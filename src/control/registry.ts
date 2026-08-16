@@ -2,7 +2,7 @@ import { isUuidV7, type JsonValue } from "./encoding.ts";
 
 export const CONTROL_PLANE_APPLICATION_ID = 1_179_405_908; // ASCII "FLNT"
 export const CONTROL_PLANE_SCHEMA_VERSION = 2;
-export const CONTROL_PLANE_REGISTRY_VERSION = 3;
+export const CONTROL_PLANE_REGISTRY_VERSION = 4;
 
 export const informationClasses = ["public", "organization", "restricted"] as const;
 export type InformationClass = (typeof informationClasses)[number];
@@ -258,8 +258,13 @@ export interface CoreSnapshotActivePayload extends Record<string, JsonValue> {
   activatedAt: string;
 }
 
-export type CoreCandidateRejectionStage = "source" | "validation" | "persistence";
-export type CoreCandidateRejectionCode = "source-unavailable" | "candidate-invalid" | "persistence-failed";
+export type CoreCandidateRejectionStage = "source" | "validation" | "continuity" | "persistence";
+export type CoreCandidateRejectionCode =
+  | "source-unavailable"
+  | "candidate-invalid"
+  | "candidate-not-descendant"
+  | "continuity-unverifiable"
+  | "persistence-failed";
 
 export interface CoreCandidateRejectionPayload extends Record<string, JsonValue> {
   checkId: string;
@@ -272,6 +277,7 @@ export interface CoreCandidateRejectionPayload extends Record<string, JsonValue>
   commitId: string | null;
   treeId: string | null;
   catalogDigest: string | null;
+  activeCommitId: string | null;
   observedAt: string;
 }
 
@@ -427,6 +433,7 @@ function isCoreCandidateRejectionPayload(value: unknown): value is CoreCandidate
       "commitId",
       "treeId",
       "catalogDigest",
+      "activeCommitId",
       "observedAt",
     ])
   ) {
@@ -435,9 +442,14 @@ function isCoreCandidateRejectionPayload(value: unknown): value is CoreCandidate
   if (
     typeof value.checkId !== "string" ||
     !isUuidV7(value.checkId) ||
-    (value.stage !== "source" && value.stage !== "validation" && value.stage !== "persistence") ||
+    (value.stage !== "source" &&
+      value.stage !== "validation" &&
+      value.stage !== "continuity" &&
+      value.stage !== "persistence") ||
     (value.code !== "source-unavailable" &&
       value.code !== "candidate-invalid" &&
+      value.code !== "candidate-not-descendant" &&
+      value.code !== "continuity-unverifiable" &&
       value.code !== "persistence-failed") ||
     !isBoundedDiagnostic(value.summary) ||
     !Array.isArray(value.details) ||
@@ -456,13 +468,21 @@ function isCoreCandidateRejectionPayload(value: unknown): value is CoreCandidate
   const hasCommit = typeof value.commitId === "string" && /^[0-9a-f]{40}$/.test(value.commitId);
   const hasTree = typeof value.treeId === "string" && /^[0-9a-f]{40}$/.test(value.treeId);
   const hasCatalog = isSha256(value.catalogDigest);
+  const hasActiveCommit = typeof value.activeCommitId === "string" && /^[0-9a-f]{40}$/.test(value.activeCommitId);
   if ((value.commitId !== null && !hasCommit) || (value.treeId !== null && !hasTree)) return false;
   if (value.catalogDigest !== null && !hasCatalog) return false;
+  if (value.activeCommitId !== null && !hasActiveCommit) return false;
   if (value.stage === "source") return value.code === "source-unavailable" && !hasCatalog;
   if (!hasCommit) return false;
   if (value.stage === "validation") return value.code === "candidate-invalid" && !hasCatalog;
-  if (!hasTree) return false;
-  return value.code === "persistence-failed" && hasCatalog;
+  if (!hasTree || !hasCatalog) return false;
+  if (value.stage === "continuity") {
+    return (
+      hasActiveCommit &&
+      (value.code === "candidate-not-descendant" || value.code === "continuity-unverifiable")
+    );
+  }
+  return value.code === "persistence-failed";
 }
 
 function isSha256(value: unknown): value is string {

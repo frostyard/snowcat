@@ -2,8 +2,10 @@
 
 import {
   CoreCandidateInspectionError,
+  CoreSourceContinuityError,
   coreGitSourceConfig,
   inspectCoreCandidate,
+  verifyCoreSourceContinuity,
   type InspectedCoreCandidate,
 } from "./git-source.ts";
 import {
@@ -46,9 +48,45 @@ try {
     }
     const store = new ControlPlaneStore(controlPlaneDatabasePath());
     try {
+      const active = store.activeCoreSnapshot();
+      let continuityAncestorCommitId: string | undefined;
+      if (active && active.sourceCommitId !== candidate.commitId) {
+        try {
+          await verifyCoreSourceContinuity(config, candidate, active.sourceCommitId);
+          continuityAncestorCommitId = active.sourceCommitId;
+        } catch (error) {
+          if (error instanceof CoreSourceContinuityError) {
+            recordAndReportRejection(
+              {
+                checkId,
+                stage: error.stage,
+                code: error.code,
+                summary: sanitizeDiagnostic(error.message),
+                details: error.details.slice(0, 8).map(sanitizeDiagnostic),
+                sourceUrl: error.sourceUrl,
+                sourceRef: error.ref,
+                commitId: error.commitId,
+                treeId: error.treeId,
+                catalogDigest: error.catalogDigest,
+                activeCommitId: error.activeCommitId,
+              },
+              store,
+            );
+          }
+          throw error;
+        }
+      }
       try {
         console.log(
-          JSON.stringify(store.activateCoreSnapshot({ candidate, expectedLastTransactionSequence }), null, 2),
+          JSON.stringify(
+            store.activateCoreSnapshot({
+              candidate,
+              expectedLastTransactionSequence,
+              continuityAncestorCommitId,
+            }),
+            null,
+            2,
+          ),
         );
       } catch (error) {
         if (error instanceof CoreSnapshotPersistenceError) {
@@ -64,6 +102,7 @@ try {
               commitId: candidate.commitId,
               treeId: candidate.treeId,
               catalogDigest: candidate.catalogDigest,
+              activeCommitId: active?.sourceCommitId,
             },
             store,
           );

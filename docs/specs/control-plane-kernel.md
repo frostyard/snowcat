@@ -26,7 +26,7 @@ transaction sequence.
 `ControlPlaneStore.occurrences()` returns occurrences ordered by transaction
 sequence and position. Neither method mutates the database or returns a secret.
 
-### Closed registry version 3
+### Closed registry version 4
 
 | Registry | Name | Version or ID rule | Contract |
 | --- | --- | --- | --- |
@@ -64,7 +64,7 @@ invalid:
 {
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
   "operatorPrincipalId": "0198b0a6-c200-7abc-8def-0123456789ac",
-  "registryVersion": 3,
+  "registryVersion": 4,
   "schemaVersion": 2
 }
 ```
@@ -87,7 +87,7 @@ The integrity observation and event payload have this exact shape:
 {
   "checkedThroughSequence": 1,
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
-  "registryVersion": 3,
+  "registryVersion": 4,
   "result": "ok",
   "schemaVersion": 2
 }
@@ -110,15 +110,16 @@ the exact stored result. A key already bound to another input digest fails.
 ### Core snapshot commands
 
 `ControlPlaneStore.activateCoreSnapshot(input)` is the only implemented fact-
-establishment path. It accepts a verified materialized candidate and the exact
-positive current sequence expected by the caller. Its source, payloads, ordered
+establishment path. It accepts a verified materialized candidate, the exact
+positive current sequence expected by the caller, and after initial activation
+the exact active commit whose Git ancestry the source adapter verified. Its source, payloads, ordered
 outputs, retained catalog, idempotency, pointer, integrity, and excluded
 behavior are specified by
 [Core snapshot activation](core-snapshot-activation.md). No other predicate or
 caller-selected fact kind is writable.
 
 `recordCoreCandidateRejection(input)` accepts one server UUIDv7 check identity,
-the registered source/validation/persistence stage and matching code, bounded
+the registered source/validation/continuity/persistence stage and matching code, bounded
 sanitized diagnostic text, configured source URL/ref, and the commit/tree/
 catalog identities available at that stage. It atomically writes an observation,
 event, receipt, transaction, and metadata watermarks. It accepts no authority
@@ -275,7 +276,7 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
    initialization transaction.
 5. Older, newer, incomplete, unexpected, or differently identified schemas
    MUST fail closed. Unregistered indexes, triggers, and views are unexpected.
-   Schema version 2 and registry version 3 define no upgrade path from earlier
+   Schema version 2 and registry version 4 define no upgrade path from earlier
    pre-production target stores.
 6. Subject, record, event, command, source, revision, record-class, and
    information-class names MUST come from the code-owned versioned registries.
@@ -414,6 +415,10 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
     record identities and order; reuse with different diagnostic input MUST
     fail. Rejection receipts remain retained until a later version defines
     count/time history retention before polling.
+48. Every new automatic activation after the first MUST require the source
+    adapter's ancestry binding to equal the source commit of the active snapshot
+    under the same writer lock. Missing or stale bindings MUST allocate no
+    transaction, snapshot, fact, event, receipt, or pointer change.
 
 ## Derived artifacts
 

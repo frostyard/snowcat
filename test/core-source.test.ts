@@ -9,7 +9,9 @@ import test from "node:test";
 
 import {
   CoreCandidateInspectionError,
+  CoreSourceContinuityError,
   inspectCoreCandidate,
+  verifyCoreSourceContinuity,
   type InspectedCoreCandidate,
 } from "../src/core/git-source.ts";
 import { CoreValidationError, validateCoreCatalog, type CoreTreeEntry } from "../src/core/validator.ts";
@@ -72,6 +74,50 @@ test("the Git source reads an exact commit through a bare mirror and rejects a s
   assert.equal(valid.repositoryCount, 1);
   assert.match(valid.commitId, /^[0-9a-f]{40}$/);
   assert.match(valid.treeId, /^[0-9a-f]{40}$/);
+
+  await writeFile(join(source, "organization", "README.md"), "# Updated organization authority\n");
+  git(source, ["add", "organization/README.md"]);
+  git(source, ["commit", "-m", "valid descendant"]);
+  const descendant = await inspectCoreCandidate({
+    sourceUrl: source,
+    ref: "refs/heads/main",
+    mirrorPath: mirror,
+    allowFileSource: true,
+  });
+  await verifyCoreSourceContinuity(
+    { sourceUrl: source, ref: "refs/heads/main", mirrorPath: mirror, allowFileSource: true },
+    descendant,
+    valid.commitId,
+  );
+
+  git(source, ["switch", "--orphan", "rewritten"]);
+  for (const entry of entries) {
+    const path = join(source, entry.path);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, entry.bytes);
+  }
+  git(source, ["add", "organization"]);
+  git(source, ["commit", "-m", "unrelated authority"]);
+  const unrelated = await inspectCoreCandidate({
+    sourceUrl: source,
+    ref: "refs/heads/rewritten",
+    mirrorPath: mirror,
+    allowFileSource: true,
+  });
+  await assert.rejects(
+    verifyCoreSourceContinuity(
+      { sourceUrl: source, ref: "refs/heads/rewritten", mirrorPath: mirror, allowFileSource: true },
+      unrelated,
+      descendant.commitId,
+    ),
+    (error) =>
+      error instanceof CoreSourceContinuityError &&
+      error.stage === "continuity" &&
+      error.code === "candidate-not-descendant" &&
+      error.activeCommitId === descendant.commitId,
+  );
+
+  git(source, ["switch", "main"]);
 
   await unlink(join(source, "organization", "README.md"));
   await symlink("repositories/frostyard/core.json", join(source, "organization", "README.md"));
@@ -140,6 +186,22 @@ test("a Core candidate rejection is bounded, idempotent, queryable, and non-auth
     /outside the registered diagnostic contract/,
   );
   assert.equal(store.metadata().lastTransactionSequence, 2);
+  const continuityCheckId = uuidV7(new Date(observedAt));
+  const continuity = store.recordCoreCandidateRejection({
+    checkId: continuityCheckId,
+    stage: "continuity",
+    code: "candidate-not-descendant",
+    summary: "candidate does not descend from the active Core source commit",
+    details: [],
+    sourceUrl: input.sourceUrl,
+    sourceRef: input.sourceRef,
+    commitId: "3".repeat(40),
+    treeId: "4".repeat(40),
+    catalogDigest: `sha256:${"5".repeat(64)}`,
+    activeCommitId: "6".repeat(40),
+  });
+  assert.equal(continuity.transactionSequence, 3);
+  assert.equal(store.coreCandidateRejections(1)[0]?.activeCommitId, "6".repeat(40));
   store.close();
 
   const output = execFileSync(
@@ -149,7 +211,7 @@ test("a Core candidate rejection is bounded, idempotent, queryable, and non-auth
   );
   const cliRows = JSON.parse(output) as Array<Record<string, unknown>>;
   assert.equal(cliRows.length, 1);
-  assert.equal(cliRows[0]?.checkId, checkId);
+  assert.equal(cliRows[0]?.checkId, continuityCheckId);
 });
 
 test("activate records a bounded source rejection while verify remains outside the target store", async () => {
@@ -219,9 +281,19 @@ test("a validated Core candidate is retained and activated atomically with exact
     activated,
   );
   const successor = await activationCandidate("e".repeat(40), "f".repeat(40));
+  assert.throws(
+    () =>
+      store.activateCoreSnapshot({
+        candidate: successor,
+        expectedLastTransactionSequence: 2,
+      }),
+    /requires source continuity from active commit/,
+  );
+  assert.equal(store.metadata().lastTransactionSequence, 2);
   const successorResult = store.activateCoreSnapshot({
     candidate: successor,
     expectedLastTransactionSequence: 2,
+    continuityAncestorCommitId: candidate.commitId,
   });
   assert.equal(successorResult.transactionSequence, 3);
   assert.notEqual(successorResult.snapshotId, activated.snapshotId);

@@ -53,6 +53,25 @@ export class CoreCandidateInspectionError extends Error {
   }
 }
 
+export class CoreSourceContinuityError extends Error {
+  readonly stage = "continuity" as const;
+
+  constructor(
+    readonly code: "candidate-not-descendant" | "continuity-unverifiable",
+    message: string,
+    readonly details: readonly string[],
+    readonly sourceUrl: string,
+    readonly ref: string,
+    readonly commitId: string,
+    readonly treeId: string,
+    readonly catalogDigest: string,
+    readonly activeCommitId: string,
+  ) {
+    super(message);
+    this.name = "CoreSourceContinuityError";
+  }
+}
+
 export function coreGitSourceConfig(): CoreGitSourceConfig {
   return {
     sourceUrl: process.env.FLUENT_CORE_URL ?? "https://github.com/frostyard/core.git",
@@ -134,6 +153,52 @@ export async function inspectCoreCandidate(config: CoreGitSourceConfig): Promise
       config.ref,
       commitId,
       treeId,
+    );
+  }
+}
+
+export async function verifyCoreSourceContinuity(
+  config: CoreGitSourceConfig,
+  candidate: InspectedCoreCandidate,
+  activeCommitId: string,
+): Promise<void> {
+  assertConfig(config);
+  assertObjectId(activeCommitId, "active Core source commit");
+  if (candidate.sourceUrl !== config.sourceUrl || candidate.ref !== config.ref) {
+    throw new Error("Core candidate source does not match the continuity source configuration");
+  }
+  if (candidate.commitId === activeCommitId) return;
+
+  let descendant: boolean;
+  try {
+    descendant = await gitIsAncestor(
+      ["--git-dir", resolve(config.mirrorPath), "merge-base", "--is-ancestor", activeCommitId, candidate.commitId],
+      Boolean(config.allowFileSource),
+    );
+  } catch (error) {
+    throw new CoreSourceContinuityError(
+      "continuity-unverifiable",
+      `Core source continuity from ${activeCommitId} to ${candidate.commitId} could not be verified`,
+      [error instanceof Error ? error.message : String(error)],
+      candidate.sourceUrl,
+      candidate.ref,
+      candidate.commitId,
+      candidate.treeId,
+      candidate.catalogDigest,
+      activeCommitId,
+    );
+  }
+  if (!descendant) {
+    throw new CoreSourceContinuityError(
+      "candidate-not-descendant",
+      `Core candidate ${candidate.commitId} does not descend from active commit ${activeCommitId}`,
+      [],
+      candidate.sourceUrl,
+      candidate.ref,
+      candidate.commitId,
+      candidate.treeId,
+      candidate.catalogDigest,
+      activeCommitId,
     );
   }
 }
@@ -231,32 +296,8 @@ function git(
   args: readonly string[],
   options: { allowFileSource: boolean; maxBuffer?: number },
 ): Promise<Buffer> {
-  const environment: NodeJS.ProcessEnv = {
-    ...process.env,
-    GIT_NO_LAZY_FETCH: "1",
-    GIT_NO_REPLACE_OBJECTS: "1",
-    GIT_TERMINAL_PROMPT: "0",
-  };
-  delete environment.GIT_DIR;
-  delete environment.GIT_WORK_TREE;
-  delete environment.GIT_OBJECT_DIRECTORY;
-  delete environment.GIT_ALTERNATE_OBJECT_DIRECTORIES;
-  delete environment.GIT_EXEC_PATH;
-  delete environment.GIT_CONFIG_COUNT;
-  for (const key of Object.keys(environment)) {
-    if (/^GIT_CONFIG_(?:KEY|VALUE)_/.test(key)) delete environment[key];
-  }
-  const secureArgs = [
-    "-c",
-    "core.hooksPath=/dev/null",
-    "-c",
-    "core.fsmonitor=false",
-    "-c",
-    `protocol.file.allow=${options.allowFileSource ? "always" : "never"}`,
-    "-c",
-    "protocol.ext.allow=never",
-    ...args,
-  ];
+  const environment = secureGitEnvironment();
+  const secureArgs = secureGitArgs(args, options.allowFileSource);
   return new Promise((resolvePromise, reject) => {
     execFile(
       "git",
@@ -272,4 +313,59 @@ function git(
       },
     );
   });
+}
+
+function gitIsAncestor(args: readonly string[], allowFileSource: boolean): Promise<boolean> {
+  return new Promise((resolvePromise, reject) => {
+    execFile(
+      "git",
+      secureGitArgs(args, allowFileSource),
+      { encoding: "buffer", env: secureGitEnvironment(), maxBuffer: 256 * 1024 },
+      (error, _stdout, stderr) => {
+        if (!error) {
+          resolvePromise(true);
+          return;
+        }
+        if (error.code === 1) {
+          resolvePromise(false);
+          return;
+        }
+        const detail = Buffer.from(stderr).toString("utf8").trim().split("\n").slice(-1)[0];
+        reject(new Error(`git merge-base failed${detail ? `: ${detail}` : ""}`));
+      },
+    );
+  });
+}
+
+function secureGitEnvironment(): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {
+    ...process.env,
+    GIT_NO_LAZY_FETCH: "1",
+    GIT_NO_REPLACE_OBJECTS: "1",
+    GIT_TERMINAL_PROMPT: "0",
+  };
+  delete environment.GIT_DIR;
+  delete environment.GIT_WORK_TREE;
+  delete environment.GIT_OBJECT_DIRECTORY;
+  delete environment.GIT_ALTERNATE_OBJECT_DIRECTORIES;
+  delete environment.GIT_EXEC_PATH;
+  delete environment.GIT_CONFIG_COUNT;
+  for (const key of Object.keys(environment)) {
+    if (/^GIT_CONFIG_(?:KEY|VALUE)_/.test(key)) delete environment[key];
+  }
+  return environment;
+}
+
+function secureGitArgs(args: readonly string[], allowFileSource: boolean): string[] {
+  return [
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    `protocol.file.allow=${allowFileSource ? "always" : "never"}`,
+    "-c",
+    "protocol.ext.allow=never",
+    ...args,
+  ];
 }

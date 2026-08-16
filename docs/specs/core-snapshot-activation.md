@@ -44,7 +44,7 @@ The command uses source kind `github-repository`, immutable source ID
 `9999-12-31T23:59:59.999Z` in this schema.
 
 `activate` assigns one server UUIDv7 invocation identity before fetching. A
-source, validation, or persistence failure is recorded idempotently as command
+source, validation, continuity, or persistence failure is recorded idempotently as command
 `core.record-candidate-rejection`, with
 `core.candidate-rejection-observation` at position `0` and
 `core.candidate-rejected` at position `1`. That audit transaction advances
@@ -57,16 +57,17 @@ The rejection payload has this exact shape:
 | Field | Type | Constraint |
 | --- | --- | --- |
 | `checkId` | UUIDv7 | Server identity for one invocation; also binds idempotent replay and correlation |
-| `stage` | enum | `source`, `validation`, or `persistence` |
-| `code` | enum | Matching `source-unavailable`, `candidate-invalid`, or `persistence-failed` |
+| `stage` | enum | `source`, `validation`, `continuity`, or `persistence` |
+| `code` | enum | Matching `source-unavailable`, `candidate-invalid`, `candidate-not-descendant`, `continuity-unverifiable`, or `persistence-failed` |
 | `summary` | string | Sanitized single line, 1–512 UTF-8 bytes |
 | `details` | string array | At most eight sanitized single lines, each 1–512 UTF-8 bytes |
 | `sourceUrl`, `sourceRef` | string | Registered Core GitHub source and canonical branch ref |
 | `commitId`, `treeId` | string or null | Available canonical SHA-1 identities; validation requires a commit and persistence requires both |
-| `catalogDigest` | string or null | Required only for persistence failure |
+| `catalogDigest` | string or null | Required for continuity and persistence failure |
+| `activeCommitId` | string or null | Required for continuity failure; exact active source commit used by the ancestry check |
 | `observedAt` | canonical UTC instant | Server evaluation and recorded time |
 
-Schema version `2` and registry version `3` govern three authority tables:
+Schema version `2` and registry version `4` govern three authority tables:
 
 | Table | Retained content |
 | --- | --- |
@@ -109,20 +110,26 @@ sourceCommitId, activatedAt }`.
 10. Verification or activation MUST NOT interpret a declaration as enrollment,
     reconcile a repository, create a hold, generate work, or execute fetched
     repository code.
-11. `core verify` MUST remain read-only even when verification fails. `core
+11. A new automatic activation after the first MUST bind the active source
+    commit under the writer lock and MUST proceed only after the source adapter
+    verifies that commit as an ancestor of the different candidate commit.
+    Exact idempotent replay is evaluated before this precondition.
+12. `core verify` MUST remain read-only even when verification fails. `core
     activate` MUST attempt to record a source or validation rejection after the
-    candidate fails and a persistence rejection only after the activation
-    transaction has fully rolled back.
-12. Rejection diagnostics MUST use the registered stage/code pairing, fixed
+    candidate fails, a continuity rejection after a validated candidate fails
+    or cannot complete the Git ancestry check, and a persistence rejection only
+    after the activation transaction has fully rolled back.
+13. Rejection diagnostics MUST use the registered stage/code pairing, fixed
     source identity, bounded sanitized strings, organization information class,
     deployment scope, optional exact source revision, and indefinitely retained
     idempotency receipt. They MUST NOT copy candidate bytes or create a fact.
-13. Rejection recording failure MUST be reported alongside the original error
+14. Rejection recording failure MUST be reported alongside the original error
     and MUST NOT replace or disguise that original failure.
-14. This version does not accept ref rewinds, define rollback, enforce
-    freshness, poll, or purge rejection history. Those operations require later
+15. This version refuses automatic ref rewinds and unrelated history but does
+    not yet define operator rollback, enforce freshness, poll, or purge
+    rejection history. Those operations require later
     typed commands and contracts before unattended polling.
-15. A schema version other than `2` or registry version other than `3` MUST fail
+16. A schema version other than `2` or registry version other than `4` MUST fail
     closed. This pre-production version defines no in-place upgrade; initialize
     a fresh target database.
 

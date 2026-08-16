@@ -47,7 +47,9 @@ npm run --silent core -- rejections
 This uses a host-local bare mirror and emits the exact commit, tree, catalog,
 schema, fixture, and repository-declaration identities. A valid report is a
 candidate inspection, not enrollment. Activation creates a retained snapshot
-and current-authority fact, still not repository enrollment or work.
+and current-authority fact, still not repository enrollment or work. Every
+later automatic activation requires verified Git ancestry from the active
+source commit.
 Failed activation attempts append bounded sanitized rejection observations and
 audit events without changing the active snapshot; standalone verification
 remains read-only.

@@ -99,6 +99,14 @@ validator over the candidate bytes. The internal candidate report is compared
 with that independent result; callers cannot manufacture a catalog by editing
 summary fields.
 
+After the first activation, the CLI asks the Git source adapter to prove Core
+source continuity from the active source commit to a different candidate. The
+store then binds that exact ancestor to the still-current snapshot under the
+writer lock before allocating authority. This two-part check keeps Git graph
+inspection outside the SQLite transaction while preventing a proof against an
+obsolete active snapshot from transferring to a concurrent state. Exact replay
+returns its retained result before continuity is reevaluated.
+
 The source is the immutable GitHub repository identity
 `github.com:1331309458`, with its exact commit as a typed source revision. Each
 accepted catalog receives a new Fluent-native `core-snapshot` UUIDv7 subject.
@@ -126,8 +134,10 @@ verified content digests, while disposable projections remain excluded.
 Activation assigns one server check identity before touching the source. A
 failure before an exact commit resolves is a `source` rejection; a structurally
 or semantically unusable resolved commit is a `validation` rejection; a failure
-after the authority transaction starts is reported as `persistence` only after
-that transaction and its SQLite sequence allocation roll back.
+to prove that a validated commit descends from the active source commit is a
+`continuity` rejection; and a failure after the authority transaction starts is
+reported as `persistence` only after that transaction and its SQLite sequence
+allocation roll back.
 
 [`recordCoreCandidateRejection`](../../src/control/store.ts) appends a typed
 `observation` and past-tense event in a separate idempotent audit transaction.
@@ -160,8 +170,8 @@ required before periodic polling.
   and any unknown `organization/` path fails closed.
 - A failed fetch or validation before the first activation leaves no last-known-
   good state. Atomic activation now preserves an existing current snapshot;
-  durable rejected-candidate diagnostics preserve the failure. Ancestry
-  checks, freshness, rollback authority, retention/purge, and polling belong to
+  durable rejected-candidate diagnostics preserve the failure. Freshness,
+  rollback authority, retention/purge, and polling belong to
   later phases of the
   [ingestion plan](../plans/core-snapshot-ingestion.md).
 - The mirror contains organization-governed data and should be backed up and

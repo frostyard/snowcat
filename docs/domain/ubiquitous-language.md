@@ -594,6 +594,25 @@ not imply that a candidate or failed snapshot exists.
 ([ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md),
 [ADR-0037](../adr/0037-store-facts-with-a-separate-event-ledger.md))
 
+#### Core source continuity
+
+Verified Git ancestry from the active Core snapshot's source commit to a
+different candidate commit. Automatic activation requires this evidence; a
+rewound, unrelated, or unverifiable history remains non-authoritative.
+
+**Avoid:** branch freshness; newer commit; trusted ref; fast-forward snapshot.
+([ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md))
+
+#### Core rollback activation
+
+An attributed operator authority transition that names an exact verified Core
+commit and reason while retaining all prior snapshots. It deliberately bypasses
+automatic source-continuity eligibility but does not rewrite Git or undo a
+database transaction.
+
+**Avoid:** transaction rollback; branch reset; force-push acceptance; restore.
+([ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md))
+
 #### Core snapshot
 
 One atomic validated import of the canonical `frostyard/core` organization

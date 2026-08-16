@@ -45,10 +45,12 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
   transaction; the prior snapshot remains current; and retry returns the
   original snapshot identity.
 
-## Phase 3 — Enforce continuity, freshness, and operator recovery (medium)
+## Phase 3 — Enforce continuity, freshness, and operator recovery (in progress)
 
-- Require an automatically activated commit to descend from the active commit.
-  Persist a ref rewind or unrelated history as a failed candidate.
+- Automatic activation now requires the Git source adapter to verify that a
+  different candidate descends from the active source commit and rebinds that
+  exact ancestor under the store writer lock. Rewound, unrelated, and
+  unverifiable histories create bounded continuity rejection evidence.
 - Add attributed operator rollback to an exact verified commit and reason,
   producing a new activation occurrence without deleting history.
 - Record fetch/validation health, last successful source check, the 24-hour

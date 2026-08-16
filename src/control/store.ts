@@ -111,6 +111,8 @@ export interface IntegrityCheckResult {
 export interface CoreSnapshotActivationInput {
   candidate: InspectedCoreCandidate;
   expectedLastTransactionSequence: number;
+  /** Set only after the source adapter verifies Git ancestry for a new activation. */
+  continuityAncestorCommitId?: string;
 }
 
 export interface CoreSnapshotActivationResult {
@@ -143,6 +145,7 @@ export interface CoreCandidateRejectionInput {
   commitId?: string;
   treeId?: string;
   catalogDigest?: string;
+  activeCommitId?: string;
 }
 
 export interface CoreCandidateRejectionResult {
@@ -158,6 +161,15 @@ export interface CoreCandidateRejectionRecord extends CoreCandidateRejectionPayl
   observationRecordId: string;
   transactionSequence: number;
   transactionPosition: 0;
+}
+
+export interface ActiveCoreSnapshot {
+  snapshotId: string;
+  sourceCommitId: string;
+  sourceTreeId: string;
+  catalogDigest: string;
+  activatedAt: string;
+  transactionSequence: number;
 }
 
 export interface ProjectionAccess {
@@ -349,6 +361,27 @@ export class ControlPlaneStore {
         transactionPosition: 0,
       };
     });
+  }
+
+  activeCoreSnapshot(): ActiveCoreSnapshot | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT snapshot.snapshot_id, snapshot.source_commit_id, snapshot.source_tree_id,
+                snapshot.catalog_digest, active.activated_at, active.activated_transaction_sequence
+         FROM core_active_snapshot active
+         JOIN core_snapshots snapshot ON snapshot.snapshot_id = active.snapshot_id
+         WHERE active.singleton = 1`,
+      )
+      .get() as Row | undefined;
+    if (!row) return undefined;
+    return {
+      snapshotId: String(row.snapshot_id),
+      sourceCommitId: String(row.source_commit_id),
+      sourceTreeId: String(row.source_tree_id),
+      catalogDigest: String(row.catalog_digest),
+      activatedAt: String(row.activated_at),
+      transactionSequence: Number(row.activated_transaction_sequence),
+    };
   }
 
   authoritativeDigest(): string {
@@ -805,6 +838,16 @@ export class ControlPlaneStore {
           `stale control-plane sequence: expected ${input.expectedLastTransactionSequence}, current ${metadata.lastTransactionSequence}`,
         );
       }
+      const active = this.activeCoreSnapshot();
+      if (active) {
+        if (input.continuityAncestorCommitId !== active.sourceCommitId) {
+          throw new Error(
+            `automatic Core activation requires source continuity from active commit ${active.sourceCommitId}`,
+          );
+        }
+      } else if (input.continuityAncestorCommitId !== undefined) {
+        throw new Error("initial Core activation must not claim a continuity ancestor");
+      }
 
       const snapshotId = uuidV7(new Date(evaluationTime));
       const transactionId = uuidV7(new Date(evaluationTime));
@@ -1041,6 +1084,7 @@ export class ControlPlaneStore {
       commitId: input.commitId ?? null,
       treeId: input.treeId ?? null,
       catalogDigest: input.catalogDigest ?? null,
+      activeCommitId: input.activeCommitId ?? null,
     } satisfies JsonValue;
     const validationPayload = {
       ...commandInput,

@@ -71,7 +71,7 @@ contracts:
 | Record kind | `control-plane.integrity-observation` v1 | The system's SQLite quick-check observation bound to the checked sequence |
 | Record kind | `core.snapshot-definition` v1 | Definition of one retained validated catalog and its source/report |
 | Record kind | `core.snapshot-active` v1 | Current-snapshot fact on the database subject |
-| Record kind | `core.candidate-rejection-observation` v1 | Bounded non-authoritative source/validation/persistence diagnostic |
+| Record kind | `core.candidate-rejection-observation` v1 | Bounded non-authoritative source/validation/continuity/persistence diagnostic |
 | Event kind | `control-plane.initialized` v1 | The past-tense account of successful initialization |
 | Event kind | `control-plane.integrity-checked` v1 | The past-tense account of the accepted integrity observation |
 | Event kind | `core.snapshot-activated` v1 | The past-tense account of selecting one snapshot |
@@ -178,7 +178,12 @@ recomputes the file and catalog digests and checks all cross-table lineage. The
 exact contract and excluded enrollment/freshness/rollback behavior live in
 [Core snapshot activation](../specs/core-snapshot-activation.md).
 
-When activation cannot fetch, validate, or persist a candidate, the Core CLI
+After initial activation, the Git source adapter proves that a different
+candidate descends from the active source commit. The store binds that same
+commit to the still-active snapshot under its writer lock; a missing or stale
+binding allocates no authority.
+
+When activation cannot fetch, validate, establish continuity, or persist a candidate, the Core CLI
 uses a separate registered command to append a bounded rejection observation
 and matching audit event on the database subject. The source repository and
 available commit revision remain provenance, not a new subject or fact. This
