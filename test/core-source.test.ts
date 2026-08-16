@@ -156,8 +156,7 @@ async function validCoreEntries(): Promise<CoreTreeEntry[]> {
     "repository-agent-governance.schema.json",
   ]) {
     const bundled = await readFile(new URL(`../src/core/schemas/v1/${name}`, import.meta.url));
-    const exactCoreBytes = bundled.at(-1) === 0x0a ? bundled.subarray(0, -1) : bundled;
-    entries.push(entryFor(`organization/schemas/v1/${name}`, exactCoreBytes));
+    entries.push(entryFor(`organization/schemas/v1/${name}`, bundled));
   }
   return entries;
 }
