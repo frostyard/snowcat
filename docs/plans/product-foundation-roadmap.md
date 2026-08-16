@@ -72,6 +72,14 @@ does not itself enroll the repository in the fleet.
 
 ## Phase 2 — Publish the core authoring contract (large)
 
+- Merged core PR #80 now supplies the strict repository declaration,
+  repository-surface, and agent-governance foundation. Fluent verifies that
+  exact current slice through the
+  [core snapshot ingestion design](../design/core-snapshot-ingestion.md),
+  [verification contract](../specs/core-snapshot-verification.md), and
+  [ingestion plan](core-snapshot-ingestion.md); it does not treat the disabled
+  fixture declaration as enrollment. The remaining record kinds below keep
+  this phase open.
 - In `frostyard/core`, record the required core-side ADR that changes its current
   repository boundary, then author the canonical paths and strict schemas from
   [ADRs 0007–0017](../adr/0007-use-frostyard-core-as-the-organization-authority.md)
@@ -272,10 +280,14 @@ does not itself enroll the repository in the fleet.
 - Product: [GitHub organization agent fleet PRD](../prd/agent-fleet.md),
   especially its [discovery inventory](../prd/agent-fleet.md#discovery-inventory)
 - Current design: [queue execution boundary](../design/queue-execution-boundary.md)
+- Core authority boundary:
+  [core snapshot ingestion](../design/core-snapshot-ingestion.md) and
+  [core snapshot verification](../specs/core-snapshot-verification.md)
 - Current contract: [work queue](../specs/work-queue.md)
 - Completed predecessor: [queue vertical spike](queue-vertical-spike.md)
 - Detailed kernel delivery:
   [control-plane kernel bootstrap](control-plane-kernel-bootstrap.md)
+- Detailed core delivery: [core snapshot ingestion](core-snapshot-ingestion.md)
 - Foundation decisions:
   [ADR-0037](../adr/0037-store-facts-with-a-separate-event-ledger.md) and
   [ADR-0038](../adr/0038-separate-lifecycle-pause-from-runtime-interventions.md),

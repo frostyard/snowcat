@@ -11,6 +11,7 @@
     "check": "npm run check:docs && npm run typecheck && npm test && npm run build",
     "check:docs": "node scripts/check-docs.mjs",
     "control": "node --import tsx src/control/cli.ts",
+    "core": "node --import tsx src/core/cli.ts",
     "mcp": "node --import tsx src/mcp/stdio.ts",
     "queue": "node --import tsx src/queue/cli.ts",
     "test": "node --import tsx --test 'test/**/*.test.ts'",
@@ -20,7 +21,9 @@
     "@earendil-works/pi-ai": "0.83.0",
     "@flue/runtime": "2.0.3",
     "@modelcontextprotocol/server": "2.0.0",
+    "ajv": "8.20.0",
     "hono": "4.13.2",
+    "jsonc-parser": "3.3.1",
     "zod": "4.4.3"
   },
   "devDependencies": {

@@ -69,17 +69,20 @@ Docs are split by the question they answer:
 
 - [Queue execution boundary](design/queue-execution-boundary.md)
 - [Control-plane kernel](design/control-plane-kernel.md)
+- [Core snapshot ingestion](design/core-snapshot-ingestion.md)
 
 ### Specs
 
 - [Work queue](specs/work-queue.md)
 - [Control-plane kernel](specs/control-plane-kernel.md)
+- [Core snapshot verification](specs/core-snapshot-verification.md)
 
 ### Plans
 
 - [Queue vertical spike](plans/queue-vertical-spike.md)
 - [Product foundation roadmap](plans/product-foundation-roadmap.md)
 - [Control-plane kernel bootstrap](plans/control-plane-kernel-bootstrap.md)
+- [Core snapshot ingestion](plans/core-snapshot-ingestion.md)
 
 ### Product requirements
 

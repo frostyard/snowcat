@@ -2053,10 +2053,13 @@ imports the spike database.
   source ownership established by
   [ADR-0045](../adr/0045-host-fluent-under-frostyard.md), and the
   [Fluent ubiquitous language](../domain/ubiquitous-language.md)
-- Designs: [queue execution boundary](../design/queue-execution-boundary.md)
-  and [control-plane kernel](../design/control-plane-kernel.md)
-- Contracts: [work queue](../specs/work-queue.md) and
-  [control-plane kernel](../specs/control-plane-kernel.md)
+- Designs: [queue execution boundary](../design/queue-execution-boundary.md),
+  [control-plane kernel](../design/control-plane-kernel.md), and
+  [core snapshot ingestion](../design/core-snapshot-ingestion.md)
+- Contracts: [work queue](../specs/work-queue.md),
+  [control-plane kernel](../specs/control-plane-kernel.md), and
+  [core snapshot verification](../specs/core-snapshot-verification.md)
 - Delivery: [queue vertical spike](../plans/queue-vertical-spike.md),
   [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md),
-  and [product foundation roadmap](../plans/product-foundation-roadmap.md)
+  [core snapshot ingestion](../plans/core-snapshot-ingestion.md), and
+  [product foundation roadmap](../plans/product-foundation-roadmap.md)

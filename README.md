@@ -34,6 +34,17 @@ The backup command prints its manifest to stdout. Save that JSON separately for
 `verify-backup` or `stage-restore`; restore staging only creates and verifies a
 new path and never replaces the live database.
 
+Verify the currently supported `frostyard/core` authority slice without
+activating it or changing the control-plane database:
+
+```bash
+npm run --silent core -- verify
+```
+
+This uses a host-local bare mirror and emits the exact commit, tree, catalog,
+schema, fixture, and repository-declaration identities. A valid report is a
+candidate inspection, not enrollment.
+
 ## Queue spike
 
 The first vertical slice draws hard boundaries between coordination,

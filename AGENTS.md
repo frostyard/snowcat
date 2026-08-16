@@ -55,6 +55,11 @@ removed. -->
   projections, and backup/restore staging. The implementation in
   [`src/control/cli.ts`](src/control/cli.ts) never activates a restore or exposes
   generic domain mutation.
+- Use `npm run --silent core -- verify` to fetch and validate the supported
+  `frostyard/core` authority candidate through the bare-mirror boundary in
+  [`src/core/git-source.ts`](src/core/git-source.ts). Verification is read-only
+  with respect to the control plane: it never activates a Core snapshot,
+  creates enrollment, or writes `FLUENT_CONTROL_DB`.
 - Keep the target control-plane store separate from the disposable queue-spike
   store. Target schema and startup live in
   [`src/control/store.ts`](src/control/store.ts); closed vocabulary lives only
