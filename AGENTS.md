@@ -61,11 +61,16 @@ removed. -->
   with respect to the control plane: it never activates a Core snapshot,
   creates enrollment, or writes `FLUENT_CONTROL_DB`.
 - Use `npm run --silent core -- activate <expected-control-plane-sequence>` for
-  the only implemented Core authority mutation. After the first activation it
+  automatic Core authority mutation. After the first activation it
   verifies Git ancestry from the active source commit, then independently
   revalidates and atomically retains/activates one candidate through the typed handler in
   [`src/control/store.ts`](src/control/store.ts); it still creates no enrollment
   or work.
+- Use `npm run --silent core -- rollback <expected-control-plane-sequence>
+  <target-commit> <reason>` only for an attributed local-operator rollback
+  activation. It creates a resolved typed decision and a new snapshot from
+  independently revalidated retained or exact-source bytes; it never deletes
+  prior snapshots.
 - Use `npm run --silent core -- rejections [limit]` to inspect bounded Core
   candidate rejection observations. `activate` records source, validation,
   continuity, and rolled-back persistence failures through the typed observation/event handler;

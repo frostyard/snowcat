@@ -107,6 +107,21 @@ inspection outside the SQLite transaction while preventing a proof against an
 obsolete active snapshot from transferring to a concurrent state. Exact replay
 returns its retained result before continuity is reevaluated.
 
+Operator rollback is not an option on that automatic path. The local operator
+names an exact target commit, observed control-plane sequence, and bounded
+reason. Fluent uses a retained snapshot of that commit when available so
+recovery survives source outage; otherwise it asks the secured Git adapter to
+materialize the exact commit. The store revalidates either candidate and writes
+one resolved `core.rollback-decision`, a new snapshot definition, a new active
+fact, and a causally linked rollback event. The new snapshot receives a fresh
+identity, all previous snapshots remain immutable, and the event preserves the
+previous authority, deciding principal, and rationale.
+
+Automatic activation receipts are scoped by pre-command sequence and commit,
+not commit alone. Consequently, `A → B → rollback A → B` creates four distinct
+authority transitions while an exact retry of any one transition still returns
+its original result.
+
 The source is the immutable GitHub repository identity
 `github.com:1331309458`, with its exact commit as a typed source revision. Each
 accepted catalog receives a new Fluent-native `core-snapshot` UUIDv7 subject.
@@ -161,6 +176,9 @@ required before periodic polling.
 - Run `npm run --silent core -- activate <expected-control-plane-sequence>` to
   persist and select that fetched candidate. Equivalent retry uses the original
   expected sequence and returns its original result.
+- Run `npm run --silent core -- rollback <expected-control-plane-sequence>
+  <target-commit> <reason>` for the attributed operator transition. Quote a
+  reason containing spaces as one shell argument.
 - Run `npm run --silent core -- rejections [limit]` to read the newest rejection
   observations; the default is 20 and the maximum is 100.
 - `FLUENT_CORE_URL`, `FLUENT_CORE_REF`, and `FLUENT_CORE_MIRROR` select the
@@ -171,7 +189,7 @@ required before periodic polling.
 - A failed fetch or validation before the first activation leaves no last-known-
   good state. Atomic activation now preserves an existing current snapshot;
   durable rejected-candidate diagnostics preserve the failure. Freshness,
-  rollback authority, retention/purge, and polling belong to
+  retention/purge, and polling belong to
   later phases of the
   [ingestion plan](../plans/core-snapshot-ingestion.md).
 - The mirror contains organization-governed data and should be backed up and

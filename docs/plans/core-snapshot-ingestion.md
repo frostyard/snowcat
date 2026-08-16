@@ -51,8 +51,10 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
   different candidate descends from the active source commit and rebinds that
   exact ancestor under the store writer lock. Rewound, unrelated, and
   unverifiable histories create bounded continuity rejection evidence.
-- Add attributed operator rollback to an exact verified commit and reason,
-  producing a new activation occurrence without deleting history.
+- Attributed operator rollback now creates a resolved typed decision and a new
+  snapshot/fact/event transaction for an exact independently revalidated target
+  commit and bounded reason. It prefers retained bytes for outage recovery,
+  can materialize an unretained exact commit, and never deletes history.
 - Record fetch/validation health, last successful source check, the 24-hour
   new-admission freshness boundary, and a conspicuous attributed expiring
   stale-source override.

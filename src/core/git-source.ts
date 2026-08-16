@@ -10,6 +10,7 @@ import {
 } from "./validator.ts";
 
 const CANDIDATE_REF = "refs/fluent/core-candidate";
+const ROLLBACK_CANDIDATE_REF = "refs/fluent/core-rollback-candidate";
 const MAX_TREE_ENTRIES = 256;
 const MAX_FILE_BYTES = 1_048_576;
 const MAX_TREE_BYTES = 8_388_608;
@@ -108,6 +109,86 @@ export async function inspectCoreCandidate(config: CoreGitSourceConfig): Promise
       "candidate commit",
     );
     assertObjectId(commitId, "candidate commit");
+    const inspected = await inspectResolvedCommit(config, mirrorPath, commitId);
+    treeId = inspected.treeId;
+    return inspected;
+  } catch (error) {
+    if (error instanceof CoreCandidateInspectionError) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    const details = error instanceof CoreValidationError ? error.details : [];
+    throw new CoreCandidateInspectionError(
+      commitId === undefined ? "source" : "validation",
+      commitId === undefined ? "source-unavailable" : "candidate-invalid",
+      message,
+      details,
+      config.sourceUrl,
+      config.ref,
+      commitId,
+      treeId,
+    );
+  }
+}
+
+export async function inspectCoreCommit(
+  config: CoreGitSourceConfig,
+  targetCommitId: string,
+): Promise<InspectedCoreCandidate> {
+  assertConfig(config);
+  if (!/^[0-9a-f]{40}$/.test(targetCommitId)) {
+    throw new Error("Core rollback target must be one canonical SHA-1 commit ID");
+  }
+  try {
+    const mirrorPath = resolve(config.mirrorPath);
+    await ensureBareMirror(mirrorPath, Boolean(config.allowFileSource));
+    try {
+      await git(["--git-dir", mirrorPath, "cat-file", "-e", `${targetCommitId}^{commit}`], {
+        allowFileSource: Boolean(config.allowFileSource),
+      });
+    } catch {
+      await git(
+        [
+          "--git-dir",
+          mirrorPath,
+          "fetch",
+          "--force",
+          "--no-tags",
+          "--no-recurse-submodules",
+          config.sourceUrl,
+          `+${targetCommitId}:${ROLLBACK_CANDIDATE_REF}`,
+        ],
+        { allowFileSource: Boolean(config.allowFileSource), maxBuffer: 1_048_576 },
+      );
+      const fetched = decodeLine(
+        await git(["--git-dir", mirrorPath, "rev-parse", `${ROLLBACK_CANDIDATE_REF}^{commit}`], {
+          allowFileSource: Boolean(config.allowFileSource),
+        }),
+        "rollback candidate commit",
+      );
+      if (fetched !== targetCommitId) throw new Error("Core rollback fetch resolved a different commit");
+    }
+    return await inspectResolvedCommit(config, mirrorPath, targetCommitId);
+  } catch (error) {
+    if (error instanceof CoreCandidateInspectionError) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new CoreCandidateInspectionError(
+      "source",
+      "source-unavailable",
+      message,
+      [],
+      config.sourceUrl,
+      config.ref,
+      targetCommitId,
+    );
+  }
+}
+
+async function inspectResolvedCommit(
+  config: CoreGitSourceConfig,
+  mirrorPath: string,
+  commitId: string,
+): Promise<InspectedCoreCandidate> {
+  let treeId: string | undefined;
+  try {
     treeId = decodeLine(
       await git(["--git-dir", mirrorPath, "rev-parse", `${commitId}:organization`], {
         allowFileSource: Boolean(config.allowFileSource),
@@ -145,8 +226,8 @@ export async function inspectCoreCandidate(config: CoreGitSourceConfig): Promise
     const message = error instanceof Error ? error.message : String(error);
     const details = error instanceof CoreValidationError ? error.details : [];
     throw new CoreCandidateInspectionError(
-      commitId === undefined ? "source" : "validation",
-      commitId === undefined ? "source-unavailable" : "candidate-invalid",
+      "validation",
+      "candidate-invalid",
       message,
       details,
       config.sourceUrl,

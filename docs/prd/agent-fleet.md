@@ -1860,7 +1860,9 @@ bounded fact path: exact verified Core bytes are retained as immutable snapshots
 and selected through an atomic, idempotent active-snapshot fact under the
 [activation contract](../specs/core-snapshot-activation.md). That path creates
 neither enrollment nor work. Later automatic activation now binds verified Git
-ancestry from the active source commit. Source, validation, continuity, and
+ancestry from the active source commit. Attributed operator rollback creates a
+resolved decision and new exact-target snapshot while retaining history and
+supporting recovery from retained bytes. Source, validation, continuity, and
 rolled-back persistence failures create bounded rejection observations and audit events while
 standalone verification remains read-only. The kernel does not yet implement a target work,
 general fact, operational-state, controller, or worker mutation path and never

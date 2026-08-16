@@ -12,6 +12,7 @@ The host-local command is:
 
 ```sh
 npm run --silent core -- activate <expected-control-plane-sequence>
+npm run --silent core -- rollback <expected-control-plane-sequence> <target-commit> <reason>
 npm run --silent core -- rejections [limit]
 ```
 
@@ -40,8 +41,28 @@ Success emits one JSON object:
 The command uses source kind `github-repository`, immutable source ID
 `github.com:1331309458`, source revision kind `git-commit-sha1`, and value
 `sha1:<commit>`. Its deterministic idempotency key is
-`core-activate:<commit>`, scoped to the database lineage and retained through
+`core-activate:<expected-sequence>:<commit>`, scoped to the database lineage and retained through
 `9999-12-31T23:59:59.999Z` in this schema.
+
+`rollback` selects an exact target commit through an attributed local-operator
+decision. It first reuses retained snapshot bytes for that commit when present;
+otherwise the source adapter materializes the exact commit from the secured bare
+mirror or configured Core source. The complete candidate is independently
+revalidated either way. The command key is
+`core-rollback:<expected-sequence>:<target-commit>` and its reason is one
+trimmed, control-free line from 1 through 512 UTF-8 bytes.
+
+An accepted rollback emits a result with the snapshot, definition, active-fact,
+event, catalog, source, import-time, and transaction fields above, plus the
+decision record ID, previous snapshot and source-commit IDs, operator principal
+ID, exact reason, and positions `[0, 1, 2, 3]`. The transaction outputs are:
+
+| Position | Kind | Meaning |
+| --- | --- | --- |
+| `0` | `core.rollback-decision` | Resolved `activate-target-commit` decision bound to the prior sequence, active snapshot, target, operator, and reason |
+| `1` | `core.snapshot-definition` | New immutable snapshot definition for the independently revalidated target bytes |
+| `2` | `core.snapshot-active` | New latest-precedence authority fact |
+| `3` | `core.snapshot-rollback-activated` | Past-tense event linking the decision, previous authority, and new snapshot |
 
 `activate` assigns one server UUIDv7 invocation identity before fetching. A
 source, validation, continuity, or persistence failure is recorded idempotently as command
@@ -67,7 +88,7 @@ The rejection payload has this exact shape:
 | `activeCommitId` | string or null | Required for continuity failure; exact active source commit used by the ancestry check |
 | `observedAt` | canonical UTC instant | Server evaluation and recorded time |
 
-Schema version `2` and registry version `4` govern three authority tables:
+Schema version `2` and registry version `5` govern three authority tables:
 
 | Table | Retained content |
 | --- | --- |
@@ -79,7 +100,9 @@ The exact definition payload contains snapshot ID, fixed source repository ID,
 source URL/ref/commit/tree, catalog digest, file/byte/repository/fixture counts,
 the three schema digests, and import time. The active fact and activation event
 share the exact payload `{ databaseLineageId, snapshotId, catalogDigest,
-sourceCommitId, activatedAt }`.
+sourceCommitId, activatedAt }` for automatic activation. A rollback keeps that
+fact payload but uses its separately registered event payload to retain the
+previous snapshot/commit, decision, operator, and reason.
 
 ## Rules
 
@@ -101,7 +124,7 @@ sourceCommitId, activatedAt }`.
    stored result before reevaluating the clock or current sequence. Reusing the
    same commit identity with a different command payload MUST fail.
 8. The active predicate is `core.snapshot-active` version `1`, established only
-   by `core.activate-snapshot`; latest transaction sequence wins. The singleton
+   by `core.activate-snapshot` or `core.rollback-snapshot`; latest transaction sequence wins. The singleton
    table is a checked pointer, not independent authority.
 9. Startup MUST recompute each retained file digest and catalog digest, verify
    canonical parsed records against raw bytes, validate occurrence/source
@@ -125,11 +148,23 @@ sourceCommitId, activatedAt }`.
     idempotency receipt. They MUST NOT copy candidate bytes or create a fact.
 14. Rejection recording failure MUST be reported alongside the original error
     and MUST NOT replace or disguise that original failure.
-15. This version refuses automatic ref rewinds and unrelated history but does
-    not yet define operator rollback, enforce freshness, poll, or purge
-    rejection history. Those operations require later
+15. Operator rollback MUST require an existing active snapshot, a different
+    exact target commit, a bounded rationale, the stored operator principal,
+    and an exact expected pre-command sequence. It MUST create a resolved
+    decision and a new snapshot/fact/event transaction without deleting or
+    editing any prior snapshot.
+16. Retained target bytes MUST permit rollback while the source is unavailable.
+    A non-retained target MUST pass the same bounded Git-object read and complete
+    validator as automatic activation. Neither path grants repository enrollment
+    or work.
+17. Activation and rollback idempotency MUST bind the observed pre-command
+    sequence as well as target commit. This MUST permit a commit to become
+    current again after an intervening rollback while preserving exact replay
+    of each original transition.
+18. This version refuses automatic ref rewinds and unrelated history but does
+    not yet enforce freshness, poll, or purge rejection history. Those operations require later
     typed commands and contracts before unattended polling.
-16. A schema version other than `2` or registry version other than `4` MUST fail
+19. A schema version other than `2` or registry version other than `5` MUST fail
     closed. This pre-production version defines no in-place upgrade; initialize
     a fresh target database.
 

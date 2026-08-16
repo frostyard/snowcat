@@ -41,6 +41,7 @@ observed target sequence:
 ```bash
 npm run --silent core -- verify
 npm run --silent core -- activate 1
+npm run --silent core -- rollback 2 <target-commit> "reason"
 npm run --silent core -- rejections
 ```
 
@@ -49,7 +50,8 @@ schema, fixture, and repository-declaration identities. A valid report is a
 candidate inspection, not enrollment. Activation creates a retained snapshot
 and current-authority fact, still not repository enrollment or work. Every
 later automatic activation requires verified Git ancestry from the active
-source commit.
+source commit. Operator rollback is a separate attributed decision that creates
+a new exact-target snapshot and retains all prior authority history.
 Failed activation attempts append bounded sanitized rejection observations and
 audit events without changing the active snapshot; standalone verification
 remains read-only.

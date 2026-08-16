@@ -10,6 +10,7 @@ import test from "node:test";
 import {
   CoreCandidateInspectionError,
   CoreSourceContinuityError,
+  inspectCoreCommit,
   inspectCoreCandidate,
   verifyCoreSourceContinuity,
   type InspectedCoreCandidate,
@@ -116,6 +117,13 @@ test("the Git source reads an exact commit through a bare mirror and rejects a s
       error.code === "candidate-not-descendant" &&
       error.activeCommitId === descendant.commitId,
   );
+
+  const exactPrior = await inspectCoreCommit(
+    { sourceUrl: source, ref: "refs/heads/rewritten", mirrorPath: mirror, allowFileSource: true },
+    valid.commitId,
+  );
+  assert.equal(exactPrior.commitId, valid.commitId);
+  assert.equal(exactPrior.catalogDigest, valid.catalogDigest);
 
   git(source, ["switch", "main"]);
 
@@ -323,6 +331,133 @@ test("a validated Core candidate is retained and activated atomically with exact
   reopened.close();
 });
 
+test("an attributed operator rollback creates a new snapshot and preserves later reactivation", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-core-operator-rollback-test-"));
+  const path = join(directory, "control-plane.db");
+  const first = await activationCandidate("1".repeat(40), "2".repeat(40));
+  const second = await activationCandidate("3".repeat(40), "4".repeat(40));
+  const store = new ControlPlaneStore(path, () => new Date("2026-08-16T16:00:00.000Z"));
+  const firstActivation = store.activateCoreSnapshot({ candidate: first, expectedLastTransactionSequence: 1 });
+  const secondActivation = store.activateCoreSnapshot({
+    candidate: second,
+    expectedLastTransactionSequence: 2,
+    continuityAncestorCommitId: first.commitId,
+  });
+
+  assert.throws(
+    () =>
+      store.rollbackCoreSnapshot({
+        candidate: first,
+        expectedLastTransactionSequence: 2,
+        reason: "This decision was rendered against stale authority",
+      }),
+    /stale control-plane sequence/,
+  );
+  assert.throws(
+    () =>
+      store.rollbackCoreSnapshot({
+        candidate: second,
+        expectedLastTransactionSequence: 3,
+        reason: "The requested target is already current",
+      }),
+    /already the active source commit/,
+  );
+  assert.equal(store.metadata().lastTransactionSequence, 3);
+
+  const rollback = store.rollbackCoreSnapshot({
+    candidate: first,
+    expectedLastTransactionSequence: 3,
+    reason: "Restore the last reviewed organization authority after the invalid change",
+  });
+  assert.equal(rollback.transactionSequence, 4);
+  assert.deepEqual(rollback.transactionPositions, [0, 1, 2, 3]);
+  assert.notEqual(rollback.snapshotId, firstActivation.snapshotId);
+  assert.equal(rollback.previousSnapshotId, secondActivation.snapshotId);
+  assert.equal(rollback.previousSourceCommitId, second.commitId);
+  assert.equal(rollback.operatorPrincipalId, store.metadata().operatorPrincipalId);
+  assert.equal(store.activeCoreSnapshot()?.sourceCommitId, first.commitId);
+  assert.deepEqual(
+    store.occurrences().slice(-4).map((occurrence) => [
+      occurrence.kind,
+      occurrence.recordClass,
+      occurrence.sourceKind,
+      occurrence.transactionPosition,
+    ]),
+    [
+      ["core.rollback-decision", "decision", "operator-principal", 0],
+      ["core.snapshot-definition", "definition", "github-repository", 1],
+      ["core.snapshot-active", "fact", "github-repository", 2],
+      ["core.snapshot-rollback-activated", undefined, "github-repository", 3],
+    ],
+  );
+  assert.deepEqual(
+    store.rollbackCoreSnapshot({
+      candidate: first,
+      expectedLastTransactionSequence: 3,
+      reason: rollback.reason,
+    }),
+    rollback,
+  );
+  assert.throws(
+    () =>
+      store.rollbackCoreSnapshot({
+        candidate: first,
+        expectedLastTransactionSequence: 3,
+        reason: "A conflicting rationale",
+      }),
+    /different command payload/,
+  );
+  assert.throws(
+    () =>
+      store.rollbackCoreSnapshot({
+        candidate: second,
+        expectedLastTransactionSequence: 4,
+        reason: " invalid surrounding whitespace ",
+      }),
+    /trimmed single line/,
+  );
+
+  const reactivated = store.activateCoreSnapshot({
+    candidate: second,
+    expectedLastTransactionSequence: 4,
+    continuityAncestorCommitId: first.commitId,
+  });
+  assert.equal(reactivated.transactionSequence, 5);
+  assert.notEqual(reactivated.snapshotId, secondActivation.snapshotId);
+  assert.equal(store.activeCoreSnapshot()?.sourceCommitId, second.commitId);
+  assert.equal(store.retainedCoreCandidate(first.commitId)?.catalogDigest, first.catalogDigest);
+  store.close();
+
+  const cliOutput = execFileSync(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "src/core/cli.ts",
+      "rollback",
+      "5",
+      first.commitId,
+      "Restore the retained reviewed authority through the operator CLI",
+    ],
+    { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, FLUENT_CONTROL_DB: path } },
+  );
+  const cliRollback = JSON.parse(cliOutput) as Record<string, unknown>;
+  assert.equal(cliRollback.sourceCommitId, first.commitId);
+  assert.equal(cliRollback.transactionSequence, 6);
+
+  const reopened = new ControlPlaneStore(path);
+  assert.equal(reopened.metadata().lastTransactionSequence, 6);
+  assert.equal(reopened.activeCoreSnapshot()?.sourceCommitId, first.commitId);
+  reopened.close();
+
+  const tampered = new DatabaseSync(path);
+  tampered
+    .prepare("UPDATE control_transactions SET principal_id = ? WHERE sequence = 6")
+    .run(uuidV7(new Date("2026-08-16T17:00:00.000Z")));
+  tampered.close();
+  assert.throws(() => new ControlPlaneStore(path), /Core snapshot rollback receipt shape is invalid/);
+});
+
 test("Core snapshot failure rolls back retained bytes and byte tampering fails closed", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fluent-core-rollback-test-"));
   const failedPath = join(directory, "failed.db");
@@ -343,6 +478,42 @@ test("Core snapshot failure rolls back retained bytes and byte tampering fails c
   assert.equal(failed.authoritativeDigest(), digest);
   assert.equal(failed.metadata().lastTransactionSequence, 1);
   failed.close();
+
+  const rollbackFailedPath = join(directory, "rollback-failed.db");
+  const successor = await activationCandidate("e".repeat(40), "f".repeat(40));
+  let injectRollbackFailure = false;
+  const rollbackFailed = new ControlPlaneStore(
+    rollbackFailedPath,
+    () => new Date("2026-08-16T14:30:00.000Z"),
+    (point) => {
+      if (injectRollbackFailure && point === "after-core-snapshot-files") {
+        throw new Error("injected Core rollback persistence failure");
+      }
+    },
+  );
+  rollbackFailed.activateCoreSnapshot({ candidate, expectedLastTransactionSequence: 1 });
+  rollbackFailed.activateCoreSnapshot({
+    candidate: successor,
+    expectedLastTransactionSequence: 2,
+    continuityAncestorCommitId: candidate.commitId,
+  });
+  injectRollbackFailure = true;
+  const beforeRollbackFailure = rollbackFailed.authoritativeDigest();
+  assert.throws(
+    () =>
+      rollbackFailed.rollbackCoreSnapshot({
+        candidate,
+        expectedLastTransactionSequence: 3,
+        reason: "Exercise atomic rollback of the operator rollback transition",
+      }),
+    (error) =>
+      error instanceof CoreSnapshotPersistenceError &&
+      /injected Core rollback persistence failure/.test(error.message),
+  );
+  assert.equal(rollbackFailed.authoritativeDigest(), beforeRollbackFailure);
+  assert.equal(rollbackFailed.metadata().lastTransactionSequence, 3);
+  assert.equal(rollbackFailed.activeCoreSnapshot()?.sourceCommitId, successor.commitId);
+  rollbackFailed.close();
 
   const tamperedPath = join(directory, "tampered.db");
   const stored = new ControlPlaneStore(tamperedPath, () => new Date("2026-08-16T15:00:00.000Z"));

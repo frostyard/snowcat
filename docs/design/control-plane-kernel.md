@@ -66,21 +66,25 @@ contracts:
 | Revision kind | `sha256`, `transaction-sequence`, `core-catalog-sha256`, `git-commit-sha1` | Exact payload, database-state, catalog, or source-commit identity |
 | Source kind | `fluent-system` / `kernel` | The deterministic kernel bootstrap source |
 | Source kind | `github-repository` | Immutable GitHub repository ID plus typed Git commit revision |
+| Source kind | `operator-principal` | Stored UUIDv7 human authority with no caller-selected revision |
 | Record kind | `control-plane.database-definition` v1 | An `organization`-class definition of the database lineage and schema/registry versions |
 | Record kind | `principal.definition` v1 | The `organization`-class definition of the implicit local operator |
 | Record kind | `control-plane.integrity-observation` v1 | The system's SQLite quick-check observation bound to the checked sequence |
 | Record kind | `core.snapshot-definition` v1 | Definition of one retained validated catalog and its source/report |
 | Record kind | `core.snapshot-active` v1 | Current-snapshot fact on the database subject |
 | Record kind | `core.candidate-rejection-observation` v1 | Bounded non-authoritative source/validation/continuity/persistence diagnostic |
+| Record kind | `core.rollback-decision` v1 | Resolved operator choice bound to exact prior Core authority, target commit, and reason |
 | Event kind | `control-plane.initialized` v1 | The past-tense account of successful initialization |
 | Event kind | `control-plane.integrity-checked` v1 | The past-tense account of the accepted integrity observation |
 | Event kind | `core.snapshot-activated` v1 | The past-tense account of selecting one snapshot |
 | Event kind | `core.candidate-rejected` v1 | The past-tense audit account of one rejected candidate check |
+| Event kind | `core.snapshot-rollback-activated` v1 | The past-tense account linking an operator decision, prior authority, and new snapshot |
 | Command kind | `control-plane.initialize` v1 | The fixed bootstrap transaction and its ordered outputs |
 | Command kind | `control-plane.check-integrity` v1 | An optimistic, idempotent system integrity check |
 | Command kind | `core.activate-snapshot` v1 | Atomic retention and activation of one independently revalidated candidate |
 | Command kind | `core.record-candidate-rejection` v1 | Idempotent bounded rejection observation and event |
-| Predicate contract | `core.snapshot-active` v1 | Established only by activation; latest transaction sequence wins |
+| Command kind | `core.rollback-snapshot` v1 | Atomic resolved decision and exact-target snapshot activation |
+| Predicate contract | `core.snapshot-active` v1 | Established by automatic activation or operator rollback; latest transaction sequence wins |
 | Projection contract | `control-plane.subject-lookup` v1 | Stable subject identity and creation-definition lookup |
 | Projection contract | `control-plane.event-cursor` v1 | Payload-free sequence/position cursor for accepted events |
 
@@ -192,6 +196,15 @@ it neither enters the active predicate family nor moves the checked pointer.
 Exact replay is keyed by the server check identity. Payloads and query limits
 are bounded now; history purge waits for the retention contract required before
 periodic polling.
+
+Operator rollback is a separate typed authority path, never a bypass flag on
+automatic activation. The local CLI binds the stored operator principal, exact
+pre-command sequence, active snapshot, target commit, and bounded rationale in
+a resolved decision record. The same transaction creates a new immutable
+snapshot, active fact, and rollback event whose causation points to that
+decision. A retained target is reconstructed from verified raw bytes so outage
+recovery does not depend on Git; an unretained target must pass the secured
+exact-commit reader. Prior snapshots are never updated or deleted.
 
 ### Rebuildable read models
 

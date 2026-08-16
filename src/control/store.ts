@@ -25,6 +25,8 @@ import {
   type CoreCandidateRejectionCode,
   type CoreCandidateRejectionPayload,
   type CoreCandidateRejectionStage,
+  type CoreRollbackActivatedPayload,
+  type CoreRollbackDecisionPayload,
   type ProjectionName,
   type RecordClass,
   type SubjectKind,
@@ -124,6 +126,29 @@ export interface CoreSnapshotActivationResult {
   sourceCommitId: string;
   importedAt: string;
   transactionPositions: readonly [0, 1, 2];
+  transactionSequence: number;
+}
+
+export interface CoreSnapshotRollbackInput {
+  candidate: InspectedCoreCandidate;
+  expectedLastTransactionSequence: number;
+  reason: string;
+}
+
+export interface CoreSnapshotRollbackResult {
+  decisionRecordId: string;
+  snapshotId: string;
+  definitionRecordId: string;
+  activeFactRecordId: string;
+  eventRecordId: string;
+  catalogDigest: string;
+  sourceCommitId: string;
+  previousSnapshotId: string;
+  previousSourceCommitId: string;
+  operatorPrincipalId: string;
+  reason: string;
+  importedAt: string;
+  transactionPositions: readonly [0, 1, 2, 3];
   transactionSequence: number;
 }
 
@@ -381,6 +406,43 @@ export class ControlPlaneStore {
       catalogDigest: String(row.catalog_digest),
       activatedAt: String(row.activated_at),
       transactionSequence: Number(row.activated_transaction_sequence),
+    };
+  }
+
+  retainedCoreCandidate(sourceCommitId: string): InspectedCoreCandidate | undefined {
+    if (!/^[0-9a-f]{40}$/.test(sourceCommitId)) {
+      throw new Error("retained Core candidate commit must be one canonical SHA-1 ID");
+    }
+    const snapshot = this.db
+      .prepare(
+        `SELECT * FROM core_snapshots
+         WHERE source_commit_id = ?
+         ORDER BY activated_transaction_sequence DESC
+         LIMIT 1`,
+      )
+      .get(sourceCommitId) as Row | undefined;
+    if (!snapshot) return undefined;
+    const files = this.db
+      .prepare("SELECT * FROM core_snapshot_files WHERE snapshot_id = ? ORDER BY path")
+      .all(snapshot.snapshot_id!) as Row[];
+    const entries: CoreTreeEntry[] = files.map((file) => {
+      if (!(file.raw_bytes instanceof Uint8Array)) {
+        throw new Error(`retained Core snapshot file is not bytes: ${String(file.path)}`);
+      }
+      return {
+        path: String(file.path),
+        mode: String(file.mode) as "100644" | "100755",
+        objectId: String(file.object_id),
+        bytes: file.raw_bytes,
+      };
+    });
+    return {
+      sourceUrl: String(snapshot.source_url),
+      ref: String(snapshot.source_ref),
+      commitId: String(snapshot.source_commit_id),
+      treeId: String(snapshot.source_tree_id),
+      files: entries,
+      ...validateCoreCatalog(entries),
     };
   }
 
@@ -793,7 +855,7 @@ export class ControlPlaneStore {
     assertMaterializedCoreCandidate(candidate);
     const validated = validateCoreCatalog(candidate.files);
     assertCandidateReport(candidate, validated);
-    const idempotencyKey = `core-activate:${candidate.commitId}`;
+    const idempotencyKey = `core-activate:${input.expectedLastTransactionSequence}:${candidate.commitId}`;
     const commandPayloadJson = canonicalJson({
       catalogDigest: validated.catalogDigest,
       expectedLastTransactionSequence: input.expectedLastTransactionSequence,
@@ -1045,6 +1107,359 @@ export class ControlPlaneStore {
              command_scope, command_kind, command_schema_version, idempotency_key,
              payload_digest, result_json, transaction_sequence, retained_until
            ) VALUES (?, 'core.activate-snapshot', 1, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          commandScope,
+          idempotencyKey,
+          commandPayloadDigest,
+          canonicalJson(result as unknown as JsonValue),
+          sequence,
+          IDEMPOTENCY_RETAINED_UNTIL,
+        );
+      this.db
+        .prepare(
+          `UPDATE control_plane_metadata
+           SET control_time_watermark = ?, last_transaction_sequence = ?
+           WHERE singleton = 1`,
+        )
+        .run(evaluationTime, sequence);
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      if (authorityWriteStarted) {
+        throw new CoreSnapshotPersistenceError(error instanceof Error ? error.message : String(error));
+      }
+      throw error;
+    }
+  }
+
+  rollbackCoreSnapshot(input: CoreSnapshotRollbackInput): CoreSnapshotRollbackResult {
+    if (!Number.isSafeInteger(input.expectedLastTransactionSequence) || input.expectedLastTransactionSequence < 1) {
+      throw new Error("expectedLastTransactionSequence must be a positive safe integer");
+    }
+    assertBoundedReason(input.reason, "Core rollback reason");
+    const candidate = input.candidate;
+    assertMaterializedCoreCandidate(candidate);
+    const validated = validateCoreCatalog(candidate.files);
+    assertCandidateReport(candidate, validated);
+    const idempotencyKey = `core-rollback:${input.expectedLastTransactionSequence}:${candidate.commitId}`;
+    const commandPayloadJson = canonicalJson({
+      catalogDigest: validated.catalogDigest,
+      expectedLastTransactionSequence: input.expectedLastTransactionSequence,
+      reason: input.reason,
+      sourceCommitId: candidate.commitId,
+      sourceRef: candidate.ref,
+      sourceTreeId: candidate.treeId,
+      sourceUrl: candidate.sourceUrl,
+    });
+    const commandPayloadDigest = sha256(commandPayloadJson);
+    let authorityWriteStarted = false;
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.verifyExisting(this.applicationTables());
+      const metadata = this.metadata();
+      const commandScope = `database:${metadata.databaseLineageId}`;
+      const prior = this.db
+        .prepare(
+          `SELECT payload_digest, result_json
+           FROM idempotency_receipts
+           WHERE command_scope = ? AND command_kind = 'core.rollback-snapshot'
+             AND command_schema_version = 1 AND idempotency_key = ?`,
+        )
+        .get(commandScope, idempotencyKey) as Row | undefined;
+      if (prior) {
+        if (String(prior.payload_digest) !== commandPayloadDigest) {
+          throw new Error("Core rollback target was already used with a different command payload");
+        }
+        const result = parseCoreSnapshotRollbackResult(parseJson(String(prior.result_json)));
+        this.db.exec("COMMIT");
+        return result;
+      }
+
+      const evaluationTime = this.now();
+      if (evaluationTime < metadata.controlTimeWatermark) {
+        throw new Error(
+          `control-plane clock moved backwards behind ${metadata.controlTimeWatermark}; refusing a new write transaction`,
+        );
+      }
+      if (metadata.lastTransactionSequence !== input.expectedLastTransactionSequence) {
+        throw new Error(
+          `stale control-plane sequence: expected ${input.expectedLastTransactionSequence}, current ${metadata.lastTransactionSequence}`,
+        );
+      }
+      const previous = this.activeCoreSnapshot();
+      if (!previous) throw new Error("Core rollback requires an active snapshot");
+      if (previous.sourceCommitId === candidate.commitId) {
+        throw new Error("Core rollback target is already the active source commit");
+      }
+
+      const decisionRecordId = uuidV7(new Date(evaluationTime));
+      const snapshotId = uuidV7(new Date(evaluationTime));
+      const transactionId = uuidV7(new Date(evaluationTime));
+      const definitionRecordId = uuidV7(new Date(evaluationTime));
+      const activeFactRecordId = uuidV7(new Date(evaluationTime));
+      const eventRecordId = uuidV7(new Date(evaluationTime));
+      const decisionPayload = {
+        decisionId: decisionRecordId,
+        decisionType: "core-rollback",
+        state: "resolved",
+        choice: "activate-target-commit",
+        databaseLineageId: metadata.databaseLineageId,
+        operatorPrincipalId: metadata.operatorPrincipalId,
+        activeSnapshotId: previous.snapshotId,
+        activeCommitId: previous.sourceCommitId,
+        targetCommitId: candidate.commitId,
+        targetCatalogDigest: validated.catalogDigest,
+        reason: input.reason,
+        expectedLastTransactionSequence: input.expectedLastTransactionSequence,
+        decidedAt: evaluationTime,
+      } satisfies CoreRollbackDecisionPayload;
+      if (!recordKindRegistry["core.rollback-decision"].validatePayload(decisionPayload)) {
+        throw new Error("Core rollback decision is outside the registered contract");
+      }
+      const definitionPayload = {
+        snapshotId,
+        sourceRepositoryId: "github.com:1331309458",
+        sourceUrl: candidate.sourceUrl,
+        sourceRef: candidate.ref,
+        sourceCommitId: candidate.commitId,
+        sourceTreeId: candidate.treeId,
+        catalogDigest: validated.catalogDigest,
+        fileCount: validated.fileCount,
+        totalBytes: validated.totalBytes,
+        repositoryCount: validated.repositoryCount,
+        validFixtureCount: validated.validFixtureCount,
+        invalidFixtureCount: validated.invalidFixtureCount,
+        schemaDigests: validated.schemaDigests,
+        importedAt: evaluationTime,
+      } satisfies JsonValue;
+      if (!recordKindRegistry["core.snapshot-definition"].validatePayload(definitionPayload)) {
+        throw new Error("Core rollback candidate is outside the snapshot definition contract");
+      }
+      const activePayload = {
+        databaseLineageId: metadata.databaseLineageId,
+        snapshotId,
+        catalogDigest: validated.catalogDigest,
+        sourceCommitId: candidate.commitId,
+        activatedAt: evaluationTime,
+      } satisfies JsonValue;
+      const rollbackEventPayload = {
+        databaseLineageId: metadata.databaseLineageId,
+        snapshotId,
+        catalogDigest: validated.catalogDigest,
+        sourceCommitId: candidate.commitId,
+        previousSnapshotId: previous.snapshotId,
+        previousSourceCommitId: previous.sourceCommitId,
+        decisionRecordId,
+        operatorPrincipalId: metadata.operatorPrincipalId,
+        reason: input.reason,
+        activatedAt: evaluationTime,
+      } satisfies CoreRollbackActivatedPayload;
+      if (!eventKindRegistry["core.snapshot-rollback-activated"].validatePayload(rollbackEventPayload)) {
+        throw new Error("Core rollback activation event is outside the registered contract");
+      }
+      const decisionPayloadJson = canonicalJson(decisionPayload);
+      const definitionPayloadJson = canonicalJson(definitionPayload);
+      const activePayloadJson = canonicalJson(activePayload);
+      const rollbackEventPayloadJson = canonicalJson(rollbackEventPayload);
+      const informationScopeJson = canonicalJson({ deploymentId: metadata.databaseLineageId });
+
+      authorityWriteStarted = true;
+      const transaction = this.db
+        .prepare(
+          `INSERT INTO control_transactions (
+             transaction_id, command_kind, command_schema_version, principal_kind,
+             principal_id, session_id, idempotency_key, payload_digest,
+             evaluation_time, recorded_at
+           ) VALUES (?, 'core.rollback-snapshot', 1, 'operator-principal', ?, NULL, ?, ?, ?, ?)`,
+        )
+        .run(
+          transactionId,
+          metadata.operatorPrincipalId,
+          idempotencyKey,
+          commandPayloadDigest,
+          evaluationTime,
+          evaluationTime,
+        );
+      const sequence = Number(transaction.lastInsertRowid);
+      this.insertOccurrence({
+        recordId: decisionRecordId,
+        occurrenceType: "record",
+        kind: "core.rollback-decision",
+        schemaVersion: 1,
+        recordClass: "decision",
+        subjectKind: "control-plane-database",
+        subjectId: metadata.databaseLineageId,
+        revisionKind: "transaction-sequence",
+        revisionValue: String(input.expectedLastTransactionSequence),
+        sourceKind: "operator-principal",
+        sourceId: metadata.operatorPrincipalId,
+        informationClass: "organization",
+        informationScopeJson,
+        payloadJson: decisionPayloadJson,
+        payloadDigest: sha256(decisionPayloadJson),
+        correlationId: decisionRecordId,
+        transactionSequence: sequence,
+        transactionPosition: 0,
+        recordedAt: evaluationTime,
+      });
+      this.db
+        .prepare(
+          `INSERT INTO subjects (subject_kind, subject_id, created_transaction_sequence)
+           VALUES ('core-snapshot', ?, ?)`,
+        )
+        .run(snapshotId, sequence);
+      const source = {
+        sourceKind: "github-repository",
+        sourceId: "github.com:1331309458",
+        sourceRevisionKind: "git-commit-sha1",
+        sourceRevisionValue: `sha1:${candidate.commitId}`,
+      };
+      this.insertOccurrence({
+        recordId: definitionRecordId,
+        occurrenceType: "record",
+        kind: "core.snapshot-definition",
+        schemaVersion: 1,
+        recordClass: "definition",
+        subjectKind: "core-snapshot",
+        subjectId: snapshotId,
+        revisionKind: "core-catalog-sha256",
+        revisionValue: validated.catalogDigest,
+        ...source,
+        informationClass: "organization",
+        informationScopeJson,
+        payloadJson: definitionPayloadJson,
+        payloadDigest: sha256(definitionPayloadJson),
+        correlationId: decisionRecordId,
+        causationRecordId: decisionRecordId,
+        transactionSequence: sequence,
+        transactionPosition: 1,
+        recordedAt: evaluationTime,
+      });
+      this.insertOccurrence({
+        recordId: activeFactRecordId,
+        occurrenceType: "record",
+        kind: "core.snapshot-active",
+        schemaVersion: 1,
+        recordClass: "fact",
+        subjectKind: "control-plane-database",
+        subjectId: metadata.databaseLineageId,
+        revisionKind: "transaction-sequence",
+        revisionValue: String(sequence),
+        ...source,
+        informationClass: "organization",
+        informationScopeJson,
+        payloadJson: activePayloadJson,
+        payloadDigest: sha256(activePayloadJson),
+        correlationId: decisionRecordId,
+        causationRecordId: decisionRecordId,
+        transactionSequence: sequence,
+        transactionPosition: 2,
+        recordedAt: evaluationTime,
+      });
+      this.insertOccurrence({
+        recordId: eventRecordId,
+        occurrenceType: "event",
+        kind: "core.snapshot-rollback-activated",
+        schemaVersion: 1,
+        subjectKind: "core-snapshot",
+        subjectId: snapshotId,
+        revisionKind: "core-catalog-sha256",
+        revisionValue: validated.catalogDigest,
+        ...source,
+        informationClass: "organization",
+        informationScopeJson,
+        payloadJson: rollbackEventPayloadJson,
+        payloadDigest: sha256(rollbackEventPayloadJson),
+        correlationId: decisionRecordId,
+        causationRecordId: decisionRecordId,
+        transactionSequence: sequence,
+        transactionPosition: 3,
+        recordedAt: evaluationTime,
+      });
+      this.db
+        .prepare(
+          `INSERT INTO core_snapshots (
+             snapshot_id, snapshot_kind, source_kind, source_id, source_url, source_ref,
+             source_commit_id, source_tree_id, catalog_digest, imported_at,
+             definition_record_id, active_fact_record_id, activation_event_record_id,
+             activated_transaction_sequence
+           ) VALUES (?, 'core-snapshot', 'github-repository', 'github.com:1331309458', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          snapshotId,
+          candidate.sourceUrl,
+          candidate.ref,
+          candidate.commitId,
+          candidate.treeId,
+          validated.catalogDigest,
+          evaluationTime,
+          definitionRecordId,
+          activeFactRecordId,
+          eventRecordId,
+          sequence,
+        );
+      const insertFile = this.db.prepare(
+        `INSERT INTO core_snapshot_files (
+           snapshot_id, path, mode, object_id, byte_size, content_digest, parsed_json, raw_bytes
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      const parsedRepositories = new Map(
+        validated.repositories.map((repository) => [
+          repository.path,
+          canonicalJson(repository.declaration as unknown as JsonValue),
+        ]),
+      );
+      for (const file of [...candidate.files].sort((left, right) => left.path.localeCompare(right.path))) {
+        insertFile.run(
+          snapshotId,
+          file.path,
+          file.mode,
+          file.objectId,
+          file.bytes.byteLength,
+          sha256Bytes(file.bytes),
+          parsedRepositories.get(file.path) ?? null,
+          file.bytes,
+        );
+      }
+      this.faultInjector?.("after-core-snapshot-files");
+      this.db
+        .prepare(
+          `INSERT INTO core_active_snapshot (
+             singleton, snapshot_id, fact_record_id, activated_transaction_sequence, activated_at
+           ) VALUES (1, ?, ?, ?, ?)
+           ON CONFLICT(singleton) DO UPDATE SET
+             snapshot_id = excluded.snapshot_id,
+             fact_record_id = excluded.fact_record_id,
+             activated_transaction_sequence = excluded.activated_transaction_sequence,
+             activated_at = excluded.activated_at`,
+        )
+        .run(snapshotId, activeFactRecordId, sequence, evaluationTime);
+
+      const result: CoreSnapshotRollbackResult = {
+        decisionRecordId,
+        snapshotId,
+        definitionRecordId,
+        activeFactRecordId,
+        eventRecordId,
+        catalogDigest: validated.catalogDigest,
+        sourceCommitId: candidate.commitId,
+        previousSnapshotId: previous.snapshotId,
+        previousSourceCommitId: previous.sourceCommitId,
+        operatorPrincipalId: metadata.operatorPrincipalId,
+        reason: input.reason,
+        importedAt: evaluationTime,
+        transactionPositions: [0, 1, 2, 3],
+        transactionSequence: sequence,
+      };
+      this.db
+        .prepare(
+          `INSERT INTO idempotency_receipts (
+             command_scope, command_kind, command_schema_version, idempotency_key,
+             payload_digest, result_json, transaction_sequence, retained_until
+           ) VALUES (?, 'core.rollback-snapshot', 1, ?, ?, ?, ?, ?)`,
         )
         .run(
           commandScope,
@@ -1571,6 +1986,7 @@ export class ControlPlaneStore {
     payloadJson: string;
     payloadDigest: string;
     correlationId: string;
+    causationRecordId?: string;
     transactionSequence: number;
     transactionPosition: number;
     recordedAt: string;
@@ -1582,8 +1998,8 @@ export class ControlPlaneStore {
            revision_kind, revision_value, source_kind, source_id,
            source_revision_kind, source_revision_value,
            information_class, information_scope_json, payload_json, payload_digest,
-           correlation_id, transaction_sequence, transaction_position, recorded_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           correlation_id, causation_record_id, transaction_sequence, transaction_position, recorded_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.recordId,
@@ -1603,6 +2019,7 @@ export class ControlPlaneStore {
         input.payloadJson,
         input.payloadDigest,
         input.correlationId,
+        input.causationRecordId ?? null,
         input.transactionSequence,
         input.transactionPosition,
         input.recordedAt,
@@ -2065,10 +2482,22 @@ export class ControlPlaneStore {
       } else if (row.command_kind === "core.activate-snapshot") {
         if (
           typeof row.idempotency_key !== "string" ||
-          !/^core-activate:[0-9a-f]{40}$/.test(row.idempotency_key) ||
+          !/^core-activate:[1-9][0-9]*:[0-9a-f]{40}$/.test(row.idempotency_key) ||
+          row.principal_kind !== "fluent-system" ||
+          row.principal_id !== "kernel" ||
           receiptCount !== 1
         ) {
           throw new Error(`Core snapshot activation receipt shape is invalid: ${String(row.sequence)}`);
+        }
+      } else if (row.command_kind === "core.rollback-snapshot") {
+        if (
+          typeof row.idempotency_key !== "string" ||
+          !/^core-rollback:[1-9][0-9]*:[0-9a-f]{40}$/.test(row.idempotency_key) ||
+          row.principal_kind !== "operator-principal" ||
+          row.principal_id !== this.metadata().operatorPrincipalId ||
+          receiptCount !== 1
+        ) {
+          throw new Error(`Core snapshot rollback receipt shape is invalid: ${String(row.sequence)}`);
         }
       } else if (row.command_kind === "core.record-candidate-rejection") {
         if (
@@ -2188,6 +2617,39 @@ export class ControlPlaneStore {
       ) {
         throw new Error(`Core candidate rejection lineage mismatch: ${String(row.record_id)}`);
       }
+      if (String(row.kind) === "core.rollback-decision") {
+        const decision = payload as CoreRollbackDecisionPayload;
+        if (
+          String(row.subject_id) !== this.metadata().databaseLineageId ||
+          String(row.source_kind) !== "operator-principal" ||
+          String(row.source_id) !== this.metadata().operatorPrincipalId ||
+          row.source_revision_kind != null ||
+          row.source_revision_value != null ||
+          String(row.record_id) !== decision.decisionId ||
+          String(row.correlation_id) !== decision.decisionId ||
+          row.causation_record_id != null ||
+          decision.databaseLineageId !== this.metadata().databaseLineageId ||
+          decision.operatorPrincipalId !== this.metadata().operatorPrincipalId ||
+          String(row.recorded_at) !== decision.decidedAt ||
+          String(row.revision_kind) !== "transaction-sequence" ||
+          Number(row.revision_value) !== decision.expectedLastTransactionSequence
+        ) {
+          throw new Error(`Core rollback decision lineage mismatch: ${String(row.record_id)}`);
+        }
+      }
+      if (String(row.kind) === "core.snapshot-rollback-activated") {
+        const rollback = payload as CoreRollbackActivatedPayload;
+        if (
+          String(row.subject_id) !== rollback.snapshotId ||
+          String(row.correlation_id) !== rollback.decisionRecordId ||
+          String(row.causation_record_id) !== rollback.decisionRecordId ||
+          rollback.databaseLineageId !== this.metadata().databaseLineageId ||
+          rollback.operatorPrincipalId !== this.metadata().operatorPrincipalId ||
+          String(row.recorded_at) !== rollback.activatedAt
+        ) {
+          throw new Error(`Core rollback activation lineage mismatch: ${String(row.record_id)}`);
+        }
+      }
       if (row.revision_kind === "sha256" && String(row.revision_value) !== String(row.payload_digest)) {
         throw new Error(`database occurrence revision does not match its payload: ${String(row.record_id)}`);
       }
@@ -2296,7 +2758,7 @@ export class ControlPlaneStore {
       }
       if (
         !event ||
-        event.kind !== "core.snapshot-activated" ||
+        (event.kind !== "core.snapshot-activated" && event.kind !== "core.snapshot-rollback-activated") ||
         event.subject_id !== snapshotId ||
         Number(event.transaction_sequence) !== Number(snapshot.activated_transaction_sequence)
       ) {
@@ -2340,10 +2802,84 @@ export class ControlPlaneStore {
         activePayload.sourceCommitId !== String(snapshot.source_commit_id) ||
         activePayload.activatedAt !== String(snapshot.imported_at) ||
         activePayload.databaseLineageId !== this.metadata().databaseLineageId ||
-        fact.subject_id !== this.metadata().databaseLineageId ||
-        String(fact.payload_json) !== String(event.payload_json)
+        fact.subject_id !== this.metadata().databaseLineageId
       ) {
         throw new Error(`Core snapshot activation payload mismatch: ${snapshotId}`);
+      }
+      if (event.kind === "core.snapshot-activated") {
+        if (
+          String(fact.payload_json) !== String(event.payload_json) ||
+          definition.causation_record_id != null ||
+          fact.causation_record_id != null ||
+          event.causation_record_id != null
+        ) {
+          throw new Error(`automatic Core snapshot activation lineage mismatch: ${snapshotId}`);
+        }
+      } else {
+        const rollbackPayload = parseJson(String(event.payload_json));
+        if (!eventKindRegistry["core.snapshot-rollback-activated"].validatePayload(rollbackPayload)) {
+          throw new Error(`Core rollback activation payload mismatch: ${snapshotId}`);
+        }
+        const rollback = rollbackPayload as CoreRollbackActivatedPayload;
+        const decision = this.db
+          .prepare(
+            `SELECT occurrence.*, record.record_class
+             FROM durable_occurrences occurrence
+             JOIN durable_records record ON record.record_id = occurrence.record_id
+             WHERE occurrence.record_id = ?`,
+          )
+          .get(rollback.decisionRecordId) as Row | undefined;
+        const decisionPayload = decision ? parseJson(String(decision.payload_json)) : undefined;
+        const transaction = this.db
+          .prepare("SELECT principal_kind, principal_id FROM control_transactions WHERE sequence = ?")
+          .get(snapshot.activated_transaction_sequence!) as Row | undefined;
+        if (
+          !decision ||
+          !decisionPayload ||
+          !recordKindRegistry["core.rollback-decision"].validatePayload(decisionPayload) ||
+          decision.record_class !== "decision" ||
+          Number(decision.transaction_sequence) !== Number(snapshot.activated_transaction_sequence) ||
+          Number(decision.transaction_position) !== 0 ||
+          rollback.snapshotId !== snapshotId ||
+          rollback.catalogDigest !== catalogDigest ||
+          rollback.sourceCommitId !== String(snapshot.source_commit_id) ||
+          rollback.activatedAt !== String(snapshot.imported_at) ||
+          rollback.operatorPrincipalId !== this.metadata().operatorPrincipalId ||
+          definition.causation_record_id !== rollback.decisionRecordId ||
+          fact.causation_record_id !== rollback.decisionRecordId ||
+          event.causation_record_id !== rollback.decisionRecordId ||
+          definition.correlation_id !== rollback.decisionRecordId ||
+          fact.correlation_id !== rollback.decisionRecordId ||
+          event.correlation_id !== rollback.decisionRecordId ||
+          (decisionPayload as CoreRollbackDecisionPayload).activeSnapshotId !== rollback.previousSnapshotId ||
+          (decisionPayload as CoreRollbackDecisionPayload).activeCommitId !== rollback.previousSourceCommitId ||
+          (decisionPayload as CoreRollbackDecisionPayload).targetCommitId !== rollback.sourceCommitId ||
+          (decisionPayload as CoreRollbackDecisionPayload).targetCatalogDigest !== rollback.catalogDigest ||
+          (decisionPayload as CoreRollbackDecisionPayload).reason !== rollback.reason ||
+          (decisionPayload as CoreRollbackDecisionPayload).expectedLastTransactionSequence !==
+            Number(snapshot.activated_transaction_sequence) - 1 ||
+          transaction?.principal_kind !== "operator-principal" ||
+          transaction.principal_id !== this.metadata().operatorPrincipalId
+        ) {
+          throw new Error(`Core rollback decision/activation linkage mismatch: ${snapshotId}`);
+        }
+        const previousSnapshot = this.db
+          .prepare("SELECT source_commit_id FROM core_snapshots WHERE snapshot_id = ?")
+          .get(rollback.previousSnapshotId) as Row | undefined;
+        const immediatelyPrevious = this.db
+          .prepare(
+            `SELECT snapshot_id FROM core_snapshots
+             WHERE activated_transaction_sequence < ?
+             ORDER BY activated_transaction_sequence DESC LIMIT 1`,
+          )
+          .get(snapshot.activated_transaction_sequence!) as Row | undefined;
+        if (
+          !previousSnapshot ||
+          previousSnapshot.source_commit_id !== rollback.previousSourceCommitId ||
+          immediatelyPrevious?.snapshot_id !== rollback.previousSnapshotId
+        ) {
+          throw new Error(`Core rollback previous-snapshot linkage mismatch: ${snapshotId}`);
+        }
       }
     }
 
@@ -2382,11 +2918,13 @@ export class ControlPlaneStore {
       }
       if (commandKind === "control-plane.check-integrity") parseIntegrityCheckResult(result);
       if (commandKind === "core.activate-snapshot") parseCoreSnapshotActivationResult(result);
+      if (commandKind === "core.rollback-snapshot") parseCoreSnapshotRollbackResult(result);
       if (commandKind === "core.record-candidate-rejection") parseCoreCandidateRejectionResult(result);
       assertUtcInstant(String(row.retained_until), `idempotency receipt ${String(row.idempotency_key)} retention time`);
       if (
         (commandKind === "control-plane.check-integrity" ||
           commandKind === "core.activate-snapshot" ||
+          commandKind === "core.rollback-snapshot" ||
           commandKind === "core.record-candidate-rejection") &&
         String(row.retained_until) !== IDEMPOTENCY_RETAINED_UNTIL
       ) {
@@ -2446,6 +2984,8 @@ export class ControlPlaneStore {
       if (commandKind === "core.activate-snapshot") {
         const activation = parseCoreSnapshotActivationResult(result);
         if (
+          String(row.idempotency_key) !==
+            `core-activate:${activation.transactionSequence - 1}:${activation.sourceCommitId}` ||
           activation.transactionSequence !== Number(row.transaction_sequence) ||
           activation.importedAt !== String(transaction.evaluation_time) ||
           activation.importedAt !== String(transaction.recorded_at)
@@ -2465,6 +3005,49 @@ export class ControlPlaneStore {
           String(outputs[2]!.record_id) !== activation.eventRecordId
         ) {
           throw new Error(`Core activation receipt result output mismatch: ${String(row.idempotency_key)}`);
+        }
+      }
+      if (commandKind === "core.rollback-snapshot") {
+        const rollback = parseCoreSnapshotRollbackResult(result);
+        if (
+          String(row.idempotency_key) !==
+            `core-rollback:${rollback.transactionSequence - 1}:${rollback.sourceCommitId}` ||
+          rollback.transactionSequence !== Number(row.transaction_sequence) ||
+          rollback.importedAt !== String(transaction.evaluation_time) ||
+          rollback.importedAt !== String(transaction.recorded_at)
+        ) {
+          throw new Error(`Core rollback receipt result transaction mismatch: ${String(row.idempotency_key)}`);
+        }
+        const outputs = this.db
+          .prepare(
+            `SELECT record_id FROM durable_occurrences
+             WHERE transaction_sequence = ? ORDER BY transaction_position`,
+          )
+          .all(row.transaction_sequence!) as Row[];
+        if (
+          outputs.length !== 4 ||
+          String(outputs[0]!.record_id) !== rollback.decisionRecordId ||
+          String(outputs[1]!.record_id) !== rollback.definitionRecordId ||
+          String(outputs[2]!.record_id) !== rollback.activeFactRecordId ||
+          String(outputs[3]!.record_id) !== rollback.eventRecordId
+        ) {
+          throw new Error(`Core rollback receipt result output mismatch: ${String(row.idempotency_key)}`);
+        }
+        const decisionRow = this.db
+          .prepare("SELECT payload_json FROM durable_occurrences WHERE record_id = ?")
+          .get(rollback.decisionRecordId) as Row | undefined;
+        const decisionPayload = decisionRow ? parseJson(String(decisionRow.payload_json)) : undefined;
+        if (
+          !decisionPayload ||
+          !recordKindRegistry["core.rollback-decision"].validatePayload(decisionPayload) ||
+          decisionPayload.operatorPrincipalId !== rollback.operatorPrincipalId ||
+          decisionPayload.activeSnapshotId !== rollback.previousSnapshotId ||
+          decisionPayload.activeCommitId !== rollback.previousSourceCommitId ||
+          decisionPayload.targetCommitId !== rollback.sourceCommitId ||
+          decisionPayload.targetCatalogDigest !== rollback.catalogDigest ||
+          decisionPayload.reason !== rollback.reason
+        ) {
+          throw new Error(`Core rollback receipt result decision mismatch: ${String(row.idempotency_key)}`);
         }
       }
       if (commandKind === "core.record-candidate-rejection") {
@@ -3034,6 +3617,74 @@ function parseCoreSnapshotActivationResult(value: JsonValue): CoreSnapshotActiva
   };
 }
 
+function parseCoreSnapshotRollbackResult(value: JsonValue): CoreSnapshotRollbackResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("invalid Core snapshot rollback receipt result");
+  }
+  const result = value as Record<string, JsonValue>;
+  const expected = [
+    "decisionRecordId",
+    "snapshotId",
+    "definitionRecordId",
+    "activeFactRecordId",
+    "eventRecordId",
+    "catalogDigest",
+    "sourceCommitId",
+    "previousSnapshotId",
+    "previousSourceCommitId",
+    "operatorPrincipalId",
+    "reason",
+    "importedAt",
+    "transactionPositions",
+    "transactionSequence",
+  ].sort();
+  const keys = Object.keys(result).sort();
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
+    throw new Error("invalid Core snapshot rollback receipt result fields");
+  }
+  if (
+    !isUuidV7(String(result.decisionRecordId)) ||
+    !isUuidV7(String(result.snapshotId)) ||
+    !isUuidV7(String(result.definitionRecordId)) ||
+    !isUuidV7(String(result.activeFactRecordId)) ||
+    !isUuidV7(String(result.eventRecordId)) ||
+    !isUuidV7(String(result.previousSnapshotId)) ||
+    !isUuidV7(String(result.operatorPrincipalId)) ||
+    !/^sha256:[0-9a-f]{64}$/.test(String(result.catalogDigest)) ||
+    !/^[0-9a-f]{40}$/.test(String(result.sourceCommitId)) ||
+    !/^[0-9a-f]{40}$/.test(String(result.previousSourceCommitId)) ||
+    typeof result.reason !== "string" ||
+    !Array.isArray(result.transactionPositions) ||
+    result.transactionPositions.length !== 4 ||
+    result.transactionPositions[0] !== 0 ||
+    result.transactionPositions[1] !== 1 ||
+    result.transactionPositions[2] !== 2 ||
+    result.transactionPositions[3] !== 3 ||
+    !Number.isSafeInteger(result.transactionSequence) ||
+    Number(result.transactionSequence) < 2
+  ) {
+    throw new Error("invalid Core snapshot rollback receipt result values");
+  }
+  assertBoundedReason(String(result.reason), "Core rollback result reason");
+  assertUtcInstant(String(result.importedAt), "Core snapshot rollback import time");
+  return {
+    decisionRecordId: String(result.decisionRecordId),
+    snapshotId: String(result.snapshotId),
+    definitionRecordId: String(result.definitionRecordId),
+    activeFactRecordId: String(result.activeFactRecordId),
+    eventRecordId: String(result.eventRecordId),
+    catalogDigest: String(result.catalogDigest),
+    sourceCommitId: String(result.sourceCommitId),
+    previousSnapshotId: String(result.previousSnapshotId),
+    previousSourceCommitId: String(result.previousSourceCommitId),
+    operatorPrincipalId: String(result.operatorPrincipalId),
+    reason: String(result.reason),
+    importedAt: String(result.importedAt),
+    transactionPositions: [0, 1, 2, 3],
+    transactionSequence: Number(result.transactionSequence),
+  };
+}
+
 function parseCoreCandidateRejectionResult(value: JsonValue): CoreCandidateRejectionResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("invalid Core candidate rejection receipt result");
@@ -3144,6 +3795,17 @@ function assertMaterializedCoreCandidate(candidate: InspectedCoreCandidate): voi
     totalBytes += file.bytes.byteLength;
   }
   if (totalBytes > 8_388_608) throw new Error("Core snapshot activation bytes exceed the bounded source contract");
+}
+
+function assertBoundedReason(value: string, label: string): void {
+  if (
+    Buffer.byteLength(value, "utf8") < 1 ||
+    Buffer.byteLength(value, "utf8") > 512 ||
+    /[\u0000-\u001f\u007f]/.test(value) ||
+    value !== value.trim()
+  ) {
+    throw new Error(`${label} must be a trimmed single line from 1 through 512 UTF-8 bytes`);
+  }
 }
 
 function sha256Bytes(value: Uint8Array): string {

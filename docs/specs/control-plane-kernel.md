@@ -26,7 +26,7 @@ transaction sequence.
 `ControlPlaneStore.occurrences()` returns occurrences ordered by transaction
 sequence and position. Neither method mutates the database or returns a secret.
 
-### Closed registry version 4
+### Closed registry version 5
 
 | Registry | Name | Version or ID rule | Contract |
 | --- | --- | --- | --- |
@@ -39,21 +39,25 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Revision | `git-commit-sha1` | `sha1:` plus 40 lowercase hexadecimal characters | Exact Git source commit |
 | Source | `fluent-system` | Only source ID `kernel` | Internal deterministic bootstrap source |
 | Source | `github-repository` | `github.com:` plus immutable positive numeric repository ID | Source revision must be `git-commit-sha1` |
+| Source | `operator-principal` | UUIDv7 matching a stored operator subject | Human authority source; accepts no source revision |
 | Record | `control-plane.database-definition` | Schema 1 | Class `definition`; subject `control-plane-database`; minimum class `organization` |
 | Record | `principal.definition` | Schema 1 | Class `definition`; subject `operator-principal`; minimum class `organization` |
 | Record | `control-plane.integrity-observation` | Schema 1 | Class `observation`; subject `control-plane-database`; minimum class `organization` |
 | Record | `core.snapshot-definition` | Schema 1 | Class `definition`; subject `core-snapshot`; minimum class `organization` |
 | Record | `core.snapshot-active` | Schema 1 | Class `fact`; subject `control-plane-database`; minimum class `organization` |
 | Record | `core.candidate-rejection-observation` | Schema 1 | Class `observation`; subject `control-plane-database`; minimum class `organization` |
+| Record | `core.rollback-decision` | Schema 1 | Class `decision`; subject `control-plane-database`; minimum class `organization` |
 | Event | `control-plane.initialized` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
 | Event | `control-plane.integrity-checked` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
 | Event | `core.snapshot-activated` | Schema 1 | Subject `core-snapshot`; minimum class `organization` |
 | Event | `core.candidate-rejected` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
+| Event | `core.snapshot-rollback-activated` | Schema 1 | Subject `core-snapshot`; minimum class `organization` |
 | Command | `control-plane.initialize` | Schema 1 | Outputs database definition, principal definition, then initialization event |
 | Command | `control-plane.check-integrity` | Schema 1 | Outputs the integrity observation, then integrity-checked event |
 | Command | `core.activate-snapshot` | Schema 1 | Outputs snapshot definition, active fact, then activation event |
 | Command | `core.record-candidate-rejection` | Schema 1 | Outputs rejection observation, then rejection event |
-| Predicate | `core.snapshot-active` | Contract 1 | Established by `core.activate-snapshot`; latest transaction sequence wins |
+| Command | `core.rollback-snapshot` | Schema 1 | Outputs resolved decision, snapshot definition, active fact, then rollback event |
+| Predicate | `core.snapshot-active` | Contract 1 | Established by automatic activation or operator rollback; latest transaction sequence wins |
 | Projection | `control-plane.subject-lookup` | Contract, transformation, and information-handling version 1 | Stable subjects and creation definitions for internal diagnostics |
 | Projection | `control-plane.event-cursor` | Contract, transformation, and information-handling version 1 | Payload-free event cursor for internal diagnostics and ProcessObserver |
 
@@ -64,7 +68,7 @@ invalid:
 {
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
   "operatorPrincipalId": "0198b0a6-c200-7abc-8def-0123456789ac",
-  "registryVersion": 4,
+  "registryVersion": 5,
   "schemaVersion": 2
 }
 ```
@@ -87,7 +91,7 @@ The integrity observation and event payload have this exact shape:
 {
   "checkedThroughSequence": 1,
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
-  "registryVersion": 4,
+  "registryVersion": 5,
   "result": "ok",
   "schemaVersion": 2
 }
@@ -127,6 +131,13 @@ expectation because it observes a rejected candidate rather than mutating the
 active predicate. `coreCandidateRejections(limit)` returns newest observations
 only, with a limit from 1 through 100. Exact payload constraints live in
 [Core snapshot activation](core-snapshot-activation.md).
+
+`rollbackCoreSnapshot(input)` accepts a completely materialized target
+candidate, exact positive pre-command sequence, and bounded operator reason. It
+atomically creates the registered resolved decision plus a new snapshot,
+active fact, rollback event, receipt, and pointer. `retainedCoreCandidate(commit)`
+provides independently revalidated retained bytes for outage recovery; a target
+not already retained is materialized through the exact-commit Git source path.
 
 ### Projection interface
 
@@ -276,7 +287,7 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
    initialization transaction.
 5. Older, newer, incomplete, unexpected, or differently identified schemas
    MUST fail closed. Unregistered indexes, triggers, and views are unexpected.
-   Schema version 2 and registry version 4 define no upgrade path from earlier
+   Schema version 2 and registry version 5 define no upgrade path from earlier
    pre-production target stores.
 6. Subject, record, event, command, source, revision, record-class, and
    information-class names MUST come from the code-owned versioned registries.
@@ -395,9 +406,10 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
 41. The CLI MUST NOT expose generic SQL, record/fact mutation, live restore
     replacement, worker execution, provider credentials, lease tokens, or a way
     to reinterpret projection output as authority.
-42. `core.activate-snapshot` MUST be the only establishment path for predicate
-    `core.snapshot-active`; the latest accepted transaction sequence MUST define
-    precedence, and the singleton pointer MUST be validated against that fact.
+42. `core.activate-snapshot` and `core.rollback-snapshot` MUST be the only
+    establishment paths for predicate `core.snapshot-active`; the latest accepted
+    transaction sequence MUST define precedence, and the singleton pointer MUST
+    be validated against that fact.
 43. Startup MUST validate retained Core raw bytes, content and catalog digests,
     canonical parsed live declarations, source revisions, ordered outputs,
     idempotency receipts, and all snapshot/pointer occurrence lineage.
@@ -419,6 +431,14 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
     adapter's ancestry binding to equal the source commit of the active snapshot
     under the same writer lock. Missing or stale bindings MUST allocate no
     transaction, snapshot, fact, event, receipt, or pointer change.
+49. `core.rollback-snapshot` MUST run as the stored `operator-principal`, bind
+    the exact prior sequence and active snapshot, require a different exact
+    target commit and bounded reason, and emit one decision followed by the new
+    definition, fact, and rollback event at positions 0 through 3.
+50. Startup MUST verify rollback decision, operator, previous-snapshot, target,
+    reason, causation, event, receipt, and transaction linkage. A rollback MUST
+    retain every prior snapshot and MUST create a new snapshot identity even
+    when target bytes were previously retained.
 
 ## Derived artifacts
 

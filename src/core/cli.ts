@@ -4,6 +4,7 @@ import {
   CoreCandidateInspectionError,
   CoreSourceContinuityError,
   coreGitSourceConfig,
+  inspectCoreCommit,
   inspectCoreCandidate,
   verifyCoreSourceContinuity,
   type InspectedCoreCandidate,
@@ -120,10 +121,77 @@ try {
     } finally {
       store.close();
     }
+  } else if (command === "rollback" && args.length === 3) {
+    const expectedLastTransactionSequence = parsePositiveInteger(args[0]!);
+    const targetCommitId = args[1]!;
+    const reason = args[2]!;
+    const config = coreGitSourceConfig();
+    const checkId = uuidV7();
+    const store = new ControlPlaneStore(controlPlaneDatabasePath());
+    try {
+      const active = store.activeCoreSnapshot();
+      let candidate = store.retainedCoreCandidate(targetCommitId);
+      if (!candidate) {
+        try {
+          candidate = await inspectCoreCommit(config, targetCommitId);
+        } catch (error) {
+          if (error instanceof CoreCandidateInspectionError) {
+            recordAndReportRejection(
+              {
+                checkId,
+                stage: error.stage,
+                code: error.code,
+                summary: sanitizeDiagnostic(error.message),
+                details: error.details.slice(0, 8).map(sanitizeDiagnostic),
+                sourceUrl: error.sourceUrl,
+                sourceRef: error.ref,
+                commitId: error.commitId,
+                treeId: error.treeId,
+                activeCommitId: active?.sourceCommitId,
+              },
+              store,
+            );
+          }
+          throw error;
+        }
+      }
+      try {
+        console.log(
+          JSON.stringify(
+            store.rollbackCoreSnapshot({ candidate, expectedLastTransactionSequence, reason }),
+            null,
+            2,
+          ),
+        );
+      } catch (error) {
+        if (error instanceof CoreSnapshotPersistenceError) {
+          recordAndReportRejection(
+            {
+              checkId,
+              stage: "persistence",
+              code: "persistence-failed",
+              summary: sanitizeDiagnostic(error.message),
+              details: [],
+              sourceUrl: candidate.sourceUrl,
+              sourceRef: candidate.ref,
+              commitId: candidate.commitId,
+              treeId: candidate.treeId,
+              catalogDigest: candidate.catalogDigest,
+              activeCommitId: active?.sourceCommitId,
+            },
+            store,
+          );
+        }
+        throw error;
+      }
+    } finally {
+      store.close();
+    }
   } else {
     throw new Error(
       "Usage: npm run --silent core -- verify\n" +
         "       npm run --silent core -- activate <expected-control-plane-sequence>\n" +
+        "       npm run --silent core -- rollback <expected-control-plane-sequence> <target-commit> <reason>\n" +
         "       npm run --silent core -- rejections [limit]",
     );
   }

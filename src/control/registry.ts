@@ -2,7 +2,7 @@ import { isUuidV7, type JsonValue } from "./encoding.ts";
 
 export const CONTROL_PLANE_APPLICATION_ID = 1_179_405_908; // ASCII "FLNT"
 export const CONTROL_PLANE_SCHEMA_VERSION = 2;
-export const CONTROL_PLANE_REGISTRY_VERSION = 4;
+export const CONTROL_PLANE_REGISTRY_VERSION = 5;
 
 export const informationClasses = ["public", "organization", "restricted"] as const;
 export type InformationClass = (typeof informationClasses)[number];
@@ -69,6 +69,10 @@ export const sourceKindRegistry = {
     validateId: (value: string) => /^github\.com:[1-9][0-9]{0,19}$/.test(value),
     revisionKinds: ["git-commit-sha1"],
   },
+  "operator-principal": {
+    validateId: isUuidV7,
+    revisionKinds: [] as const,
+  },
 } as const;
 
 export const recordKindRegistry = {
@@ -114,6 +118,13 @@ export const recordKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isCoreCandidateRejectionPayload,
   },
+  "core.rollback-decision": {
+    schemaVersion: 1,
+    recordClass: "decision",
+    subjectKinds: ["control-plane-database"],
+    minimumInformationClass: "organization",
+    validatePayload: isCoreRollbackDecisionPayload,
+  },
 } as const;
 
 export const eventKindRegistry = {
@@ -141,6 +152,12 @@ export const eventKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isCoreCandidateRejectionPayload,
   },
+  "core.snapshot-rollback-activated": {
+    schemaVersion: 1,
+    subjectKinds: ["core-snapshot"],
+    minimumInformationClass: "organization",
+    validatePayload: isCoreRollbackActivatedPayload,
+  },
 } as const;
 
 export const commandKindRegistry = {
@@ -160,6 +177,15 @@ export const commandKindRegistry = {
     schemaVersion: 1,
     outputKinds: ["core.candidate-rejection-observation", "core.candidate-rejected"],
   },
+  "core.rollback-snapshot": {
+    schemaVersion: 1,
+    outputKinds: [
+      "core.rollback-decision",
+      "core.snapshot-definition",
+      "core.snapshot-active",
+      "core.snapshot-rollback-activated",
+    ],
+  },
 } as const;
 
 export const predicateContractRegistry = {
@@ -167,7 +193,7 @@ export const predicateContractRegistry = {
     contractVersion: 1,
     recordClass: "fact",
     subjectKinds: ["control-plane-database"],
-    establishedBy: ["core.activate-snapshot"],
+    establishedBy: ["core.activate-snapshot", "core.rollback-snapshot"],
     precedence: "latest-transaction-sequence",
     consumers: ["core-authority"],
   },
@@ -279,6 +305,35 @@ export interface CoreCandidateRejectionPayload extends Record<string, JsonValue>
   catalogDigest: string | null;
   activeCommitId: string | null;
   observedAt: string;
+}
+
+export interface CoreRollbackDecisionPayload extends Record<string, JsonValue> {
+  decisionId: string;
+  decisionType: "core-rollback";
+  state: "resolved";
+  choice: "activate-target-commit";
+  databaseLineageId: string;
+  operatorPrincipalId: string;
+  activeSnapshotId: string;
+  activeCommitId: string;
+  targetCommitId: string;
+  targetCatalogDigest: string;
+  reason: string;
+  expectedLastTransactionSequence: number;
+  decidedAt: string;
+}
+
+export interface CoreRollbackActivatedPayload extends Record<string, JsonValue> {
+  databaseLineageId: string;
+  snapshotId: string;
+  catalogDigest: string;
+  sourceCommitId: string;
+  previousSnapshotId: string;
+  previousSourceCommitId: string;
+  decisionRecordId: string;
+  operatorPrincipalId: string;
+  reason: string;
+  activatedAt: string;
 }
 
 export function assertSubject(kind: string, id: string): asserts kind is SubjectKind {
@@ -483,6 +538,80 @@ function isCoreCandidateRejectionPayload(value: unknown): value is CoreCandidate
     );
   }
   return value.code === "persistence-failed";
+}
+
+function isCoreRollbackDecisionPayload(value: unknown): value is CoreRollbackDecisionPayload {
+  return (
+    isExactObject(value, [
+      "decisionId",
+      "decisionType",
+      "state",
+      "choice",
+      "databaseLineageId",
+      "operatorPrincipalId",
+      "activeSnapshotId",
+      "activeCommitId",
+      "targetCommitId",
+      "targetCatalogDigest",
+      "reason",
+      "expectedLastTransactionSequence",
+      "decidedAt",
+    ]) &&
+    typeof value.decisionId === "string" &&
+    isUuidV7(value.decisionId) &&
+    value.decisionType === "core-rollback" &&
+    value.state === "resolved" &&
+    value.choice === "activate-target-commit" &&
+    typeof value.databaseLineageId === "string" &&
+    isUuidV7(value.databaseLineageId) &&
+    typeof value.operatorPrincipalId === "string" &&
+    isUuidV7(value.operatorPrincipalId) &&
+    typeof value.activeSnapshotId === "string" &&
+    isUuidV7(value.activeSnapshotId) &&
+    typeof value.activeCommitId === "string" &&
+    /^[0-9a-f]{40}$/.test(value.activeCommitId) &&
+    typeof value.targetCommitId === "string" &&
+    /^[0-9a-f]{40}$/.test(value.targetCommitId) &&
+    isSha256(value.targetCatalogDigest) &&
+    isBoundedDiagnostic(value.reason) &&
+    Number.isSafeInteger(value.expectedLastTransactionSequence) &&
+    Number(value.expectedLastTransactionSequence) >= 1 &&
+    isUtcInstant(value.decidedAt)
+  );
+}
+
+function isCoreRollbackActivatedPayload(value: unknown): value is CoreRollbackActivatedPayload {
+  return (
+    isExactObject(value, [
+      "databaseLineageId",
+      "snapshotId",
+      "catalogDigest",
+      "sourceCommitId",
+      "previousSnapshotId",
+      "previousSourceCommitId",
+      "decisionRecordId",
+      "operatorPrincipalId",
+      "reason",
+      "activatedAt",
+    ]) &&
+    typeof value.databaseLineageId === "string" &&
+    isUuidV7(value.databaseLineageId) &&
+    typeof value.snapshotId === "string" &&
+    isUuidV7(value.snapshotId) &&
+    isSha256(value.catalogDigest) &&
+    typeof value.sourceCommitId === "string" &&
+    /^[0-9a-f]{40}$/.test(value.sourceCommitId) &&
+    typeof value.previousSnapshotId === "string" &&
+    isUuidV7(value.previousSnapshotId) &&
+    typeof value.previousSourceCommitId === "string" &&
+    /^[0-9a-f]{40}$/.test(value.previousSourceCommitId) &&
+    typeof value.decisionRecordId === "string" &&
+    isUuidV7(value.decisionRecordId) &&
+    typeof value.operatorPrincipalId === "string" &&
+    isUuidV7(value.operatorPrincipalId) &&
+    isBoundedDiagnostic(value.reason) &&
+    isUtcInstant(value.activatedAt)
+  );
 }
 
 function isSha256(value: unknown): value is string {

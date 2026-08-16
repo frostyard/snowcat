@@ -611,7 +611,8 @@ automatic source-continuity eligibility but does not rewrite Git or undo a
 database transaction.
 
 **Avoid:** transaction rollback; branch reset; force-push acceptance; restore.
-([ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md))
+([ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md),
+[ADR-0035](../adr/0035-route-human-authority-through-typed-decisions.md))
 
 #### Core snapshot
 
