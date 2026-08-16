@@ -1,0 +1,264 @@
+# Control-plane kernel
+
+Living document. Rationale:
+[ADR-0037](../adr/0037-store-facts-with-a-separate-event-ledger.md) through
+[ADR-0044](../adr/0044-replace-the-queue-spike-database.md).
+Contracts: [control-plane kernel](../specs/control-plane-kernel.md).
+
+## Overview
+
+The control-plane kernel is the separately identified SQLite store that will
+hold Fluent's typed authoritative records, operational history, and rebuildable
+read models. The implemented slices initialize the kernel and one stable
+implicit local-operator principal, execute one system integrity command, and
+publish subject-lookup and event-cursor projection generations. They do not yet
+expose work admission, fact establishment, sessions, grants, or worker
+operations.
+
+```text
+empty target file
+      │
+      ▼
+ControlPlaneStore ──► code-owned closed registries
+      │
+      ├──► database definition (record, position 0)
+      ├──► operator definition (record, position 1)
+      └──► initialization event (event, position 2)
+                 one committed transaction sequence
+      │
+      └──► immutable projection shadows ──► atomic active heads
+```
+
+The queue-spike database remains independent. The kernel uses another path,
+SQLite application ID, schema lineage, and table set and refuses a spike file
+before changing it.
+
+## Design
+
+### Database boundary
+
+[`ControlPlaneStore`](../../src/control/store.ts) owns the target database.
+`FLUENT_CONTROL_DB` selects its path and defaults to
+`./data/control-plane.db`; `FLUENT_QUEUE_DB` continues to select the disposable
+spike. The path helper rejects equal resolved paths, while store startup also
+recognizes the spike tables and refuses to initialize over them.
+
+The target file identifies itself with SQLite application ID `1179405908`
+(`FLNT`), `PRAGMA user_version = 1`, a server-generated UUIDv7 database-lineage
+ID, a separately generated UUIDv7 operator-principal ID, schema version,
+registry version, control-time watermark, and last committed transaction
+sequence. Opening a current database validates those values and performs no
+schema write. Older, newer, incomplete, augmented, or differently identified
+schemas fail rather than being guessed or upgraded by this slice.
+
+### Closed registries
+
+[`registry.ts`](../../src/control/registry.ts) is the only owner of the current
+kernel vocabulary. Registry version 1 contains the minimum bootstrap contracts:
+
+| Registry | Initial member | Meaning |
+| --- | --- | --- |
+| Subject kind | `control-plane-database` | One Fluent-native database lineage with UUIDv7 identity |
+| Subject kind | `operator-principal` | The stable human-authority identity implicitly bound by local stdio |
+| Revision kind | `sha256`, `transaction-sequence` | Exact payload bytes or an as-known database sequence |
+| Source kind | `fluent-system` / `kernel` | The deterministic kernel bootstrap source |
+| Record kind | `control-plane.database-definition` v1 | An `organization`-class definition of the database lineage and schema/registry versions |
+| Record kind | `principal.definition` v1 | The `organization`-class definition of the implicit local operator |
+| Record kind | `control-plane.integrity-observation` v1 | The system's SQLite quick-check observation bound to the checked sequence |
+| Event kind | `control-plane.initialized` v1 | The past-tense account of successful initialization |
+| Event kind | `control-plane.integrity-checked` v1 | The past-tense account of the accepted integrity observation |
+| Command kind | `control-plane.initialize` v1 | The fixed bootstrap transaction and its ordered outputs |
+| Command kind | `control-plane.check-integrity` v1 | An optimistic, idempotent system integrity check |
+| Projection contract | `control-plane.subject-lookup` v1 | Stable subject identity and creation-definition lookup |
+| Projection contract | `control-plane.event-cursor` v1 | Payload-free sequence/position cursor for accepted events |
+
+Information classes are closed to `public`, `organization`, and `restricted`;
+record classes are closed to definition, assertion, observation, evidence
+reference, fact, and decision. Event remains an occurrence subtype, not a
+record class. These larger enums reserve accepted vocabulary; only the concrete
+bootstrap record and event kinds can currently be persisted through kernel
+code.
+
+### Relational spine
+
+`control_transactions` allocates the canonical transaction sequence with an
+SQLite `AUTOINCREMENT` primary key. `durable_occurrences` holds the common
+envelope and enforces one unique position across both record and event outputs
+within that transaction. `durable_records` adds the record class;
+`event_ledger` identifies events without pretending that event is a record
+class. `subjects` keeps typed identity separate from occurrence identity.
+
+`control_plane_metadata` holds the database lineage and persisted sequence and
+control-time watermarks. `idempotency_receipts` stores the retained result of
+the registered integrity command; initialization is naturally idempotent
+because an existing target database is validated and returned, not initialized
+again. No generic record, fact, or event insertion API is exposed.
+
+Payload and information-scope JSON use a deterministic canonical encoder.
+Their SHA-256 digest is verified when a database opens. Record IDs, transaction
+IDs, correlation IDs, and the database subject ID are independently generated
+UUIDv7 values; none provides transaction order.
+
+### Initialization transaction
+
+After acquiring `BEGIN IMMEDIATE`, initialization captures one evaluation and
+recorded time, creates the schema, allocates transaction sequence `1`, creates
+the database subject, and writes two outputs in registered order:
+
+1. `control-plane.database-definition` at position `0`; and
+2. `principal.definition` at position `1`; and
+3. `control-plane.initialized` at position `2`.
+
+The database definition and event bind the database subject; the principal
+definition binds the distinct operator subject. The operator definition records
+only `principalKind: operator` and `binding: local-stdio-implicit`: it does not
+derive identity from an OS username, provider, model, or caller-supplied worker
+text. All three outputs bind SHA-256 revisions, the system kernel source,
+deployment-scoped `organization` information, one correlation ID, and one
+recorded time. Metadata watermarks, SQLite identifiers, both subjects, outputs,
+and transaction commit atomically.
+
+### Registered integrity command
+
+`checkIntegrity` is the first post-bootstrap typed command. Its input is an
+idempotency key and the exact last transaction sequence the caller expects.
+After acquiring the writer transaction, the handler validates the current
+schema and registries, checks for an existing receipt, then captures one
+evaluation time. Equivalent replay returns the original result without checking
+the newer sequence or clock; the same key with another expected sequence fails.
+
+A new execution rejects a stale expected sequence or a wall clock earlier than
+the persisted control-time watermark. It runs SQLite `PRAGMA quick_check`, then
+writes `control-plane.integrity-observation` at position `0` and
+`control-plane.integrity-checked` at position `1`. Both bind the database subject
+at revision kind `transaction-sequence` using the pre-command sequence that was
+checked. The receipt, occurrences, transaction, and advanced watermarks commit
+atomically. The receipt is retained for the database lineage in this slice with
+an explicit maximum UTC deadline; no purge operation exists.
+
+### Rebuildable read models
+
+[`ControlPlaneStore`](../../src/control/store.ts) materializes two registered
+read models. Subject lookup derives only from stable subjects and exactly one
+definition in each subject's creation transaction. Event cursor derives from
+the event ledger and common occurrence envelope, omitting payloads and payload
+digests. Neither transformation calls a model, network, external source, or
+implicit clock.
+
+Each full build writes a new immutable shadow generation with a UUIDv7
+generation identity, exact source transaction-sequence watermark, source and
+output digests, contract/transformation/information-handling versions, explicit
+evaluation time, row count, and invariant result. Initialization builds at
+sequence `1`. Later authoritative commands may leave active generations stale;
+an explicit rebuild constructs both shadows and switches both head pointers in
+one SQLite transaction. Injected failure before publication rolls the shadows
+back and preserves the old heads.
+
+Projection health distinguishes current, stale, unavailable, and invalid. A
+stale generation may conservatively return its older identities but is labeled
+stale. Reads filter by the internal caller's class ceiling and exact deployment
+scope, then join every candidate back to its current authoritative definition
+or event before returning it. A wrong scope, lower class, invalid digest, or
+failed invariant yields no projection result rather than broader disclosure.
+Projection output never authorizes a mutation.
+
+Ordinary rebuilds retain inactive generations for diagnostics. Explicit repair
+deletes only the disposable projection tables and rebuilds them from source; it
+cannot allocate a control transaction or alter metadata, subjects, records,
+events, receipts, or transaction order.
+
+### Backup and restore staging
+
+Online backup reads the live file through a dedicated read-only SQLite
+connection and writes only to a new path. Fluent never uses filesystem copy on
+an open WAL database and never overwrites an existing backup. It then opens the
+artifact through the same target validator, runs SQLite quick-check, and
+requires usable projection heads.
+
+The returned manifest binds the absolute artifact path, database lineage,
+schema and registry versions, last and next transaction sequences, control-time
+watermark, backup creation time, and a canonical authoritative digest. That
+digest covers all authority tables and SQLite's transaction allocation but
+excludes disposable projection generations, so it compares logical authority
+rather than physical file bytes.
+
+Verification requires the operator's expected lineage and highest sequence ever
+visible for it. A backup below that fence is unsafe even if otherwise valid:
+continuing from it could allocate a sequence already observed before the
+restore. V1 refuses that restore rather than manufacturing a sequence gap or
+rewriting history.
+
+Restore copies a verified backup through SQLite into another new path and
+validates the staged artifact again. It does not replace the live file or change
+runtime configuration. This separation makes destructive activation an
+explicit offline operator procedure while giving that procedure a fully checked
+candidate.
+
+### Local operator surface
+
+[`src/control/cli.ts`](../../src/control/cli.ts) exposes the implemented kernel
+diagnostics, integrity execution, projection rebuild/repair, and backup
+verification through `npm run --silent control`. It emits JSON for scripting but is a
+host-local operator surface, not a worker protocol or authenticated remote API.
+Backup verification and restore staging dispatch without opening the configured
+live database, preventing an absent `FLUENT_CONTROL_DB` from being initialized
+as an inspection side effect.
+
+Normal store construction validates the complete projection catalog. The
+explicit projection-repair opener skips only that startup check so a missing or
+damaged disposable catalog can be replaced; it still validates every
+authoritative schema, transaction, registry reference, occurrence, and receipt
+before deletion. Authority commands run their normal full validation even on
+that connection, so repair mode is not a general fail-open switch.
+
+### Validation boundary
+
+Startup checks schema identity, the exact v1 table set and absence of
+unregistered indexes, triggers, or views, metadata versions,
+UUIDv7 lineage, transaction maximum and SQLite allocation watermark, control
+time, subject and revision kinds, source, information class, payload digest,
+payload contract, occurrence subtype coverage, ordered command-output contracts,
+and receipt-to-transaction/output lineage. Projection catalog identity and
+versions are checked at startup. Active row digests and source equivalence are
+checked by health and read operations, so projection corruption fails that read
+closed without disabling unrelated authoritative commands; explicit repair
+replaces the disposable generations.
+
+The public class currently offers secret-safe metadata and occurrence
+inspection plus the system-only integrity command. There is no administrative,
+worker, or generic mutation surface. Authentication, principal/session command
+binding, facts and reducers, operational state, authority-sensitive
+projections, bounded clock-rollback recovery, backup activation operations, and
+work lineage are later slices in the
+[kernel bootstrap plan](../plans/control-plane-kernel-bootstrap.md).
+
+## Operational notes
+
+- Do not point `FLUENT_CONTROL_DB` at `FLUENT_QUEUE_DB`. A spike database is an
+  archive or temporary prototype input to humans, never a target initialization
+  input.
+- The target file, WAL, and backups must be handled as `restricted` assets even
+  though the two initialization occurrences are `organization` class.
+- The production suitability of Node's built-in SQLite binding remains an open
+  plan question. This slice deliberately uses the binding already exercised by
+  the spike and does not settle deployment support.
+- A v1 schema mismatch is not repaired automatically. Preserve the file for
+  diagnosis and use a new empty database during this pre-production slice.
+- Projection repair is narrower than schema repair: it discards only registered
+  read-model generations after authoritative schema and records validate.
+- Backup and staged-restore artifacts contain restricted deployment state. The
+  API verifies content but does not encrypt, relocate, retain, or delete them.
+
+## References
+
+- Rationale:
+  [ADR-0037](../adr/0037-store-facts-with-a-separate-event-ledger.md),
+  [ADR-0039](../adr/0039-use-typed-source-native-subject-identities.md),
+  [ADR-0040](../adr/0040-establish-facts-through-registered-predicate-contracts.md),
+  [ADR-0041](../adr/0041-enforce-three-information-classes-and-scoped-access.md),
+  [ADR-0042](../adr/0042-use-rebuildable-projections-only-as-read-models.md),
+  [ADR-0043](../adr/0043-order-records-by-transaction-sequence-not-timestamps.md),
+  and [ADR-0044](../adr/0044-replace-the-queue-spike-database.md)
+- Contracts: [control-plane kernel](../specs/control-plane-kernel.md)
+- Built in: [control-plane kernel bootstrap — Phases 1–3](../plans/control-plane-kernel-bootstrap.md)
+- Product: [GitHub organization agent fleet](../prd/agent-fleet.md)

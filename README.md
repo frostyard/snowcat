@@ -1,68 +1,87 @@
-# agentic-template
+# Fluent (working name)
 
-A GitHub template for projects built and maintained by LLM agents. It contains
-no code — just the documentation structure and agent rules that make one-shot
-agent work reliable, extracted from [bespoke](https://github.com/bketelsen/bespoke),
-where this structure has held up across every coding agent thrown at it.
+Fluent is a self-hosted, durable work queue for capable coding agents that
+maintain opted-in repositories in a GitHub organization. It is being designed
+for Frostyard first, with repository-scoped workstreams, shared maintenance
+specialties, organization-level direction, and portable agent instructions.
 
-## Why this works
+The product definition is still being refined. Start with the
+[documentation index](docs/README.md) and the
+[discovery PRD](docs/prd/agent-fleet.md).
 
-Agents succeed when the repository answers their questions before they ask:
+The clean target control-plane substrate now initializes separately at
+`FLUENT_CONTROL_DB` (default `./data/control-plane.db`) with closed bootstrap
+registries, ordered record/event envelopes, and registered rebuildable subject
+and event-cursor projections. It can create verified online backups and stage a
+restore without overwriting a live path. It is not yet the worker-facing runtime
+and never imports the queue-spike database; see the
+[kernel design](docs/design/control-plane-kernel.md).
 
-- **One law, every agent.** `AGENTS.md` is the canonical instruction file;
-  `CLAUDE.md`, `GEMINI.md`, and `.github/copilot-instructions.md` are symlinks
-  to it, so Claude Code, Copilot, Gemini, and whatever comes next all read the
-  same rules. Skills live once in `.agents/skills/` (`.claude/skills` is a
-  symlink). No drift, ever.
-- **Docs split by the question they answer.** `docs/adr/` (why — immutable),
-  `docs/design/` (how — living), `docs/specs/` (what exactly — testable
-  contracts), `docs/plans/` (when — phases with "Done when" outcomes). An agent
-  that needs rationale, mechanism, contract, or sequence knows exactly where to
-  look — and where to write.
-- **Templates as enforcement.** Every category has a `TEMPLATE.md`; every new
-  doc starts from it. Structure you don't have to think about is structure that
-  stays consistent.
-- **Mandatory cross-linking.** ADRs link the designs they shape; designs link
-  their ADRs, specs, and roadmap phase; specs link back. A doc without its
-  links is defined as incomplete, so the graph stays navigable from any entry
-  point.
-- **Live conventions only.** AGENTS.md's code-conventions section describes the
-  code *as it is* — rules graduate in when the enforcing code lands. Agents
-  following stale rules produce broken work; this structure makes stale rules a
-  category error.
-- **Skills over improvisation.** Multi-step procedures that repeat become
-  `.agents/skills/<name>/SKILL.md` files with a frontmatter description agents
-  can select on. Explaining a procedure twice means it should become a skill.
+Host-local kernel operations use the JSON control CLI:
 
-## Using this template
-
-1. Click **Use this template** on GitHub (or `gh repo create myproject
-   --template bketelsen/agentic-template`).
-2. In `AGENTS.md`: replace the title and intro, then fill in the commented
-   placeholder sections as your project takes shape — especially the project
-   check command (`just check` / `make check` / …) that gates "done".
-3. Set the dates in `docs/adr/0001` and `0002` to today; they're pre-accepted
-   because this template implements them.
-4. Write your first real ADR (0003) for your first significant choice —
-   language, framework, storage — and keep going from there.
-5. Delete this "Using this template" section and make the README describe your
-   project.
-
-## Layout
-
-```
-AGENTS.md                     canonical agent instructions (the law)
-CLAUDE.md → AGENTS.md         symlink for Claude Code
-GEMINI.md → AGENTS.md         symlink for Gemini CLI
-.github/copilot-instructions.md → AGENTS.md
-.agents/skills/               canonical skills; TEMPLATE/SKILL.md to copy
-.claude/skills → .agents/skills
-docs/README.md                taxonomy + index (every doc gets a line)
-docs/adr/                     why — immutable decisions + TEMPLATE.md
-docs/design/                  how — living architecture docs + TEMPLATE.md
-docs/specs/                   what — testable contracts + TEMPLATE.md
-docs/plans/                   when — phased plans + TEMPLATE.md
+```bash
+npm run --silent control -- metadata
+npm run --silent control -- projection-health
+npm run --silent control -- check-integrity 1 integrity:operator:example
+npm run --silent control -- backup /absolute/new/path/control-plane-backup.db
 ```
 
-Symlinks require Linux/macOS (or `core.symlinks=true` on Windows); GitHub's
-web renderer shows symlinks as their target path, which is cosmetic only.
+The backup command prints its manifest to stdout. Save that JSON separately for
+`verify-backup` or `stage-restore`; restore staging only creates and verifies a
+new path and never replaces the live database.
+
+## Queue spike
+
+The first vertical slice draws hard boundaries between coordination,
+authorization, and execution:
+
+- deterministic code owns enrollment, queue state, leases, permissions,
+  delegation, and provenance;
+- an operator starts Codex, Claude, Copilot, or another capable client and asks
+  it to work one item from Fluent through MCP;
+- an optional Flue agent may use local Lemonade for non-authoritative assistance
+  without entering the control path.
+
+Fluent does not launch, supervise, authenticate, refresh credentials for, or
+sandbox those worker processes. The worker environment owns those concerns;
+Fluent owns repository opt-in, leases, action limits, lineage, and evidence.
+
+Try the deterministic testing-gap slice:
+
+```bash
+npm install
+npm run queue -- opt-in frostyard/updex
+npm run queue -- seed-testing-gap frostyard/updex
+npm run queue -- list
+npm run check
+```
+
+For bounded dogfooding, `npm run queue -- seed-dogfood <owner/repo>` creates at
+most one active read-only root for quality, CI, security, and architecture.
+Repeated or concurrent feeder invocations do not duplicate an active specialty.
+Worker-created children appear under `list proposed` and require operator
+admission before any worker can claim them.
+
+Operator queue controls are local CLI commands and never expose a lease token:
+
+```bash
+npm run queue -- list proposed
+npm run queue -- approve <work-item-id>
+npm run queue -- reject <work-item-id> <reason>
+npm run queue -- defer <work-item-id> <reason>
+npm run queue -- requeue <work-item-id> <reason>
+npm run queue -- cancel <work-item-id> <reason>
+```
+
+`defer` withdraws an admitted, unclaimed item for later review. `requeue` and
+`cancel` are the operator-only exits from `blocked`; workers can neither admit
+work nor choose those exits through MCP.
+
+Configure an MCP server named `fluent` to run `npm run mcp`, then tell a capable
+client to "work the Fluent queue." The portable
+[worker skill](.agents/skills/work-fluent-queue/SKILL.md) claims at most one
+item per invocation by default.
+
+The optional local clerk defaults to `http://10.0.1.200:13305/v1` and
+`Qwen3.8-27B-GGUF-UD-Q4_K_XL`. Fluent remains useful when that endpoint is
+absent, and subscription credentials never enter Fluent.

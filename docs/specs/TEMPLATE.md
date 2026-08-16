@@ -7,7 +7,7 @@ be checked mechanically or by a clear manual test, it belongs in a design doc
 instead.
 -->
 
-One paragraph: what this contract governs and who consumes it (code, agents,
+One paragraph: what this contract governs and who consumes it (code, workers,
 the CLI, other services).
 
 ## Interface

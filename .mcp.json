@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "fluent": {
+      "type": "stdio",
+      "command": "/home/linuxbrew/.linuxbrew/bin/npm",
+      "args": ["run", "mcp"]
+    }
+  }
+}

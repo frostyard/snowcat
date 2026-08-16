@@ -1,12 +1,18 @@
-# Project Name
+# Fluent (working name)
 
 <!-- One paragraph: what this project is and who it serves. Point at
 docs/README.md as the entry point for everything else. Keep this file under
 ~200 lines — it is loaded into every agent session; long files dilute the
 rules that matter. -->
 
-One or two sentences describing the project. Start at
-[docs/README.md](docs/README.md).
+Fluent is a self-hosted coordination service and durable work queue for
+operator-started workers maintaining opted-in GitHub repositories. Start at
+[docs/README.md](docs/README.md); the product definition remains a discovery
+draft and the name is not final.
+
+Use the canonical [Fluent ubiquitous language](docs/domain/ubiquitous-language.md)
+for domain terms. Root `CONTEXT.md` is a compatibility symlink to that file;
+edit only the canonical path.
 
 This file (`AGENTS.md`) is the CANONICAL agent instructions — `CLAUDE.md`,
 `GEMINI.md`, and `.github/copilot-instructions.md` are symlinks to it, and
@@ -23,7 +29,10 @@ them rather than improvising, whichever agent you are:
 Add a skill whenever you find yourself re-explaining a multi-step procedure.
 Start from .agents/skills/TEMPLATE/SKILL.md. -->
 
-- *(none yet — add the first one when a procedure repeats)*
+- **Claim and resolve one queued repository work item** →
+  [.agents/skills/work-fluent-queue/SKILL.md](.agents/skills/work-fluent-queue/SKILL.md).
+- **Resolve or review Fluent domain terminology** →
+  [.agents/skills/model-fluent-domain/SKILL.md](.agents/skills/model-fluent-domain/SKILL.md).
 
 ## Code conventions (live — the code exists)
 
@@ -39,10 +48,23 @@ every structural rule. Rules that remove a degree of freedom are the
 valuable ones: every choice an agent doesn't have to make is a failure mode
 removed. -->
 
-- *(add rules as the code that enforces them lands)*
-- Run the project's full check (`just check`, `make check`, or equivalent —
-  define it early) before calling any change done. CI runs the same recipe,
-  so a local pass is a CI pass.
+- Keep native coding-agent processes outside Fluent. They consume work through
+  the MCP contract in [`src/mcp/server.ts`](src/mcp/server.ts) and own their
+  execution isolation, credentials, and tools.
+- Use `npm run --silent control -- …` for host-local target-kernel diagnostics,
+  projections, and backup/restore staging. The implementation in
+  [`src/control/cli.ts`](src/control/cli.ts) never activates a restore or exposes
+  generic domain mutation.
+- Keep the target control-plane store separate from the disposable queue-spike
+  store. Target schema and startup live in
+  [`src/control/store.ts`](src/control/store.ts); closed vocabulary lives only
+  in [`src/control/registry.ts`](src/control/registry.ts). Do not add a generic
+  record or fact mutation surface.
+- Run `npm run check` before calling any change done. CI must run the same
+  recipe, so a local pass is a CI pass.
+- Tests are `*.test.ts` files anywhere under `test/`, discovered recursively by
+  Node's test runner (the pattern in `package.json` is quoted so the shell
+  never expands it).
 
 ## Repository boundary
 
@@ -52,7 +74,7 @@ releases cut? Delete the section if genuinely not applicable. -->
 
 ## Documentation rules (enforced)
 
-Docs live in `docs/` in four categories. **Every new doc starts from its
+Docs live in `docs/` in six categories. **Every new doc starts from its
 category's `TEMPLATE.md`** and follows its structure:
 
 - `docs/adr/` — why we decided. Immutable once Accepted; reversals are new
@@ -61,6 +83,10 @@ category's `TEMPLATE.md`** and follows its structure:
   reality.
 - `docs/specs/` — exact contracts. Change only alongside implementing code.
 - `docs/plans/` — order of work. Phases with "Done when" outcomes.
+- `docs/prd/` — product definition. Living during discovery; status changes to
+  Approved only when scope, success measures, and open questions are resolved.
+- `docs/domain/` — what domain words mean. Living, lean, and human-reviewed;
+  terms are not implementation specifications or decision histories.
 
 ### Cross-linking is mandatory
 
@@ -74,6 +100,9 @@ until they exist, in both directions:
   fits.
 - **Plan** → every phase links the design docs/specs it implements; resolved
   open questions become ADRs.
+- **PRD** → links the decisions, designs, specs, and plans that realize it.
+- **Domain language** → links the Accepted ADR(s) that established each term;
+  Accepted ADRs remain immutable and need no glossary-only backlink.
 
 When you touch a doc, verify its links still hold (targets exist, section
 anchors valid) and add the back-links on the targets. Use relative paths.
@@ -84,3 +113,5 @@ anchors valid) and add the back-links on the targets. Use relative paths.
 - New significant decision ⇒ new ADR *first*, then update the affected design
   docs/specs in the same change.
 - Convert relative dates ("next weekend") to absolute dates in all docs.
+- When domain terms change, update the canonical language during the same
+  design conversation and reconcile affected code/docs or record the migration.

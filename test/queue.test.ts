@@ -1,0 +1,1010 @@
+import assert from "node:assert/strict";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import test from "node:test";
+import { Worker } from "node:worker_threads";
+
+import { QueueStore, SCHEMA_VERSION } from "../src/queue/store.ts";
+import type { FollowUpInput } from "../src/queue/types.ts";
+
+test("seed work requires an opted-in repository and preserves child lineage", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-queue-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+
+  assert.throws(() => seedTestingGap(queue, "frostyard/updex"), /not opted in/);
+  queue.setRepositoryEnabled("frostyard/updex", true);
+
+  const seed = seedTestingGap(queue, "frostyard/updex");
+  const claimed = queue.claim({ worker: "codex:updex:one", repository: "frostyard/updex", leaseSeconds: 60 });
+  assert.equal(claimed?.id, seed.id);
+  assert.equal(queue.claim({ worker: "claude:updex:two", repository: "frostyard/updex" }), undefined);
+
+  const completion = queue.complete({
+    id: claimed!.id,
+    leaseToken: claimed!.leaseToken!,
+    worker: "codex:updex:one",
+    result: {
+      summary: "The retry path has no regression test.",
+      evidence: ["pkg/retry/retry.go handles timeout retries; pkg/retry/retry_test.go covers only success."],
+      artifacts: [],
+    },
+    followUps: [
+      {
+        kind: "test-implementation",
+        objective: "Add a regression test for retry exhaustion after timeouts.",
+        instructions: "Add the smallest deterministic test and run the repository check.",
+        acceptanceCriteria: ["The test fails without retry exhaustion handling and passes with current behavior."],
+        allowedActions: ["read", "write", "run-tests", "open-pr"],
+        delegableActions: [],
+      },
+    ],
+  });
+
+  assert.equal(completion.completed.status, "completed");
+  assert.equal(completion.followUps.length, 1);
+  assert.equal(completion.followUps[0]?.parentId, seed.id);
+  assert.equal(completion.followUps[0]?.rootId, seed.id);
+  assert.equal(completion.followUps[0]?.repository, "frostyard/updex");
+  assert.equal(completion.followUps[0]?.status, "proposed");
+  assert.equal(queue.claim({ worker: "claude:updex:child", repository: "frostyard/updex" }), undefined);
+  const approved = queue.approve(completion.followUps[0]!.id, "operator:test");
+  assert.equal(approved.status, "queued");
+  assert.equal(queue.claim({ worker: "claude:updex:child", repository: "frostyard/updex" })?.id, approved.id);
+  assert.deepEqual(
+    queue.events(approved.id).map((event) => event.type),
+    ["work.proposed", "work.approved", "work.claimed"],
+  );
+  assert.deepEqual(
+    queue.events(seed.id).map((event) => event.type),
+    ["work.queued", "work.claimed", "work.completed"],
+  );
+});
+
+test("expired leases can be reclaimed without accepting the old token", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-lease-test-"));
+  let now = new Date("2026-08-14T12:00:00.000Z");
+  const queue = new QueueStore(join(directory, "queue.db"), () => now);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/chairlift", true);
+  seedTestingGap(queue, "frostyard/chairlift");
+
+  const first = queue.claim({ worker: "codex:chairlift:one", leaseSeconds: 30 })!;
+  now = new Date("2026-08-14T12:00:31.000Z");
+
+  // Expiry alone does not requeue: the item stays claimed until reclaimed.
+  assert.deepEqual(queue.list({ status: "queued" }), []);
+  assert.deepEqual(
+    queue.list({ status: "claimed" }).map((item) => [item.id, item.leaseOwner, item.leaseExpiresAt]),
+    [[first.id, "codex:chairlift:one", first.leaseExpiresAt]],
+  );
+  assert.equal(queue.counts().queued, 0);
+  assert.equal(queue.counts().claimed, 1);
+  assert.deepEqual(
+    queue.events(first.id).map((event) => event.type),
+    ["work.queued", "work.claimed"],
+  );
+
+  const second = queue.claim({ worker: "claude:chairlift:two", leaseSeconds: 30 })!;
+
+  assert.equal(second.id, first.id);
+  assert.notEqual(second.leaseToken, first.leaseToken);
+  assert.throws(
+    () => queue.heartbeat(first.id, first.leaseToken!, "codex:chairlift:one", 30),
+    /owner or token/,
+  );
+  assert.deepEqual(
+    queue.events(first.id).map((event) => event.type),
+    ["work.queued", "work.claimed", "lease.expired", "work.claimed"],
+  );
+  assert.equal(queue.get(first.id)?.leaseOwner, "claude:chairlift:two");
+});
+
+test("released work clears its lease, invalidates the old token, and can be reclaimed", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-release-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/chairlift", true);
+  const seed = seedTestingGap(queue, "frostyard/chairlift");
+  const claimed = queue.claim({ worker: "codex:chairlift:mismatch", leaseSeconds: 60 })!;
+  const oldToken = claimed.leaseToken!;
+
+  const released = queue.release(seed.id, oldToken, "codex:chairlift:mismatch", "Wrong specialty.");
+  assert.equal(released.status, "queued");
+  assert.equal(released.leaseOwner, undefined);
+  assert.equal(released.leaseToken, undefined);
+  assert.equal(released.leaseExpiresAt, undefined);
+  assert.equal(released.result, undefined);
+  assert.equal(queue.counts().queued, 1);
+  assert.equal(queue.counts().claimed, 0);
+  const releaseEvent = queue.events(seed.id).at(-1)!;
+  assert.equal(releaseEvent.type, "work.released");
+  assert.equal(releaseEvent.actor, "codex:chairlift:mismatch");
+  assert.deepEqual(releaseEvent.payload, { reason: "Wrong specialty." });
+
+  assert.throws(() => queue.heartbeat(seed.id, oldToken, "codex:chairlift:mismatch"), /not claimed/);
+  assert.throws(
+    () =>
+      queue.complete({
+        id: seed.id,
+        leaseToken: oldToken,
+        worker: "codex:chairlift:mismatch",
+        result: { summary: "Stale completion.", evidence: ["test"], artifacts: [] },
+        followUps: [],
+      }),
+    /not claimed/,
+  );
+  assert.throws(() => queue.block(seed.id, oldToken, "codex:chairlift:mismatch", "Stale block."), /not claimed/);
+  assert.throws(() => queue.release(seed.id, oldToken, "codex:chairlift:mismatch", "Again."), /not claimed/);
+
+  const reclaimed = queue.claim({ worker: "claude:chairlift:correct", leaseSeconds: 60 })!;
+  assert.equal(reclaimed.id, seed.id);
+  assert.notEqual(reclaimed.leaseToken, oldToken);
+  assert.equal(reclaimed.leaseOwner, "claude:chairlift:correct");
+});
+
+test("a worker cannot grant follow-up actions above the delegation ceiling", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-ceiling-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/core", true);
+  const seed = queue.enqueueSeed({
+    repository: "frostyard/core",
+    kind: "read-only-review",
+    objective: "Report one documentation ambiguity.",
+    instructions: "Read and report only.",
+    acceptanceCriteria: ["One ambiguity is supported by a path reference."],
+    allowedActions: ["read", "create-followup"],
+    delegableActions: ["read"],
+    createdBy: "operator:test",
+  });
+  const claimed = queue.claim({ worker: "copilot:core:one" })!;
+
+  assert.throws(
+    () =>
+      queue.complete({
+        id: seed.id,
+        leaseToken: claimed.leaseToken!,
+        worker: "copilot:core:one",
+        result: { summary: "Found ambiguity.", evidence: ["docs/README.md"], artifacts: [] },
+        followUps: [
+          {
+            kind: "rewrite-docs",
+            objective: "Rewrite the documentation.",
+            instructions: "Edit the ambiguous section.",
+            acceptanceCriteria: ["The ambiguity is removed."],
+            allowedActions: ["read", "write"],
+            delegableActions: [],
+          },
+        ],
+      }),
+    /delegation ceiling: write/,
+  );
+  assert.equal(queue.get(seed.id)?.status, "claimed");
+  assert.equal(queue.list({ repository: "frostyard/core" }).length, 1);
+});
+
+test("completion artifacts are rejected when the matching action is not allowed", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-artifact-deny-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/lodge", true);
+  queue.enqueueSeed({
+    repository: "frostyard/lodge",
+    kind: "read-only-review",
+    objective: "Report findings without producing GitHub artifacts.",
+    instructions: "Read and report only.",
+    acceptanceCriteria: ["Findings reference concrete paths."],
+    allowedActions: ["read", "run-tests"],
+    delegableActions: [],
+    createdBy: "operator:test",
+  });
+  const claimed = queue.claim({ worker: "codex:lodge:one" })!;
+
+  assert.throws(
+    () =>
+      queue.complete({
+        id: claimed.id,
+        leaseToken: claimed.leaseToken!,
+        worker: "codex:lodge:one",
+        result: {
+          summary: "Opened a pull request.",
+          evidence: ["src/queue/store.ts"],
+          artifacts: [{ kind: "pull-request", url: "https://github.com/frostyard/lodge/pull/1" }],
+        },
+        followUps: [],
+      }),
+    /requires allowed action open-pr/,
+  );
+  assert.equal(queue.get(claimed.id)?.status, "claimed");
+
+  assert.throws(
+    () =>
+      queue.complete({
+        id: claimed.id,
+        leaseToken: claimed.leaseToken!,
+        worker: "codex:lodge:one",
+        result: {
+          summary: "Opened an issue.",
+          evidence: ["src/queue/store.ts"],
+          artifacts: [{ kind: "issue", url: "https://github.com/frostyard/lodge/issues/2" }],
+        },
+        followUps: [],
+      }),
+    /requires allowed action open-issue/,
+  );
+  assert.throws(
+    () =>
+      queue.complete({
+        id: claimed.id,
+        leaseToken: claimed.leaseToken!,
+        worker: "codex:lodge:one",
+        result: {
+          summary: "Pushed a commit.",
+          evidence: ["src/queue/store.ts"],
+          artifacts: [{ kind: "commit", url: "https://github.com/frostyard/lodge/commit/abc123" }],
+        },
+        followUps: [],
+      }),
+    /requires allowed action write/,
+  );
+  assert.equal(queue.get(claimed.id)?.status, "claimed");
+});
+
+test("completion stores a pull-request artifact when open-pr is allowed", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-artifact-allow-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/lodge", true);
+  queue.enqueueSeed({
+    repository: "frostyard/lodge",
+    kind: "test-implementation",
+    objective: "Land a test via pull request.",
+    instructions: "Write the test and open a pull request.",
+    acceptanceCriteria: ["The pull request contains the new test."],
+    allowedActions: ["read", "write", "run-tests", "open-pr"],
+    delegableActions: [],
+    createdBy: "operator:test",
+  });
+  const claimed = queue.claim({ worker: "codex:lodge:two" })!;
+
+  const completion = queue.complete({
+    id: claimed.id,
+    leaseToken: claimed.leaseToken!,
+    worker: "codex:lodge:two",
+    result: {
+      summary: "Opened a pull request with the new test.",
+      evidence: ["test/queue.test.ts"],
+      artifacts: [
+        { kind: "pull-request", url: "https://github.com/frostyard/lodge/pull/7", description: "New test" },
+      ],
+    },
+    followUps: [],
+  });
+
+  assert.equal(completion.completed.status, "completed");
+  assert.deepEqual(completion.completed.result?.artifacts, [
+    { kind: "pull-request", url: "https://github.com/frostyard/lodge/pull/7", description: "New test" },
+  ]);
+});
+
+test("GitHub artifact claims must match the work repository and declared kind", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-artifact-scope-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/lodge", true);
+  const seed = queue.enqueueSeed({
+    repository: "frostyard/lodge",
+    kind: "implementation",
+    objective: "Implement and report one repository-scoped change.",
+    instructions: "Report only artifacts created for this repository.",
+    acceptanceCriteria: ["The reported artifact belongs to frostyard/lodge."],
+    allowedActions: ["read", "write", "run-tests", "open-issue", "open-pr", "create-followup"],
+    delegableActions: ["read"],
+    createdBy: "operator:test",
+  });
+  const claimed = queue.claim({ worker: "claude:lodge:scope" })!;
+
+  const invalidArtifacts = [
+    { kind: "pull-request" as const, url: "https://github.com/frostyard/other/pull/7" },
+    { kind: "pull-request" as const, url: "https://github.com/frostyard/lodge/issues/7" },
+    { kind: "pull-request" as const, url: "https://github.com/frostyard/lodge/pull/0" },
+    { kind: "pull-request" as const, url: "https://github.com/frostyard/lodge/pull/7/files" },
+    { kind: "pull-request" as const, url: "https://github.com/frostyard/lodge/pull/7?reported=true" },
+    { kind: "pull-request" as const, url: "https://github.com/frostyard/lodge/pull/7#discussion" },
+    { kind: "pull-request" as const, url: "https://github.com.evil.example/frostyard/lodge/pull/7" },
+    { kind: "commit" as const, url: "https://github.com/frostyard/lodge/commit/not-a-sha" },
+  ];
+
+  for (const artifact of invalidArtifacts) {
+    assert.throws(
+      () =>
+        queue.complete({
+          id: seed.id,
+          leaseToken: claimed.leaseToken!,
+          worker: "claude:lodge:scope",
+          result: { summary: "Reported artifact.", evidence: ["worker report"], artifacts: [artifact] },
+          followUps: [
+            {
+              kind: "review",
+              objective: "Review the reported change.",
+              instructions: "Read the change.",
+              acceptanceCriteria: ["The change is reviewed."],
+              allowedActions: ["read"],
+              delegableActions: [],
+            },
+          ],
+        }),
+      /URL must match/,
+    );
+    assert.equal(queue.get(seed.id)?.status, "claimed");
+    assert.equal(queue.get(seed.id)?.result, undefined);
+    assert.equal(queue.list({ repository: "frostyard/lodge" }).length, 1);
+  }
+
+  const completion = queue.complete({
+    id: seed.id,
+    leaseToken: claimed.leaseToken!,
+    worker: "claude:lodge:scope",
+    result: {
+      summary: "Reported repository-scoped artifacts.",
+      evidence: ["worker report"],
+      artifacts: [
+        { kind: "issue", url: "https://github.com/FrostYard/LODGE/issues/12" },
+        { kind: "pull-request", url: "https://github.com/frostyard/lodge/pull/7" },
+        { kind: "commit", url: "https://github.com/frostyard/lodge/commit/0123456789abcdef" },
+      ],
+    },
+    followUps: [],
+  });
+
+  assert.equal(completion.completed.status, "completed");
+  assert.equal(completion.completed.result?.artifacts.length, 3);
+});
+
+test("artifact URLs reject credentials before provenance is stored", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-artifact-credentials-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/lodge", true);
+  const seed = queue.enqueueSeed({
+    repository: "frostyard/lodge",
+    kind: "report",
+    objective: "Record a report URL.",
+    instructions: "Do not include credentials.",
+    acceptanceCriteria: ["The report URL contains no credentials."],
+    allowedActions: ["read"],
+    delegableActions: [],
+    createdBy: "operator:test",
+  });
+  const claimed = queue.claim({ worker: "codex:lodge:credentials" })!;
+
+  assert.throws(
+    () =>
+      queue.complete({
+        id: seed.id,
+        leaseToken: claimed.leaseToken!,
+        worker: "codex:lodge:credentials",
+        result: {
+          summary: "Recorded report.",
+          evidence: ["worker report"],
+          artifacts: [{ kind: "report", url: "https://token:secret@example.com/report/1" }],
+        },
+        followUps: [],
+      }),
+    /must not contain credentials/,
+  );
+  assert.equal(queue.get(seed.id)?.status, "claimed");
+  assert.equal(queue.get(seed.id)?.result, undefined);
+});
+
+test("rejected proposals remain auditable and cannot be claimed", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-rejection-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/core", true);
+  const seed = seedTestingGap(queue, "frostyard/core");
+  const claimed = queue.claim({ worker: "claude:core:discovery" })!;
+  const completion = queue.complete({
+    id: seed.id,
+    leaseToken: claimed.leaseToken!,
+    worker: "claude:core:discovery",
+    result: { summary: "Proposed unnecessary work.", evidence: ["docs/example.md"], artifacts: [] },
+    followUps: [
+      {
+        kind: "test-implementation",
+        objective: "Add a redundant test.",
+        instructions: "Duplicate existing coverage.",
+        acceptanceCriteria: ["A duplicate test exists."],
+        allowedActions: ["read"],
+        delegableActions: [],
+      },
+    ],
+  });
+  const proposal = completion.followUps[0]!;
+
+  const rejected = queue.reject(proposal.id, "operator:test", "Existing coverage is sufficient.");
+  assert.equal(rejected.status, "cancelled");
+  assert.equal(rejected.result?.summary, "Existing coverage is sufficient.");
+  assert.equal(queue.claim({ worker: "codex:core:implementation" }), undefined);
+  assert.deepEqual(
+    queue.events(proposal.id).map((event) => event.type),
+    ["work.proposed", "work.rejected"],
+  );
+});
+
+test("an operator can defer admitted work and later approve it again", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-defer-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/core", true);
+  const seed = seedTestingGap(queue, "frostyard/core");
+
+  assert.throws(() => queue.defer(seed.id, "", "later"), /actor is required/);
+  assert.throws(() => queue.defer(seed.id, "operator:test", ""), /reason is required/);
+  const deferred = queue.defer(seed.id, "operator:test", "Serialize repository writers.");
+  assert.equal(deferred.status, "proposed");
+  assert.equal(deferred.leaseOwner, undefined);
+  assert.equal(queue.claim({ worker: "claude:core:early" }), undefined);
+  const deferredEvent = queue.events(seed.id).at(-1)!;
+  assert.equal(deferredEvent.type, "work.deferred");
+  assert.equal(deferredEvent.actor, "operator:test");
+  assert.deepEqual(deferredEvent.payload, { reason: "Serialize repository writers." });
+  assert.throws(() => queue.defer(seed.id, "operator:test", "again"), /not queued and admitted/);
+
+  const approved = queue.approve(seed.id, "operator:test");
+  assert.equal(approved.status, "queued");
+  const claimed = queue.claim({ worker: "codex:core:ready" })!;
+  assert.equal(claimed.id, seed.id);
+  assert.throws(() => queue.defer(seed.id, "operator:test", "too late"), /not queued and admitted/);
+  queue.complete({
+    id: seed.id,
+    leaseToken: claimed.leaseToken!,
+    worker: "codex:core:ready",
+    result: { summary: "Done.", evidence: ["test"], artifacts: [] },
+    followUps: [],
+  });
+  assert.throws(() => queue.defer(seed.id, "operator:test", "terminal"), /not queued and admitted/);
+});
+
+test("follow-up count and lineage depth are hard bounded", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-runaway-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/core", true);
+  const root = seedTestingGap(queue, "frostyard/core");
+  let claimed = queue.claim({ worker: "claude:core:depth-0" })!;
+
+  const tooMany = Array.from({ length: 11 }, (_, index) => ({
+    kind: "test-implementation",
+    objective: `Proposed child ${index}.`,
+    instructions: "Read only.",
+    acceptanceCriteria: ["One observation is recorded."],
+    allowedActions: ["read" as const],
+    delegableActions: ["read" as const, "create-followup" as const],
+  }));
+  assert.throws(
+    () =>
+      queue.complete({
+        id: root.id,
+        leaseToken: claimed.leaseToken!,
+        worker: "claude:core:depth-0",
+        result: { summary: "Too many proposals.", evidence: ["test"], artifacts: [] },
+        followUps: tooMany,
+      }),
+    /at most 10/,
+  );
+  assert.equal(queue.get(root.id)?.status, "claimed");
+  assert.equal(queue.list({ repository: "frostyard/core" }).length, 1);
+
+  let current = root;
+  for (let depth = 1; depth <= 4; depth += 1) {
+    const completion = queue.complete({
+      id: current.id,
+      leaseToken: claimed.leaseToken!,
+      worker: `claude:core:depth-${depth - 1}`,
+      result: { summary: `Completed depth ${depth - 1}.`, evidence: ["test"], artifacts: [] },
+      followUps: [
+        {
+          kind: "test-implementation",
+          objective: `Inspect depth ${depth}.`,
+          instructions: "Read and propose only.",
+          acceptanceCriteria: ["One observation is recorded."],
+          allowedActions: ["read", "create-followup"],
+          delegableActions: ["read", "create-followup"],
+        },
+      ],
+    });
+    current = queue.approve(completion.followUps[0]!.id, "operator:test");
+    claimed = queue.claim({ worker: `claude:core:depth-${depth}` })!;
+    assert.equal(claimed.id, current.id);
+  }
+
+  assert.throws(
+    () =>
+      queue.complete({
+        id: current.id,
+        leaseToken: claimed.leaseToken!,
+        worker: "claude:core:depth-4",
+        result: { summary: "Reached the limit.", evidence: ["test"], artifacts: [] },
+        followUps: [
+          {
+            kind: "test-implementation",
+            objective: "Exceed the depth limit.",
+            instructions: "Read only.",
+            acceptanceCriteria: ["This must not be admitted."],
+            allowedActions: ["read"],
+            delegableActions: [],
+          },
+        ],
+      }),
+    /at most 4 edges deep/,
+  );
+  assert.equal(queue.get(current.id)?.status, "claimed");
+});
+
+test("the database itself refuses to claim or create claimable proposals through legacy SQL", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-admission-trigger-test-"));
+  const path = join(directory, "queue.db");
+  const queue = new QueueStore(path);
+  const legacy = new DatabaseSync(path);
+  test.after(() => {
+    legacy.close();
+    queue.close();
+  });
+  queue.setRepositoryEnabled("frostyard/core", true);
+  const seed = seedTestingGap(queue, "frostyard/core");
+  const claimed = queue.claim({ worker: "claude:core:discovery" })!;
+  const completion = queue.complete({
+    id: seed.id,
+    leaseToken: claimed.leaseToken!,
+    worker: "claude:core:discovery",
+    result: { summary: "Proposed one child.", evidence: ["docs/example.md"], artifacts: [] },
+    followUps: [
+      {
+        kind: "test-implementation",
+        objective: "Add the missing test.",
+        instructions: "Add the test and run the check.",
+        acceptanceCriteria: ["The test exists and passes."],
+        allowedActions: ["read", "write", "run-tests"],
+        delegableActions: [],
+      },
+    ],
+  });
+  const proposal = completion.followUps[0]!;
+  assert.equal(proposal.status, "proposed");
+
+  // A pre-admission client claims by status alone and never touches `admitted`.
+  const legacyClaim = legacy.prepare(
+    `UPDATE work_items
+     SET status = 'claimed', lease_owner = ?, lease_token = ?, lease_expires_at = ?, updated_at = ?
+     WHERE id = ? AND status = 'queued'`,
+  );
+  assert.throws(
+    () => legacyClaim.run("legacy:worker", "legacy-token", "2099-01-01T00:00:00.000Z", "2026-08-15T00:00:00.000Z", proposal.id),
+    /must be admitted before it can be claimed/,
+  );
+  // Nor may a single statement admit and claim in one step.
+  assert.throws(
+    () =>
+      legacy
+        .prepare("UPDATE work_items SET status = 'claimed', admitted = 1, lease_owner = 'legacy:worker' WHERE id = ?")
+        .run(proposal.id),
+    /must be admitted before it can be claimed/,
+  );
+  assert.equal(queue.get(proposal.id)?.status, "proposed");
+  assert.equal(queue.get(proposal.id)?.leaseOwner, undefined);
+  assert.equal(queue.claim({ worker: "claude:core:child" }), undefined);
+
+  // A pre-admission client inserts children without the admitted column, so the
+  // column default would make them claimable; the database rejects that too.
+  assert.throws(
+    () =>
+      legacy
+        .prepare(
+          `INSERT INTO work_items (
+             id, root_id, parent_id, repository, kind, objective, instructions,
+             acceptance_criteria_json, allowed_actions_json, delegable_actions_json,
+             priority, status, created_by, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`,
+        )
+        .run(
+          "11111111-1111-4111-8111-111111111111",
+          seed.id,
+          seed.id,
+          "frostyard/core",
+          "test-implementation",
+          "Legacy child.",
+          "Inserted by legacy code.",
+          "[]",
+          '["read"]',
+          "[]",
+          0,
+          "legacy:worker",
+          "2026-08-15T00:00:00.000Z",
+          "2026-08-15T00:00:00.000Z",
+        ),
+    /must be created as proposed/,
+  );
+  assert.equal(queue.list({ repository: "frostyard/core" }).length, 2);
+
+  // The only admission path still works and the admitted child is claimable.
+  const approved = queue.approve(proposal.id, "operator:test");
+  assert.equal(approved.status, "queued");
+  const row = legacy.prepare("SELECT admitted, status FROM work_items WHERE id = ?").get(proposal.id) as {
+    admitted: number;
+    status: string;
+  };
+  assert.equal(row.admitted, 1);
+  assert.equal(row.status, "queued");
+  assert.equal(queue.claim({ worker: "claude:core:child" })?.id, proposal.id);
+});
+
+test("a queue store refuses databases newer than its schema version, even after opening", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-schema-version-test-"));
+  const path = join(directory, "queue.db");
+  const queue = new QueueStore(path);
+  const other = new DatabaseSync(path);
+  test.after(() => {
+    other.close();
+    queue.close();
+  });
+  assert.equal(queue.schemaVersion(), SCHEMA_VERSION);
+  assert.equal((other.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, SCHEMA_VERSION);
+  queue.setRepositoryEnabled("frostyard/core", true);
+
+  // A later migration from another process advances the database version.
+  other.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`);
+
+  assert.throws(() => new QueueStore(path), /schema version 2 is newer than the supported version 1/);
+  assert.throws(() => seedTestingGap(queue, "frostyard/core"), /schema version 2 is newer than the supported version 1/);
+  assert.throws(() => queue.setRepositoryEnabled("frostyard/core", false), /newer than the supported version/);
+  assert.equal(queue.list({ repository: "frostyard/core" }).length, 0);
+  assert.equal(
+    (other.prepare("SELECT enabled FROM repositories WHERE slug = ?").get("frostyard/core") as { enabled: number })
+      .enabled,
+    1,
+  );
+
+  // Restoring the version lets the same open store write again.
+  other.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+  assert.equal(seedTestingGap(queue, "frostyard/core").status, "queued");
+});
+
+test("two stores on one database file both write, and a writer waits out another connection's lock", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-busy-timeout-test-"));
+  const path = join(directory, "queue.db");
+  const first = new QueueStore(path);
+  const second = new QueueStore(path);
+  test.after(() => {
+    second.close();
+    first.close();
+  });
+
+  first.setRepositoryEnabled("frostyard/core", true);
+  const seed = seedTestingGap(second, "frostyard/core");
+  assert.equal(first.get(seed.id)?.status, "queued");
+  const claimed = second.claim({ worker: "codex:core:other-process" });
+  assert.equal(claimed?.id, seed.id);
+  assert.equal(first.get(seed.id)?.status, "claimed");
+
+  // Another thread holds the write lock for a while; this connection must wait
+  // for it rather than failing immediately with SQLITE_BUSY.
+  const HOLD_MS = 400;
+  const signal = new Int32Array(new SharedArrayBuffer(4));
+  const holder = new Worker(
+    `(async () => {
+       const { workerData } = await import("node:worker_threads");
+       const { DatabaseSync } = await import("node:sqlite");
+       const db = new DatabaseSync(workerData.path);
+       db.exec("BEGIN IMMEDIATE");
+       Atomics.store(workerData.signal, 0, 1);
+       Atomics.notify(workerData.signal, 0);
+       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, workerData.holdMs);
+       db.exec("COMMIT");
+       db.close();
+     })();`,
+    { eval: true, workerData: { path, signal, holdMs: HOLD_MS } },
+  );
+  const exited = new Promise<number>((resolve) => holder.once("exit", resolve));
+  assert.equal(Atomics.wait(signal, 0, 0, 5000), "ok");
+
+  const started = Date.now();
+  first.setRepositoryEnabled("frostyard/lodge", true);
+  const waited = Date.now() - started;
+  assert.ok(waited >= HOLD_MS - 50, `write should have waited for the lock, waited ${waited}ms`);
+  assert.equal(await exited, 0);
+  assert.equal(seedTestingGap(second, "frostyard/lodge").status, "queued");
+});
+
+test("scheduling priority is operator-owned: workers cannot set it and children inherit it", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-priority-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/core", true);
+
+  for (const priority of [1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1, Number.POSITIVE_INFINITY]) {
+    assert.throws(
+      () =>
+        queue.enqueueSeed({
+          repository: "frostyard/core",
+          kind: "testing-gap-discovery",
+          objective: "Seed with an invalid priority.",
+          instructions: "Read only.",
+          acceptanceCriteria: ["Never created."],
+          allowedActions: ["read", "create-followup"],
+          delegableActions: ["read", "write"],
+          priority,
+          createdBy: "operator:test",
+        }),
+      /priority must be a safe integer/,
+    );
+  }
+  assert.equal(queue.list({ repository: "frostyard/core" }).length, 0);
+
+  const root = queue.enqueueSeed({
+    repository: "frostyard/core",
+    kind: "testing-gap-discovery",
+    objective: "Identify one testing gap.",
+    instructions: "Read only and propose one child.",
+    acceptanceCriteria: ["Exactly one gap has file-level evidence."],
+    allowedActions: ["read", "create-followup"],
+    delegableActions: ["read", "write", "run-tests", "create-followup"],
+    priority: 7,
+    createdBy: "operator:test",
+  });
+  assert.equal(root.priority, 7);
+  const claimed = queue.claim({ worker: "claude:core:priority" })!;
+  const child = {
+    kind: "test-implementation",
+    objective: "Add the missing test.",
+    instructions: "Add the test and run the check.",
+    acceptanceCriteria: ["The test passes."],
+    allowedActions: ["read", "write", "run-tests"] as const,
+    delegableActions: [] as const,
+  };
+
+  // A worker-supplied priority (even a low one) rejects the whole completion.
+  const smuggled = { ...child, priority: 0 } as unknown as FollowUpInput;
+  assert.throws(
+    () =>
+      queue.complete({
+        id: root.id,
+        leaseToken: claimed.leaseToken!,
+        worker: "claude:core:priority",
+        result: { summary: "Found a gap.", evidence: ["src/example.ts"], artifacts: [] },
+        followUps: [{ ...child, allowedActions: [...child.allowedActions], delegableActions: [] }, smuggled],
+      }),
+    /follow-up items may not set priority/,
+  );
+  assert.equal(queue.get(root.id)?.status, "claimed");
+  assert.equal(queue.get(root.id)?.result, undefined);
+  assert.equal(queue.list({ repository: "frostyard/core" }).length, 1);
+
+  // Without a priority the child inherits the parent's exact (nonzero) value.
+  const completion = queue.complete({
+    id: root.id,
+    leaseToken: claimed.leaseToken!,
+    worker: "claude:core:priority",
+    result: { summary: "Found a gap.", evidence: ["src/example.ts"], artifacts: [] },
+    followUps: [{ ...child, allowedActions: [...child.allowedActions], delegableActions: [] }],
+  });
+  assert.equal(completion.followUps[0]?.priority, 7);
+  assert.equal(queue.get(completion.followUps[0]!.id)?.priority, 7);
+});
+
+test("blocking stores the reason as the item's result and clears the lease", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-block-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/core", true);
+  const seed = seedTestingGap(queue, "frostyard/core");
+  const claimed = queue.claim({ worker: "claude:core:blocker" })!;
+
+  const blocked = queue.block(seed.id, claimed.leaseToken!, "claude:core:blocker", "Needs operator credentials.");
+  assert.equal(blocked.status, "blocked");
+  assert.deepEqual(blocked.result, { summary: "Needs operator credentials.", evidence: [], artifacts: [] });
+  assert.equal(blocked.leaseOwner, undefined);
+  assert.equal(blocked.leaseToken, undefined);
+  assert.equal(blocked.leaseExpiresAt, undefined);
+  assert.deepEqual(queue.get(seed.id)?.result, { summary: "Needs operator credentials.", evidence: [], artifacts: [] });
+
+  const events = queue.events(seed.id);
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ["work.queued", "work.claimed", "work.blocked"],
+  );
+  assert.deepEqual(events.at(-1)?.payload, { reason: "Needs operator credentials." });
+  assert.equal(queue.claim({ worker: "claude:core:next" }), undefined);
+  assert.throws(
+    () => queue.heartbeat(seed.id, claimed.leaseToken!, "claude:core:blocker", 60),
+    /not claimed/,
+  );
+});
+
+test("an operator can requeue blocked work and a different worker can claim it", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-requeue-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/core", true);
+  const seed = seedTestingGap(queue, "frostyard/core");
+  const first = queue.claim({ worker: "claude:core:first" })!;
+  queue.block(seed.id, first.leaseToken!, "claude:core:first", "Waiting for operator input.");
+
+  assert.throws(() => queue.requeue(seed.id, "", "resume"), /actor is required/);
+  assert.throws(() => queue.requeue(seed.id, "operator:test", ""), /reason is required/);
+  const requeued = queue.requeue(seed.id, "operator:test", "Input supplied.");
+  assert.equal(requeued.status, "queued");
+  assert.equal(requeued.result, undefined);
+  assert.equal(requeued.leaseOwner, undefined);
+  assert.equal(requeued.leaseToken, undefined);
+  assert.equal(requeued.leaseExpiresAt, undefined);
+  assert.deepEqual(queue.events(seed.id).at(-1), {
+    sequence: queue.events(seed.id).at(-1)?.sequence,
+    workItemId: seed.id,
+    type: "work.requeued",
+    actor: "operator:test",
+    payload: { reason: "Input supplied." },
+    occurredAt: queue.events(seed.id).at(-1)?.occurredAt,
+  });
+
+  const second = queue.claim({ worker: "codex:core:second" })!;
+  assert.equal(second.id, seed.id);
+  assert.notEqual(second.leaseToken, first.leaseToken);
+  assert.throws(() => queue.requeue(seed.id, "operator:test", "already active"), /not blocked/);
+});
+
+test("cancelling the final blocked descendant makes its specialty inactive", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-cancel-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/core", true);
+  const root = seedTestingGap(queue, "frostyard/core");
+  const rootClaim = queue.claim({ worker: "claude:core:discovery" })!;
+  const completion = queue.complete({
+    id: root.id,
+    leaseToken: rootClaim.leaseToken!,
+    worker: "claude:core:discovery",
+    result: { summary: "Found one gap.", evidence: ["src/example.ts"], artifacts: [] },
+    followUps: [
+      {
+        kind: "test-implementation",
+        objective: "Add the missing test.",
+        instructions: "Add one test and run the check.",
+        acceptanceCriteria: ["The test passes."],
+        allowedActions: ["read", "write", "run-tests"],
+        delegableActions: [],
+      },
+    ],
+  });
+  const child = queue.approve(completion.followUps[0]!.id, "operator:test");
+  const childClaim = queue.claim({ worker: "codex:core:implementation" })!;
+  queue.block(child.id, childClaim.leaseToken!, "codex:core:implementation", "Dependency unavailable.");
+  assert.deepEqual(queue.activeRootKinds("frostyard/core"), ["testing-gap-discovery"]);
+
+  assert.throws(() => queue.cancel(root.id, "operator:test", "not blocked"), /not blocked/);
+  assert.throws(() => queue.cancel(child.id, "", "stop"), /actor is required/);
+  assert.throws(() => queue.cancel(child.id, "operator:test", ""), /reason is required/);
+  const cancelled = queue.cancel(child.id, "operator:test", "No longer needed.");
+  assert.equal(cancelled.status, "cancelled");
+  assert.deepEqual(cancelled.result, { summary: "No longer needed.", evidence: [], artifacts: [] });
+  assert.deepEqual(queue.activeRootKinds("frostyard/core"), []);
+  const event = queue.events(child.id).at(-1)!;
+  assert.equal(event.type, "work.cancelled");
+  assert.equal(event.actor, "operator:test");
+  assert.deepEqual(event.payload, { reason: "No longer needed." });
+});
+
+test("opening an up-to-date database performs no schema writes, and unversioned databases migrate once", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-migration-test-"));
+  const path = join(directory, "queue.db");
+  const first = new QueueStore(path);
+  const raw = new DatabaseSync(path);
+  test.after(() => {
+    raw.close();
+    first.close();
+  });
+  const pragma = (name: string) => Number((raw.prepare(`PRAGMA ${name}`).get() as Record<string, number>)[name]);
+  const schemaObjects = () =>
+    (raw.prepare("SELECT name FROM sqlite_master WHERE type IN ('index', 'trigger') ORDER BY name").all() as Row[])
+      .map((row) => String(row.name));
+
+  assert.equal(pragma("user_version"), SCHEMA_VERSION);
+  const before = pragma("schema_version");
+  const objectsBefore = schemaObjects();
+  assert.ok(objectsBefore.includes("work_items_claimable"));
+  assert.ok(objectsBefore.includes("work_items_claim_requires_admission"));
+  assert.ok(objectsBefore.includes("work_items_children_start_proposed"));
+
+  const second = new QueueStore(path);
+  second.close();
+  assert.equal(pragma("schema_version"), before, "a second open must not run any DDL");
+  assert.equal(pragma("user_version"), SCHEMA_VERSION);
+  assert.deepEqual(schemaObjects(), objectsBefore);
+
+  // A database that has the tables but predates schema versioning migrates once.
+  raw.exec("PRAGMA user_version = 0");
+  raw.exec("DROP TRIGGER work_items_claim_requires_admission");
+  const migrated = new QueueStore(path);
+  migrated.close();
+  assert.equal(pragma("user_version"), SCHEMA_VERSION);
+  assert.deepEqual(schemaObjects(), objectsBefore);
+  assert.ok(pragma("schema_version") > before, "migration is a real schema change");
+  const afterMigration = pragma("schema_version");
+  new QueueStore(path).close();
+  assert.equal(pragma("schema_version"), afterMigration);
+});
+
+test("worker identities cannot use reserved principal namespaces", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-principal-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/updex", true);
+  const seed = seedTestingGap(queue, "frostyard/updex");
+
+  for (const worker of ["operator:cli", "OPERATOR:dogfood", "policy:auto", "system:lease", "System", " system "]) {
+    assert.throws(() => queue.claim({ worker, repository: "frostyard/updex" }), /reserved principal namespace/);
+  }
+  assert.equal(queue.get(seed.id)?.status, "queued");
+  assert.equal(queue.get(seed.id)?.leaseOwner, undefined);
+  assert.deepEqual(
+    queue.events(seed.id).map((event) => event.type),
+    ["work.queued"],
+  );
+
+  const claimed = queue.claim({ worker: "codex:updex:one", repository: "frostyard/updex" })!;
+  assert.equal(claimed.id, seed.id);
+  const attempt = (worker: string) => ({
+    id: seed.id,
+    leaseToken: claimed.leaseToken!,
+    worker,
+    result: { summary: "Spoofed.", evidence: ["none"], artifacts: [] },
+    followUps: [
+      {
+        kind: "test-implementation",
+        objective: "Look operator-authored.",
+        instructions: "Read only.",
+        acceptanceCriteria: ["Never created."],
+        allowedActions: ["read" as const],
+        delegableActions: [],
+      },
+    ],
+  });
+  assert.throws(() => queue.heartbeat(seed.id, claimed.leaseToken!, "operator:cli", 60), /reserved principal namespace/);
+  assert.throws(() => queue.complete(attempt("operator:cli")), /reserved principal namespace/);
+  assert.throws(() => queue.block(seed.id, claimed.leaseToken!, "system", "spoof"), /reserved principal namespace/);
+  assert.throws(() => queue.release(seed.id, claimed.leaseToken!, "policy:x", "spoof"), /reserved principal namespace/);
+  assert.equal(queue.get(seed.id)?.status, "claimed");
+  assert.equal(queue.get(seed.id)?.leaseOwner, "codex:updex:one");
+  assert.equal(queue.list({ repository: "frostyard/updex" }).length, 1);
+
+  // Fluent's own principals still write their reserved names.
+  const completion = queue.complete(attempt("codex:updex:one"));
+  const approved = queue.approve(completion.followUps[0]!.id, "operator:cli");
+  assert.equal(approved.status, "queued");
+  assert.deepEqual(
+    queue.events(approved.id).map((event) => [event.type, event.actor]),
+    [
+      ["work.proposed", "codex:updex:one"],
+      ["work.approved", "operator:cli"],
+    ],
+  );
+  assert.equal(seed.createdBy, "operator:test");
+});
+
+type Row = Record<string, unknown>;
+
+function seedTestingGap(queue: QueueStore, repository: string) {
+  return queue.enqueueSeed({
+    repository,
+    kind: "testing-gap-discovery",
+    objective: "Identify one meaningful testing gap and propose a test that covers it.",
+    instructions: "Read and report one gap. Do not edit files. Create a bounded implementation follow-up.",
+    acceptanceCriteria: ["Exactly one gap has file-level evidence."],
+    allowedActions: ["read", "create-followup"],
+    delegableActions: ["read", "write", "run-tests", "open-pr", "create-followup"],
+    createdBy: "operator:test",
+  });
+}

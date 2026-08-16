@@ -1,0 +1,4 @@
+interface:
+  display_name: "Model Fluent Domain"
+  short_description: "Sharpen Fluent terms and boundaries"
+  default_prompt: "Use $model-fluent-domain to resolve and record ambiguous Fluent domain terms."

@@ -1,12 +1,12 @@
 ---
 name: skill-name
-description: One sentence saying what this skill produces and one sentence saying when to use it ("Use whenever asked to …"). Agents pick skills by this description alone — make the trigger unmistakable.
+description: One sentence saying what this skill produces and one sentence saying when to use it ("Use whenever asked to …"). Workers pick skills by this description alone — make the trigger unmistakable.
 ---
 
 # Imperative title (e.g. "Build a new widget")
 
 <!--
-A skill is a repeatable procedure an agent should follow instead of
+A skill is a repeatable procedure a worker should follow instead of
 improvising. Copy this directory, rename it, and register the skill with a
 bullet in AGENTS.md's Skills section. Keep steps concrete: name the commands,
 files, and checks. Link the design docs/specs that govern the steps rather
@@ -24,4 +24,4 @@ State the goal in one line, and what "done" looks like.
 
 ## Pitfalls
 
-- Known failure mode an agent hits on this path, and the correction.
+- Known failure mode a worker hits on this path, and the correction.
