@@ -15,7 +15,7 @@ no generic record-writing, fact-writing, administrative, or worker interface.
 | Default path | `./data/control-plane.db` | Distinct from the queue-spike default |
 | SQLite application ID | `1179405908` | Decimal encoding of `FLNT` |
 | Schema version | `2` | Stored in both `PRAGMA user_version` and metadata |
-| Registry version | `6` | Stored in metadata and both initialization payloads |
+| Registry version | `7` | Stored in metadata and both initialization payloads |
 | Node runtime | `>=24.0.0` | Required for the stable `node:sqlite` surface and online backup API |
 | Database lineage ID | UUIDv7 | Generated once by the server; never reused or inferred from path |
 | Operator principal ID | UUIDv7 | Generated once and stored separately from database, session, worker, or provider identity |
@@ -26,7 +26,7 @@ transaction sequence.
 `ControlPlaneStore.occurrences()` returns occurrences ordered by transaction
 sequence and position. Neither method mutates the database or returns a secret.
 
-### Closed registry version 6
+### Closed registry version 7
 
 | Registry | Name | Version or ID rule | Contract |
 | --- | --- | --- | --- |
@@ -47,18 +47,21 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Record | `core.snapshot-active` | Schema 1 | Class `fact`; subject `control-plane-database`; minimum class `organization` |
 | Record | `core.candidate-rejection-observation` | Schema 1 | Class `observation`; subject `control-plane-database`; minimum class `organization` |
 | Record | `core.source-check-eligible-observation` | Schema 1 | Class `observation`; subject `control-plane-database`; minimum class `organization` |
+| Record | `core.stale-source-override-decision` | Schema 1 | Class `decision`; subject `control-plane-database`; minimum class `organization` |
 | Record | `core.rollback-decision` | Schema 1 | Class `decision`; subject `control-plane-database`; minimum class `organization` |
 | Event | `control-plane.initialized` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
 | Event | `control-plane.integrity-checked` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
 | Event | `core.snapshot-activated` | Schema 1 | Subject `core-snapshot`; minimum class `organization` |
 | Event | `core.candidate-rejected` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
 | Event | `core.source-check-eligible` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
+| Event | `core.stale-source-override-issued` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
 | Event | `core.snapshot-rollback-activated` | Schema 1 | Subject `core-snapshot`; minimum class `organization` |
 | Command | `control-plane.initialize` | Schema 1 | Outputs database definition, principal definition, then initialization event |
 | Command | `control-plane.check-integrity` | Schema 1 | Outputs the integrity observation, then integrity-checked event |
 | Command | `core.activate-snapshot` | Schema 1 | Outputs snapshot definition, active fact, then activation event |
 | Command | `core.record-candidate-rejection` | Schema 1 | Outputs rejection observation, then rejection event |
 | Command | `core.record-source-check-eligible` | Schema 1 | Outputs eligible-check observation, then eligible-check event |
+| Command | `core.issue-stale-source-override` | Schema 1 | Outputs resolved operator decision, then causally linked event |
 | Command | `core.rollback-snapshot` | Schema 1 | Outputs resolved decision, snapshot definition, active fact, then rollback event |
 | Predicate | `core.snapshot-active` | Contract 1 | Established by automatic activation or operator rollback; latest transaction sequence wins |
 | Projection | `control-plane.subject-lookup` | Contract, transformation, and information-handling version 1 | Stable subjects and creation definitions for internal diagnostics |
@@ -71,7 +74,7 @@ invalid:
 {
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
   "operatorPrincipalId": "0198b0a6-c200-7abc-8def-0123456789ac",
-  "registryVersion": 6,
+  "registryVersion": 7,
   "schemaVersion": 2
 }
 ```
@@ -94,7 +97,7 @@ The integrity observation and event payload have this exact shape:
 {
   "checkedThroughSequence": 1,
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
-  "registryVersion": 6,
+  "registryVersion": 7,
   "result": "ok",
   "schemaVersion": 2
 }
@@ -290,7 +293,7 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
    initialization transaction.
 5. Older, newer, incomplete, unexpected, or differently identified schemas
    MUST fail closed. Unregistered indexes, triggers, and views are unexpected.
-   Schema version 2 and registry version 6 define no upgrade path from earlier
+   Schema version 2 and registry version 7 define no upgrade path from earlier
    pre-production target stores.
 6. Subject, record, event, command, source, revision, record-class, and
    information-class names MUST come from the code-owned versioned registries.

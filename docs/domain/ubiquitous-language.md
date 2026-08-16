@@ -638,12 +638,13 @@ reads or already admitted work.
 An attributed expiring operator decision that temporarily permits Core
 admission readiness beyond its elapsed-time freshness boundary. It cannot
 bypass missing authority, invalidity, continuity rejection, or persistence
-failure.
+failure, and one decision can last no more than 24 hours from issuance.
 
 **Avoid:** Core rollback; validation waiver; continuity override; permanent exception.
 ([ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md),
 [ADR-0035](../adr/0035-route-human-authority-through-typed-decisions.md),
-[ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md))
+[ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md),
+[ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md))
 
 #### Core rollback activation
 

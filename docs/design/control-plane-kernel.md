@@ -57,7 +57,7 @@ schemas fail rather than being guessed or upgraded by this slice.
 ### Closed registries
 
 [`registry.ts`](../../src/control/registry.ts) is the only owner of the current
-kernel vocabulary. Registry version 6 contains the bootstrap, Core snapshot,
+kernel vocabulary. Registry version 7 contains the bootstrap, Core snapshot,
 source-check, and rollback contracts:
 
 | Registry | Initial member | Meaning |
@@ -76,18 +76,21 @@ source-check, and rollback contracts:
 | Record kind | `core.snapshot-active` v1 | Current-snapshot fact on the database subject |
 | Record kind | `core.candidate-rejection-observation` v1 | Bounded non-authoritative source/validation/continuity/persistence diagnostic |
 | Record kind | `core.source-check-eligible-observation` v1 | Configured-ref check that exactly matches active authority |
+| Record kind | `core.stale-source-override-decision` v1 | Resolved operator choice bound to stale evidence, active snapshot, and expiry |
 | Record kind | `core.rollback-decision` v1 | Resolved operator choice bound to exact prior Core authority, target commit, and reason |
 | Event kind | `control-plane.initialized` v1 | The past-tense account of successful initialization |
 | Event kind | `control-plane.integrity-checked` v1 | The past-tense account of the accepted integrity observation |
 | Event kind | `core.snapshot-activated` v1 | The past-tense account of selecting one snapshot |
 | Event kind | `core.candidate-rejected` v1 | The past-tense audit account of one rejected candidate check |
 | Event kind | `core.source-check-eligible` v1 | The past-tense audit account of one eligible configured-ref check |
+| Event kind | `core.stale-source-override-issued` v1 | The past-tense account causally linked to the override decision |
 | Event kind | `core.snapshot-rollback-activated` v1 | The past-tense account linking an operator decision, prior authority, and new snapshot |
 | Command kind | `control-plane.initialize` v1 | The fixed bootstrap transaction and its ordered outputs |
 | Command kind | `control-plane.check-integrity` v1 | An optimistic, idempotent system integrity check |
 | Command kind | `core.activate-snapshot` v1 | Atomic retention and activation of one independently revalidated candidate |
 | Command kind | `core.record-candidate-rejection` v1 | Idempotent bounded rejection observation and event |
 | Command kind | `core.record-source-check-eligible` v1 | Idempotent eligible-check observation and event |
+| Command kind | `core.issue-stale-source-override` v1 | Optimistic attributed decision capped at 24 hours |
 | Command kind | `core.rollback-snapshot` v1 | Atomic resolved decision and exact-target snapshot activation |
 | Predicate contract | `core.snapshot-active` v1 | Established by automatic activation or operator rollback; latest transaction sequence wins |
 | Projection contract | `control-plane.subject-lookup` v1 | Stable subject identity and creation-definition lookup |
@@ -209,8 +212,11 @@ attempts. The kernel derives Core admission readiness at a caller evaluation
 time from the active snapshot and this ordered history: invalidity, unresolved
 continuity, and persistence failure block immediately; source unavailability
 only advances the 24-hour clock from the last successful validation. The read
-allocates no transaction and currently exposes no stale-source override
-decision.
+allocates no transaction. A typed operator command may issue a stale-source
+override only against the exact `source-stale` base result. The decision binds
+the active snapshot and evidence, expires within 24 hours of server issuance,
+and makes the read visibly degraded while applicable; it cannot alter any hard
+failure or transfer to a later snapshot.
 
 Operator rollback is a separate typed authority path, never a bypass flag on
 automatic activation. The local CLI binds the stored operator principal, exact
@@ -345,7 +351,8 @@ work lineage are later slices in the
   [ADR-0042](../adr/0042-use-rebuildable-projections-only-as-read-models.md),
   [ADR-0043](../adr/0043-order-records-by-transaction-sequence-not-timestamps.md),
   [ADR-0044](../adr/0044-replace-the-queue-spike-database.md), and
-  [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md)
+  [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md),
+  and [ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md)
 - Contracts: [control-plane kernel](../specs/control-plane-kernel.md) and
   [Core snapshot activation](../specs/core-snapshot-activation.md), and
   [Core source readiness](../specs/core-source-readiness.md)

@@ -226,8 +226,9 @@ test("a Core candidate rejection is bounded, idempotent, queryable, and non-auth
 
 test("Core source freshness stays distinct from immediate admission blockers", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fluent-core-readiness-test-"));
+  const path = join(directory, "control-plane.db");
   let now = new Date("2026-08-16T10:00:00.000Z");
-  const store = new ControlPlaneStore(join(directory, "control-plane.db"), () => now);
+  const store = new ControlPlaneStore(path, () => now);
   const activeCandidate = await activationCandidate("7".repeat(40), "8".repeat(40));
   const activation = store.activateCoreSnapshot({
     candidate: activeCandidate,
@@ -262,6 +263,15 @@ test("Core source freshness stays distinct from immediate admission blockers", a
     overrideExpiresAt: null,
     degraded: false,
   });
+  assert.throws(
+    () =>
+      store.issueCoreStaleSourceOverride({
+        expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+        expiresAt: "2026-08-16T11:00:00.000Z",
+        reason: "A fresh source does not need degraded operation",
+      }),
+    /requires source-stale readiness; found ready/,
+  );
 
   now = new Date("2026-08-16T10:30:00.000Z");
   store.recordCoreCandidateRejection({
@@ -303,6 +313,15 @@ test("Core source freshness stays distinct from immediate admission blockers", a
   });
   assert.equal(store.coreAdmissionReadiness().reason, "continuity-blocked");
   assert.equal(store.coreAdmissionReadiness().lastValidatedAt, now.toISOString());
+  assert.throws(
+    () =>
+      store.issueCoreStaleSourceOverride({
+        expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+        expiresAt: "2026-08-16T12:00:00.000Z",
+        reason: "A stale override must not bypass divergent authority",
+      }),
+    /requires source-stale readiness; found continuity-blocked/,
+  );
 
   now = new Date("2026-08-16T12:00:00.000Z");
   const outageCheckId = uuidV7(now);
@@ -349,6 +368,100 @@ test("Core source freshness stays distinct from immediate admission blockers", a
   const stale = store.coreAdmissionReadiness();
   assert.equal(stale.reason, "source-stale");
   assert.equal(stale.ready, false);
+  const sequenceBeforeOverride = store.metadata().lastTransactionSequence;
+  assert.throws(
+    () =>
+      store.issueCoreStaleSourceOverride({
+        expectedLastTransactionSequence: sequenceBeforeOverride,
+        expiresAt: "2026-08-18T11:00:00.001Z",
+        reason: "This attempted decision exceeds the bounded window",
+      }),
+    /cannot exceed 24 hours/,
+  );
+  assert.equal(store.metadata().lastTransactionSequence, sequenceBeforeOverride);
+  const override = store.issueCoreStaleSourceOverride({
+    expectedLastTransactionSequence: sequenceBeforeOverride,
+    expiresAt: "2026-08-18T11:00:00.000Z",
+    reason: "Keep organization-dependent admission available during the confirmed source outage",
+  });
+  assert.equal(override.transactionSequence, sequenceBeforeOverride + 1);
+  assert.deepEqual(override.transactionPositions, [0, 1]);
+  assert.deepEqual(store.issueCoreStaleSourceOverride({
+    expectedLastTransactionSequence: sequenceBeforeOverride,
+    expiresAt: "2026-08-18T11:00:00.000Z",
+    reason: "Keep organization-dependent admission available during the confirmed source outage",
+  }), override);
+  const degraded = store.coreAdmissionReadiness();
+  assert.equal(degraded.ready, true);
+  assert.equal(degraded.reason, "ready");
+  assert.equal(degraded.degraded, true);
+  assert.equal(degraded.overrideDecisionId, override.decisionRecordId);
+  assert.equal(degraded.overrideExpiresAt, override.expiresAt);
+
+  now = new Date("2026-08-18T11:00:00.000Z");
+  const expired = store.coreAdmissionReadiness();
+  assert.equal(expired.ready, false);
+  assert.equal(expired.reason, "source-stale");
+  assert.equal(expired.degraded, false);
+  assert.equal(expired.overrideDecisionId, null);
+  store.close();
+  const reopened = new ControlPlaneStore(path, () => now);
+  assert.equal(reopened.coreAdmissionReadiness().reason, "source-stale");
+  reopened.close();
+});
+
+test("a stale-source override neither transfers to new authority nor masks a later hard failure", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-core-override-boundary-test-"));
+  let now = new Date("2026-08-14T09:00:00.000Z");
+  const store = new ControlPlaneStore(join(directory, "control-plane.db"), () => now);
+  const first = await activationCandidate("1".repeat(40), "2".repeat(40));
+  const firstActivation = store.activateCoreSnapshot({ candidate: first, expectedLastTransactionSequence: 1 });
+  store.recordCoreSourceCheckEligible({
+    checkId: uuidV7(now),
+    candidate: first,
+    expectedLastTransactionSequence: firstActivation.transactionSequence,
+  });
+  now = new Date("2026-08-15T10:00:00.000Z");
+  const override = store.issueCoreStaleSourceOverride({
+    expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+    expiresAt: "2026-08-16T10:00:00.000Z",
+    reason: "Continue from the last validated authority during a bounded source outage",
+  });
+  assert.equal(store.coreAdmissionReadiness().overrideDecisionId, override.decisionRecordId);
+
+  now = new Date("2026-08-15T11:00:00.000Z");
+  const second = await activationCandidate("3".repeat(40), "4".repeat(40));
+  store.rollbackCoreSnapshot({
+    candidate: second,
+    expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+    reason: "Select a separately reviewed recovery authority",
+  });
+  const afterRollback = store.coreAdmissionReadiness();
+  assert.equal(afterRollback.reason, "continuity-blocked");
+  assert.equal(afterRollback.degraded, false);
+  assert.equal(afterRollback.overrideDecisionId, null);
+
+  store.recordCoreSourceCheckEligible({
+    checkId: uuidV7(now),
+    candidate: second,
+    expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+  });
+  store.recordCoreCandidateRejection({
+    checkId: uuidV7(now),
+    operation: "automatic-source-check",
+    stage: "validation",
+    code: "candidate-invalid",
+    summary: "a later configured-ref candidate is invalid",
+    details: [],
+    sourceUrl: second.sourceUrl,
+    sourceRef: second.ref,
+    commitId: "5".repeat(40),
+    treeId: "6".repeat(40),
+  });
+  const hardFailure = store.coreAdmissionReadiness();
+  assert.equal(hardFailure.reason, "candidate-invalid");
+  assert.equal(hardFailure.degraded, false);
+  assert.equal(hardFailure.overrideDecisionId, null);
   store.close();
 });
 

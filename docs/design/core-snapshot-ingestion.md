@@ -4,7 +4,8 @@ Living document. Rationale:
 [ADR-0007](../adr/0007-use-frostyard-core-as-the-organization-authority.md),
 [ADR-0013](../adr/0013-author-organization-records-as-strict-json.md), and
 [ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md), and
-[ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md).
+[ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md),
+and [ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md).
 Contracts: [core snapshot verification](../specs/core-snapshot-verification.md)
 [Core snapshot activation](../specs/core-snapshot-activation.md), and
 [Core source readiness](../specs/core-source-readiness.md).
@@ -185,6 +186,10 @@ required before periodic polling.
   observations; the default is 20 and the maximum is 100.
 - Run `npm run --silent core -- readiness` to read the current admission gate,
   its exact reason, latest automatic check, and freshness boundary.
+- Run `npm run --silent core -- override-staleness
+  <expected-control-plane-sequence> <expires-at> <reason>` only when base
+  readiness is `source-stale`; the canonical UTC expiry must be within 24 hours
+  of server issuance.
 - `FLUENT_CORE_URL`, `FLUENT_CORE_REF`, and `FLUENT_CORE_MIRROR` select the
   exact allowed source, branch ref, and host-local mirror path.
 - A valid report proves compatibility with the implemented repository-authority
@@ -193,8 +198,8 @@ required before periodic polling.
 - A failed fetch or validation before the first activation leaves no last-known-
   good state. Atomic activation now preserves an existing current snapshot;
   durable rejected-candidate diagnostics preserve the failure. The readiness
-  gate fails closed without active authority; stale override, retention/purge,
-  and polling belong to
+  gate fails closed without active authority; retention/purge and polling
+  belong to
   later phases of the
   [ingestion plan](../plans/core-snapshot-ingestion.md).
 - The mirror contains organization-governed data and should be backed up and
@@ -212,9 +217,10 @@ different: it lets the prior successful-check clock continue until the
 
 Readiness is evaluated from authoritative state at an exact control-plane
 sequence. It requires an active snapshot, respects hard check failures before
-elapsed staleness, and reports one specific reason. Registry version 6 reserves
-override result fields but never relaxes staleness; the later typed stale-source
-override can relax only elapsed staleness and must expose degraded operation.
+elapsed staleness, and reports one specific reason. The typed stale-source
+override binds the exact stale evidence and active snapshot, lasts no more than
+24 hours from issuance, relaxes only elapsed staleness, and exposes degraded
+operation until it expires.
 Read-only verification and exact-commit inspection never refresh this state.
 The exact record and read contract is
 [Core source readiness](../specs/core-source-readiness.md).
@@ -226,7 +232,8 @@ The exact record and read contract is
   [ADR-0013](../adr/0013-author-organization-records-as-strict-json.md),
   [ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md), and
   [ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md), and
-  [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md)
+  [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md),
+  and [ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md)
 - Contracts: [core snapshot verification](../specs/core-snapshot-verification.md)
   [Core snapshot activation](../specs/core-snapshot-activation.md), and
   [Core source readiness](../specs/core-source-readiness.md)

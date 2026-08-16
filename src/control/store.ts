@@ -28,6 +28,7 @@ import {
   type CoreRollbackActivatedPayload,
   type CoreRollbackDecisionPayload,
   type CoreSourceCheckEligiblePayload,
+  type CoreStaleSourceOverrideDecisionPayload,
   type ProjectionName,
   type RecordClass,
   type SubjectKind,
@@ -233,9 +234,27 @@ export interface CoreAdmissionReadiness {
   lastValidatedAt: string | null;
   maximumStalenessSeconds: 86400;
   staleAt: string | null;
-  overrideDecisionId: null;
-  overrideExpiresAt: null;
-  degraded: false;
+  overrideDecisionId: string | null;
+  overrideExpiresAt: string | null;
+  degraded: boolean;
+}
+
+export interface CoreStaleSourceOverrideInput {
+  expectedLastTransactionSequence: number;
+  expiresAt: string;
+  reason: string;
+}
+
+export interface CoreStaleSourceOverrideResult {
+  decisionRecordId: string;
+  eventRecordId: string;
+  activeSnapshotId: string;
+  operatorPrincipalId: string;
+  reason: string;
+  decidedAt: string;
+  expiresAt: string;
+  transactionPositions: readonly [0, 1];
+  transactionSequence: number;
 }
 
 export interface ActiveCoreSnapshot {
@@ -460,6 +479,42 @@ export class ControlPlaneStore {
   }
 
   coreAdmissionReadiness(evaluatedAt = this.now()): CoreAdmissionReadiness {
+    const readiness = this.coreAdmissionReadinessWithoutOverride(evaluatedAt);
+    if (readiness.reason !== "source-stale" || readiness.activeSnapshotId === null) return readiness;
+    const rows = this.db
+      .prepare(
+        `SELECT payload_json
+         FROM durable_occurrences occurrence
+         JOIN durable_records record ON record.record_id = occurrence.record_id
+         WHERE occurrence.kind = 'core.stale-source-override-decision'
+           AND record.record_class = 'decision'
+         ORDER BY occurrence.transaction_sequence DESC`,
+      )
+      .all() as Row[];
+    for (const row of rows) {
+      const payload = parseJson(String(row.payload_json));
+      if (!recordKindRegistry["core.stale-source-override-decision"].validatePayload(payload)) {
+        throw new Error("invalid Core stale-source override decision");
+      }
+      if (
+        payload.activeSnapshotId === readiness.activeSnapshotId &&
+        payload.decidedAt <= evaluatedAt &&
+        evaluatedAt < payload.expiresAt
+      ) {
+        return {
+          ...readiness,
+          ready: true,
+          reason: "ready",
+          overrideDecisionId: payload.decisionId,
+          overrideExpiresAt: payload.expiresAt,
+          degraded: true,
+        };
+      }
+    }
+    return readiness;
+  }
+
+  private coreAdmissionReadinessWithoutOverride(evaluatedAt: string): CoreAdmissionReadiness {
     assertUtcInstant(evaluatedAt, "Core admission readiness evaluation time");
     const metadata = this.metadata();
     if (evaluatedAt < metadata.controlTimeWatermark) {
@@ -1802,6 +1857,190 @@ export class ControlPlaneStore {
     }
   }
 
+  issueCoreStaleSourceOverride(input: CoreStaleSourceOverrideInput): CoreStaleSourceOverrideResult {
+    if (!Number.isSafeInteger(input.expectedLastTransactionSequence) || input.expectedLastTransactionSequence < 1) {
+      throw new Error("expectedLastTransactionSequence must be a positive safe integer");
+    }
+    assertUtcInstant(input.expiresAt, "Core stale-source override expiry");
+    assertBoundedReason(input.reason, "Core stale-source override reason");
+    const expiresAtMilliseconds = new Date(input.expiresAt).getTime();
+    const idempotencyKey =
+      `core-stale-source-override:${input.expectedLastTransactionSequence}:${expiresAtMilliseconds}`;
+    const commandInput = {
+      expectedLastTransactionSequence: input.expectedLastTransactionSequence,
+      expiresAt: input.expiresAt,
+      reason: input.reason,
+    } satisfies JsonValue;
+    const commandPayloadJson = canonicalJson(commandInput);
+    const commandPayloadDigest = sha256(commandPayloadJson);
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.verifyExisting(this.applicationTables());
+      const metadata = this.metadata();
+      const commandScope = `database:${metadata.databaseLineageId}`;
+      const prior = this.db
+        .prepare(
+          `SELECT payload_digest, result_json
+           FROM idempotency_receipts
+           WHERE command_scope = ? AND command_kind = 'core.issue-stale-source-override'
+             AND command_schema_version = 1 AND idempotency_key = ?`,
+        )
+        .get(commandScope, idempotencyKey) as Row | undefined;
+      if (prior) {
+        if (String(prior.payload_digest) !== commandPayloadDigest) {
+          throw new Error("Core stale-source override was already issued with a different payload");
+        }
+        const result = parseCoreStaleSourceOverrideResult(parseJson(String(prior.result_json)));
+        this.db.exec("COMMIT");
+        return result;
+      }
+
+      const decidedAt = this.now();
+      if (decidedAt < metadata.controlTimeWatermark) {
+        throw new Error(
+          `control-plane clock moved backwards behind ${metadata.controlTimeWatermark}; refusing a new write transaction`,
+        );
+      }
+      if (metadata.lastTransactionSequence !== input.expectedLastTransactionSequence) {
+        throw new Error(
+          `stale control-plane sequence: expected ${input.expectedLastTransactionSequence}, current ${metadata.lastTransactionSequence}`,
+        );
+      }
+      const decidedAtMilliseconds = new Date(decidedAt).getTime();
+      if (expiresAtMilliseconds <= decidedAtMilliseconds) {
+        throw new Error("Core stale-source override expiry must be after its decision time");
+      }
+      if (expiresAtMilliseconds > decidedAtMilliseconds + 86_400_000) {
+        throw new Error("Core stale-source override cannot exceed 24 hours from issuance");
+      }
+      const readiness = this.coreAdmissionReadinessWithoutOverride(decidedAt);
+      if (
+        readiness.reason !== "source-stale" ||
+        readiness.activeSnapshotId === null ||
+        readiness.latestCheckId === null ||
+        readiness.lastValidatedAt === null ||
+        readiness.staleAt === null
+      ) {
+        throw new Error(`Core stale-source override requires source-stale readiness; found ${readiness.reason}`);
+      }
+
+      const decisionRecordId = uuidV7(new Date(decidedAt));
+      const eventRecordId = uuidV7(new Date(decidedAt));
+      const transactionId = uuidV7(new Date(decidedAt));
+      const payload = {
+        decisionId: decisionRecordId,
+        decisionType: "core-stale-source-override",
+        state: "resolved",
+        choice: "permit-stale-source-admission",
+        databaseLineageId: metadata.databaseLineageId,
+        operatorPrincipalId: metadata.operatorPrincipalId,
+        activeSnapshotId: readiness.activeSnapshotId,
+        latestCheckId: readiness.latestCheckId,
+        lastValidatedAt: readiness.lastValidatedAt,
+        staleAt: readiness.staleAt,
+        maximumDurationSeconds: 86400,
+        expectedLastTransactionSequence: input.expectedLastTransactionSequence,
+        reason: input.reason,
+        decidedAt,
+        expiresAt: input.expiresAt,
+      } satisfies JsonValue;
+      if (!recordKindRegistry["core.stale-source-override-decision"].validatePayload(payload)) {
+        throw new Error("Core stale-source override is outside the registered decision contract");
+      }
+      const payloadJson = canonicalJson(payload);
+      const payloadDigest = sha256(payloadJson);
+      const informationScopeJson = canonicalJson({ deploymentId: metadata.databaseLineageId });
+      const transaction = this.db
+        .prepare(
+          `INSERT INTO control_transactions (
+             transaction_id, command_kind, command_schema_version, principal_kind,
+             principal_id, session_id, idempotency_key, payload_digest,
+             evaluation_time, recorded_at
+           ) VALUES (?, 'core.issue-stale-source-override', 1, 'operator-principal', ?, NULL, ?, ?, ?, ?)`,
+        )
+        .run(
+          transactionId,
+          metadata.operatorPrincipalId,
+          idempotencyKey,
+          commandPayloadDigest,
+          decidedAt,
+          decidedAt,
+        );
+      const sequence = Number(transaction.lastInsertRowid);
+      const common = {
+        schemaVersion: 1,
+        subjectKind: "control-plane-database" as const,
+        subjectId: metadata.databaseLineageId,
+        revisionKind: "transaction-sequence",
+        revisionValue: String(input.expectedLastTransactionSequence),
+        sourceKind: "operator-principal",
+        sourceId: metadata.operatorPrincipalId,
+        informationClass: "organization" as const,
+        informationScopeJson,
+        payloadJson,
+        payloadDigest,
+        correlationId: decisionRecordId,
+        transactionSequence: sequence,
+        recordedAt: decidedAt,
+      };
+      this.insertOccurrence({
+        ...common,
+        recordId: decisionRecordId,
+        occurrenceType: "record",
+        kind: "core.stale-source-override-decision",
+        recordClass: "decision",
+        transactionPosition: 0,
+      });
+      this.insertOccurrence({
+        ...common,
+        recordId: eventRecordId,
+        occurrenceType: "event",
+        kind: "core.stale-source-override-issued",
+        causationRecordId: decisionRecordId,
+        transactionPosition: 1,
+      });
+      const result: CoreStaleSourceOverrideResult = {
+        decisionRecordId,
+        eventRecordId,
+        activeSnapshotId: readiness.activeSnapshotId,
+        operatorPrincipalId: metadata.operatorPrincipalId,
+        reason: input.reason,
+        decidedAt,
+        expiresAt: input.expiresAt,
+        transactionPositions: [0, 1],
+        transactionSequence: sequence,
+      };
+      this.db
+        .prepare(
+          `INSERT INTO idempotency_receipts (
+             command_scope, command_kind, command_schema_version, idempotency_key,
+             payload_digest, result_json, transaction_sequence, retained_until
+           ) VALUES (?, 'core.issue-stale-source-override', 1, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          commandScope,
+          idempotencyKey,
+          commandPayloadDigest,
+          canonicalJson(result as unknown as JsonValue),
+          sequence,
+          IDEMPOTENCY_RETAINED_UNTIL,
+        );
+      this.db
+        .prepare(
+          `UPDATE control_plane_metadata
+           SET control_time_watermark = ?, last_transaction_sequence = ?
+           WHERE singleton = 1`,
+        )
+        .run(decidedAt, sequence);
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   recordCoreCandidateRejection(input: CoreCandidateRejectionInput): CoreCandidateRejectionResult {
     const commandInput = {
       checkId: input.checkId,
@@ -2839,6 +3078,19 @@ export class ControlPlaneStore {
         if (outputs[0]!.payload_digest !== outputs[1]!.payload_digest) {
           throw new Error(`eligible Core source check outputs disagree: ${String(row.sequence)}`);
         }
+      } else if (row.command_kind === "core.issue-stale-source-override") {
+        if (
+          typeof row.idempotency_key !== "string" ||
+          !/^core-stale-source-override:[1-9][0-9]*:[1-9][0-9]*$/.test(row.idempotency_key) ||
+          row.principal_kind !== "operator-principal" ||
+          row.principal_id !== this.metadata().operatorPrincipalId ||
+          receiptCount !== 1
+        ) {
+          throw new Error(`Core stale-source override receipt shape is invalid: ${String(row.sequence)}`);
+        }
+        if (outputs[0]!.payload_digest !== outputs[1]!.payload_digest) {
+          throw new Error(`Core stale-source override outputs disagree: ${String(row.sequence)}`);
+        }
       }
     }
 
@@ -2961,6 +3213,92 @@ export class ControlPlaneStore {
           String(row.recorded_at) !== check.checkedAt
         ) {
           throw new Error(`eligible Core source check lineage mismatch: ${String(row.record_id)}`);
+        }
+      }
+      if (
+        String(row.kind) === "core.stale-source-override-decision" ||
+        String(row.kind) === "core.stale-source-override-issued"
+      ) {
+        const decision = payload as CoreStaleSourceOverrideDecisionPayload;
+        const expectedEvent = String(row.kind) === "core.stale-source-override-issued";
+        const snapshot = this.db
+          .prepare(
+            `SELECT snapshot_id, source_commit_id, activated_transaction_sequence
+             FROM core_snapshots WHERE activated_transaction_sequence <= ?
+             ORDER BY activated_transaction_sequence DESC LIMIT 1`,
+          )
+          .get(decision.expectedLastTransactionSequence) as Row | undefined;
+        const sourceRows = this.db
+          .prepare(
+            `SELECT kind, correlation_id, payload_json, transaction_sequence
+             FROM durable_occurrences
+             WHERE occurrence_type = 'record'
+               AND kind IN ('core.source-check-eligible-observation', 'core.candidate-rejection-observation')
+               AND transaction_sequence <= ?
+             ORDER BY transaction_sequence DESC`,
+          )
+          .all(decision.expectedLastTransactionSequence) as Row[];
+        let latestAutomaticCheckId: string | undefined;
+        let lastValidatedAt: string | undefined;
+        let substantiveHardFailure = false;
+        let foundSubstantive = false;
+        for (const sourceRow of sourceRows) {
+          const sourcePayload = parseJson(String(sourceRow.payload_json));
+          if (sourceRow.kind === "core.source-check-eligible-observation") {
+            if (!recordKindRegistry["core.source-check-eligible-observation"].validatePayload(sourcePayload)) {
+              throw new Error("Core stale-source override references an invalid eligible check");
+            }
+            latestAutomaticCheckId ??= sourcePayload.checkId;
+            lastValidatedAt ??= sourcePayload.checkedAt;
+            if (!foundSubstantive) {
+              substantiveHardFailure = sourcePayload.commitId !== String(snapshot?.source_commit_id);
+              foundSubstantive = true;
+            }
+          } else {
+            if (!recordKindRegistry["core.candidate-rejection-observation"].validatePayload(sourcePayload)) {
+              throw new Error("Core stale-source override references an invalid rejection");
+            }
+            if (sourcePayload.operation !== "automatic-source-check") continue;
+            latestAutomaticCheckId ??= sourcePayload.checkId;
+            if (sourcePayload.stage === "continuity" || sourcePayload.stage === "persistence") {
+              lastValidatedAt ??= sourcePayload.observedAt;
+            }
+            if (!foundSubstantive && sourcePayload.stage !== "source") {
+              substantiveHardFailure =
+                sourcePayload.stage === "validation" ||
+                sourcePayload.stage === "persistence" ||
+                (sourcePayload.stage === "continuity" &&
+                  !(
+                    sourcePayload.commitId === String(snapshot?.source_commit_id) &&
+                    Number(snapshot?.activated_transaction_sequence) > Number(sourceRow.transaction_sequence)
+                  ));
+              foundSubstantive = true;
+            }
+          }
+        }
+        if (
+          String(row.subject_id) !== this.metadata().databaseLineageId ||
+          String(row.source_kind) !== "operator-principal" ||
+          String(row.source_id) !== this.metadata().operatorPrincipalId ||
+          row.source_revision_kind != null ||
+          row.source_revision_value != null ||
+          String(row.correlation_id) !== decision.decisionId ||
+          String(row.recorded_at) !== decision.decidedAt ||
+          String(row.revision_kind) !== "transaction-sequence" ||
+          Number(row.revision_value) !== decision.expectedLastTransactionSequence ||
+          decision.databaseLineageId !== this.metadata().databaseLineageId ||
+          decision.operatorPrincipalId !== this.metadata().operatorPrincipalId ||
+          Number(row.transaction_sequence) !== decision.expectedLastTransactionSequence + 1 ||
+          (expectedEvent
+            ? String(row.causation_record_id) !== decision.decisionId
+            : row.causation_record_id != null || String(row.record_id) !== decision.decisionId) ||
+          !snapshot ||
+          String(snapshot.snapshot_id) !== decision.activeSnapshotId ||
+          latestAutomaticCheckId !== decision.latestCheckId ||
+          lastValidatedAt !== decision.lastValidatedAt ||
+          substantiveHardFailure
+        ) {
+          throw new Error(`Core stale-source override lineage mismatch: ${String(row.record_id)}`);
         }
       }
       if (String(row.kind) === "core.rollback-decision") {
@@ -3267,13 +3605,15 @@ export class ControlPlaneStore {
       if (commandKind === "core.rollback-snapshot") parseCoreSnapshotRollbackResult(result);
       if (commandKind === "core.record-candidate-rejection") parseCoreCandidateRejectionResult(result);
       if (commandKind === "core.record-source-check-eligible") parseCoreSourceCheckEligibleResult(result);
+      if (commandKind === "core.issue-stale-source-override") parseCoreStaleSourceOverrideResult(result);
       assertUtcInstant(String(row.retained_until), `idempotency receipt ${String(row.idempotency_key)} retention time`);
       if (
         (commandKind === "control-plane.check-integrity" ||
           commandKind === "core.activate-snapshot" ||
           commandKind === "core.rollback-snapshot" ||
           commandKind === "core.record-candidate-rejection" ||
-          commandKind === "core.record-source-check-eligible") &&
+          commandKind === "core.record-source-check-eligible" ||
+          commandKind === "core.issue-stale-source-override") &&
         String(row.retained_until) !== IDEMPOTENCY_RETAINED_UNTIL
       ) {
         throw new Error(`idempotency receipt retention mismatch: ${String(row.idempotency_key)}`);
@@ -3444,6 +3784,46 @@ export class ControlPlaneStore {
           String(outputs[1]!.record_id) !== check.eventRecordId
         ) {
           throw new Error(`eligible Core source check receipt output mismatch: ${String(row.idempotency_key)}`);
+        }
+      }
+      if (commandKind === "core.issue-stale-source-override") {
+        const override = parseCoreStaleSourceOverrideResult(result);
+        if (
+          String(row.idempotency_key) !==
+            `core-stale-source-override:${override.transactionSequence - 1}:${new Date(override.expiresAt).getTime()}` ||
+          override.transactionSequence !== Number(row.transaction_sequence) ||
+          override.decidedAt !== String(transaction.evaluation_time) ||
+          override.decidedAt !== String(transaction.recorded_at)
+        ) {
+          throw new Error(`Core stale-source override receipt result mismatch: ${String(row.idempotency_key)}`);
+        }
+        const outputs = this.db
+          .prepare(
+            `SELECT record_id FROM durable_occurrences
+             WHERE transaction_sequence = ? ORDER BY transaction_position`,
+          )
+          .all(row.transaction_sequence!) as Row[];
+        if (
+          outputs.length !== 2 ||
+          String(outputs[0]!.record_id) !== override.decisionRecordId ||
+          String(outputs[1]!.record_id) !== override.eventRecordId
+        ) {
+          throw new Error(`Core stale-source override receipt output mismatch: ${String(row.idempotency_key)}`);
+        }
+        const decisionRow = this.db
+          .prepare("SELECT payload_json FROM durable_occurrences WHERE record_id = ?")
+          .get(override.decisionRecordId) as Row | undefined;
+        const decisionPayload = decisionRow ? parseJson(String(decisionRow.payload_json)) : undefined;
+        if (
+          !decisionPayload ||
+          !recordKindRegistry["core.stale-source-override-decision"].validatePayload(decisionPayload) ||
+          decisionPayload.activeSnapshotId !== override.activeSnapshotId ||
+          decisionPayload.operatorPrincipalId !== override.operatorPrincipalId ||
+          decisionPayload.reason !== override.reason ||
+          decisionPayload.decidedAt !== override.decidedAt ||
+          decisionPayload.expiresAt !== override.expiresAt
+        ) {
+          throw new Error(`Core stale-source override receipt decision mismatch: ${String(row.idempotency_key)}`);
         }
       }
     }
@@ -4134,6 +4514,61 @@ function parseCoreSourceCheckEligibleResult(value: JsonValue): CoreSourceCheckEl
     observationRecordId: String(result.observationRecordId),
     eventRecordId: String(result.eventRecordId),
     checkedAt: String(result.checkedAt),
+    transactionPositions: [0, 1],
+    transactionSequence: Number(result.transactionSequence),
+  };
+}
+
+function parseCoreStaleSourceOverrideResult(value: JsonValue): CoreStaleSourceOverrideResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("invalid Core stale-source override receipt result");
+  }
+  const result = value as Record<string, JsonValue>;
+  const expected = [
+    "decisionRecordId",
+    "eventRecordId",
+    "activeSnapshotId",
+    "operatorPrincipalId",
+    "reason",
+    "decidedAt",
+    "expiresAt",
+    "transactionPositions",
+    "transactionSequence",
+  ].sort();
+  const keys = Object.keys(result).sort();
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
+    throw new Error("invalid Core stale-source override receipt result fields");
+  }
+  if (
+    !isUuidV7(String(result.decisionRecordId)) ||
+    !isUuidV7(String(result.eventRecordId)) ||
+    !isUuidV7(String(result.activeSnapshotId)) ||
+    !isUuidV7(String(result.operatorPrincipalId)) ||
+    !Array.isArray(result.transactionPositions) ||
+    result.transactionPositions.length !== 2 ||
+    result.transactionPositions[0] !== 0 ||
+    result.transactionPositions[1] !== 1 ||
+    !Number.isSafeInteger(result.transactionSequence) ||
+    Number(result.transactionSequence) < 2
+  ) {
+    throw new Error("invalid Core stale-source override receipt result values");
+  }
+  assertBoundedReason(String(result.reason), "Core stale-source override result reason");
+  assertUtcInstant(String(result.decidedAt), "Core stale-source override decision time");
+  assertUtcInstant(String(result.expiresAt), "Core stale-source override expiry");
+  const decidedAt = new Date(String(result.decidedAt)).getTime();
+  const expiresAt = new Date(String(result.expiresAt)).getTime();
+  if (expiresAt <= decidedAt || expiresAt > decidedAt + 86_400_000) {
+    throw new Error("invalid Core stale-source override result duration");
+  }
+  return {
+    decisionRecordId: String(result.decisionRecordId),
+    eventRecordId: String(result.eventRecordId),
+    activeSnapshotId: String(result.activeSnapshotId),
+    operatorPrincipalId: String(result.operatorPrincipalId),
+    reason: String(result.reason),
+    decidedAt: String(result.decidedAt),
+    expiresAt: String(result.expiresAt),
     transactionPositions: [0, 1],
     transactionSequence: Number(result.transactionSequence),
   };

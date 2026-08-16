@@ -97,7 +97,7 @@ The rejection payload has this exact shape:
 | `activeCommitId` | string or null | Required for continuity failure; exact active source commit used by the ancestry check |
 | `observedAt` | canonical UTC instant | Server evaluation and recorded time |
 
-Schema version `2` and registry version `6` govern three authority tables:
+Schema version `2` and registry version `7` govern three authority tables:
 
 | Table | Retained content |
 | --- | --- |
@@ -175,7 +175,7 @@ previous snapshot/commit, decision, operator, and reason.
     [Core source readiness](core-source-readiness.md) contract. It does not yet
     poll or purge rejection history; those operations require later typed
     commands and contracts before unattended polling.
-19. A schema version other than `2` or registry version other than `6` MUST fail
+19. A schema version other than `2` or registry version other than `7` MUST fail
     closed. This pre-production version defines no in-place upgrade; initialize
     a fresh target database.
 

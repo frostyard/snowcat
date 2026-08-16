@@ -2,7 +2,7 @@ import { isUuidV7, type JsonValue } from "./encoding.ts";
 
 export const CONTROL_PLANE_APPLICATION_ID = 1_179_405_908; // ASCII "FLNT"
 export const CONTROL_PLANE_SCHEMA_VERSION = 2;
-export const CONTROL_PLANE_REGISTRY_VERSION = 6;
+export const CONTROL_PLANE_REGISTRY_VERSION = 7;
 
 export const informationClasses = ["public", "organization", "restricted"] as const;
 export type InformationClass = (typeof informationClasses)[number];
@@ -125,6 +125,13 @@ export const recordKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isCoreSourceCheckEligiblePayload,
   },
+  "core.stale-source-override-decision": {
+    schemaVersion: 1,
+    recordClass: "decision",
+    subjectKinds: ["control-plane-database"],
+    minimumInformationClass: "organization",
+    validatePayload: isCoreStaleSourceOverrideDecisionPayload,
+  },
   "core.rollback-decision": {
     schemaVersion: 1,
     recordClass: "decision",
@@ -165,6 +172,12 @@ export const eventKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isCoreSourceCheckEligiblePayload,
   },
+  "core.stale-source-override-issued": {
+    schemaVersion: 1,
+    subjectKinds: ["control-plane-database"],
+    minimumInformationClass: "organization",
+    validatePayload: isCoreStaleSourceOverrideDecisionPayload,
+  },
   "core.snapshot-rollback-activated": {
     schemaVersion: 1,
     subjectKinds: ["core-snapshot"],
@@ -193,6 +206,10 @@ export const commandKindRegistry = {
   "core.record-source-check-eligible": {
     schemaVersion: 1,
     outputKinds: ["core.source-check-eligible-observation", "core.source-check-eligible"],
+  },
+  "core.issue-stale-source-override": {
+    schemaVersion: 1,
+    outputKinds: ["core.stale-source-override-decision", "core.stale-source-override-issued"],
   },
   "core.rollback-snapshot": {
     schemaVersion: 1,
@@ -336,6 +353,24 @@ export interface CoreSourceCheckEligiblePayload extends Record<string, JsonValue
   activeSnapshotId: string;
   activeCommitId: string;
   checkedAt: string;
+}
+
+export interface CoreStaleSourceOverrideDecisionPayload extends Record<string, JsonValue> {
+  decisionId: string;
+  decisionType: "core-stale-source-override";
+  state: "resolved";
+  choice: "permit-stale-source-admission";
+  databaseLineageId: string;
+  operatorPrincipalId: string;
+  activeSnapshotId: string;
+  latestCheckId: string;
+  lastValidatedAt: string;
+  staleAt: string;
+  maximumDurationSeconds: 86400;
+  expectedLastTransactionSequence: number;
+  reason: string;
+  decidedAt: string;
+  expiresAt: string;
 }
 
 export interface CoreRollbackDecisionPayload extends Record<string, JsonValue> {
@@ -605,6 +640,63 @@ function isCoreSourceCheckEligiblePayload(value: unknown): value is CoreSourceCh
     isUuidV7(value.activeSnapshotId) &&
     value.activeCommitId === value.commitId &&
     isUtcInstant(value.checkedAt)
+  );
+}
+
+function isCoreStaleSourceOverrideDecisionPayload(
+  value: unknown,
+): value is CoreStaleSourceOverrideDecisionPayload {
+  if (
+    !isExactObject(value, [
+      "decisionId",
+      "decisionType",
+      "state",
+      "choice",
+      "databaseLineageId",
+      "operatorPrincipalId",
+      "activeSnapshotId",
+      "latestCheckId",
+      "lastValidatedAt",
+      "staleAt",
+      "maximumDurationSeconds",
+      "expectedLastTransactionSequence",
+      "reason",
+      "decidedAt",
+      "expiresAt",
+    ]) ||
+    typeof value.decisionId !== "string" ||
+    !isUuidV7(value.decisionId) ||
+    value.decisionType !== "core-stale-source-override" ||
+    value.state !== "resolved" ||
+    value.choice !== "permit-stale-source-admission" ||
+    typeof value.databaseLineageId !== "string" ||
+    !isUuidV7(value.databaseLineageId) ||
+    typeof value.operatorPrincipalId !== "string" ||
+    !isUuidV7(value.operatorPrincipalId) ||
+    typeof value.activeSnapshotId !== "string" ||
+    !isUuidV7(value.activeSnapshotId) ||
+    typeof value.latestCheckId !== "string" ||
+    !isUuidV7(value.latestCheckId) ||
+    !isUtcInstant(value.lastValidatedAt) ||
+    !isUtcInstant(value.staleAt) ||
+    value.maximumDurationSeconds !== 86400 ||
+    !Number.isSafeInteger(value.expectedLastTransactionSequence) ||
+    Number(value.expectedLastTransactionSequence) < 1 ||
+    !isBoundedDiagnostic(value.reason) ||
+    !isUtcInstant(value.decidedAt) ||
+    !isUtcInstant(value.expiresAt)
+  ) {
+    return false;
+  }
+  const validatedAt = new Date(value.lastValidatedAt).getTime();
+  const staleAt = new Date(value.staleAt).getTime();
+  const decidedAt = new Date(value.decidedAt).getTime();
+  const expiresAt = new Date(value.expiresAt).getTime();
+  return (
+    staleAt === validatedAt + 86_400_000 &&
+    decidedAt >= staleAt &&
+    expiresAt > decidedAt &&
+    expiresAt <= decidedAt + 86_400_000
   );
 }
 

@@ -61,6 +61,7 @@ Docs are split by the question they answer:
 - [0044 — Replace the queue spike database](adr/0044-replace-the-queue-spike-database.md)
 - [0045 — Host Fluent under the Frostyard organization](adr/0045-host-fluent-under-frostyard.md)
 - [0046 — Separate Core source freshness from admission readiness](adr/0046-separate-core-source-freshness-from-admission-readiness.md)
+- [0047 — Cap stale-source overrides at 24 hours](adr/0047-cap-stale-source-overrides-at-24-hours.md)
 
 ### Domain language
 

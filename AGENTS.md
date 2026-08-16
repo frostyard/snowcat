@@ -78,6 +78,11 @@ removed. -->
 - Use `npm run --silent core -- readiness` to inspect the current Core
   admission-readiness reason and its 24-hour source-freshness evidence. The
   read never activates authority or admits work.
+- Use `npm run --silent core -- override-staleness
+  <expected-control-plane-sequence> <expires-at> <reason>` only for an
+  attributed local-operator decision while base readiness is `source-stale`.
+  One override expires within 24 hours and cannot relax another readiness
+  failure.
 - Keep the target control-plane store separate from the disposable queue-spike
   store. Target schema and startup live in
   [`src/control/store.ts`](src/control/store.ts); closed vocabulary lives only

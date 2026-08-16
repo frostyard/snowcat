@@ -60,9 +60,10 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
   [Core source readiness contract](../specs/core-source-readiness.md) derives
   last successful validation, the 24-hour boundary, and immediate invalidity,
   continuity, and persistence blocks at an exact control-plane sequence.
-- Add a conspicuous attributed expiring stale-source override that can relax
-  only elapsed staleness, never candidate validity, continuity, persistence,
-  or the requirement for active authority.
+- The implemented attributed stale-source override binds the exact stale
+  evidence and active snapshot, lasts at most 24 hours per decision, and
+  relaxes only elapsed staleness—never candidate validity, continuity,
+  persistence, or the requirement for active authority.
 - Add configurable periodic polling over the same typed sync operation; do not
   add a model or webhook requirement.
 - Set time/count retention and purge semantics for raw snapshots and candidate
@@ -107,6 +108,7 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
 - Rationale:
   [ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md) and
   [ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md), and
-  [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md)
+  [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md),
+  and [ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md)
 - Parent delivery order: [product foundation roadmap](product-foundation-roadmap.md)
 - Target substrate: [control-plane kernel bootstrap](control-plane-kernel-bootstrap.md)

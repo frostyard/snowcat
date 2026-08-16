@@ -148,6 +148,21 @@ try {
     } finally {
       store.close();
     }
+  } else if (command === "override-staleness" && args.length === 3) {
+    const expectedLastTransactionSequence = parsePositiveInteger(args[0]!);
+    const expiresAt = args[1]!;
+    const reason = args[2]!;
+    const store = new ControlPlaneStore(controlPlaneDatabasePath());
+    try {
+      const decision = store.issueCoreStaleSourceOverride({
+        expectedLastTransactionSequence,
+        expiresAt,
+        reason,
+      });
+      console.log(JSON.stringify({ decision, readiness: store.coreAdmissionReadiness() }, null, 2));
+    } finally {
+      store.close();
+    }
   } else if (command === "rollback" && args.length === 3) {
     const expectedLastTransactionSequence = parsePositiveInteger(args[0]!);
     const targetCommitId = args[1]!;
@@ -222,7 +237,8 @@ try {
         "       npm run --silent core -- activate <expected-control-plane-sequence>\n" +
         "       npm run --silent core -- rollback <expected-control-plane-sequence> <target-commit> <reason>\n" +
         "       npm run --silent core -- rejections [limit]\n" +
-        "       npm run --silent core -- readiness",
+        "       npm run --silent core -- readiness\n" +
+        "       npm run --silent core -- override-staleness <expected-control-plane-sequence> <expires-at> <reason>",
     );
   }
 } catch (error) {
