@@ -60,6 +60,7 @@ Docs are split by the question they answer:
 - [0043 — Order records by transaction sequence, not timestamps](adr/0043-order-records-by-transaction-sequence-not-timestamps.md)
 - [0044 — Replace the queue spike database](adr/0044-replace-the-queue-spike-database.md)
 - [0045 — Host Fluent under the Frostyard organization](adr/0045-host-fluent-under-frostyard.md)
+- [0046 — Separate Core source freshness from admission readiness](adr/0046-separate-core-source-freshness-from-admission-readiness.md)
 
 ### Domain language
 
@@ -77,6 +78,7 @@ Docs are split by the question they answer:
 - [Control-plane kernel](specs/control-plane-kernel.md)
 - [Core snapshot verification](specs/core-snapshot-verification.md)
 - [Core snapshot activation](specs/core-snapshot-activation.md)
+- [Core source readiness](specs/core-source-readiness.md)
 
 ### Plans
 

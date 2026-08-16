@@ -603,6 +603,48 @@ rewound, unrelated, or unverifiable history remains non-authoritative.
 **Avoid:** branch freshness; newer commit; trusted ref; fast-forward snapshot.
 ([ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md))
 
+#### Core source check
+
+One durable outcome from automatically inspecting the configured Core ref for
+source availability, candidate validity, and eligibility to remain or become
+authority. It is distinct from read-only verification, exact-commit rollback
+inspection, and snapshot activation.
+
+**Avoid:** sync attempt; health ping; verification result; activation result.
+([ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md))
+
+#### Core source freshness
+
+The elapsed time since the configured Core ref last fetched and validated
+successfully. Freshness says nothing by itself about continuity, persistence,
+or permission to create organization-dependent work.
+
+**Avoid:** Core admission readiness; branch freshness; active-snapshot age.
+([ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md),
+[ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md))
+
+#### Core admission readiness
+
+The deterministic precondition for new organization-dependent discovery and
+admission, derived from active Core authority, source-check outcome, freshness,
+and any applicable stale-source override. It does not gate retained-context
+reads or already admitted work.
+
+**Avoid:** source freshness; Core health; repository readiness; queue health.
+([ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md))
+
+#### Stale-source override
+
+An attributed expiring operator decision that temporarily permits Core
+admission readiness beyond its elapsed-time freshness boundary. It cannot
+bypass missing authority, invalidity, continuity rejection, or persistence
+failure.
+
+**Avoid:** Core rollback; validation waiver; continuity override; permanent exception.
+([ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md),
+[ADR-0035](../adr/0035-route-human-authority-through-typed-decisions.md),
+[ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md))
+
 #### Core rollback activation
 
 An attributed operator authority transition that names an exact verified Core

@@ -75,6 +75,9 @@ removed. -->
   candidate rejection observations. `activate` records source, validation,
   continuity, and rolled-back persistence failures through the typed observation/event handler;
   `verify` never does.
+- Use `npm run --silent core -- readiness` to inspect the current Core
+  admission-readiness reason and its 24-hour source-freshness evidence. The
+  read never activates authority or admits work.
 - Keep the target control-plane store separate from the disposable queue-spike
   store. Target schema and startup live in
   [`src/control/store.ts`](src/control/store.ts); closed vocabulary lives only

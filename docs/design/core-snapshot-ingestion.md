@@ -3,9 +3,11 @@
 Living document. Rationale:
 [ADR-0007](../adr/0007-use-frostyard-core-as-the-organization-authority.md),
 [ADR-0013](../adr/0013-author-organization-records-as-strict-json.md), and
-[ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md).
+[ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md), and
+[ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md).
 Contracts: [core snapshot verification](../specs/core-snapshot-verification.md)
-and [Core snapshot activation](../specs/core-snapshot-activation.md).
+[Core snapshot activation](../specs/core-snapshot-activation.md), and
+[Core source readiness](../specs/core-source-readiness.md).
 
 ## Overview
 
@@ -181,6 +183,8 @@ required before periodic polling.
   reason containing spaces as one shell argument.
 - Run `npm run --silent core -- rejections [limit]` to read the newest rejection
   observations; the default is 20 and the maximum is 100.
+- Run `npm run --silent core -- readiness` to read the current admission gate,
+  its exact reason, latest automatic check, and freshness boundary.
 - `FLUENT_CORE_URL`, `FLUENT_CORE_REF`, and `FLUENT_CORE_MIRROR` select the
   exact allowed source, branch ref, and host-local mirror path.
 - A valid report proves compatibility with the implemented repository-authority
@@ -188,13 +192,32 @@ required before periodic polling.
   and any unknown `organization/` path fails closed.
 - A failed fetch or validation before the first activation leaves no last-known-
   good state. Atomic activation now preserves an existing current snapshot;
-  durable rejected-candidate diagnostics preserve the failure. Freshness,
-  retention/purge, and polling belong to
+  durable rejected-candidate diagnostics preserve the failure. The readiness
+  gate fails closed without active authority; stale override, retention/purge,
+  and polling belong to
   later phases of the
   [ingestion plan](../plans/core-snapshot-ingestion.md).
 - The mirror contains organization-governed data and should be backed up and
   permissioned as an `organization` asset. It must never be mounted as an
   enrolled repository checkout or exposed to workers as a tool directory.
+
+### Source freshness and admission readiness
+
+Automatic configured-ref checks produce durable outcomes independently of
+authority activation. A successful fetch and validation advances Core source
+freshness even when later continuity or persistence fails; the resulting hard
+failure blocks Core admission readiness immediately. Source unavailability is
+different: it lets the prior successful-check clock continue until the
+24-hour boundary so temporary outages preserve last-known-good operation.
+
+Readiness is evaluated from authoritative state at an exact control-plane
+sequence. It requires an active snapshot, respects hard check failures before
+elapsed staleness, and reports one specific reason. Registry version 6 reserves
+override result fields but never relaxes staleness; the later typed stale-source
+override can relax only elapsed staleness and must expose degraded operation.
+Read-only verification and exact-commit inspection never refresh this state.
+The exact record and read contract is
+[Core source readiness](../specs/core-source-readiness.md).
 
 ## References
 
@@ -202,8 +225,10 @@ required before periodic polling.
   [ADR-0007](../adr/0007-use-frostyard-core-as-the-organization-authority.md),
   [ADR-0013](../adr/0013-author-organization-records-as-strict-json.md),
   [ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md), and
-  [ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md)
+  [ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md), and
+  [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md)
 - Contracts: [core snapshot verification](../specs/core-snapshot-verification.md)
-  and [Core snapshot activation](../specs/core-snapshot-activation.md)
+  [Core snapshot activation](../specs/core-snapshot-activation.md), and
+  [Core source readiness](../specs/core-source-readiness.md)
 - Built in: [Core snapshot ingestion — Phases 1–2](../plans/core-snapshot-ingestion.md)
 - Product: [GitHub organization agent fleet](../prd/agent-fleet.md)

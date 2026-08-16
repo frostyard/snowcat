@@ -55,9 +55,14 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
   snapshot/fact/event transaction for an exact independently revalidated target
   commit and bounded reason. It prefers retained bytes for outage recovery,
   can materialize an unretained exact commit, and never deletes history.
-- Record fetch/validation health, last successful source check, the 24-hour
-  new-admission freshness boundary, and a conspicuous attributed expiring
-  stale-source override.
+- Automatic configured-ref checks now record eligible outcomes distinctly from
+  rollback diagnostics, and the
+  [Core source readiness contract](../specs/core-source-readiness.md) derives
+  last successful validation, the 24-hour boundary, and immediate invalidity,
+  continuity, and persistence blocks at an exact control-plane sequence.
+- Add a conspicuous attributed expiring stale-source override that can relax
+  only elapsed staleness, never candidate validity, continuity, persistence,
+  or the requirement for active authority.
 - Add configurable periodic polling over the same typed sync operation; do not
   add a model or webhook requirement.
 - Set time/count retention and purge semantics for raw snapshots and candidate
@@ -97,9 +102,11 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
 
 - Implements: [core snapshot ingestion](../design/core-snapshot-ingestion.md),
   [core snapshot verification](../specs/core-snapshot-verification.md), and
-  [Core snapshot activation](../specs/core-snapshot-activation.md)
+  [Core snapshot activation](../specs/core-snapshot-activation.md), and
+  [Core source readiness](../specs/core-source-readiness.md)
 - Rationale:
   [ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md) and
-  [ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md)
+  [ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md), and
+  [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md)
 - Parent delivery order: [product foundation roadmap](product-foundation-roadmap.md)
 - Target substrate: [control-plane kernel bootstrap](control-plane-kernel-bootstrap.md)

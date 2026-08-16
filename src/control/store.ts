@@ -27,6 +27,7 @@ import {
   type CoreCandidateRejectionStage,
   type CoreRollbackActivatedPayload,
   type CoreRollbackDecisionPayload,
+  type CoreSourceCheckEligiblePayload,
   type ProjectionName,
   type RecordClass,
   type SubjectKind,
@@ -161,6 +162,7 @@ export class CoreSnapshotPersistenceError extends Error {
 
 export interface CoreCandidateRejectionInput {
   checkId: string;
+  operation: "automatic-source-check" | "operator-rollback";
   stage: CoreCandidateRejectionStage;
   code: CoreCandidateRejectionCode;
   summary: string;
@@ -186,6 +188,54 @@ export interface CoreCandidateRejectionRecord extends CoreCandidateRejectionPayl
   observationRecordId: string;
   transactionSequence: number;
   transactionPosition: 0;
+}
+
+export interface CoreSourceCheckEligibleInput {
+  checkId: string;
+  candidate: InspectedCoreCandidate;
+  expectedLastTransactionSequence: number;
+}
+
+export interface CoreSourceCheckEligibleResult {
+  checkId: string;
+  observationRecordId: string;
+  eventRecordId: string;
+  checkedAt: string;
+  transactionPositions: readonly [0, 1];
+  transactionSequence: number;
+}
+
+export type CoreSourceCheckOutcome =
+  | "eligible"
+  | "source-unavailable"
+  | "candidate-invalid"
+  | "continuity-blocked"
+  | "persistence-failed";
+
+export type CoreAdmissionReadinessReason =
+  | "ready"
+  | "no-active-snapshot"
+  | "source-stale"
+  | "candidate-invalid"
+  | "continuity-blocked"
+  | "persistence-failed";
+
+export interface CoreAdmissionReadiness {
+  ready: boolean;
+  reason: CoreAdmissionReadinessReason;
+  evaluatedAt: string;
+  controlPlaneSequence: number;
+  activeSnapshotId: string | null;
+  activeSourceCommitId: string | null;
+  latestCheckId: string | null;
+  latestCheckOutcome: CoreSourceCheckOutcome | null;
+  latestCheckedAt: string | null;
+  lastValidatedAt: string | null;
+  maximumStalenessSeconds: 86400;
+  staleAt: string | null;
+  overrideDecisionId: null;
+  overrideExpiresAt: null;
+  degraded: false;
 }
 
 export interface ActiveCoreSnapshot {
@@ -406,6 +456,112 @@ export class ControlPlaneStore {
       catalogDigest: String(row.catalog_digest),
       activatedAt: String(row.activated_at),
       transactionSequence: Number(row.activated_transaction_sequence),
+    };
+  }
+
+  coreAdmissionReadiness(evaluatedAt = this.now()): CoreAdmissionReadiness {
+    assertUtcInstant(evaluatedAt, "Core admission readiness evaluation time");
+    const metadata = this.metadata();
+    if (evaluatedAt < metadata.controlTimeWatermark) {
+      throw new Error(
+        `Core admission readiness evaluation precedes control time ${metadata.controlTimeWatermark}`,
+      );
+    }
+    const active = this.activeCoreSnapshot();
+    const rows = this.db
+      .prepare(
+        `SELECT kind, payload_json, transaction_sequence
+         FROM durable_occurrences
+         WHERE occurrence_type = 'record'
+           AND kind IN ('core.source-check-eligible-observation', 'core.candidate-rejection-observation')
+         ORDER BY transaction_sequence DESC, transaction_position DESC`,
+      )
+      .all() as Row[];
+    const checks: Array<{
+      checkId: string;
+      outcome: CoreSourceCheckOutcome;
+      checkedAt: string;
+      commitId: string | null;
+      transactionSequence: number;
+      validated: boolean;
+    }> = [];
+    for (const row of rows) {
+      const payload = parseJson(String(row.payload_json));
+      if (row.kind === "core.source-check-eligible-observation") {
+        if (!recordKindRegistry["core.source-check-eligible-observation"].validatePayload(payload)) {
+          throw new Error(`invalid eligible Core source check: ${String(row.transaction_sequence)}`);
+        }
+        checks.push({
+          checkId: payload.checkId,
+          outcome: "eligible",
+          checkedAt: payload.checkedAt,
+          commitId: payload.commitId,
+          transactionSequence: Number(row.transaction_sequence),
+          validated: true,
+        });
+      } else {
+        if (!recordKindRegistry["core.candidate-rejection-observation"].validatePayload(payload)) {
+          throw new Error(`invalid Core candidate rejection: ${String(row.transaction_sequence)}`);
+        }
+        if (payload.operation !== "automatic-source-check") continue;
+        const outcome: CoreSourceCheckOutcome =
+          payload.stage === "source"
+            ? "source-unavailable"
+            : payload.stage === "validation"
+              ? "candidate-invalid"
+              : payload.stage === "continuity"
+                ? "continuity-blocked"
+                : "persistence-failed";
+        checks.push({
+          checkId: payload.checkId,
+          outcome,
+          checkedAt: payload.observedAt,
+          commitId: payload.commitId,
+          transactionSequence: Number(row.transaction_sequence),
+          validated: payload.stage === "continuity" || payload.stage === "persistence",
+        });
+      }
+    }
+
+    const latest = checks[0];
+    const lastValidated = checks.find((check) => check.validated);
+    const staleAt = lastValidated
+      ? new Date(new Date(lastValidated.checkedAt).getTime() + 86_400_000).toISOString()
+      : null;
+    let reason: CoreAdmissionReadinessReason = "ready";
+    if (!active) {
+      reason = "no-active-snapshot";
+    } else {
+      const substantive = checks.find((check) => check.outcome !== "source-unavailable");
+      if (substantive?.outcome === "eligible" && substantive.commitId !== active.sourceCommitId) {
+        reason = "continuity-blocked";
+      }
+      if (substantive?.outcome === "candidate-invalid") reason = "candidate-invalid";
+      if (substantive?.outcome === "persistence-failed") reason = "persistence-failed";
+      if (substantive?.outcome === "continuity-blocked") {
+        const resolvedByRollback =
+          substantive.commitId === active.sourceCommitId &&
+          active.transactionSequence > substantive.transactionSequence;
+        if (!resolvedByRollback) reason = "continuity-blocked";
+      }
+      if (reason === "ready" && (staleAt === null || evaluatedAt >= staleAt)) reason = "source-stale";
+    }
+    return {
+      ready: reason === "ready",
+      reason,
+      evaluatedAt,
+      controlPlaneSequence: metadata.lastTransactionSequence,
+      activeSnapshotId: active?.snapshotId ?? null,
+      activeSourceCommitId: active?.sourceCommitId ?? null,
+      latestCheckId: latest?.checkId ?? null,
+      latestCheckOutcome: latest?.outcome ?? null,
+      latestCheckedAt: latest?.checkedAt ?? null,
+      lastValidatedAt: lastValidated?.checkedAt ?? null,
+      maximumStalenessSeconds: 86400,
+      staleAt,
+      overrideDecisionId: null,
+      overrideExpiresAt: null,
+      degraded: false,
     };
   }
 
@@ -1487,9 +1643,169 @@ export class ControlPlaneStore {
     }
   }
 
+  recordCoreSourceCheckEligible(input: CoreSourceCheckEligibleInput): CoreSourceCheckEligibleResult {
+    if (!isUuidV7(input.checkId)) throw new Error("Core source check ID must be UUIDv7");
+    if (!Number.isSafeInteger(input.expectedLastTransactionSequence) || input.expectedLastTransactionSequence < 1) {
+      throw new Error("expectedLastTransactionSequence must be a positive safe integer");
+    }
+    assertMaterializedCoreCandidate(input.candidate);
+    const validated = validateCoreCatalog(input.candidate.files);
+    assertCandidateReport(input.candidate, validated);
+    const commandInput = {
+      checkId: input.checkId,
+      sourceUrl: input.candidate.sourceUrl,
+      sourceRef: input.candidate.ref,
+      commitId: input.candidate.commitId,
+      treeId: input.candidate.treeId,
+      catalogDigest: input.candidate.catalogDigest,
+      expectedLastTransactionSequence: input.expectedLastTransactionSequence,
+    } satisfies JsonValue;
+    const idempotencyKey = `core-source-check:${input.checkId}`;
+    const commandPayloadJson = canonicalJson(commandInput);
+    const commandPayloadDigest = sha256(commandPayloadJson);
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.verifyExisting(this.applicationTables());
+      const metadata = this.metadata();
+      const commandScope = `database:${metadata.databaseLineageId}`;
+      const prior = this.db
+        .prepare(
+          `SELECT payload_digest, result_json
+           FROM idempotency_receipts
+           WHERE command_scope = ? AND command_kind = 'core.record-source-check-eligible'
+             AND command_schema_version = 1 AND idempotency_key = ?`,
+        )
+        .get(commandScope, idempotencyKey) as Row | undefined;
+      if (prior) {
+        if (String(prior.payload_digest) !== commandPayloadDigest) {
+          throw new Error("Core source check ID was already used with a different candidate");
+        }
+        const result = parseCoreSourceCheckEligibleResult(parseJson(String(prior.result_json)));
+        this.db.exec("COMMIT");
+        return result;
+      }
+      const active = this.activeCoreSnapshot();
+      if (metadata.lastTransactionSequence !== input.expectedLastTransactionSequence) {
+        throw new Error(
+          `stale control-plane sequence: expected ${input.expectedLastTransactionSequence}, current ${metadata.lastTransactionSequence}`,
+        );
+      }
+      if (!active || active.sourceCommitId !== input.candidate.commitId || active.catalogDigest !== validated.catalogDigest) {
+        throw new Error("eligible Core source check must match the active snapshot exactly");
+      }
+      const checkedAt = this.now();
+      if (checkedAt < metadata.controlTimeWatermark) {
+        throw new Error(
+          `control-plane clock moved backwards behind ${metadata.controlTimeWatermark}; refusing a new write transaction`,
+        );
+      }
+      const payload = {
+        checkId: input.checkId,
+        outcome: "eligible",
+        sourceUrl: input.candidate.sourceUrl,
+        sourceRef: input.candidate.ref,
+        commitId: input.candidate.commitId,
+        treeId: input.candidate.treeId,
+        catalogDigest: validated.catalogDigest,
+        activeSnapshotId: active.snapshotId,
+        activeCommitId: active.sourceCommitId,
+        checkedAt,
+      } satisfies JsonValue;
+      if (!recordKindRegistry["core.source-check-eligible-observation"].validatePayload(payload)) {
+        throw new Error("eligible Core source check is outside the registered contract");
+      }
+      const payloadJson = canonicalJson(payload);
+      const payloadDigest = sha256(payloadJson);
+      const transactionId = uuidV7(new Date(checkedAt));
+      const observationRecordId = uuidV7(new Date(checkedAt));
+      const eventRecordId = uuidV7(new Date(checkedAt));
+      const informationScopeJson = canonicalJson({ deploymentId: metadata.databaseLineageId });
+      const transaction = this.db
+        .prepare(
+          `INSERT INTO control_transactions (
+             transaction_id, command_kind, command_schema_version, principal_kind,
+             principal_id, session_id, idempotency_key, payload_digest,
+             evaluation_time, recorded_at
+           ) VALUES (?, 'core.record-source-check-eligible', 1, 'fluent-system', 'kernel', NULL, ?, ?, ?, ?)`,
+        )
+        .run(transactionId, idempotencyKey, commandPayloadDigest, checkedAt, checkedAt);
+      const sequence = Number(transaction.lastInsertRowid);
+      const common = {
+        schemaVersion: 1,
+        subjectKind: "control-plane-database" as const,
+        subjectId: metadata.databaseLineageId,
+        revisionKind: "transaction-sequence",
+        revisionValue: String(metadata.lastTransactionSequence),
+        sourceKind: "github-repository",
+        sourceId: "github.com:1331309458",
+        sourceRevisionKind: "git-commit-sha1",
+        sourceRevisionValue: `sha1:${input.candidate.commitId}`,
+        informationClass: "organization" as const,
+        informationScopeJson,
+        payloadJson,
+        payloadDigest,
+        correlationId: input.checkId,
+        transactionSequence: sequence,
+        recordedAt: checkedAt,
+      };
+      this.insertOccurrence({
+        ...common,
+        recordId: observationRecordId,
+        occurrenceType: "record",
+        kind: "core.source-check-eligible-observation",
+        recordClass: "observation",
+        transactionPosition: 0,
+      });
+      this.insertOccurrence({
+        ...common,
+        recordId: eventRecordId,
+        occurrenceType: "event",
+        kind: "core.source-check-eligible",
+        transactionPosition: 1,
+      });
+      const result: CoreSourceCheckEligibleResult = {
+        checkId: input.checkId,
+        observationRecordId,
+        eventRecordId,
+        checkedAt,
+        transactionPositions: [0, 1],
+        transactionSequence: sequence,
+      };
+      this.db
+        .prepare(
+          `INSERT INTO idempotency_receipts (
+             command_scope, command_kind, command_schema_version, idempotency_key,
+             payload_digest, result_json, transaction_sequence, retained_until
+           ) VALUES (?, 'core.record-source-check-eligible', 1, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          commandScope,
+          idempotencyKey,
+          commandPayloadDigest,
+          canonicalJson(result as unknown as JsonValue),
+          sequence,
+          IDEMPOTENCY_RETAINED_UNTIL,
+        );
+      this.db
+        .prepare(
+          `UPDATE control_plane_metadata
+           SET control_time_watermark = ?, last_transaction_sequence = ?
+           WHERE singleton = 1`,
+        )
+        .run(checkedAt, sequence);
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   recordCoreCandidateRejection(input: CoreCandidateRejectionInput): CoreCandidateRejectionResult {
     const commandInput = {
       checkId: input.checkId,
+      operation: input.operation,
       stage: input.stage,
       code: input.code,
       summary: input.summary,
@@ -2510,6 +2826,19 @@ export class ControlPlaneStore {
         if (outputs[0]!.payload_digest !== outputs[1]!.payload_digest) {
           throw new Error(`Core candidate rejection outputs disagree: ${String(row.sequence)}`);
         }
+      } else if (row.command_kind === "core.record-source-check-eligible") {
+        if (
+          typeof row.idempotency_key !== "string" ||
+          !/^core-source-check:[0-9a-f-]{36}$/.test(row.idempotency_key) ||
+          row.principal_kind !== "fluent-system" ||
+          row.principal_id !== "kernel" ||
+          receiptCount !== 1
+        ) {
+          throw new Error(`eligible Core source check receipt shape is invalid: ${String(row.sequence)}`);
+        }
+        if (outputs[0]!.payload_digest !== outputs[1]!.payload_digest) {
+          throw new Error(`eligible Core source check outputs disagree: ${String(row.sequence)}`);
+        }
       }
     }
 
@@ -2616,6 +2945,23 @@ export class ControlPlaneStore {
                 `sha1:${String((payload as CoreCandidateRejectionPayload).commitId)}`)))
       ) {
         throw new Error(`Core candidate rejection lineage mismatch: ${String(row.record_id)}`);
+      }
+      if (
+        (String(row.kind) === "core.source-check-eligible-observation" ||
+          String(row.kind) === "core.source-check-eligible")
+      ) {
+        const check = payload as CoreSourceCheckEligiblePayload;
+        if (
+          String(row.subject_id) !== this.metadata().databaseLineageId ||
+          String(row.source_kind) !== "github-repository" ||
+          String(row.source_id) !== "github.com:1331309458" ||
+          String(row.source_revision_kind) !== "git-commit-sha1" ||
+          String(row.source_revision_value) !== `sha1:${check.commitId}` ||
+          String(row.correlation_id) !== check.checkId ||
+          String(row.recorded_at) !== check.checkedAt
+        ) {
+          throw new Error(`eligible Core source check lineage mismatch: ${String(row.record_id)}`);
+        }
       }
       if (String(row.kind) === "core.rollback-decision") {
         const decision = payload as CoreRollbackDecisionPayload;
@@ -2920,12 +3266,14 @@ export class ControlPlaneStore {
       if (commandKind === "core.activate-snapshot") parseCoreSnapshotActivationResult(result);
       if (commandKind === "core.rollback-snapshot") parseCoreSnapshotRollbackResult(result);
       if (commandKind === "core.record-candidate-rejection") parseCoreCandidateRejectionResult(result);
+      if (commandKind === "core.record-source-check-eligible") parseCoreSourceCheckEligibleResult(result);
       assertUtcInstant(String(row.retained_until), `idempotency receipt ${String(row.idempotency_key)} retention time`);
       if (
         (commandKind === "control-plane.check-integrity" ||
           commandKind === "core.activate-snapshot" ||
           commandKind === "core.rollback-snapshot" ||
-          commandKind === "core.record-candidate-rejection") &&
+          commandKind === "core.record-candidate-rejection" ||
+          commandKind === "core.record-source-check-eligible") &&
         String(row.retained_until) !== IDEMPOTENCY_RETAINED_UNTIL
       ) {
         throw new Error(`idempotency receipt retention mismatch: ${String(row.idempotency_key)}`);
@@ -3072,6 +3420,30 @@ export class ControlPlaneStore {
           String(outputs[1]!.record_id) !== rejection.eventRecordId
         ) {
           throw new Error(`Core rejection receipt result output mismatch: ${String(row.idempotency_key)}`);
+        }
+      }
+      if (commandKind === "core.record-source-check-eligible") {
+        const check = parseCoreSourceCheckEligibleResult(result);
+        if (
+          String(row.idempotency_key) !== `core-source-check:${check.checkId}` ||
+          check.transactionSequence !== Number(row.transaction_sequence) ||
+          check.checkedAt !== String(transaction.evaluation_time) ||
+          check.checkedAt !== String(transaction.recorded_at)
+        ) {
+          throw new Error(`eligible Core source check receipt result mismatch: ${String(row.idempotency_key)}`);
+        }
+        const outputs = this.db
+          .prepare(
+            `SELECT record_id FROM durable_occurrences
+             WHERE transaction_sequence = ? ORDER BY transaction_position`,
+          )
+          .all(row.transaction_sequence!) as Row[];
+        if (
+          outputs.length !== 2 ||
+          String(outputs[0]!.record_id) !== check.observationRecordId ||
+          String(outputs[1]!.record_id) !== check.eventRecordId
+        ) {
+          throw new Error(`eligible Core source check receipt output mismatch: ${String(row.idempotency_key)}`);
         }
       }
     }
@@ -3721,6 +4093,47 @@ function parseCoreCandidateRejectionResult(value: JsonValue): CoreCandidateRejec
     observationRecordId: String(result.observationRecordId),
     eventRecordId: String(result.eventRecordId),
     observedAt: String(result.observedAt),
+    transactionPositions: [0, 1],
+    transactionSequence: Number(result.transactionSequence),
+  };
+}
+
+function parseCoreSourceCheckEligibleResult(value: JsonValue): CoreSourceCheckEligibleResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("invalid eligible Core source check receipt result");
+  }
+  const result = value as Record<string, JsonValue>;
+  const expected = [
+    "checkId",
+    "observationRecordId",
+    "eventRecordId",
+    "checkedAt",
+    "transactionPositions",
+    "transactionSequence",
+  ].sort();
+  const keys = Object.keys(result).sort();
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
+    throw new Error("invalid eligible Core source check receipt result fields");
+  }
+  if (
+    !isUuidV7(String(result.checkId)) ||
+    !isUuidV7(String(result.observationRecordId)) ||
+    !isUuidV7(String(result.eventRecordId)) ||
+    !Array.isArray(result.transactionPositions) ||
+    result.transactionPositions.length !== 2 ||
+    result.transactionPositions[0] !== 0 ||
+    result.transactionPositions[1] !== 1 ||
+    !Number.isSafeInteger(result.transactionSequence) ||
+    Number(result.transactionSequence) < 2
+  ) {
+    throw new Error("invalid eligible Core source check receipt result values");
+  }
+  assertUtcInstant(String(result.checkedAt), "eligible Core source check time");
+  return {
+    checkId: String(result.checkId),
+    observationRecordId: String(result.observationRecordId),
+    eventRecordId: String(result.eventRecordId),
+    checkedAt: String(result.checkedAt),
     transactionPositions: [0, 1],
     transactionSequence: Number(result.transactionSequence),
   };

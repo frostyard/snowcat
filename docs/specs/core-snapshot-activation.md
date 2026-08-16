@@ -24,7 +24,7 @@ It uses the same `FLUENT_CORE_URL`, `FLUENT_CORE_REF`, and
 positive canonical safe integer that optimistically binds the new transaction
 to the operator's observed target state.
 
-Success emits one JSON object:
+The underlying accepted activation result has this shape:
 
 | Field | Type | Constraint |
 | --- | --- | --- |
@@ -37,6 +37,14 @@ Success emits one JSON object:
 | `importedAt` | canonical UTC instant | Shared evaluation and recorded time |
 | `transactionPositions` | tuple | Exactly `[0, 1, 2]` |
 | `transactionSequence` | positive integer | Allocated control-plane order |
+
+The host-local `activate` command then records the eligible automatic source
+check and emits `{ activation, activationResult, activeSnapshot, sourceCheck,
+readiness }`. `activation` is `activated` or `unchanged`; `activationResult` is
+the result above or null for an unchanged active commit. `sourceCheck` carries
+its own later transaction sequence, which is the sequence callers should use
+for the next command. The command does not create another snapshot for an
+unchanged commit.
 
 The command uses source kind `github-repository`, immutable source ID
 `github.com:1331309458`, source revision kind `git-commit-sha1`, and value
@@ -78,6 +86,7 @@ The rejection payload has this exact shape:
 | Field | Type | Constraint |
 | --- | --- | --- |
 | `checkId` | UUIDv7 | Server identity for one invocation; also binds idempotent replay and correlation |
+| `operation` | enum | `automatic-source-check` or `operator-rollback`; only the former affects source readiness |
 | `stage` | enum | `source`, `validation`, `continuity`, or `persistence` |
 | `code` | enum | Matching `source-unavailable`, `candidate-invalid`, `candidate-not-descendant`, `continuity-unverifiable`, or `persistence-failed` |
 | `summary` | string | Sanitized single line, 1–512 UTF-8 bytes |
@@ -88,7 +97,7 @@ The rejection payload has this exact shape:
 | `activeCommitId` | string or null | Required for continuity failure; exact active source commit used by the ancestry check |
 | `observedAt` | canonical UTC instant | Server evaluation and recorded time |
 
-Schema version `2` and registry version `5` govern three authority tables:
+Schema version `2` and registry version `6` govern three authority tables:
 
 | Table | Retained content |
 | --- | --- |
@@ -161,10 +170,12 @@ previous snapshot/commit, decision, operator, and reason.
     sequence as well as target commit. This MUST permit a commit to become
     current again after an intervening rollback while preserving exact replay
     of each original transition.
-18. This version refuses automatic ref rewinds and unrelated history but does
-    not yet enforce freshness, poll, or purge rejection history. Those operations require later
-    typed commands and contracts before unattended polling.
-19. A schema version other than `2` or registry version other than `5` MUST fail
+18. This version refuses automatic ref rewinds and unrelated history and feeds
+    automatic outcomes to the separate
+    [Core source readiness](core-source-readiness.md) contract. It does not yet
+    poll or purge rejection history; those operations require later typed
+    commands and contracts before unattended polling.
+19. A schema version other than `2` or registry version other than `6` MUST fail
     closed. This pre-production version defines no in-place upgrade; initialize
     a fresh target database.
 
@@ -183,7 +194,9 @@ previous snapshot/commit, decision, operator, and reason.
 - Rationale:
   [ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md),
   [ADR-0039](../adr/0039-use-typed-source-native-subject-identities.md), and
-  [ADR-0040](../adr/0040-establish-facts-through-registered-predicate-contracts.md)
+  [ADR-0040](../adr/0040-establish-facts-through-registered-predicate-contracts.md),
+  and [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md)
 - Context: [Core snapshot ingestion](../design/core-snapshot-ingestion.md)
+- Source gate: [Core source readiness](core-source-readiness.md)
 - Substrate: [control-plane kernel](control-plane-kernel.md)
 - Delivery: [Core snapshot ingestion plan](../plans/core-snapshot-ingestion.md)

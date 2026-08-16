@@ -2,7 +2,7 @@ import { isUuidV7, type JsonValue } from "./encoding.ts";
 
 export const CONTROL_PLANE_APPLICATION_ID = 1_179_405_908; // ASCII "FLNT"
 export const CONTROL_PLANE_SCHEMA_VERSION = 2;
-export const CONTROL_PLANE_REGISTRY_VERSION = 5;
+export const CONTROL_PLANE_REGISTRY_VERSION = 6;
 
 export const informationClasses = ["public", "organization", "restricted"] as const;
 export type InformationClass = (typeof informationClasses)[number];
@@ -118,6 +118,13 @@ export const recordKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isCoreCandidateRejectionPayload,
   },
+  "core.source-check-eligible-observation": {
+    schemaVersion: 1,
+    recordClass: "observation",
+    subjectKinds: ["control-plane-database"],
+    minimumInformationClass: "organization",
+    validatePayload: isCoreSourceCheckEligiblePayload,
+  },
   "core.rollback-decision": {
     schemaVersion: 1,
     recordClass: "decision",
@@ -152,6 +159,12 @@ export const eventKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isCoreCandidateRejectionPayload,
   },
+  "core.source-check-eligible": {
+    schemaVersion: 1,
+    subjectKinds: ["control-plane-database"],
+    minimumInformationClass: "organization",
+    validatePayload: isCoreSourceCheckEligiblePayload,
+  },
   "core.snapshot-rollback-activated": {
     schemaVersion: 1,
     subjectKinds: ["core-snapshot"],
@@ -176,6 +189,10 @@ export const commandKindRegistry = {
   "core.record-candidate-rejection": {
     schemaVersion: 1,
     outputKinds: ["core.candidate-rejection-observation", "core.candidate-rejected"],
+  },
+  "core.record-source-check-eligible": {
+    schemaVersion: 1,
+    outputKinds: ["core.source-check-eligible-observation", "core.source-check-eligible"],
   },
   "core.rollback-snapshot": {
     schemaVersion: 1,
@@ -294,6 +311,7 @@ export type CoreCandidateRejectionCode =
 
 export interface CoreCandidateRejectionPayload extends Record<string, JsonValue> {
   checkId: string;
+  operation: "automatic-source-check" | "operator-rollback";
   stage: CoreCandidateRejectionStage;
   code: CoreCandidateRejectionCode;
   summary: string;
@@ -305,6 +323,19 @@ export interface CoreCandidateRejectionPayload extends Record<string, JsonValue>
   catalogDigest: string | null;
   activeCommitId: string | null;
   observedAt: string;
+}
+
+export interface CoreSourceCheckEligiblePayload extends Record<string, JsonValue> {
+  checkId: string;
+  outcome: "eligible";
+  sourceUrl: string;
+  sourceRef: string;
+  commitId: string;
+  treeId: string;
+  catalogDigest: string;
+  activeSnapshotId: string;
+  activeCommitId: string;
+  checkedAt: string;
 }
 
 export interface CoreRollbackDecisionPayload extends Record<string, JsonValue> {
@@ -479,6 +510,7 @@ function isCoreCandidateRejectionPayload(value: unknown): value is CoreCandidate
   if (
     !isExactObject(value, [
       "checkId",
+      "operation",
       "stage",
       "code",
       "summary",
@@ -497,6 +529,7 @@ function isCoreCandidateRejectionPayload(value: unknown): value is CoreCandidate
   if (
     typeof value.checkId !== "string" ||
     !isUuidV7(value.checkId) ||
+    (value.operation !== "automatic-source-check" && value.operation !== "operator-rollback") ||
     (value.stage !== "source" &&
       value.stage !== "validation" &&
       value.stage !== "continuity" &&
@@ -538,6 +571,41 @@ function isCoreCandidateRejectionPayload(value: unknown): value is CoreCandidate
     );
   }
   return value.code === "persistence-failed";
+}
+
+function isCoreSourceCheckEligiblePayload(value: unknown): value is CoreSourceCheckEligiblePayload {
+  return (
+    isExactObject(value, [
+      "checkId",
+      "outcome",
+      "sourceUrl",
+      "sourceRef",
+      "commitId",
+      "treeId",
+      "catalogDigest",
+      "activeSnapshotId",
+      "activeCommitId",
+      "checkedAt",
+    ]) &&
+    typeof value.checkId === "string" &&
+    isUuidV7(value.checkId) &&
+    value.outcome === "eligible" &&
+    typeof value.sourceUrl === "string" &&
+    /^(?:https:\/\/github\.com\/frostyard\/core\.git|git@github\.com:frostyard\/core\.git|ssh:\/\/git@github\.com\/frostyard\/core\.git)$/.test(
+      value.sourceUrl,
+    ) &&
+    typeof value.sourceRef === "string" &&
+    isCanonicalCoreRef(value.sourceRef) &&
+    typeof value.commitId === "string" &&
+    /^[0-9a-f]{40}$/.test(value.commitId) &&
+    typeof value.treeId === "string" &&
+    /^[0-9a-f]{40}$/.test(value.treeId) &&
+    isSha256(value.catalogDigest) &&
+    typeof value.activeSnapshotId === "string" &&
+    isUuidV7(value.activeSnapshotId) &&
+    value.activeCommitId === value.commitId &&
+    isUtcInstant(value.checkedAt)
+  );
 }
 
 function isCoreRollbackDecisionPayload(value: unknown): value is CoreRollbackDecisionPayload {

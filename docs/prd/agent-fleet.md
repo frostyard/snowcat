@@ -330,7 +330,11 @@ targets are required before this PRD can become Approved.
     closed by default while existing context and admitted work remain usable.
 66. Date-based rules MUST continue locally during source outages, so stale
     source data MUST NOT prolong a goal or exception. A stale-source override
-    MUST be attributed, time-bounded, and conspicuously reported.
+    MUST be attributed, time-bounded, and conspicuously reported. Source
+    freshness MUST remain distinct from Core admission readiness: candidate
+    invalidity, unresolved continuity rejection, and persistence failure MUST
+    block new organization-dependent discovery and admission immediately, and
+    the override MUST relax only elapsed-time staleness.
 67. Organization policy MUST complement rather than replace repository-local
     policy and CI enforcement. Fluent MUST apply the most restrictive result
     from both layers and MUST NOT overwrite local policy files during import or
@@ -1864,7 +1868,11 @@ ancestry from the active source commit. Attributed operator rollback creates a
 resolved decision and new exact-target snapshot while retaining history and
 supporting recovery from retained bytes. Source, validation, continuity, and
 rolled-back persistence failures create bounded rejection observations and audit events while
-standalone verification remains read-only. The kernel does not yet implement a target work,
+standalone verification remains read-only. The accepted
+[Core source readiness contract](../specs/core-source-readiness.md) separates
+elapsed source freshness from the stricter new-admission gate. Its durable
+automatic outcomes and deterministic 24-hour read are implemented; the typed
+override path remains. The kernel does not yet implement a target work,
 general fact, operational-state, controller, or worker mutation path and never
 reads or imports the spike database.
 
@@ -1872,7 +1880,7 @@ reads or imports the spike database.
 
 | Track | What remains before implementation is well specified |
 | --- | --- |
-| Core contract and migration | Remaining organization JSON Schemas and fixtures, canonical-surface migrations, rejection-history retention, continuity/freshness/rollback controls, and enrollment reconciliation |
+| Core contract and migration | Remaining organization JSON Schemas and fixtures, canonical-surface migrations, rejection-history retention, source-readiness and stale-override controls, and enrollment reconciliation |
 | Control-plane domain model | Execute the [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md): specify exact durable schemas, predicates, reducers, events, projections, invalidation, idempotency, and state machines in a fresh target database shared by RepositoryController, FleetController, ProcessObserver, scheduling, and decisions |
 | GitHub observation | GitHub App permissions, installation and actor mapping, CI/review/merge and artifact reconciliation, polling versus webhooks, forks, outage behavior, and external decision signals |
 | Workflow contracts | Versioned role briefs, evidence schemas, skills, attempt budgets, and deterministic gates for maintenance, planning, review, implementation, repair, and verification |
@@ -2060,7 +2068,10 @@ reads or imports the spike database.
   with clean replacement of the queue-spike database defined by
   [ADR-0044](../adr/0044-replace-the-queue-spike-database.md), with canonical
   source ownership established by
-  [ADR-0045](../adr/0045-host-fluent-under-frostyard.md), and the
+  [ADR-0045](../adr/0045-host-fluent-under-frostyard.md), with Core source
+  freshness separated from admission readiness by
+  [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md),
+  and the
   [Fluent ubiquitous language](../domain/ubiquitous-language.md)
 - Designs: [queue execution boundary](../design/queue-execution-boundary.md),
   [control-plane kernel](../design/control-plane-kernel.md), and
@@ -2068,7 +2079,8 @@ reads or imports the spike database.
 - Contracts: [work queue](../specs/work-queue.md),
   [control-plane kernel](../specs/control-plane-kernel.md), and
   [core snapshot verification](../specs/core-snapshot-verification.md), plus
-  [Core snapshot activation](../specs/core-snapshot-activation.md)
+  [Core snapshot activation](../specs/core-snapshot-activation.md) and
+  [Core source readiness](../specs/core-source-readiness.md)
 - Delivery: [queue vertical spike](../plans/queue-vertical-spike.md),
   [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md),
   [core snapshot ingestion](../plans/core-snapshot-ingestion.md), and

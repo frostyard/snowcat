@@ -151,6 +151,7 @@ test("a Core candidate rejection is bounded, idempotent, queryable, and non-auth
   const store = new ControlPlaneStore(path, () => new Date(observedAt));
   const input = {
     checkId,
+    operation: "automatic-source-check" as const,
     stage: "validation" as const,
     code: "candidate-invalid" as const,
     summary: "organization/README.md: required authority file is missing",
@@ -197,6 +198,7 @@ test("a Core candidate rejection is bounded, idempotent, queryable, and non-auth
   const continuityCheckId = uuidV7(new Date(observedAt));
   const continuity = store.recordCoreCandidateRejection({
     checkId: continuityCheckId,
+    operation: "automatic-source-check",
     stage: "continuity",
     code: "candidate-not-descendant",
     summary: "candidate does not descend from the active Core source commit",
@@ -220,6 +222,134 @@ test("a Core candidate rejection is bounded, idempotent, queryable, and non-auth
   const cliRows = JSON.parse(output) as Array<Record<string, unknown>>;
   assert.equal(cliRows.length, 1);
   assert.equal(cliRows[0]?.checkId, continuityCheckId);
+});
+
+test("Core source freshness stays distinct from immediate admission blockers", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-core-readiness-test-"));
+  let now = new Date("2026-08-16T10:00:00.000Z");
+  const store = new ControlPlaneStore(join(directory, "control-plane.db"), () => now);
+  const activeCandidate = await activationCandidate("7".repeat(40), "8".repeat(40));
+  const activation = store.activateCoreSnapshot({
+    candidate: activeCandidate,
+    expectedLastTransactionSequence: 1,
+  });
+  const eligibleCheckId = uuidV7(now);
+  const eligible = store.recordCoreSourceCheckEligible({
+    checkId: eligibleCheckId,
+    candidate: activeCandidate,
+    expectedLastTransactionSequence: activation.transactionSequence,
+  });
+  assert.equal(eligible.transactionSequence, 3);
+  assert.deepEqual(store.recordCoreSourceCheckEligible({
+    checkId: eligibleCheckId,
+    candidate: activeCandidate,
+    expectedLastTransactionSequence: activation.transactionSequence,
+  }), eligible);
+  assert.deepEqual(store.coreAdmissionReadiness(), {
+    ready: true,
+    reason: "ready",
+    evaluatedAt: now.toISOString(),
+    controlPlaneSequence: 3,
+    activeSnapshotId: activation.snapshotId,
+    activeSourceCommitId: activeCandidate.commitId,
+    latestCheckId: eligibleCheckId,
+    latestCheckOutcome: "eligible",
+    latestCheckedAt: now.toISOString(),
+    lastValidatedAt: now.toISOString(),
+    maximumStalenessSeconds: 86400,
+    staleAt: "2026-08-17T10:00:00.000Z",
+    overrideDecisionId: null,
+    overrideExpiresAt: null,
+    degraded: false,
+  });
+
+  now = new Date("2026-08-16T10:30:00.000Z");
+  store.recordCoreCandidateRejection({
+    checkId: uuidV7(now),
+    operation: "automatic-source-check",
+    stage: "validation",
+    code: "candidate-invalid",
+    summary: "configured Core candidate failed the bundled contract",
+    details: [],
+    sourceUrl: activeCandidate.sourceUrl,
+    sourceRef: activeCandidate.ref,
+    commitId: "b".repeat(40),
+    treeId: "c".repeat(40),
+  });
+  assert.equal(store.coreAdmissionReadiness().reason, "candidate-invalid");
+  assert.equal(store.coreAdmissionReadiness().lastValidatedAt, "2026-08-16T10:00:00.000Z");
+  store.recordCoreSourceCheckEligible({
+    checkId: uuidV7(now),
+    candidate: activeCandidate,
+    expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+  });
+  assert.equal(store.coreAdmissionReadiness().reason, "ready");
+
+  now = new Date("2026-08-16T11:00:00.000Z");
+  const rejectedCandidate = await activationCandidate("9".repeat(40), "a".repeat(40));
+  const continuity = store.recordCoreCandidateRejection({
+    checkId: uuidV7(now),
+    operation: "automatic-source-check",
+    stage: "continuity",
+    code: "candidate-not-descendant",
+    summary: "configured Core ref does not descend from active authority",
+    details: [],
+    sourceUrl: rejectedCandidate.sourceUrl,
+    sourceRef: rejectedCandidate.ref,
+    commitId: rejectedCandidate.commitId,
+    treeId: rejectedCandidate.treeId,
+    catalogDigest: rejectedCandidate.catalogDigest,
+    activeCommitId: activeCandidate.commitId,
+  });
+  assert.equal(store.coreAdmissionReadiness().reason, "continuity-blocked");
+  assert.equal(store.coreAdmissionReadiness().lastValidatedAt, now.toISOString());
+
+  now = new Date("2026-08-16T12:00:00.000Z");
+  const outageCheckId = uuidV7(now);
+  store.recordCoreCandidateRejection({
+    checkId: outageCheckId,
+    operation: "automatic-source-check",
+    stage: "source",
+    code: "source-unavailable",
+    summary: "configured Core ref is temporarily unavailable",
+    details: [],
+    sourceUrl: activeCandidate.sourceUrl,
+    sourceRef: activeCandidate.ref,
+  });
+  const stillBlocked = store.coreAdmissionReadiness();
+  assert.equal(stillBlocked.latestCheckId, outageCheckId);
+  assert.equal(stillBlocked.latestCheckOutcome, "source-unavailable");
+  assert.equal(stillBlocked.reason, "continuity-blocked");
+
+  now = new Date("2026-08-16T13:00:00.000Z");
+  const rollback = store.rollbackCoreSnapshot({
+    candidate: rejectedCandidate,
+    expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+    reason: "Explicitly accept the reviewed non-descendant Core authority",
+  });
+  assert.equal(rollback.transactionSequence, continuity.transactionSequence + 2);
+  assert.equal(store.coreAdmissionReadiness().reason, "ready");
+
+  now = new Date("2026-08-16T13:30:00.000Z");
+  store.recordCoreCandidateRejection({
+    checkId: uuidV7(now),
+    operation: "operator-rollback",
+    stage: "validation",
+    code: "candidate-invalid",
+    summary: "an unrelated exact rollback target was invalid",
+    details: [],
+    sourceUrl: activeCandidate.sourceUrl,
+    sourceRef: activeCandidate.ref,
+    commitId: "d".repeat(40),
+    treeId: "e".repeat(40),
+  });
+  assert.equal(store.coreAdmissionReadiness().reason, "ready");
+
+  now = new Date("2026-08-17T11:00:00.000Z");
+  const stale = store.coreAdmissionReadiness();
+  assert.equal(stale.reason, "source-stale");
+  assert.equal(stale.ready, false);
+  store.close();
 });
 
 test("activate records a bounded source rejection while verify remains outside the target store", async () => {
@@ -308,6 +438,7 @@ test("a validated Core candidate is retained and activated atomically with exact
   assert.equal(store.occurrences().filter((occurrence) => occurrence.kind === "core.snapshot-definition").length, 2);
   const rejection = store.recordCoreCandidateRejection({
     checkId: uuidV7(new Date("2026-08-16T13:00:00.000Z")),
+    operation: "automatic-source-check",
     stage: "persistence",
     code: "persistence-failed",
     summary: "A later candidate could not be persisted",

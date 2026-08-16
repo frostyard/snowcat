@@ -35,6 +35,7 @@ try {
       if (error instanceof CoreCandidateInspectionError) {
         recordAndReportRejection({
           checkId,
+          operation: "automatic-source-check",
           stage: error.stage,
           code: error.code,
           summary: sanitizeDiagnostic(error.message),
@@ -60,6 +61,7 @@ try {
             recordAndReportRejection(
               {
                 checkId,
+                operation: "automatic-source-check",
                 stage: error.stage,
                 code: error.code,
                 summary: sanitizeDiagnostic(error.message),
@@ -78,13 +80,30 @@ try {
         }
       }
       try {
-        console.log(
-          JSON.stringify(
-            store.activateCoreSnapshot({
+        const currentSequence = store.metadata().lastTransactionSequence;
+        const unchanged = active?.sourceCommitId === candidate.commitId && currentSequence === expectedLastTransactionSequence;
+        const activation = unchanged
+          ? undefined
+          : store.activateCoreSnapshot({
               candidate,
               expectedLastTransactionSequence,
               continuityAncestorCommitId,
-            }),
+            });
+        const sourceCheck = store.recordCoreSourceCheckEligible({
+          checkId,
+          candidate,
+          expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+        });
+        const current = store.activeCoreSnapshot();
+        console.log(
+          JSON.stringify(
+            {
+              activation: activation ? "activated" : "unchanged",
+              activationResult: activation ?? null,
+              activeSnapshot: current,
+              sourceCheck,
+              readiness: store.coreAdmissionReadiness(),
+            },
             null,
             2,
           ),
@@ -94,6 +113,7 @@ try {
           recordAndReportRejection(
             {
               checkId,
+              operation: "automatic-source-check",
               stage: "persistence",
               code: "persistence-failed",
               summary: sanitizeDiagnostic(error.message),
@@ -121,6 +141,13 @@ try {
     } finally {
       store.close();
     }
+  } else if (command === "readiness" && args.length === 0) {
+    const store = new ControlPlaneStore(controlPlaneDatabasePath());
+    try {
+      console.log(JSON.stringify(store.coreAdmissionReadiness(), null, 2));
+    } finally {
+      store.close();
+    }
   } else if (command === "rollback" && args.length === 3) {
     const expectedLastTransactionSequence = parsePositiveInteger(args[0]!);
     const targetCommitId = args[1]!;
@@ -139,6 +166,7 @@ try {
             recordAndReportRejection(
               {
                 checkId,
+                operation: "operator-rollback",
                 stage: error.stage,
                 code: error.code,
                 summary: sanitizeDiagnostic(error.message),
@@ -168,6 +196,7 @@ try {
           recordAndReportRejection(
             {
               checkId,
+              operation: "operator-rollback",
               stage: "persistence",
               code: "persistence-failed",
               summary: sanitizeDiagnostic(error.message),
@@ -192,7 +221,8 @@ try {
       "Usage: npm run --silent core -- verify\n" +
         "       npm run --silent core -- activate <expected-control-plane-sequence>\n" +
         "       npm run --silent core -- rollback <expected-control-plane-sequence> <target-commit> <reason>\n" +
-        "       npm run --silent core -- rejections [limit]",
+        "       npm run --silent core -- rejections [limit]\n" +
+        "       npm run --silent core -- readiness",
     );
   }
 } catch (error) {
