@@ -1,10 +1,10 @@
 # Spec: Core snapshot activation
 
-This contract governs the typed control-plane transaction that turns one
-successfully verified `frostyard/core` candidate into a retained Core snapshot
-and selects it as current organization authority. It is consumed by the
-host-local Core CLI and internal Fluent code; it does not create repository
-enrollment, reconcile GitHub, or admit work.
+This contract governs the typed control-plane transactions that either turn one
+successfully verified `frostyard/core` candidate into the current retained Core
+snapshot or record a bounded rejection observation when activation cannot
+begin or commit. It is consumed by the host-local Core CLI and internal Fluent
+code; it does not create repository enrollment, reconcile GitHub, or admit work.
 
 ## Interface
 
@@ -12,6 +12,7 @@ The host-local command is:
 
 ```sh
 npm run --silent core -- activate <expected-control-plane-sequence>
+npm run --silent core -- rejections [limit]
 ```
 
 It uses the same `FLUENT_CORE_URL`, `FLUENT_CORE_REF`, and
@@ -42,7 +43,30 @@ The command uses source kind `github-repository`, immutable source ID
 `core-activate:<commit>`, scoped to the database lineage and retained through
 `9999-12-31T23:59:59.999Z` in this schema.
 
-Schema and registry version `2` add three authority tables:
+`activate` assigns one server UUIDv7 invocation identity before fetching. A
+source, validation, or persistence failure is recorded idempotently as command
+`core.record-candidate-rejection`, with
+`core.candidate-rejection-observation` at position `0` and
+`core.candidate-rejected` at position `1`. That audit transaction advances
+control-plane order but creates no fact and does not change the active pointer.
+`rejections` returns the newest 20 observations by default and accepts a limit
+from 1 through 100.
+
+The rejection payload has this exact shape:
+
+| Field | Type | Constraint |
+| --- | --- | --- |
+| `checkId` | UUIDv7 | Server identity for one invocation; also binds idempotent replay and correlation |
+| `stage` | enum | `source`, `validation`, or `persistence` |
+| `code` | enum | Matching `source-unavailable`, `candidate-invalid`, or `persistence-failed` |
+| `summary` | string | Sanitized single line, 1–512 UTF-8 bytes |
+| `details` | string array | At most eight sanitized single lines, each 1–512 UTF-8 bytes |
+| `sourceUrl`, `sourceRef` | string | Registered Core GitHub source and canonical branch ref |
+| `commitId`, `treeId` | string or null | Available canonical SHA-1 identities; validation requires a commit and persistence requires both |
+| `catalogDigest` | string or null | Required only for persistence failure |
+| `observedAt` | canonical UTC instant | Server evaluation and recorded time |
+
+Schema version `2` and registry version `3` govern three authority tables:
 
 | Table | Retained content |
 | --- | --- |
@@ -85,11 +109,22 @@ sourceCommitId, activatedAt }`.
 10. Verification or activation MUST NOT interpret a declaration as enrollment,
     reconcile a repository, create a hold, generate work, or execute fetched
     repository code.
-11. This version does not accept ref rewinds, define rollback, record rejected
-    candidate diagnostics, enforce freshness, or poll. Those operations require
-    later typed commands and contracts.
-12. A schema/registry version `1` database MUST fail closed. This pre-production
-    version defines no in-place upgrade; initialize a fresh target database.
+11. `core verify` MUST remain read-only even when verification fails. `core
+    activate` MUST attempt to record a source or validation rejection after the
+    candidate fails and a persistence rejection only after the activation
+    transaction has fully rolled back.
+12. Rejection diagnostics MUST use the registered stage/code pairing, fixed
+    source identity, bounded sanitized strings, organization information class,
+    deployment scope, optional exact source revision, and indefinitely retained
+    idempotency receipt. They MUST NOT copy candidate bytes or create a fact.
+13. Rejection recording failure MUST be reported alongside the original error
+    and MUST NOT replace or disguise that original failure.
+14. This version does not accept ref rewinds, define rollback, enforce
+    freshness, poll, or purge rejection history. Those operations require later
+    typed commands and contracts before unattended polling.
+15. A schema version other than `2` or registry version other than `3` MUST fail
+    closed. This pre-production version defines no in-place upgrade; initialize
+    a fresh target database.
 
 ## Derived artifacts
 
@@ -98,6 +133,7 @@ sourceCommitId, activatedAt }`.
 | Retained Core snapshot | Exact candidate bytes plus the independently rerun validation report |
 | Current Core authority | Latest accepted `core.snapshot-active` fact and its checked singleton pointer |
 | Startup integrity evidence | Recomputed bytes, parsed-record, catalog, occurrence, receipt, and pointer lineage |
+| Core candidate rejection history | Registered bounded observations and audit events ordered independently of activation facts |
 | Focused conformance tests | `test/core-source.test.ts` |
 
 ## References

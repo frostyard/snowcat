@@ -1859,7 +1859,9 @@ diagnostics and recovery operations. The kernel now also implements the first
 bounded fact path: exact verified Core bytes are retained as immutable snapshots
 and selected through an atomic, idempotent active-snapshot fact under the
 [activation contract](../specs/core-snapshot-activation.md). That path creates
-neither enrollment nor work. The kernel does not yet implement a target work,
+neither enrollment nor work. Source, validation, and rolled-back persistence
+failures now create bounded rejection observations and audit events while
+standalone verification remains read-only. The kernel does not yet implement a target work,
 general fact, operational-state, controller, or worker mutation path and never
 reads or imports the spike database.
 
@@ -1867,7 +1869,7 @@ reads or imports the spike database.
 
 | Track | What remains before implementation is well specified |
 | --- | --- |
-| Core contract and migration | Remaining organization JSON Schemas and fixtures, canonical-surface migrations, rejected-candidate diagnostics, continuity/freshness/rollback controls, and enrollment reconciliation |
+| Core contract and migration | Remaining organization JSON Schemas and fixtures, canonical-surface migrations, rejection-history retention, continuity/freshness/rollback controls, and enrollment reconciliation |
 | Control-plane domain model | Execute the [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md): specify exact durable schemas, predicates, reducers, events, projections, invalidation, idempotency, and state machines in a fresh target database shared by RepositoryController, FleetController, ProcessObserver, scheduling, and decisions |
 | GitHub observation | GitHub App permissions, installation and actor mapping, CI/review/merge and artifact reconciliation, polling versus webhooks, forks, outage behavior, and external decision signals |
 | Workflow contracts | Versioned role briefs, evidence schemas, skills, attempt budgets, and deterministic gates for maintenance, planning, review, implementation, repair, and verification |

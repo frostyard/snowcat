@@ -15,7 +15,7 @@ no generic record-writing, fact-writing, administrative, or worker interface.
 | Default path | `./data/control-plane.db` | Distinct from the queue-spike default |
 | SQLite application ID | `1179405908` | Decimal encoding of `FLNT` |
 | Schema version | `2` | Stored in both `PRAGMA user_version` and metadata |
-| Registry version | `2` | Stored in metadata and both initialization payloads |
+| Registry version | `3` | Stored in metadata and both initialization payloads |
 | Node runtime | `>=24.0.0` | Required for the stable `node:sqlite` surface and online backup API |
 | Database lineage ID | UUIDv7 | Generated once by the server; never reused or inferred from path |
 | Operator principal ID | UUIDv7 | Generated once and stored separately from database, session, worker, or provider identity |
@@ -26,7 +26,7 @@ transaction sequence.
 `ControlPlaneStore.occurrences()` returns occurrences ordered by transaction
 sequence and position. Neither method mutates the database or returns a secret.
 
-### Closed registry version 2
+### Closed registry version 3
 
 | Registry | Name | Version or ID rule | Contract |
 | --- | --- | --- | --- |
@@ -44,12 +44,15 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Record | `control-plane.integrity-observation` | Schema 1 | Class `observation`; subject `control-plane-database`; minimum class `organization` |
 | Record | `core.snapshot-definition` | Schema 1 | Class `definition`; subject `core-snapshot`; minimum class `organization` |
 | Record | `core.snapshot-active` | Schema 1 | Class `fact`; subject `control-plane-database`; minimum class `organization` |
+| Record | `core.candidate-rejection-observation` | Schema 1 | Class `observation`; subject `control-plane-database`; minimum class `organization` |
 | Event | `control-plane.initialized` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
 | Event | `control-plane.integrity-checked` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
 | Event | `core.snapshot-activated` | Schema 1 | Subject `core-snapshot`; minimum class `organization` |
+| Event | `core.candidate-rejected` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
 | Command | `control-plane.initialize` | Schema 1 | Outputs database definition, principal definition, then initialization event |
 | Command | `control-plane.check-integrity` | Schema 1 | Outputs the integrity observation, then integrity-checked event |
 | Command | `core.activate-snapshot` | Schema 1 | Outputs snapshot definition, active fact, then activation event |
+| Command | `core.record-candidate-rejection` | Schema 1 | Outputs rejection observation, then rejection event |
 | Predicate | `core.snapshot-active` | Contract 1 | Established by `core.activate-snapshot`; latest transaction sequence wins |
 | Projection | `control-plane.subject-lookup` | Contract, transformation, and information-handling version 1 | Stable subjects and creation definitions for internal diagnostics |
 | Projection | `control-plane.event-cursor` | Contract, transformation, and information-handling version 1 | Payload-free event cursor for internal diagnostics and ProcessObserver |
@@ -61,7 +64,7 @@ invalid:
 {
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
   "operatorPrincipalId": "0198b0a6-c200-7abc-8def-0123456789ac",
-  "registryVersion": 2,
+  "registryVersion": 3,
   "schemaVersion": 2
 }
 ```
@@ -84,7 +87,7 @@ The integrity observation and event payload have this exact shape:
 {
   "checkedThroughSequence": 1,
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
-  "registryVersion": 2,
+  "registryVersion": 3,
   "result": "ok",
   "schemaVersion": 2
 }
@@ -104,7 +107,7 @@ observation and event UUIDv7 record IDs, transaction sequence, fixed positions
 `[0, 1]`, and its evaluation and recorded UTC time. Equivalent replay returns
 the exact stored result. A key already bound to another input digest fails.
 
-### Core snapshot command
+### Core snapshot commands
 
 `ControlPlaneStore.activateCoreSnapshot(input)` is the only implemented fact-
 establishment path. It accepts a verified materialized candidate and the exact
@@ -113,6 +116,16 @@ outputs, retained catalog, idempotency, pointer, integrity, and excluded
 behavior are specified by
 [Core snapshot activation](core-snapshot-activation.md). No other predicate or
 caller-selected fact kind is writable.
+
+`recordCoreCandidateRejection(input)` accepts one server UUIDv7 check identity,
+the registered source/validation/persistence stage and matching code, bounded
+sanitized diagnostic text, configured source URL/ref, and the commit/tree/
+catalog identities available at that stage. It atomically writes an observation,
+event, receipt, transaction, and metadata watermarks. It accepts no authority
+expectation because it observes a rejected candidate rather than mutating the
+active predicate. `coreCandidateRejections(limit)` returns newest observations
+only, with a limit from 1 through 100. Exact payload constraints live in
+[Core snapshot activation](core-snapshot-activation.md).
 
 ### Projection interface
 
@@ -262,7 +275,8 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
    initialization transaction.
 5. Older, newer, incomplete, unexpected, or differently identified schemas
    MUST fail closed. Unregistered indexes, triggers, and views are unexpected.
-   Version 2 defines no upgrade path from the pre-production version 1 store.
+   Schema version 2 and registry version 3 define no upgrade path from earlier
+   pre-production target stores.
 6. Subject, record, event, command, source, revision, record-class, and
    information-class names MUST come from the code-owned versioned registries.
    Payload validity alone MUST NOT create a kind.
@@ -388,6 +402,18 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
     idempotency receipts, and all snapshot/pointer occurrence lineage.
 44. Core activation MUST leave projections stale rather than synchronously
     rebuilding them inside the authority transaction.
+45. A Core candidate rejection MUST create exactly one registered observation
+    and one matching past-tense event in its own idempotent transaction. It MUST
+    NOT create a subject, fact, snapshot, enrollment, hold, or active-pointer
+    change.
+46. Rejection payloads MUST enforce the stage/code relationship, optional
+    source revision sufficiency, single-line 512-byte text fields, at most eight
+    detail fields, canonical source identity, deployment scope, organization
+    information class, server time, and check-ID correlation.
+47. Reusing a rejection check ID with equivalent input MUST return the original
+    record identities and order; reuse with different diagnostic input MUST
+    fail. Rejection receipts remain retained until a later version defines
+    count/time history retention before polling.
 
 ## Derived artifacts
 
@@ -399,6 +425,7 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
 | Implicit operator identity | Fixed `operator-principal` subject and `principal.definition` initialization output |
 | Integrity observation, event, and receipt | Fixed outputs of `control-plane.check-integrity` v1 |
 | Core snapshot definition, fact, event, retained files, and receipt | Fixed outputs and source material of `core.activate-snapshot` v1 |
+| Core candidate rejection observation, event, and receipt | Bounded fixed outputs of `core.record-candidate-rejection` v1 |
 | Subject lookup generations | Full deterministic rebuild from subjects and their creation definitions |
 | Event cursor generations | Full deterministic rebuild from event occurrences without payload copies |
 | Backup manifest | Verified metadata and canonical authoritative digest of one online SQLite backup artifact |

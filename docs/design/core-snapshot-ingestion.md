@@ -121,6 +121,29 @@ and requires the pointer to name the latest accepted activation fact. Raw bytes
 are transitively covered by the authoritative database digest through their
 verified content digests, while disposable projections remain excluded.
 
+### Rejected candidates
+
+Activation assigns one server check identity before touching the source. A
+failure before an exact commit resolves is a `source` rejection; a structurally
+or semantically unusable resolved commit is a `validation` rejection; a failure
+after the authority transaction starts is reported as `persistence` only after
+that transaction and its SQLite sequence allocation roll back.
+
+[`recordCoreCandidateRejection`](../../src/control/store.ts) appends a typed
+`observation` and past-tense event in a separate idempotent audit transaction.
+They bind the control-plane deployment, immutable GitHub repository source, and
+exact commit when available. Summaries and at most eight details are normalized,
+secret-pattern redacted, single-line, and capped at 512 UTF-8 bytes each. The
+observation creates no candidate or snapshot subject, fact, hold, enrollment,
+or pointer change. Its transaction sequence orders the audit occurrence; it
+does not become activation precedence.
+
+`core verify` intentionally records nothing. `core activate` attempts rejection
+recording and preserves the original failure if diagnostics cannot be written.
+The current manual-only slice retains accepted rejection history and receipts;
+payload and list size are bounded now, while count/time purge semantics remain
+required before periodic polling.
+
 ## Operational notes
 
 - Run `npm run --silent core -- verify`. Success writes one JSON value to
@@ -128,6 +151,8 @@ verified content digests, while disposable projections remain excluded.
 - Run `npm run --silent core -- activate <expected-control-plane-sequence>` to
   persist and select that fetched candidate. Equivalent retry uses the original
   expected sequence and returns its original result.
+- Run `npm run --silent core -- rejections [limit]` to read the newest rejection
+  observations; the default is 20 and the maximum is 100.
 - `FLUENT_CORE_URL`, `FLUENT_CORE_REF`, and `FLUENT_CORE_MIRROR` select the
   exact allowed source, branch ref, and host-local mirror path.
 - A valid report proves compatibility with the implemented repository-authority
@@ -135,8 +160,9 @@ verified content digests, while disposable projections remain excluded.
   and any unknown `organization/` path fails closed.
 - A failed fetch or validation before the first activation leaves no last-known-
   good state. Atomic activation now preserves an existing current snapshot;
-  durable rejected-candidate diagnostics, ancestry checks, freshness, rollback
-  authority, and polling belong to later phases of the
+  durable rejected-candidate diagnostics preserve the failure. Ancestry
+  checks, freshness, rollback authority, retention/purge, and polling belong to
+  later phases of the
   [ingestion plan](../plans/core-snapshot-ingestion.md).
 - The mirror contains organization-governed data and should be backed up and
   permissioned as an `organization` asset. It must never be mounted as an

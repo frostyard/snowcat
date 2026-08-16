@@ -22,6 +22,9 @@ import {
   recordClasses,
   recordKindRegistry,
   type InformationClass,
+  type CoreCandidateRejectionCode,
+  type CoreCandidateRejectionPayload,
+  type CoreCandidateRejectionStage,
   type ProjectionName,
   type RecordClass,
   type SubjectKind,
@@ -120,6 +123,41 @@ export interface CoreSnapshotActivationResult {
   importedAt: string;
   transactionPositions: readonly [0, 1, 2];
   transactionSequence: number;
+}
+
+export class CoreSnapshotPersistenceError extends Error {
+  constructor(readonly diagnostic: string) {
+    super(`Core snapshot persistence failed: ${diagnostic}`);
+    this.name = "CoreSnapshotPersistenceError";
+  }
+}
+
+export interface CoreCandidateRejectionInput {
+  checkId: string;
+  stage: CoreCandidateRejectionStage;
+  code: CoreCandidateRejectionCode;
+  summary: string;
+  details: readonly string[];
+  sourceUrl: string;
+  sourceRef: string;
+  commitId?: string;
+  treeId?: string;
+  catalogDigest?: string;
+}
+
+export interface CoreCandidateRejectionResult {
+  checkId: string;
+  observationRecordId: string;
+  eventRecordId: string;
+  observedAt: string;
+  transactionPositions: readonly [0, 1];
+  transactionSequence: number;
+}
+
+export interface CoreCandidateRejectionRecord extends CoreCandidateRejectionPayload {
+  observationRecordId: string;
+  transactionSequence: number;
+  transactionPosition: 0;
 }
 
 export interface ProjectionAccess {
@@ -281,6 +319,36 @@ export class ControlPlaneStore {
       )
       .all() as Row[];
     return rows.map(decodeOccurrence);
+  }
+
+  coreCandidateRejections(limit = 20): CoreCandidateRejectionRecord[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error("Core candidate rejection limit must be a safe integer from 1 through 100");
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT occurrence.record_id, occurrence.payload_json,
+                occurrence.transaction_sequence, occurrence.transaction_position
+         FROM durable_occurrences occurrence
+         JOIN durable_records record ON record.record_id = occurrence.record_id
+         WHERE occurrence.kind = 'core.candidate-rejection-observation'
+           AND record.record_class = 'observation'
+         ORDER BY occurrence.transaction_sequence DESC
+         LIMIT ?`,
+      )
+      .all(limit) as Row[];
+    return rows.map((row) => {
+      const payload = parseJson(String(row.payload_json));
+      if (!recordKindRegistry["core.candidate-rejection-observation"].validatePayload(payload)) {
+        throw new Error(`invalid Core candidate rejection payload: ${String(row.record_id)}`);
+      }
+      return {
+        ...payload,
+        observationRecordId: String(row.record_id),
+        transactionSequence: Number(row.transaction_sequence),
+        transactionPosition: 0,
+      };
+    });
   }
 
   authoritativeDigest(): string {
@@ -702,6 +770,7 @@ export class ControlPlaneStore {
       sourceUrl: candidate.sourceUrl,
     });
     const commandPayloadDigest = sha256(commandPayloadJson);
+    let authorityWriteStarted = false;
 
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -775,6 +844,7 @@ export class ControlPlaneStore {
       const activePayloadDigest = sha256(activePayloadJson);
       const informationScopeJson = canonicalJson({ deploymentId: metadata.databaseLineageId });
 
+      authorityWriteStarted = true;
       const transaction = this.db
         .prepare(
           `INSERT INTO control_transactions (
@@ -948,6 +1018,155 @@ export class ControlPlaneStore {
            WHERE singleton = 1`,
         )
         .run(evaluationTime, sequence);
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      if (authorityWriteStarted) {
+        throw new CoreSnapshotPersistenceError(error instanceof Error ? error.message : String(error));
+      }
+      throw error;
+    }
+  }
+
+  recordCoreCandidateRejection(input: CoreCandidateRejectionInput): CoreCandidateRejectionResult {
+    const commandInput = {
+      checkId: input.checkId,
+      stage: input.stage,
+      code: input.code,
+      summary: input.summary,
+      details: [...input.details],
+      sourceUrl: input.sourceUrl,
+      sourceRef: input.sourceRef,
+      commitId: input.commitId ?? null,
+      treeId: input.treeId ?? null,
+      catalogDigest: input.catalogDigest ?? null,
+    } satisfies JsonValue;
+    const validationPayload = {
+      ...commandInput,
+      observedAt: "1970-01-01T00:00:00.000Z",
+    } satisfies JsonValue;
+    if (!recordKindRegistry["core.candidate-rejection-observation"].validatePayload(validationPayload)) {
+      throw new Error("Core candidate rejection input is outside the registered diagnostic contract");
+    }
+    const idempotencyKey = `core-rejection:${input.checkId}`;
+    const commandPayloadJson = canonicalJson(commandInput);
+    const commandPayloadDigest = sha256(commandPayloadJson);
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.verifyExisting(this.applicationTables());
+      const metadata = this.metadata();
+      const commandScope = `database:${metadata.databaseLineageId}`;
+      const prior = this.db
+        .prepare(
+          `SELECT payload_digest, result_json
+           FROM idempotency_receipts
+           WHERE command_scope = ? AND command_kind = 'core.record-candidate-rejection'
+             AND command_schema_version = 1 AND idempotency_key = ?`,
+        )
+        .get(commandScope, idempotencyKey) as Row | undefined;
+      if (prior) {
+        if (String(prior.payload_digest) !== commandPayloadDigest) {
+          throw new Error("Core rejection check ID was already used with a different diagnostic payload");
+        }
+        const result = parseCoreCandidateRejectionResult(parseJson(String(prior.result_json)));
+        this.db.exec("COMMIT");
+        return result;
+      }
+
+      const observedAt = this.now();
+      if (observedAt < metadata.controlTimeWatermark) {
+        throw new Error(
+          `control-plane clock moved backwards behind ${metadata.controlTimeWatermark}; refusing a new write transaction`,
+        );
+      }
+      const payload = { ...commandInput, observedAt } satisfies JsonValue;
+      if (!recordKindRegistry["core.candidate-rejection-observation"].validatePayload(payload)) {
+        throw new Error("Core candidate rejection payload is outside the registered diagnostic contract");
+      }
+      const payloadJson = canonicalJson(payload);
+      const payloadDigest = sha256(payloadJson);
+      const transactionId = uuidV7(new Date(observedAt));
+      const observationRecordId = uuidV7(new Date(observedAt));
+      const eventRecordId = uuidV7(new Date(observedAt));
+      const informationScopeJson = canonicalJson({ deploymentId: metadata.databaseLineageId });
+      const transaction = this.db
+        .prepare(
+          `INSERT INTO control_transactions (
+             transaction_id, command_kind, command_schema_version, principal_kind,
+             principal_id, session_id, idempotency_key, payload_digest,
+             evaluation_time, recorded_at
+           ) VALUES (?, 'core.record-candidate-rejection', 1, 'fluent-system', 'kernel', NULL, ?, ?, ?, ?)`,
+        )
+        .run(transactionId, idempotencyKey, commandPayloadDigest, observedAt, observedAt);
+      const sequence = Number(transaction.lastInsertRowid);
+      const sourceRevision =
+        input.commitId === undefined
+          ? {}
+          : { sourceRevisionKind: "git-commit-sha1", sourceRevisionValue: `sha1:${input.commitId}` };
+      const common = {
+        schemaVersion: 1,
+        subjectKind: "control-plane-database" as const,
+        subjectId: metadata.databaseLineageId,
+        revisionKind: "transaction-sequence",
+        revisionValue: String(metadata.lastTransactionSequence),
+        sourceKind: "github-repository",
+        sourceId: "github.com:1331309458",
+        ...sourceRevision,
+        informationClass: "organization" as const,
+        informationScopeJson,
+        payloadJson,
+        payloadDigest,
+        correlationId: input.checkId,
+        transactionSequence: sequence,
+        recordedAt: observedAt,
+      };
+      this.insertOccurrence({
+        ...common,
+        recordId: observationRecordId,
+        occurrenceType: "record",
+        kind: "core.candidate-rejection-observation",
+        recordClass: "observation",
+        transactionPosition: 0,
+      });
+      this.insertOccurrence({
+        ...common,
+        recordId: eventRecordId,
+        occurrenceType: "event",
+        kind: "core.candidate-rejected",
+        transactionPosition: 1,
+      });
+      const result: CoreCandidateRejectionResult = {
+        checkId: input.checkId,
+        observationRecordId,
+        eventRecordId,
+        observedAt,
+        transactionPositions: [0, 1],
+        transactionSequence: sequence,
+      };
+      this.db
+        .prepare(
+          `INSERT INTO idempotency_receipts (
+             command_scope, command_kind, command_schema_version, idempotency_key,
+             payload_digest, result_json, transaction_sequence, retained_until
+           ) VALUES (?, 'core.record-candidate-rejection', 1, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          commandScope,
+          idempotencyKey,
+          commandPayloadDigest,
+          canonicalJson(result as unknown as JsonValue),
+          sequence,
+          IDEMPOTENCY_RETAINED_UNTIL,
+        );
+      this.db
+        .prepare(
+          `UPDATE control_plane_metadata
+           SET control_time_watermark = ?, last_transaction_sequence = ?
+           WHERE singleton = 1`,
+        )
+        .run(observedAt, sequence);
       this.db.exec("COMMIT");
       return result;
     } catch (error) {
@@ -1748,7 +1967,7 @@ export class ControlPlaneStore {
 
       const outputs = this.db
         .prepare(
-          `SELECT kind, transaction_position, recorded_at
+          `SELECT kind, transaction_position, recorded_at, payload_digest
            FROM durable_occurrences
            WHERE transaction_sequence = ?
            ORDER BY transaction_position`,
@@ -1806,6 +2025,17 @@ export class ControlPlaneStore {
           receiptCount !== 1
         ) {
           throw new Error(`Core snapshot activation receipt shape is invalid: ${String(row.sequence)}`);
+        }
+      } else if (row.command_kind === "core.record-candidate-rejection") {
+        if (
+          typeof row.idempotency_key !== "string" ||
+          !/^core-rejection:[0-9a-f-]{36}$/.test(row.idempotency_key) ||
+          receiptCount !== 1
+        ) {
+          throw new Error(`Core candidate rejection receipt shape is invalid: ${String(row.sequence)}`);
+        }
+        if (outputs[0]!.payload_digest !== outputs[1]!.payload_digest) {
+          throw new Error(`Core candidate rejection outputs disagree: ${String(row.sequence)}`);
         }
       }
     }
@@ -1897,6 +2127,22 @@ export class ControlPlaneStore {
         (String(row.subject_id) !== this.metadata().operatorPrincipalId || subjectKind !== "operator-principal")
       ) {
         throw new Error(`principal definition does not match the deployment operator: ${String(row.record_id)}`);
+      }
+      if (
+        (String(row.kind) === "core.candidate-rejection-observation" ||
+          String(row.kind) === "core.candidate-rejected") &&
+        (String(row.subject_id) !== this.metadata().databaseLineageId ||
+          String(row.source_kind) !== "github-repository" ||
+          String(row.source_id) !== "github.com:1331309458" ||
+          String((payload as CoreCandidateRejectionPayload).checkId) !== String(row.correlation_id) ||
+          String((payload as CoreCandidateRejectionPayload).observedAt) !== String(row.recorded_at) ||
+          ((payload as CoreCandidateRejectionPayload).commitId === null) !== (row.source_revision_value == null) ||
+          ((payload as CoreCandidateRejectionPayload).commitId !== null &&
+            (String(row.source_revision_kind) !== "git-commit-sha1" ||
+              String(row.source_revision_value) !==
+                `sha1:${String((payload as CoreCandidateRejectionPayload).commitId)}`)))
+      ) {
+        throw new Error(`Core candidate rejection lineage mismatch: ${String(row.record_id)}`);
       }
       if (row.revision_kind === "sha256" && String(row.revision_value) !== String(row.payload_digest)) {
         throw new Error(`database occurrence revision does not match its payload: ${String(row.record_id)}`);
@@ -2092,9 +2338,12 @@ export class ControlPlaneStore {
       }
       if (commandKind === "control-plane.check-integrity") parseIntegrityCheckResult(result);
       if (commandKind === "core.activate-snapshot") parseCoreSnapshotActivationResult(result);
+      if (commandKind === "core.record-candidate-rejection") parseCoreCandidateRejectionResult(result);
       assertUtcInstant(String(row.retained_until), `idempotency receipt ${String(row.idempotency_key)} retention time`);
       if (
-        (commandKind === "control-plane.check-integrity" || commandKind === "core.activate-snapshot") &&
+        (commandKind === "control-plane.check-integrity" ||
+          commandKind === "core.activate-snapshot" ||
+          commandKind === "core.record-candidate-rejection") &&
         String(row.retained_until) !== IDEMPOTENCY_RETAINED_UNTIL
       ) {
         throw new Error(`idempotency receipt retention mismatch: ${String(row.idempotency_key)}`);
@@ -2172,6 +2421,30 @@ export class ControlPlaneStore {
           String(outputs[2]!.record_id) !== activation.eventRecordId
         ) {
           throw new Error(`Core activation receipt result output mismatch: ${String(row.idempotency_key)}`);
+        }
+      }
+      if (commandKind === "core.record-candidate-rejection") {
+        const rejection = parseCoreCandidateRejectionResult(result);
+        if (
+          String(row.idempotency_key) !== `core-rejection:${rejection.checkId}` ||
+          rejection.transactionSequence !== Number(row.transaction_sequence) ||
+          rejection.observedAt !== String(transaction.evaluation_time) ||
+          rejection.observedAt !== String(transaction.recorded_at)
+        ) {
+          throw new Error(`Core rejection receipt result transaction mismatch: ${String(row.idempotency_key)}`);
+        }
+        const outputs = this.db
+          .prepare(
+            `SELECT record_id FROM durable_occurrences
+             WHERE transaction_sequence = ? ORDER BY transaction_position`,
+          )
+          .all(row.transaction_sequence!) as Row[];
+        if (
+          outputs.length !== 2 ||
+          String(outputs[0]!.record_id) !== rejection.observationRecordId ||
+          String(outputs[1]!.record_id) !== rejection.eventRecordId
+        ) {
+          throw new Error(`Core rejection receipt result output mismatch: ${String(row.idempotency_key)}`);
         }
       }
     }
@@ -2713,6 +2986,47 @@ function parseCoreSnapshotActivationResult(value: JsonValue): CoreSnapshotActiva
     sourceCommitId: String(result.sourceCommitId),
     importedAt: String(result.importedAt),
     transactionPositions: [0, 1, 2],
+    transactionSequence: Number(result.transactionSequence),
+  };
+}
+
+function parseCoreCandidateRejectionResult(value: JsonValue): CoreCandidateRejectionResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("invalid Core candidate rejection receipt result");
+  }
+  const result = value as Record<string, JsonValue>;
+  const expected = [
+    "checkId",
+    "observationRecordId",
+    "eventRecordId",
+    "observedAt",
+    "transactionPositions",
+    "transactionSequence",
+  ].sort();
+  const keys = Object.keys(result).sort();
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
+    throw new Error("invalid Core candidate rejection receipt result fields");
+  }
+  if (
+    !isUuidV7(String(result.checkId)) ||
+    !isUuidV7(String(result.observationRecordId)) ||
+    !isUuidV7(String(result.eventRecordId)) ||
+    !Array.isArray(result.transactionPositions) ||
+    result.transactionPositions.length !== 2 ||
+    result.transactionPositions[0] !== 0 ||
+    result.transactionPositions[1] !== 1 ||
+    !Number.isSafeInteger(result.transactionSequence) ||
+    Number(result.transactionSequence) < 2
+  ) {
+    throw new Error("invalid Core candidate rejection receipt result values");
+  }
+  assertUtcInstant(String(result.observedAt), "Core candidate rejection observation time");
+  return {
+    checkId: String(result.checkId),
+    observationRecordId: String(result.observationRecordId),
+    eventRecordId: String(result.eventRecordId),
+    observedAt: String(result.observedAt),
+    transactionPositions: [0, 1],
     transactionSequence: Number(result.transactionSequence),
   };
 }

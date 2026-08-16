@@ -55,7 +55,7 @@ schemas fail rather than being guessed or upgraded by this slice.
 ### Closed registries
 
 [`registry.ts`](../../src/control/registry.ts) is the only owner of the current
-kernel vocabulary. Registry version 2 contains the bootstrap and Core snapshot
+kernel vocabulary. Registry version 3 contains the bootstrap and Core snapshot
 contracts:
 
 | Registry | Initial member | Meaning |
@@ -71,12 +71,15 @@ contracts:
 | Record kind | `control-plane.integrity-observation` v1 | The system's SQLite quick-check observation bound to the checked sequence |
 | Record kind | `core.snapshot-definition` v1 | Definition of one retained validated catalog and its source/report |
 | Record kind | `core.snapshot-active` v1 | Current-snapshot fact on the database subject |
+| Record kind | `core.candidate-rejection-observation` v1 | Bounded non-authoritative source/validation/persistence diagnostic |
 | Event kind | `control-plane.initialized` v1 | The past-tense account of successful initialization |
 | Event kind | `control-plane.integrity-checked` v1 | The past-tense account of the accepted integrity observation |
 | Event kind | `core.snapshot-activated` v1 | The past-tense account of selecting one snapshot |
+| Event kind | `core.candidate-rejected` v1 | The past-tense audit account of one rejected candidate check |
 | Command kind | `control-plane.initialize` v1 | The fixed bootstrap transaction and its ordered outputs |
 | Command kind | `control-plane.check-integrity` v1 | An optimistic, idempotent system integrity check |
 | Command kind | `core.activate-snapshot` v1 | Atomic retention and activation of one independently revalidated candidate |
+| Command kind | `core.record-candidate-rejection` v1 | Idempotent bounded rejection observation and event |
 | Predicate contract | `core.snapshot-active` v1 | Established only by activation; latest transaction sequence wins |
 | Projection contract | `control-plane.subject-lookup` v1 | Stable subject identity and creation-definition lookup |
 | Projection contract | `control-plane.event-cursor` v1 | Payload-free sequence/position cursor for accepted events |
@@ -174,6 +177,16 @@ three occurrences, receipt, pointer, and watermarks commit together. Startup
 recomputes the file and catalog digests and checks all cross-table lineage. The
 exact contract and excluded enrollment/freshness/rollback behavior live in
 [Core snapshot activation](../specs/core-snapshot-activation.md).
+
+When activation cannot fetch, validate, or persist a candidate, the Core CLI
+uses a separate registered command to append a bounded rejection observation
+and matching audit event on the database subject. The source repository and
+available commit revision remain provenance, not a new subject or fact. This
+diagnostic transaction advances audit order and may make projections stale, but
+it neither enters the active predicate family nor moves the checked pointer.
+Exact replay is keyed by the server check identity. Payloads and query limits
+are bounded now; history purge waits for the retention contract required before
+periodic polling.
 
 ### Rebuildable read models
 
@@ -282,7 +295,7 @@ work lineage are later slices in the
 - The production suitability of Node's built-in SQLite binding remains an open
   plan question. This slice deliberately uses the binding already exercised by
   the spike and does not settle deployment support.
-- A schema/registry v1 mismatch is not repaired automatically. Preserve the file for
+- A prior schema or registry mismatch is not repaired automatically. Preserve the file for
   diagnosis and use a new empty database during this pre-production slice.
 - Projection repair is narrower than schema repair: it discards only registered
   read-model generations after authoritative schema and records validate.

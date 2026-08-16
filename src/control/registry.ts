@@ -2,7 +2,7 @@ import { isUuidV7, type JsonValue } from "./encoding.ts";
 
 export const CONTROL_PLANE_APPLICATION_ID = 1_179_405_908; // ASCII "FLNT"
 export const CONTROL_PLANE_SCHEMA_VERSION = 2;
-export const CONTROL_PLANE_REGISTRY_VERSION = 2;
+export const CONTROL_PLANE_REGISTRY_VERSION = 3;
 
 export const informationClasses = ["public", "organization", "restricted"] as const;
 export type InformationClass = (typeof informationClasses)[number];
@@ -107,6 +107,13 @@ export const recordKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isCoreSnapshotActivePayload,
   },
+  "core.candidate-rejection-observation": {
+    schemaVersion: 1,
+    recordClass: "observation",
+    subjectKinds: ["control-plane-database"],
+    minimumInformationClass: "organization",
+    validatePayload: isCoreCandidateRejectionPayload,
+  },
 } as const;
 
 export const eventKindRegistry = {
@@ -128,6 +135,12 @@ export const eventKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isCoreSnapshotActivePayload,
   },
+  "core.candidate-rejected": {
+    schemaVersion: 1,
+    subjectKinds: ["control-plane-database"],
+    minimumInformationClass: "organization",
+    validatePayload: isCoreCandidateRejectionPayload,
+  },
 } as const;
 
 export const commandKindRegistry = {
@@ -142,6 +155,10 @@ export const commandKindRegistry = {
   "core.activate-snapshot": {
     schemaVersion: 1,
     outputKinds: ["core.snapshot-definition", "core.snapshot-active", "core.snapshot-activated"],
+  },
+  "core.record-candidate-rejection": {
+    schemaVersion: 1,
+    outputKinds: ["core.candidate-rejection-observation", "core.candidate-rejected"],
   },
 } as const;
 
@@ -239,6 +256,23 @@ export interface CoreSnapshotActivePayload extends Record<string, JsonValue> {
   catalogDigest: string;
   sourceCommitId: string;
   activatedAt: string;
+}
+
+export type CoreCandidateRejectionStage = "source" | "validation" | "persistence";
+export type CoreCandidateRejectionCode = "source-unavailable" | "candidate-invalid" | "persistence-failed";
+
+export interface CoreCandidateRejectionPayload extends Record<string, JsonValue> {
+  checkId: string;
+  stage: CoreCandidateRejectionStage;
+  code: CoreCandidateRejectionCode;
+  summary: string;
+  details: string[];
+  sourceUrl: string;
+  sourceRef: string;
+  commitId: string | null;
+  treeId: string | null;
+  catalogDigest: string | null;
+  observedAt: string;
 }
 
 export function assertSubject(kind: string, id: string): asserts kind is SubjectKind {
@@ -380,6 +414,57 @@ function isCoreSnapshotActivePayload(value: unknown): value is CoreSnapshotActiv
   );
 }
 
+function isCoreCandidateRejectionPayload(value: unknown): value is CoreCandidateRejectionPayload {
+  if (
+    !isExactObject(value, [
+      "checkId",
+      "stage",
+      "code",
+      "summary",
+      "details",
+      "sourceUrl",
+      "sourceRef",
+      "commitId",
+      "treeId",
+      "catalogDigest",
+      "observedAt",
+    ])
+  ) {
+    return false;
+  }
+  if (
+    typeof value.checkId !== "string" ||
+    !isUuidV7(value.checkId) ||
+    (value.stage !== "source" && value.stage !== "validation" && value.stage !== "persistence") ||
+    (value.code !== "source-unavailable" &&
+      value.code !== "candidate-invalid" &&
+      value.code !== "persistence-failed") ||
+    !isBoundedDiagnostic(value.summary) ||
+    !Array.isArray(value.details) ||
+    value.details.length > 8 ||
+    !value.details.every(isBoundedDiagnostic) ||
+    typeof value.sourceUrl !== "string" ||
+    !/^(?:https:\/\/github\.com\/frostyard\/core\.git|git@github\.com:frostyard\/core\.git|ssh:\/\/git@github\.com:frostyard\/core\.git)$/.test(
+      value.sourceUrl,
+    ) ||
+    typeof value.sourceRef !== "string" ||
+    !isCanonicalCoreRef(value.sourceRef) ||
+    !isUtcInstant(value.observedAt)
+  ) {
+    return false;
+  }
+  const hasCommit = typeof value.commitId === "string" && /^[0-9a-f]{40}$/.test(value.commitId);
+  const hasTree = typeof value.treeId === "string" && /^[0-9a-f]{40}$/.test(value.treeId);
+  const hasCatalog = isSha256(value.catalogDigest);
+  if ((value.commitId !== null && !hasCommit) || (value.treeId !== null && !hasTree)) return false;
+  if (value.catalogDigest !== null && !hasCatalog) return false;
+  if (value.stage === "source") return value.code === "source-unavailable" && !hasCatalog;
+  if (!hasCommit) return false;
+  if (value.stage === "validation") return value.code === "candidate-invalid" && !hasCatalog;
+  if (!hasTree) return false;
+  return value.code === "persistence-failed" && hasCatalog;
+}
+
 function isSha256(value: unknown): value is string {
   return typeof value === "string" && /^sha256:[0-9a-f]{64}$/.test(value);
 }
@@ -406,6 +491,17 @@ function isCanonicalCoreRef(value: string): boolean {
     !value.includes("@{") &&
     !value.endsWith("/") &&
     !value.endsWith(".")
+  );
+}
+
+function isBoundedDiagnostic(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    Buffer.byteLength(value, "utf8") >= 1 &&
+    Buffer.byteLength(value, "utf8") <= 512 &&
+    !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value) &&
+    !value.includes("\n") &&
+    !value.includes("\r")
   );
 }
 

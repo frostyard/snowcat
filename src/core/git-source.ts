@@ -2,7 +2,12 @@ import { execFile } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-import { validateCoreCatalog, type CoreTreeEntry, type ValidatedCoreCatalog } from "./validator.ts";
+import {
+  CoreValidationError,
+  validateCoreCatalog,
+  type CoreTreeEntry,
+  type ValidatedCoreCatalog,
+} from "./validator.ts";
 
 const CANDIDATE_REF = "refs/fluent/core-candidate";
 const MAX_TREE_ENTRIES = 256;
@@ -32,6 +37,22 @@ export interface InspectedCoreCandidate extends ValidatedCoreCatalog {
   files: CoreTreeEntry[];
 }
 
+export class CoreCandidateInspectionError extends Error {
+  constructor(
+    readonly stage: "source" | "validation",
+    readonly code: "source-unavailable" | "candidate-invalid",
+    message: string,
+    readonly details: readonly string[],
+    readonly sourceUrl: string,
+    readonly ref: string,
+    readonly commitId?: string,
+    readonly treeId?: string,
+  ) {
+    super(message);
+    this.name = "CoreCandidateInspectionError";
+  }
+}
+
 export function coreGitSourceConfig(): CoreGitSourceConfig {
   return {
     sourceUrl: process.env.FLUENT_CORE_URL ?? "https://github.com/frostyard/core.git",
@@ -42,62 +63,79 @@ export function coreGitSourceConfig(): CoreGitSourceConfig {
 
 export async function inspectCoreCandidate(config: CoreGitSourceConfig): Promise<InspectedCoreCandidate> {
   assertConfig(config);
-  const mirrorPath = resolve(config.mirrorPath);
-  await ensureBareMirror(mirrorPath, Boolean(config.allowFileSource));
+  let commitId: string | undefined;
+  let treeId: string | undefined;
+  try {
+    const mirrorPath = resolve(config.mirrorPath);
+    await ensureBareMirror(mirrorPath, Boolean(config.allowFileSource));
 
-  await git(
-    [
-      "--git-dir",
-      mirrorPath,
-      "fetch",
-      "--force",
-      "--no-tags",
-      "--no-recurse-submodules",
-      config.sourceUrl,
-      `+${config.ref}:${CANDIDATE_REF}`,
-    ],
-    { allowFileSource: Boolean(config.allowFileSource), maxBuffer: 1_048_576 },
-  );
-  const commitId = decodeLine(
-    await git(["--git-dir", mirrorPath, "rev-parse", `${CANDIDATE_REF}^{commit}`], {
-      allowFileSource: Boolean(config.allowFileSource),
-    }),
-    "candidate commit",
-  );
-  const treeId = decodeLine(
-    await git(["--git-dir", mirrorPath, "rev-parse", `${commitId}:organization`], {
-      allowFileSource: Boolean(config.allowFileSource),
-    }),
-    "organization tree",
-  );
-  assertObjectId(commitId, "candidate commit");
-  assertObjectId(treeId, "organization tree");
+    await git(
+      [
+        "--git-dir",
+        mirrorPath,
+        "fetch",
+        "--force",
+        "--no-tags",
+        "--no-recurse-submodules",
+        config.sourceUrl,
+        `+${config.ref}:${CANDIDATE_REF}`,
+      ],
+      { allowFileSource: Boolean(config.allowFileSource), maxBuffer: 1_048_576 },
+    );
+    commitId = decodeLine(
+      await git(["--git-dir", mirrorPath, "rev-parse", `${CANDIDATE_REF}^{commit}`], {
+        allowFileSource: Boolean(config.allowFileSource),
+      }),
+      "candidate commit",
+    );
+    assertObjectId(commitId, "candidate commit");
+    treeId = decodeLine(
+      await git(["--git-dir", mirrorPath, "rev-parse", `${commitId}:organization`], {
+        allowFileSource: Boolean(config.allowFileSource),
+      }),
+      "organization tree",
+    );
+    assertObjectId(treeId, "organization tree");
 
-  const listing = await git(
-    ["--git-dir", mirrorPath, "ls-tree", "-r", "-z", "-l", "--full-tree", commitId, "--", "organization/"],
-    { allowFileSource: Boolean(config.allowFileSource), maxBuffer: 1_048_576 },
-  );
-  const metadata = parseTreeListing(listing);
-  const entries: CoreTreeEntry[] = [];
-  for (const item of metadata) {
-    const bytes = await git(["--git-dir", mirrorPath, "cat-file", "blob", item.objectId], {
-      allowFileSource: Boolean(config.allowFileSource),
-      maxBuffer: MAX_FILE_BYTES + 1,
-    });
-    if (bytes.byteLength !== item.size) {
-      throw new Error(`${item.path}: Git blob size changed during candidate inspection`);
+    const listing = await git(
+      ["--git-dir", mirrorPath, "ls-tree", "-r", "-z", "-l", "--full-tree", commitId, "--", "organization/"],
+      { allowFileSource: Boolean(config.allowFileSource), maxBuffer: 1_048_576 },
+    );
+    const metadata = parseTreeListing(listing);
+    const entries: CoreTreeEntry[] = [];
+    for (const item of metadata) {
+      const bytes = await git(["--git-dir", mirrorPath, "cat-file", "blob", item.objectId], {
+        allowFileSource: Boolean(config.allowFileSource),
+        maxBuffer: MAX_FILE_BYTES + 1,
+      });
+      if (bytes.byteLength !== item.size) {
+        throw new Error(`${item.path}: Git blob size changed during candidate inspection`);
+      }
+      entries.push({ ...item, bytes });
     }
-    entries.push({ ...item, bytes });
-  }
 
-  return {
-    sourceUrl: config.sourceUrl,
-    ref: config.ref,
-    commitId,
-    treeId,
-    files: entries,
-    ...validateCoreCatalog(entries),
-  };
+    return {
+      sourceUrl: config.sourceUrl,
+      ref: config.ref,
+      commitId,
+      treeId,
+      files: entries,
+      ...validateCoreCatalog(entries),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const details = error instanceof CoreValidationError ? error.details : [];
+    throw new CoreCandidateInspectionError(
+      commitId === undefined ? "source" : "validation",
+      commitId === undefined ? "source-unavailable" : "candidate-invalid",
+      message,
+      details,
+      config.sourceUrl,
+      config.ref,
+      commitId,
+      treeId,
+    );
+  }
 }
 
 function assertConfig(config: CoreGitSourceConfig): void {

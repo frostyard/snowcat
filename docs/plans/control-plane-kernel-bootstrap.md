@@ -15,7 +15,7 @@ the bounded cutover in Phase 5 below.
   [control-plane kernel design](../design/control-plane-kernel.md) and
   [kernel specification](../specs/control-plane-kernel.md). It implements
   database identity, a distinct stable implicit operator principal, current
-  registry version 2, ordered initialization occurrences, and fail-closed startup; later
+  registry version 3, ordered initialization occurrences, and fail-closed startup; later
   Phase 1 fields and registries remain open.
 - Define the smallest v1 registries and exact envelopes required by
   [ADRs 0037–0043](../adr/0037-store-facts-with-a-separate-event-ledger.md):

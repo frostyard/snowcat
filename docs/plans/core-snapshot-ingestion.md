@@ -21,7 +21,7 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
   fixtures, and one disabled `frostyard/core` declaration; schema drift,
   duplicate live keys, and Git symlinks fail closed.
 
-## Phase 2 — Persist and atomically activate snapshots (in progress)
+## Phase 2 — Persist and atomically activate snapshots (completed)
 
 - The implemented [activation contract](../specs/core-snapshot-activation.md)
   adds exact Core snapshot, immutable GitHub source, activation predicate,
@@ -34,11 +34,16 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
 - Equivalent retry returns the original result; failure after retained file
   writes rolls back authority and sequence allocation; every accepted prior
   snapshot remains retained.
-- Record rejected candidate diagnostics without advancing the active pointer.
-- **Done when:** rejected fetch/validation/storage attempts have bounded durable
-  diagnostics, and a failure injected after any snapshot write rolls back all
-  candidate authority and leaves the prior active snapshot byte-for-byte and
-  sequence-for-sequence unchanged; retry returns the original snapshot identity.
+- The same [activation contract](../specs/core-snapshot-activation.md) now
+  records source, validation, and post-rollback persistence rejection as a
+  bounded observation plus audit event. `core verify` stays read-only;
+  `core rejections` exposes the newest bounded result set; rejection creates no
+  fact and never advances the active pointer.
+- **Done when:** rejected fetch/validation/storage attempts have mechanically
+  bounded durable diagnostics; a failure injected after any snapshot write
+  rolls back all candidate authority and allocation before its separate audit
+  transaction; the prior snapshot remains current; and retry returns the
+  original snapshot identity.
 
 ## Phase 3 — Enforce continuity, freshness, and operator recovery (medium)
 
@@ -51,6 +56,8 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
   stale-source override.
 - Add configurable periodic polling over the same typed sync operation; do not
   add a model or webhook requirement.
+- Set time/count retention and purge semantics for raw snapshots and candidate
+  rejection history before periodic polling can create unattended volume.
 - **Done when:** tests distinguish unchanged retry, fast-forward activation,
   force-push refusal, explicit rollback, source outage under and over the
   freshness boundary, and locally advancing exception expiry.
@@ -78,8 +85,9 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
 
 ## Open questions
 
-- **Retention:** set bounded failed-candidate diagnostic and raw snapshot
-  retention before unattended polling begins.
+- **Retention:** set bounded failed-candidate history and raw snapshot retention
+  before unattended polling begins; current payloads and reads are bounded, but
+  accepted history is not yet purged.
 
 ## References
 

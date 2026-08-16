@@ -65,6 +65,10 @@ removed. -->
   and atomically retains/activates one candidate through the typed handler in
   [`src/control/store.ts`](src/control/store.ts); it still creates no enrollment
   or work.
+- Use `npm run --silent core -- rejections [limit]` to inspect bounded Core
+  candidate rejection observations. `activate` records source, validation, and
+  rolled-back persistence failures through the typed observation/event handler;
+  `verify` never does.
 - Keep the target control-plane store separate from the disposable queue-spike
   store. Target schema and startup live in
   [`src/control/store.ts`](src/control/store.ts); closed vocabulary lives only

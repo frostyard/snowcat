@@ -1,15 +1,20 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-import { inspectCoreCandidate, type InspectedCoreCandidate } from "../src/core/git-source.ts";
+import {
+  CoreCandidateInspectionError,
+  inspectCoreCandidate,
+  type InspectedCoreCandidate,
+} from "../src/core/git-source.ts";
 import { CoreValidationError, validateCoreCatalog, type CoreTreeEntry } from "../src/core/validator.ts";
-import { ControlPlaneStore } from "../src/control/store.ts";
+import { ControlPlaneStore, CoreSnapshotPersistenceError } from "../src/control/store.ts";
+import { uuidV7 } from "../src/control/encoding.ts";
 
 test("the bundled validator accepts the current core repository-authority shape without enrolling it", async () => {
   const entries = await validCoreEntries();
@@ -75,8 +80,118 @@ test("the Git source reads an exact commit through a bare mirror and rejects a s
 
   await assert.rejects(
     inspectCoreCandidate({ sourceUrl: source, ref: "refs/heads/main", mirrorPath: mirror, allowFileSource: true }),
-    /accepts only regular Git blobs/,
+    (error) =>
+      error instanceof CoreCandidateInspectionError &&
+      error.stage === "validation" &&
+      error.code === "candidate-invalid" &&
+      error.commitId !== undefined &&
+      /accepts only regular Git blobs/.test(error.message),
   );
+});
+
+test("a Core candidate rejection is bounded, idempotent, queryable, and non-authoritative", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-core-rejection-test-"));
+  const path = join(directory, "control-plane.db");
+  const observedAt = "2026-08-16T12:30:00.000Z";
+  const checkId = uuidV7(new Date(observedAt));
+  const store = new ControlPlaneStore(path, () => new Date(observedAt));
+  const input = {
+    checkId,
+    stage: "validation" as const,
+    code: "candidate-invalid" as const,
+    summary: "organization/README.md: required authority file is missing",
+    details: ["candidate rejected before snapshot activation"],
+    sourceUrl: "https://github.com/frostyard/core.git",
+    sourceRef: "refs/heads/main",
+    commitId: "1".repeat(40),
+    treeId: "2".repeat(40),
+  };
+
+  const rejection = store.recordCoreCandidateRejection(input);
+  assert.equal(rejection.transactionSequence, 2);
+  assert.deepEqual(rejection.transactionPositions, [0, 1]);
+  assert.equal(store.metadata().lastTransactionSequence, 2);
+  assert.deepEqual(store.recordCoreCandidateRejection(input), rejection);
+  assert.equal(store.metadata().lastTransactionSequence, 2);
+  const listed = store.coreCandidateRejections();
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0]?.checkId, checkId);
+  assert.equal(listed[0]?.stage, "validation");
+  assert.equal(listed[0]?.transactionPosition, 0);
+  assert.deepEqual(
+    store.occurrences().slice(-2).map((occurrence) => [
+      occurrence.kind,
+      occurrence.recordClass,
+      occurrence.transactionPosition,
+      occurrence.revisionValue,
+      occurrence.sourceRevisionValue,
+    ]),
+    [
+      ["core.candidate-rejection-observation", "observation", 0, "1", `sha1:${"1".repeat(40)}`],
+      ["core.candidate-rejected", undefined, 1, "1", `sha1:${"1".repeat(40)}`],
+    ],
+  );
+  assert.throws(
+    () => store.recordCoreCandidateRejection({ ...input, summary: "different" }),
+    /check ID was already used/,
+  );
+  assert.throws(
+    () => store.recordCoreCandidateRejection({ ...input, checkId: uuidV7(), summary: "x".repeat(513) }),
+    /outside the registered diagnostic contract/,
+  );
+  assert.equal(store.metadata().lastTransactionSequence, 2);
+  store.close();
+
+  const output = execFileSync(
+    process.execPath,
+    ["--import", "tsx", "src/core/cli.ts", "rejections", "1"],
+    { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, FLUENT_CONTROL_DB: path } },
+  );
+  const cliRows = JSON.parse(output) as Array<Record<string, unknown>>;
+  assert.equal(cliRows.length, 1);
+  assert.equal(cliRows[0]?.checkId, checkId);
+});
+
+test("activate records a bounded source rejection while verify remains outside the target store", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-core-cli-rejection-test-"));
+  const controlPath = join(directory, "control-plane.db");
+  const invalidMirror = join(directory, "not-a-bare-repository");
+  await writeFile(invalidMirror, "not git", "utf8");
+  const environment = {
+    ...process.env,
+    FLUENT_CONTROL_DB: controlPath,
+    FLUENT_CORE_MIRROR: invalidMirror,
+  };
+
+  const verify = spawnSync(process.execPath, ["--import", "tsx", "src/core/cli.ts", "verify"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: environment,
+  });
+  assert.notEqual(verify.status, 0);
+  assert.equal(verify.stdout, "");
+  const untouched = new DatabaseSync(controlPath);
+  assert.equal(
+    Number((untouched.prepare("PRAGMA application_id").get() as { application_id: number }).application_id),
+    0,
+  );
+  untouched.close();
+
+  const activate = spawnSync(process.execPath, ["--import", "tsx", "src/core/cli.ts", "activate", "1"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: environment,
+  });
+  assert.notEqual(activate.status, 0);
+  assert.equal(activate.stdout, "");
+  assert.match(activate.stderr, /Core candidate rejection recorded:/);
+  const store = new ControlPlaneStore(controlPath);
+  const rejections = store.coreCandidateRejections();
+  assert.equal(rejections.length, 1);
+  assert.equal(rejections[0]?.stage, "source");
+  assert.equal(rejections[0]?.code, "source-unavailable");
+  assert.equal(rejections[0]?.commitId, null);
+  store.close();
 });
 
 test("a validated Core candidate is retained and activated atomically with exact retry", async () => {
@@ -111,11 +226,28 @@ test("a validated Core candidate is retained and activated atomically with exact
   assert.equal(successorResult.transactionSequence, 3);
   assert.notEqual(successorResult.snapshotId, activated.snapshotId);
   assert.equal(store.occurrences().filter((occurrence) => occurrence.kind === "core.snapshot-definition").length, 2);
-  assert.equal(store.metadata().lastTransactionSequence, 3);
+  const rejection = store.recordCoreCandidateRejection({
+    checkId: uuidV7(new Date("2026-08-16T13:00:00.000Z")),
+    stage: "persistence",
+    code: "persistence-failed",
+    summary: "A later candidate could not be persisted",
+    details: [],
+    sourceUrl: successor.sourceUrl,
+    sourceRef: successor.ref,
+    commitId: "9".repeat(40),
+    treeId: "8".repeat(40),
+    catalogDigest: successor.catalogDigest,
+  });
+  assert.equal(rejection.transactionSequence, 4);
+  assert.deepEqual(
+    store.activateCoreSnapshot({ candidate: successor, expectedLastTransactionSequence: 2 }),
+    successorResult,
+  );
+  assert.equal(store.metadata().lastTransactionSequence, 4);
   store.close();
 
   const reopened = new ControlPlaneStore(path);
-  assert.equal(reopened.metadata().lastTransactionSequence, 3);
+  assert.equal(reopened.metadata().lastTransactionSequence, 4);
   reopened.close();
 });
 
@@ -133,7 +265,8 @@ test("Core snapshot failure rolls back retained bytes and byte tampering fails c
   const digest = failed.authoritativeDigest();
   assert.throws(
     () => failed.activateCoreSnapshot({ candidate, expectedLastTransactionSequence: 1 }),
-    /injected Core persistence failure/,
+    (error) =>
+      error instanceof CoreSnapshotPersistenceError && /injected Core persistence failure/.test(error.message),
   );
   assert.equal(failed.authoritativeDigest(), digest);
   assert.equal(failed.metadata().lastTransactionSequence, 1);

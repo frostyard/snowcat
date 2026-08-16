@@ -574,6 +574,26 @@ Success measures remain distinct from merged artifacts and slice acceptance.
 
 ### Organization governance
 
+#### Core candidate
+
+One exact bounded `frostyard/core` source revision materialized for validation
+and possible activation. A candidate is staging input and becomes neither
+authority nor a Core snapshot merely because it was fetched or validated.
+
+**Avoid:** Core snapshot; latest branch contents; pending authority.
+([ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md))
+
+#### Core candidate rejection
+
+A non-authoritative observation and audit event that one activation invocation
+could not produce or activate a Core candidate, with bounded sanitized
+diagnostics. Rejection leaves the current Core snapshot authoritative and does
+not imply that a candidate or failed snapshot exists.
+
+**Avoid:** failed snapshot; activation fact; repository hold; terminal failure.
+([ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md),
+[ADR-0037](../adr/0037-store-facts-with-a-separate-event-ledger.md))
+
 #### Core snapshot
 
 One atomic validated import of the canonical `frostyard/core` organization
