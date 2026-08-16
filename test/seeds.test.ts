@@ -8,13 +8,15 @@ import { Worker } from "node:worker_threads";
 import { enqueueDogfoodBatch } from "../src/queue/seeds.ts";
 import { QueueStore } from "../src/queue/store.ts";
 
+const DOGFOOD_REPOSITORY = "frostyard/fluent";
+
 test("the dogfood feeder creates one bounded read-only root per specialty without active duplicates", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fluent-dogfood-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
-  queue.setRepositoryEnabled("bketelsen/fluent", true);
+  queue.setRepositoryEnabled(DOGFOOD_REPOSITORY, true);
 
-  const first = enqueueDogfoodBatch(queue, "bketelsen/fluent");
+  const first = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY);
   assert.deepEqual(
     first.created.map((item) => item.kind),
     ["quality-gap-discovery", "ci-gap-discovery", "security-gap-discovery", "architecture-gap-discovery"],
@@ -27,7 +29,7 @@ test("the dogfood feeder creates one bounded read-only root per specialty withou
     assert.equal(item.parentId, undefined);
   }
 
-  const second = enqueueDogfoodBatch(queue, "bketelsen/fluent");
+  const second = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY);
   assert.deepEqual(second.created, []);
   assert.deepEqual(second.skippedKinds, first.created.map((item) => item.kind));
 
@@ -50,7 +52,7 @@ test("the dogfood feeder creates one bounded read-only root per specialty withou
   });
   assert.equal(completion.followUps[0]?.status, "proposed");
 
-  const third = enqueueDogfoodBatch(queue, "bketelsen/fluent");
+  const third = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY);
   assert.deepEqual(third.created, []);
   assert.deepEqual(third.skippedKinds, first.created.map((item) => item.kind));
 });
@@ -60,12 +62,12 @@ test("the dogfood feeder detects active lineages beyond the 100-row listing cap"
   let tick = 0;
   const queue = new QueueStore(join(directory, "queue.db"), () => new Date(Date.UTC(2026, 7, 15, 0, 0, tick++)));
   test.after(() => queue.close());
-  queue.setRepositoryEnabled("bketelsen/fluent", true);
+  queue.setRepositoryEnabled(DOGFOOD_REPOSITORY, true);
 
   // 101 older, unrelated roots fill the whole 100-row listing window.
   for (let index = 0; index < 101; index += 1) {
     queue.enqueueSeed({
-      repository: "bketelsen/fluent",
+      repository: DOGFOOD_REPOSITORY,
       kind: "filler-review",
       objective: `Filler root ${index}.`,
       instructions: "Read only.",
@@ -75,9 +77,9 @@ test("the dogfood feeder detects active lineages beyond the 100-row listing cap"
       createdBy: "operator:test",
     });
   }
-  assert.equal(queue.list({ repository: "bketelsen/fluent", limit: 100 }).length, 100);
+  assert.equal(queue.list({ repository: DOGFOOD_REPOSITORY, limit: 100 }).length, 100);
 
-  const first = enqueueDogfoodBatch(queue, "bketelsen/fluent");
+  const first = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY);
   assert.equal(first.created.length, 4);
   const quality = queue.claim({ worker: "claude:fluent:dogfood", kinds: ["quality-gap-discovery"] })!;
   const completion = queue.complete({
@@ -98,16 +100,16 @@ test("the dogfood feeder detects active lineages beyond the 100-row listing cap"
   });
   assert.equal(completion.followUps[0]?.status, "proposed");
   // The active dogfood lineages are the newest rows, outside a 100-row window.
-  const window = queue.list({ repository: "bketelsen/fluent", limit: 100 });
+  const window = queue.list({ repository: DOGFOOD_REPOSITORY, limit: 100 });
   assert.equal(window.some((item) => item.kind !== "filler-review"), false);
 
-  const second = enqueueDogfoodBatch(queue, "bketelsen/fluent");
+  const second = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY);
   assert.deepEqual(second.created, []);
   assert.deepEqual(second.skippedKinds, first.created.map((item) => item.kind));
 
   // Once the quality lineage is terminal, only that specialty is offered again.
   queue.reject(completion.followUps[0]!.id, "operator:test", "Not needed.");
-  const third = enqueueDogfoodBatch(queue, "bketelsen/fluent");
+  const third = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY);
   assert.deepEqual(
     third.created.map((item) => item.kind),
     ["quality-gap-discovery"],
@@ -119,11 +121,11 @@ test("an invalid later batch candidate rolls back roots inserted earlier in the 
   const directory = await mkdtemp(join(tmpdir(), "fluent-dogfood-rollback-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
-  queue.setRepositoryEnabled("bketelsen/fluent", true);
+  queue.setRepositoryEnabled(DOGFOOD_REPOSITORY, true);
 
   assert.throws(
     () =>
-      queue.enqueueInactiveRootBatch("bketelsen/fluent", [
+      queue.enqueueInactiveRootBatch(DOGFOOD_REPOSITORY, [
         {
           kind: "quality-gap-discovery",
           objective: "Find one quality gap.",
@@ -145,14 +147,14 @@ test("an invalid later batch candidate rolls back roots inserted earlier in the 
       ]),
     /invalid work kind/,
   );
-  assert.deepEqual(queue.list({ repository: "bketelsen/fluent" }), []);
+  assert.deepEqual(queue.list({ repository: DOGFOOD_REPOSITORY }), []);
 });
 
 test("concurrent dogfood feeders create exactly one active root per specialty", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fluent-dogfood-concurrency-test-"));
   const path = join(directory, "queue.db");
   const setup = new QueueStore(path);
-  setup.setRepositoryEnabled("bketelsen/fluent", true);
+  setup.setRepositoryEnabled(DOGFOOD_REPOSITORY, true);
   setup.close();
 
   const signal = new Int32Array(new SharedArrayBuffer(8));
@@ -166,7 +168,7 @@ test("concurrent dogfood feeders create exactly one active root per specialty", 
       parentPort.postMessage({ ready: true });
       Atomics.wait(workerData.signal, 1, 0);
       try {
-        const result = enqueueDogfoodBatch(queue, "bketelsen/fluent");
+        const result = enqueueDogfoodBatch(queue, workerData.repository);
         parentPort.postMessage({
           ready: false,
           createdKinds: result.created.map((item) => item.kind),
@@ -179,6 +181,7 @@ test("concurrent dogfood feeders create exactly one active root per specialty", 
   `;
   const workerData = {
     path,
+    repository: DOGFOOD_REPOSITORY,
     signal,
     storeUrl: new URL("../src/queue/store.ts", import.meta.url).href,
     seedsUrl: new URL("../src/queue/seeds.ts", import.meta.url).href,
@@ -236,6 +239,6 @@ test("concurrent dogfood feeders create exactly one active root per specialty", 
   );
 
   const verify = new QueueStore(path);
-  assert.equal(verify.list({ repository: "bketelsen/fluent", limit: 100 }).length, 4);
+  assert.equal(verify.list({ repository: DOGFOOD_REPOSITORY, limit: 100 }).length, 4);
   verify.close();
 });

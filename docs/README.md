@@ -59,6 +59,7 @@ Docs are split by the question they answer:
 - [0042 — Use rebuildable projections only as read models](adr/0042-use-rebuildable-projections-only-as-read-models.md)
 - [0043 — Order records by transaction sequence, not timestamps](adr/0043-order-records-by-transaction-sequence-not-timestamps.md)
 - [0044 — Replace the queue spike database](adr/0044-replace-the-queue-spike-database.md)
+- [0045 — Host Fluent under the Frostyard organization](adr/0045-host-fluent-under-frostyard.md)
 
 ### Domain language
 

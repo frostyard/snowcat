@@ -2049,7 +2049,9 @@ imports the spike database.
   with time and record ordering defined by
   [ADR-0043](../adr/0043-order-records-by-transaction-sequence-not-timestamps.md),
   with clean replacement of the queue-spike database defined by
-  [ADR-0044](../adr/0044-replace-the-queue-spike-database.md), and the
+  [ADR-0044](../adr/0044-replace-the-queue-spike-database.md), with canonical
+  source ownership established by
+  [ADR-0045](../adr/0045-host-fluent-under-frostyard.md), and the
   [Fluent ubiquitous language](../domain/ubiquitous-language.md)
 - Designs: [queue execution boundary](../design/queue-execution-boundary.md)
   and [control-plane kernel](../design/control-plane-kernel.md)

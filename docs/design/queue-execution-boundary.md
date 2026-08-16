@@ -111,7 +111,10 @@ source can establish that an artifact exists and has the reported state.
 
 ### Trial findings
 
-The first host-local trial used `bketelsen/fluent`. One Claude invocation
+The first host-local trial used the then-current `bketelsen/fluent` locator.
+The same repository identity was transferred to canonical `frostyard/fluent`
+on 2026-08-16 under
+[ADR-0045](../adr/0045-host-fluent-under-frostyard.md). One Claude invocation
 completed a testing-gap discovery in about 44 seconds and created one bounded
 implementation child. A second invocation completed the child in about 79
 seconds, added artifact-authorization tests, created no grandchildren, and
@@ -207,3 +210,5 @@ operator step the guard cannot perform.
 - Replacement decision and plan:
   [ADR-0044](../adr/0044-replace-the-queue-spike-database.md) and
   [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md)
+- Source repository ownership:
+  [ADR-0045](../adr/0045-host-fluent-under-frostyard.md)

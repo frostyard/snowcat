@@ -7,6 +7,10 @@ phase begins, that phase must author and link its current design and implementin
 spec; this roadmap does not describe unimplemented architecture as current
 reality.
 
+Fluent's canonical source is `frostyard/fluent` under
+[ADR-0045](../adr/0045-host-fluent-under-frostyard.md). Organization ownership
+does not itself enroll the repository in the fleet.
+
 ## Phase 0 — Canonical language and documentation integrity (completed)
 
 - Establish the canonical
@@ -286,4 +290,6 @@ reality.
   with record order and time semantics from
   [ADR-0043](../adr/0043-order-records-by-transaction-sequence-not-timestamps.md),
   and clean replacement of the queue-spike database from
-  [ADR-0044](../adr/0044-replace-the-queue-spike-database.md)
+  [ADR-0044](../adr/0044-replace-the-queue-spike-database.md), with canonical
+  source ownership established by
+  [ADR-0045](../adr/0045-host-fluent-under-frostyard.md)

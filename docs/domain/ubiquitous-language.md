@@ -694,7 +694,8 @@ reconciliation. The owner/name slug is a mutable display and routing locator,
 not stable identity.
 
 **Avoid:** repository slug as immutable identity; local checkout path.
-([ADR-0018](../adr/0018-bind-worker-sessions-and-verify-github-artifacts.md))
+([ADR-0018](../adr/0018-bind-worker-sessions-and-verify-github-artifacts.md),
+[ADR-0045](../adr/0045-host-fluent-under-frostyard.md))
 
 #### Risk tier
 

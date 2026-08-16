@@ -5,6 +5,10 @@ maintain opted-in repositories in a GitHub organization. It is being designed
 for Frostyard first, with repository-scoped workstreams, shared maintenance
 specialties, organization-level direction, and portable agent instructions.
 
+The canonical source repository is
+[`frostyard/fluent`](https://github.com/frostyard/fluent), as recorded in
+[ADR-0045](docs/adr/0045-host-fluent-under-frostyard.md).
+
 The product definition is still being refined. Start with the
 [documentation index](docs/README.md) and the
 [discovery PRD](docs/prd/agent-fleet.md).

@@ -49,7 +49,9 @@ without Fluent managing that client or its credentials.
   discovery result and a second invocation completes or deliberately blocks
   its child, with full queue lineage and no Fluent-managed client process.
 
-Observed on 2026-08-14 with `bketelsen/fluent`:
+Observed on 2026-08-14 with the then-current `bketelsen/fluent` locator; the
+same repository identity moved to canonical `frostyard/fluent` on 2026-08-16
+under [ADR-0045](../adr/0045-host-fluent-under-frostyard.md):
 
 - Discovery completed in about 44 seconds and created one bounded child.
 - Implementation completed in about 79 seconds, created no grandchildren, and
@@ -199,3 +201,5 @@ release, stale-token rejection, and reclaim by another worker. The full Node
 - Successor: [control-plane kernel bootstrap](control-plane-kernel-bootstrap.md)
   under [ADR-0044](../adr/0044-replace-the-queue-spike-database.md); spike rows
   are archived rather than imported at target cutover
+- Current source ownership:
+  [ADR-0045](../adr/0045-host-fluent-under-frostyard.md)
