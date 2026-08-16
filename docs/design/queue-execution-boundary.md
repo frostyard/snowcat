@@ -141,6 +141,11 @@ operator step the guard cannot perform.
 
 - `FLUENT_QUEUE_DB` selects the application queue database. SQLite assumes one
   host and uses WAL mode.
+- Each queue connection installs its busy timeout as an SQLite open option,
+  before reading or negotiating journal mode. Reopening an existing WAL
+  database does not renegotiate the mode, so concurrent CLI, MCP, and feeder
+  startup tolerates a connection finishing a write transaction instead of
+  failing immediately with `SQLITE_BUSY`.
 - Opening a database that is already at the current schema version performs no
   schema writes: `list`, `get`, and server start-up do not take the write lock
   or rebuild indexes. Migration runs once, inside a single transaction, when

@@ -64,13 +64,18 @@ export class QueueStore {
     private readonly clock: () => Date = () => new Date(),
   ) {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
-    this.db = new DatabaseSync(path);
-    this.db.exec("PRAGMA journal_mode = WAL");
+    // Install the busy handler while SQLite opens the connection. Setting it
+    // later with PRAGMA leaves journal-mode negotiation and startup reads able
+    // to fail immediately when another process is closing a write transaction.
+    this.db = new DatabaseSync(path, { timeout: BUSY_TIMEOUT_MS });
+    const journalMode = this.db.prepare("PRAGMA journal_mode").get() as Row | undefined;
+    if (String(journalMode?.journal_mode).toLowerCase() !== "wal") {
+      this.db.exec("PRAGMA journal_mode = WAL");
+    }
     this.db.exec("PRAGMA foreign_keys = ON");
     // Each MCP server process and CLI invocation opens its own connection to the
     // shared queue file, so brief write contention is normal; wait for the lock
     // instead of failing immediately with SQLITE_BUSY.
-    this.db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
     this.assertSupportedSchemaVersion();
     this.migrate();
   }

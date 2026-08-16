@@ -719,6 +719,41 @@ test("two stores on one database file both write, and a writer waits out another
   assert.equal(seedTestingGap(second, "frostyard/lodge").status, "queued");
 });
 
+test("queue startup installs its busy timeout before journal-mode negotiation", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-startup-timeout-test-"));
+  const path = join(directory, "queue.db");
+  const bootstrap = new DatabaseSync(path);
+  bootstrap.exec("CREATE TABLE bootstrap_marker (value INTEGER NOT NULL)");
+  bootstrap.close();
+
+  const HOLD_MS = 400;
+  const signal = new Int32Array(new SharedArrayBuffer(4));
+  const holder = new Worker(
+    `(async () => {
+       const { workerData } = await import("node:worker_threads");
+       const { DatabaseSync } = await import("node:sqlite");
+       const db = new DatabaseSync(workerData.path);
+       db.exec("BEGIN EXCLUSIVE");
+       Atomics.store(workerData.signal, 0, 1);
+       Atomics.notify(workerData.signal, 0);
+       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, workerData.holdMs);
+       db.exec("COMMIT");
+       db.close();
+     })();`,
+    { eval: true, workerData: { path, signal, holdMs: HOLD_MS } },
+  );
+  const exited = new Promise<number>((resolve) => holder.once("exit", resolve));
+  assert.equal(Atomics.wait(signal, 0, 0, 5000), "ok");
+
+  const started = Date.now();
+  const queue = new QueueStore(path);
+  const waited = Date.now() - started;
+  assert.ok(waited >= HOLD_MS - 50, `startup should have waited for the lock, waited ${waited}ms`);
+  assert.equal(queue.schemaVersion(), SCHEMA_VERSION);
+  queue.close();
+  assert.equal(await exited, 0);
+});
+
 test("scheduling priority is operator-owned: workers cannot set it and children inherit it", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fluent-priority-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
