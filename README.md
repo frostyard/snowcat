@@ -35,15 +35,18 @@ The backup command prints its manifest to stdout. Save that JSON separately for
 new path and never replaces the live database.
 
 Verify the currently supported `frostyard/core` authority slice without
-activating it or changing the control-plane database:
+changing the control-plane database, or atomically retain and activate it at an
+observed target sequence:
 
 ```bash
 npm run --silent core -- verify
+npm run --silent core -- activate 1
 ```
 
 This uses a host-local bare mirror and emits the exact commit, tree, catalog,
 schema, fixture, and repository-declaration identities. A valid report is a
-candidate inspection, not enrollment.
+candidate inspection, not enrollment. Activation creates a retained snapshot
+and current-authority fact, still not repository enrollment or work.
 
 ## Queue spike
 

@@ -60,6 +60,11 @@ removed. -->
   [`src/core/git-source.ts`](src/core/git-source.ts). Verification is read-only
   with respect to the control plane: it never activates a Core snapshot,
   creates enrollment, or writes `FLUENT_CONTROL_DB`.
+- Use `npm run --silent core -- activate <expected-control-plane-sequence>` for
+  the only implemented Core authority mutation. It independently revalidates
+  and atomically retains/activates one candidate through the typed handler in
+  [`src/control/store.ts`](src/control/store.ts); it still creates no enrollment
+  or work.
 - Keep the target control-plane store separate from the disposable queue-spike
   store. Target schema and startup live in
   [`src/control/store.ts`](src/control/store.ts); closed vocabulary lives only

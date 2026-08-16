@@ -1855,15 +1855,19 @@ under the exact [kernel specification](../specs/control-plane-kernel.md). Online
 backup and create-only restore staging bind lineage, canonical authoritative
 content, and a highest-visible sequence fence so an older restore cannot reuse
 transaction order. A host-local JSON CLI exposes only those implemented
-diagnostics and recovery operations. The kernel does not yet implement a target work, fact,
-operational-state, controller, or worker mutation path and never reads or
-imports the spike database.
+diagnostics and recovery operations. The kernel now also implements the first
+bounded fact path: exact verified Core bytes are retained as immutable snapshots
+and selected through an atomic, idempotent active-snapshot fact under the
+[activation contract](../specs/core-snapshot-activation.md). That path creates
+neither enrollment nor work. The kernel does not yet implement a target work,
+general fact, operational-state, controller, or worker mutation path and never
+reads or imports the spike database.
 
 ### Remaining design and delivery tracks
 
 | Track | What remains before implementation is well specified |
 | --- | --- |
-| Core contract and migration | Exact JSON Schemas and fixtures, ownership and precedence, initial core PRs, canonical-surface migrations, atomic importer contract, and enrollment reconciliation |
+| Core contract and migration | Remaining organization JSON Schemas and fixtures, canonical-surface migrations, rejected-candidate diagnostics, continuity/freshness/rollback controls, and enrollment reconciliation |
 | Control-plane domain model | Execute the [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md): specify exact durable schemas, predicates, reducers, events, projections, invalidation, idempotency, and state machines in a fresh target database shared by RepositoryController, FleetController, ProcessObserver, scheduling, and decisions |
 | GitHub observation | GitHub App permissions, installation and actor mapping, CI/review/merge and artifact reconciliation, polling versus webhooks, forks, outage behavior, and external decision signals |
 | Workflow contracts | Versioned role briefs, evidence schemas, skills, attempt budgets, and deterministic gates for maintenance, planning, review, implementation, repair, and verification |
@@ -2058,7 +2062,8 @@ imports the spike database.
   [core snapshot ingestion](../design/core-snapshot-ingestion.md)
 - Contracts: [work queue](../specs/work-queue.md),
   [control-plane kernel](../specs/control-plane-kernel.md), and
-  [core snapshot verification](../specs/core-snapshot-verification.md)
+  [core snapshot verification](../specs/core-snapshot-verification.md), plus
+  [Core snapshot activation](../specs/core-snapshot-activation.md)
 - Delivery: [queue vertical spike](../plans/queue-vertical-spike.md),
   [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md),
   [core snapshot ingestion](../plans/core-snapshot-ingestion.md), and

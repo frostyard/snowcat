@@ -583,6 +583,17 @@ retains the prior one; individual files never become authority independently.
 **Avoid:** latest branch contents; arbitrary core prose; partial import.
 ([ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md))
 
+#### Core snapshot activation
+
+The authority act that selects one retained Core snapshot as the current
+organization authority for one Fluent deployment. Activation is distinct from
+fetching, validation, importing bytes, following the latest branch, and
+repository enrollment.
+
+**Avoid:** successful validation; latest core; enrollment; mutable pointer.
+([ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md),
+[ADR-0040](../adr/0040-establish-facts-through-registered-predicate-contracts.md))
+
 #### Organization record
 
 A strict versioned JSON record in core with common identity, lifecycle,

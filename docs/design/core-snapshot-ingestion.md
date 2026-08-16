@@ -4,16 +4,18 @@ Living document. Rationale:
 [ADR-0007](../adr/0007-use-frostyard-core-as-the-organization-authority.md),
 [ADR-0013](../adr/0013-author-organization-records-as-strict-json.md), and
 [ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md).
-Contracts: [core snapshot verification](../specs/core-snapshot-verification.md).
+Contracts: [core snapshot verification](../specs/core-snapshot-verification.md)
+and [Core snapshot activation](../specs/core-snapshot-activation.md).
 
 ## Overview
 
 Core snapshot ingestion is the deterministic boundary between the mutable
-`frostyard/core` branch and future Fluent authority. The implemented first
-slice fetches one exact commit into a bare mirror, reads only its Git tree and
-blob objects under `organization/`, validates the complete supported contract,
-and emits a content-addressed candidate catalog. It does not write the
-control-plane database, activate a Core snapshot, or create enrollment.
+`frostyard/core` branch and Fluent authority. The implemented path fetches one
+exact commit into a bare mirror, reads only its Git tree and blob objects under
+`organization/`, validates the complete supported contract, and emits a
+content-addressed candidate catalog. A separate typed command reruns validation,
+retains the exact catalog in the target database, and atomically selects it as
+current authority. Neither verification nor activation creates enrollment.
 
 ```text
 frostyard/core refs/heads/main
@@ -26,6 +28,12 @@ frostyard/core refs/heads/main
               │
               ├──► rejected candidate diagnostics
               └──► immutable candidate summary (not authority)
+                              │ typed command; optimistic sequence
+                              ▼
+                 retained Core snapshot + activation fact
+                              │ one SQLite transaction
+                              ▼
+                   checked active-snapshot pointer
 ```
 
 ## Design
@@ -81,18 +89,54 @@ The bare mirror and JSON report are staging artifacts, not facts, projections,
 or active authority. Re-running verification is safe and does not allocate a
 control-plane transaction.
 
+### Atomic retention and activation
+
+[`ControlPlaneStore.activateCoreSnapshot`](../../src/control/store.ts) is the
+only implemented authority transition. It takes the expected current control-
+plane sequence and a fully materialized candidate, acquires the writer lock,
+checks for an exact retry, validates the target database, and reruns the Core
+validator over the candidate bytes. The internal candidate report is compared
+with that independent result; callers cannot manufacture a catalog by editing
+summary fields.
+
+The source is the immutable GitHub repository identity
+`github.com:1331309458`, with its exact commit as a typed source revision. Each
+accepted catalog receives a new Fluent-native `core-snapshot` UUIDv7 subject.
+Its creation transaction emits a snapshot definition, an active-snapshot fact
+on the control-plane database subject, and a past-tense activation event. The
+active fact's registered latest-transaction precedence is authority; the
+singleton table is a checked efficient pointer to it.
+
+The same transaction retains every recognized file's raw bytes and Git/content
+identity, a canonical parsed copy of each live repository declaration, the
+validation report carried by the snapshot definition, occurrence and source
+lineage, an indefinitely retained idempotency receipt, and advanced metadata
+watermarks. The pointer moves last. Any failure rolls back all of these writes,
+including SQLite's sequence allocation. Prior snapshots remain immutable and
+available after another commit activates.
+
+Startup revalidates the durable envelope and source vocabulary, recomputes each
+file and complete catalog digest, checks parsed declarations against raw bytes,
+and requires the pointer to name the latest accepted activation fact. Raw bytes
+are transitively covered by the authoritative database digest through their
+verified content digests, while disposable projections remain excluded.
+
 ## Operational notes
 
 - Run `npm run --silent core -- verify`. Success writes one JSON value to
   stdout; diagnostics and Git/Node warnings use stderr.
+- Run `npm run --silent core -- activate <expected-control-plane-sequence>` to
+  persist and select that fetched candidate. Equivalent retry uses the original
+  expected sequence and returns its original result.
 - `FLUENT_CORE_URL`, `FLUENT_CORE_REF`, and `FLUENT_CORE_MIRROR` select the
   exact allowed source, branch ref, and host-local mirror path.
 - A valid report proves compatibility with the implemented repository-authority
   slice only. Core roadmap record kinds that do not yet exist remain unsupported
   and any unknown `organization/` path fails closed.
-- A failed fetch or validation leaves no last-known-good state in this slice.
-  Durable candidate diagnostics, atomic activation, ancestry checks, freshness,
-  rollback authority, and polling belong to later phases of the
+- A failed fetch or validation before the first activation leaves no last-known-
+  good state. Atomic activation now preserves an existing current snapshot;
+  durable rejected-candidate diagnostics, ancestry checks, freshness, rollback
+  authority, and polling belong to later phases of the
   [ingestion plan](../plans/core-snapshot-ingestion.md).
 - The mirror contains organization-governed data and should be backed up and
   permissioned as an `organization` asset. It must never be mounted as an
@@ -105,6 +149,7 @@ control-plane transaction.
   [ADR-0013](../adr/0013-author-organization-records-as-strict-json.md),
   [ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md), and
   [ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md)
-- Contract: [core snapshot verification](../specs/core-snapshot-verification.md)
-- Built in: [core snapshot ingestion — Phase 1](../plans/core-snapshot-ingestion.md)
+- Contracts: [core snapshot verification](../specs/core-snapshot-verification.md)
+  and [Core snapshot activation](../specs/core-snapshot-activation.md)
+- Built in: [Core snapshot ingestion — Phases 1–2](../plans/core-snapshot-ingestion.md)
 - Product: [GitHub organization agent fleet](../prd/agent-fleet.md)

@@ -77,9 +77,10 @@ does not itself enroll the repository in the fleet.
   exact current slice through the
   [core snapshot ingestion design](../design/core-snapshot-ingestion.md),
   [verification contract](../specs/core-snapshot-verification.md), and
-  [ingestion plan](core-snapshot-ingestion.md); it does not treat the disabled
-  fixture declaration as enrollment. The remaining record kinds below keep
-  this phase open.
+  [activation contract](../specs/core-snapshot-activation.md), and
+  [ingestion plan](core-snapshot-ingestion.md). Fluent can now retain and
+  activate the disabled fixture declaration without treating it as enrollment.
+  The remaining record kinds below keep this phase open.
 - In `frostyard/core`, record the required core-side ADR that changes its current
   repository boundary, then author the canonical paths and strict schemas from
   [ADRs 0007–0017](../adr/0007-use-frostyard-core-as-the-organization-authority.md)

@@ -29,6 +29,7 @@ export interface InspectedCoreCandidate extends ValidatedCoreCatalog {
   ref: string;
   commitId: string;
   treeId: string;
+  files: CoreTreeEntry[];
 }
 
 export function coreGitSourceConfig(): CoreGitSourceConfig {
@@ -94,6 +95,7 @@ export async function inspectCoreCandidate(config: CoreGitSourceConfig): Promise
     ref: config.ref,
     commitId,
     treeId,
+    files: entries,
     ...validateCoreCatalog(entries),
   };
 }

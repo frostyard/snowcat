@@ -1,8 +1,11 @@
 import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { backup as sqliteBackup, DatabaseSync, type SQLInputValue } from "node:sqlite";
 
 import { canonicalJson, isUuidV7, sha256, uuidV7, type JsonValue } from "./encoding.ts";
+import { validateCoreCatalog, type CoreTreeEntry } from "../core/validator.ts";
+import type { InspectedCoreCandidate } from "../core/git-source.ts";
 import {
   CONTROL_PLANE_APPLICATION_ID,
   CONTROL_PLANE_REGISTRY_VERSION,
@@ -10,6 +13,7 @@ import {
   assertInformationClass,
   assertRevision,
   assertSource,
+  assertSourceRevision,
   assertSubject,
   commandKindRegistry,
   eventKindRegistry,
@@ -27,6 +31,9 @@ type Row = Record<string, SQLInputValue>;
 
 const BUSY_TIMEOUT_MS = 5_000;
 const TARGET_TABLES = [
+  "core_active_snapshot",
+  "core_snapshot_files",
+  "core_snapshots",
   "control_plane_metadata",
   "control_transactions",
   "durable_occurrences",
@@ -42,7 +49,10 @@ const TARGET_TABLES = [
 const SPIKE_TABLES = new Set(["repositories", "work_items", "work_events"]);
 const IDEMPOTENCY_RETAINED_UNTIL = "9999-12-31T23:59:59.999Z";
 
-export type ControlPlaneFaultPoint = "after-integrity-observation" | "after-projection-shadow-write";
+export type ControlPlaneFaultPoint =
+  | "after-core-snapshot-files"
+  | "after-integrity-observation"
+  | "after-projection-shadow-write";
 
 export interface ControlPlaneMetadata {
   applicationId: number;
@@ -67,6 +77,8 @@ export interface DurableOccurrence {
   revisionValue?: string;
   sourceKind: string;
   sourceId: string;
+  sourceRevisionKind?: string;
+  sourceRevisionValue?: string;
   informationClass: InformationClass;
   informationScope: JsonValue;
   payload: JsonValue;
@@ -90,6 +102,23 @@ export interface IntegrityCheckResult {
   recordedTime: string;
   result: "ok";
   transactionPositions: readonly [0, 1];
+  transactionSequence: number;
+}
+
+export interface CoreSnapshotActivationInput {
+  candidate: InspectedCoreCandidate;
+  expectedLastTransactionSequence: number;
+}
+
+export interface CoreSnapshotActivationResult {
+  snapshotId: string;
+  definitionRecordId: string;
+  activeFactRecordId: string;
+  eventRecordId: string;
+  catalogDigest: string;
+  sourceCommitId: string;
+  importedAt: string;
+  transactionPositions: readonly [0, 1, 2];
   transactionSequence: number;
 }
 
@@ -268,6 +297,12 @@ export class ControlPlaneStore {
         `SELECT * FROM idempotency_receipts
          ORDER BY command_scope, command_kind, command_schema_version, idempotency_key`,
       ),
+      coreSnapshots: this.queryJsonRows("SELECT * FROM core_snapshots ORDER BY activated_transaction_sequence"),
+      coreSnapshotFiles: this.queryJsonRows(
+        `SELECT snapshot_id, path, mode, object_id, byte_size, content_digest, parsed_json
+         FROM core_snapshot_files ORDER BY snapshot_id, path`,
+      ),
+      coreActiveSnapshot: this.queryJsonRows("SELECT * FROM core_active_snapshot ORDER BY singleton"),
       transactionAllocation: this.sqliteTransactionAllocation(),
     } satisfies JsonValue;
     return sha256(canonicalJson(content));
@@ -649,6 +684,278 @@ export class ControlPlaneStore {
     }
   }
 
+  activateCoreSnapshot(input: CoreSnapshotActivationInput): CoreSnapshotActivationResult {
+    if (!Number.isSafeInteger(input.expectedLastTransactionSequence) || input.expectedLastTransactionSequence < 1) {
+      throw new Error("expectedLastTransactionSequence must be a positive safe integer");
+    }
+    const candidate = input.candidate;
+    assertMaterializedCoreCandidate(candidate);
+    const validated = validateCoreCatalog(candidate.files);
+    assertCandidateReport(candidate, validated);
+    const idempotencyKey = `core-activate:${candidate.commitId}`;
+    const commandPayloadJson = canonicalJson({
+      catalogDigest: validated.catalogDigest,
+      expectedLastTransactionSequence: input.expectedLastTransactionSequence,
+      sourceCommitId: candidate.commitId,
+      sourceRef: candidate.ref,
+      sourceTreeId: candidate.treeId,
+      sourceUrl: candidate.sourceUrl,
+    });
+    const commandPayloadDigest = sha256(commandPayloadJson);
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.verifyExisting(this.applicationTables());
+      const metadata = this.metadata();
+      const commandScope = `database:${metadata.databaseLineageId}`;
+      const prior = this.db
+        .prepare(
+          `SELECT payload_digest, result_json
+           FROM idempotency_receipts
+           WHERE command_scope = ? AND command_kind = 'core.activate-snapshot'
+             AND command_schema_version = 1 AND idempotency_key = ?`,
+        )
+        .get(commandScope, idempotencyKey) as Row | undefined;
+      if (prior) {
+        if (String(prior.payload_digest) !== commandPayloadDigest) {
+          throw new Error("Core commit was already activated with a different command payload");
+        }
+        const result = parseCoreSnapshotActivationResult(parseJson(String(prior.result_json)));
+        this.db.exec("COMMIT");
+        return result;
+      }
+
+      const evaluationTime = this.now();
+      if (evaluationTime < metadata.controlTimeWatermark) {
+        throw new Error(
+          `control-plane clock moved backwards behind ${metadata.controlTimeWatermark}; refusing a new write transaction`,
+        );
+      }
+      if (metadata.lastTransactionSequence !== input.expectedLastTransactionSequence) {
+        throw new Error(
+          `stale control-plane sequence: expected ${input.expectedLastTransactionSequence}, current ${metadata.lastTransactionSequence}`,
+        );
+      }
+
+      const snapshotId = uuidV7(new Date(evaluationTime));
+      const transactionId = uuidV7(new Date(evaluationTime));
+      const definitionRecordId = uuidV7(new Date(evaluationTime));
+      const activeFactRecordId = uuidV7(new Date(evaluationTime));
+      const eventRecordId = uuidV7(new Date(evaluationTime));
+      const correlationId = uuidV7(new Date(evaluationTime));
+      const definitionPayload = {
+        snapshotId,
+        sourceRepositoryId: "github.com:1331309458",
+        sourceUrl: candidate.sourceUrl,
+        sourceRef: candidate.ref,
+        sourceCommitId: candidate.commitId,
+        sourceTreeId: candidate.treeId,
+        catalogDigest: validated.catalogDigest,
+        fileCount: validated.fileCount,
+        totalBytes: validated.totalBytes,
+        repositoryCount: validated.repositoryCount,
+        validFixtureCount: validated.validFixtureCount,
+        invalidFixtureCount: validated.invalidFixtureCount,
+        schemaDigests: validated.schemaDigests,
+        importedAt: evaluationTime,
+      } satisfies JsonValue;
+      if (!recordKindRegistry["core.snapshot-definition"].validatePayload(definitionPayload)) {
+        throw new Error("Core candidate source or validation report is outside the activation contract");
+      }
+      const activePayload = {
+        databaseLineageId: metadata.databaseLineageId,
+        snapshotId,
+        catalogDigest: validated.catalogDigest,
+        sourceCommitId: candidate.commitId,
+        activatedAt: evaluationTime,
+      } satisfies JsonValue;
+      const definitionPayloadJson = canonicalJson(definitionPayload);
+      const definitionPayloadDigest = sha256(definitionPayloadJson);
+      const activePayloadJson = canonicalJson(activePayload);
+      const activePayloadDigest = sha256(activePayloadJson);
+      const informationScopeJson = canonicalJson({ deploymentId: metadata.databaseLineageId });
+
+      const transaction = this.db
+        .prepare(
+          `INSERT INTO control_transactions (
+             transaction_id, command_kind, command_schema_version, principal_kind,
+             principal_id, session_id, idempotency_key, payload_digest,
+             evaluation_time, recorded_at
+           ) VALUES (?, 'core.activate-snapshot', 1, 'fluent-system', 'kernel', NULL, ?, ?, ?, ?)`,
+        )
+        .run(transactionId, idempotencyKey, commandPayloadDigest, evaluationTime, evaluationTime);
+      const sequence = Number(transaction.lastInsertRowid);
+      this.db
+        .prepare(
+          `INSERT INTO subjects (subject_kind, subject_id, created_transaction_sequence)
+           VALUES ('core-snapshot', ?, ?)`,
+        )
+        .run(snapshotId, sequence);
+      const source = {
+        sourceKind: "github-repository",
+        sourceId: "github.com:1331309458",
+        sourceRevisionKind: "git-commit-sha1",
+        sourceRevisionValue: `sha1:${candidate.commitId}`,
+      };
+      this.insertOccurrence({
+        recordId: definitionRecordId,
+        occurrenceType: "record",
+        kind: "core.snapshot-definition",
+        schemaVersion: 1,
+        recordClass: "definition",
+        subjectKind: "core-snapshot",
+        subjectId: snapshotId,
+        revisionKind: "core-catalog-sha256",
+        revisionValue: validated.catalogDigest,
+        ...source,
+        informationClass: "organization",
+        informationScopeJson,
+        payloadJson: definitionPayloadJson,
+        payloadDigest: definitionPayloadDigest,
+        correlationId,
+        transactionSequence: sequence,
+        transactionPosition: 0,
+        recordedAt: evaluationTime,
+      });
+      this.insertOccurrence({
+        recordId: activeFactRecordId,
+        occurrenceType: "record",
+        kind: "core.snapshot-active",
+        schemaVersion: 1,
+        recordClass: "fact",
+        subjectKind: "control-plane-database",
+        subjectId: metadata.databaseLineageId,
+        revisionKind: "transaction-sequence",
+        revisionValue: String(sequence),
+        ...source,
+        informationClass: "organization",
+        informationScopeJson,
+        payloadJson: activePayloadJson,
+        payloadDigest: activePayloadDigest,
+        correlationId,
+        transactionSequence: sequence,
+        transactionPosition: 1,
+        recordedAt: evaluationTime,
+      });
+      this.insertOccurrence({
+        recordId: eventRecordId,
+        occurrenceType: "event",
+        kind: "core.snapshot-activated",
+        schemaVersion: 1,
+        subjectKind: "core-snapshot",
+        subjectId: snapshotId,
+        revisionKind: "core-catalog-sha256",
+        revisionValue: validated.catalogDigest,
+        ...source,
+        informationClass: "organization",
+        informationScopeJson,
+        payloadJson: activePayloadJson,
+        payloadDigest: activePayloadDigest,
+        correlationId,
+        transactionSequence: sequence,
+        transactionPosition: 2,
+        recordedAt: evaluationTime,
+      });
+      this.db
+        .prepare(
+          `INSERT INTO core_snapshots (
+             snapshot_id, snapshot_kind, source_kind, source_id, source_url, source_ref,
+             source_commit_id, source_tree_id, catalog_digest, imported_at,
+             definition_record_id, active_fact_record_id, activation_event_record_id,
+             activated_transaction_sequence
+           ) VALUES (?, 'core-snapshot', 'github-repository', 'github.com:1331309458', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          snapshotId,
+          candidate.sourceUrl,
+          candidate.ref,
+          candidate.commitId,
+          candidate.treeId,
+          validated.catalogDigest,
+          evaluationTime,
+          definitionRecordId,
+          activeFactRecordId,
+          eventRecordId,
+          sequence,
+        );
+      const insertFile = this.db.prepare(
+        `INSERT INTO core_snapshot_files (
+           snapshot_id, path, mode, object_id, byte_size, content_digest, parsed_json, raw_bytes
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      const parsedRepositories = new Map(
+        validated.repositories.map((repository) => [
+          repository.path,
+          canonicalJson(repository.declaration as unknown as JsonValue),
+        ]),
+      );
+      for (const file of [...candidate.files].sort((left, right) => left.path.localeCompare(right.path))) {
+        insertFile.run(
+          snapshotId,
+          file.path,
+          file.mode,
+          file.objectId,
+          file.bytes.byteLength,
+          sha256Bytes(file.bytes),
+          parsedRepositories.get(file.path) ?? null,
+          file.bytes,
+        );
+      }
+      this.faultInjector?.("after-core-snapshot-files");
+      this.db
+        .prepare(
+          `INSERT INTO core_active_snapshot (
+             singleton, snapshot_id, fact_record_id, activated_transaction_sequence, activated_at
+           ) VALUES (1, ?, ?, ?, ?)
+           ON CONFLICT(singleton) DO UPDATE SET
+             snapshot_id = excluded.snapshot_id,
+             fact_record_id = excluded.fact_record_id,
+             activated_transaction_sequence = excluded.activated_transaction_sequence,
+             activated_at = excluded.activated_at`,
+        )
+        .run(snapshotId, activeFactRecordId, sequence, evaluationTime);
+
+      const result: CoreSnapshotActivationResult = {
+        snapshotId,
+        definitionRecordId,
+        activeFactRecordId,
+        eventRecordId,
+        catalogDigest: validated.catalogDigest,
+        sourceCommitId: candidate.commitId,
+        importedAt: evaluationTime,
+        transactionPositions: [0, 1, 2],
+        transactionSequence: sequence,
+      };
+      this.db
+        .prepare(
+          `INSERT INTO idempotency_receipts (
+             command_scope, command_kind, command_schema_version, idempotency_key,
+             payload_digest, result_json, transaction_sequence, retained_until
+           ) VALUES (?, 'core.activate-snapshot', 1, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          commandScope,
+          idempotencyKey,
+          commandPayloadDigest,
+          canonicalJson(result as unknown as JsonValue),
+          sequence,
+          IDEMPOTENCY_RETAINED_UNTIL,
+        );
+      this.db
+        .prepare(
+          `UPDATE control_plane_metadata
+           SET control_time_watermark = ?, last_transaction_sequence = ?
+           WHERE singleton = 1`,
+        )
+        .run(evaluationTime, sequence);
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   private initialize(): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -891,6 +1198,44 @@ export class ControlPlaneStore {
         PRIMARY KEY (command_scope, command_kind, command_schema_version, idempotency_key)
       );
 
+      CREATE TABLE core_snapshots (
+        snapshot_id TEXT PRIMARY KEY,
+        snapshot_kind TEXT NOT NULL CHECK (snapshot_kind = 'core-snapshot'),
+        source_kind TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        source_url TEXT NOT NULL,
+        source_ref TEXT NOT NULL,
+        source_commit_id TEXT NOT NULL,
+        source_tree_id TEXT NOT NULL,
+        catalog_digest TEXT NOT NULL,
+        imported_at TEXT NOT NULL,
+        definition_record_id TEXT NOT NULL UNIQUE REFERENCES durable_records(record_id),
+        active_fact_record_id TEXT NOT NULL UNIQUE REFERENCES durable_records(record_id),
+        activation_event_record_id TEXT NOT NULL UNIQUE REFERENCES event_ledger(record_id),
+        activated_transaction_sequence INTEGER NOT NULL UNIQUE REFERENCES control_transactions(sequence),
+        FOREIGN KEY (snapshot_kind, snapshot_id) REFERENCES subjects(subject_kind, subject_id)
+      );
+
+      CREATE TABLE core_snapshot_files (
+        snapshot_id TEXT NOT NULL REFERENCES core_snapshots(snapshot_id),
+        path TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        object_id TEXT NOT NULL,
+        byte_size INTEGER NOT NULL CHECK (byte_size >= 0),
+        content_digest TEXT NOT NULL,
+        parsed_json TEXT,
+        raw_bytes BLOB NOT NULL,
+        PRIMARY KEY (snapshot_id, path)
+      );
+
+      CREATE TABLE core_active_snapshot (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        snapshot_id TEXT NOT NULL UNIQUE REFERENCES core_snapshots(snapshot_id),
+        fact_record_id TEXT NOT NULL UNIQUE REFERENCES durable_records(record_id),
+        activated_transaction_sequence INTEGER NOT NULL UNIQUE REFERENCES control_transactions(sequence),
+        activated_at TEXT NOT NULL
+      );
+
       CREATE TABLE projection_generations (
         generation_id TEXT PRIMARY KEY,
         projection_name TEXT NOT NULL,
@@ -956,6 +1301,8 @@ export class ControlPlaneStore {
     revisionValue?: string;
     sourceKind: string;
     sourceId: string;
+    sourceRevisionKind?: string;
+    sourceRevisionValue?: string;
     informationClass: InformationClass;
     informationScopeJson: string;
     payloadJson: string;
@@ -970,9 +1317,10 @@ export class ControlPlaneStore {
         `INSERT INTO durable_occurrences (
            record_id, occurrence_type, kind, schema_version, subject_kind, subject_id,
            revision_kind, revision_value, source_kind, source_id,
+           source_revision_kind, source_revision_value,
            information_class, information_scope_json, payload_json, payload_digest,
            correlation_id, transaction_sequence, transaction_position, recorded_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.recordId,
@@ -985,6 +1333,8 @@ export class ControlPlaneStore {
         input.revisionValue ?? null,
         input.sourceKind,
         input.sourceId,
+        input.sourceRevisionKind ?? null,
+        input.sourceRevisionValue ?? null,
         input.informationClass,
         input.informationScopeJson,
         input.payloadJson,
@@ -1372,6 +1722,7 @@ export class ControlPlaneStore {
     if (metadata.controlTimeWatermark < metadata.createdAt) throw new Error("control-time watermark predates database creation");
     this.verifyTransactions();
     this.verifyRegistryReferences();
+    this.verifyCoreSnapshots();
     this.verifyIdempotencyReceipts();
     if (verifyProjectionCatalog) this.verifyProjectionCatalog();
   }
@@ -1448,6 +1799,14 @@ export class ControlPlaneStore {
         ) {
           throw new Error(`integrity transaction receipt shape is invalid: ${String(row.sequence)}`);
         }
+      } else if (row.command_kind === "core.activate-snapshot") {
+        if (
+          typeof row.idempotency_key !== "string" ||
+          !/^core-activate:[0-9a-f]{40}$/.test(row.idempotency_key) ||
+          receiptCount !== 1
+        ) {
+          throw new Error(`Core snapshot activation receipt shape is invalid: ${String(row.sequence)}`);
+        }
       }
     }
 
@@ -1486,6 +1845,9 @@ export class ControlPlaneStore {
         String(row.source_id),
         row.source_revision_kind == null ? undefined : String(row.source_revision_kind),
       );
+      if (row.source_revision_kind != null && row.source_revision_value != null) {
+        assertSourceRevision(String(row.source_revision_kind), String(row.source_revision_value));
+      }
       const informationClass = String(row.information_class);
       assertInformationClass(informationClass);
       const informationScopeJson = String(row.information_scope_json);
@@ -1546,6 +1908,170 @@ export class ControlPlaneStore {
     if (recordCount + eventCount !== rows.length) throw new Error("durable occurrence subtype coverage mismatch");
   }
 
+  private verifyCoreSnapshots(): void {
+    const snapshots = this.db
+      .prepare("SELECT * FROM core_snapshots ORDER BY activated_transaction_sequence")
+      .all() as Row[];
+    const subjectCount = Number(
+      (this.db.prepare("SELECT COUNT(*) AS count FROM subjects WHERE subject_kind = 'core-snapshot'").get() as Row)
+        .count,
+    );
+    if (subjectCount !== snapshots.length) throw new Error("Core snapshot subject coverage mismatch");
+
+    for (const snapshot of snapshots) {
+      const snapshotId = String(snapshot.snapshot_id);
+      const files = this.db
+        .prepare("SELECT * FROM core_snapshot_files WHERE snapshot_id = ? ORDER BY path")
+        .all(snapshotId) as Row[];
+      files.sort((left, right) => String(left.path).localeCompare(String(right.path)));
+      const catalogMaterial: JsonValue[] = [];
+      const retainedEntries: CoreTreeEntry[] = [];
+      for (const file of files) {
+        const bytes = file.raw_bytes;
+        if (!(bytes instanceof Uint8Array)) throw new Error(`Core snapshot file is not retained as bytes: ${String(file.path)}`);
+        if (bytes.byteLength !== Number(file.byte_size)) {
+          throw new Error(`Core snapshot file size mismatch: ${String(file.path)}`);
+        }
+        const contentDigest = sha256Bytes(bytes);
+        if (contentDigest !== String(file.content_digest)) {
+          throw new Error(`Core snapshot file digest mismatch: ${String(file.path)}`);
+        }
+        if (
+          (file.mode !== "100644" && file.mode !== "100755") ||
+          !/^[0-9a-f]{40}$/.test(String(file.object_id))
+        ) {
+          throw new Error(`Core snapshot file identity mismatch: ${String(file.path)}`);
+        }
+        const isRepositoryDeclaration = /^organization\/repositories\/[^/]+\/[^/]+\.json$/.test(String(file.path));
+        if (isRepositoryDeclaration !== (file.parsed_json != null)) {
+          throw new Error(`Core snapshot parsed-record coverage mismatch: ${String(file.path)}`);
+        }
+        if (file.parsed_json != null) {
+          const parsedJson = String(file.parsed_json);
+          const parsed = parseJson(parsedJson);
+          if (canonicalJson(parsed) !== parsedJson) {
+            throw new Error(`Core snapshot parsed record is not canonical: ${String(file.path)}`);
+          }
+          const rawParsed = parseJson(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+          if (canonicalJson(rawParsed) !== parsedJson) {
+            throw new Error(`Core snapshot parsed record does not match retained bytes: ${String(file.path)}`);
+          }
+        }
+        catalogMaterial.push({
+          contentDigest,
+          mode: String(file.mode),
+          objectId: String(file.object_id),
+          path: String(file.path),
+          size: Number(file.byte_size),
+        });
+        retainedEntries.push({
+          path: String(file.path),
+          mode: String(file.mode) as "100644" | "100755",
+          objectId: String(file.object_id),
+          bytes,
+        });
+      }
+      const catalogDigest = sha256(canonicalJson(catalogMaterial));
+      if (catalogDigest !== String(snapshot.catalog_digest)) {
+        throw new Error(`Core snapshot catalog digest mismatch: ${snapshotId}`);
+      }
+      const validated = validateCoreCatalog(retainedEntries);
+      if (validated.catalogDigest !== catalogDigest) {
+        throw new Error(`Core snapshot retained validation digest mismatch: ${snapshotId}`);
+      }
+
+      const definition = this.db
+        .prepare("SELECT * FROM durable_occurrences WHERE record_id = ?")
+        .get(snapshot.definition_record_id!) as Row | undefined;
+      const fact = this.db
+        .prepare("SELECT * FROM durable_occurrences WHERE record_id = ?")
+        .get(snapshot.active_fact_record_id!) as Row | undefined;
+      const event = this.db
+        .prepare("SELECT * FROM durable_occurrences WHERE record_id = ?")
+        .get(snapshot.activation_event_record_id!) as Row | undefined;
+      if (
+        !definition ||
+        definition.kind !== "core.snapshot-definition" ||
+        definition.subject_id !== snapshotId ||
+        definition.revision_value !== catalogDigest
+      ) {
+        throw new Error(`Core snapshot definition linkage mismatch: ${snapshotId}`);
+      }
+      if (
+        !fact ||
+        fact.kind !== "core.snapshot-active" ||
+        Number(fact.transaction_sequence) !== Number(snapshot.activated_transaction_sequence)
+      ) {
+        throw new Error(`Core snapshot active-fact linkage mismatch: ${snapshotId}`);
+      }
+      if (
+        !event ||
+        event.kind !== "core.snapshot-activated" ||
+        event.subject_id !== snapshotId ||
+        Number(event.transaction_sequence) !== Number(snapshot.activated_transaction_sequence)
+      ) {
+        throw new Error(`Core snapshot activation-event linkage mismatch: ${snapshotId}`);
+      }
+      for (const occurrence of [definition, fact, event]) {
+        if (
+          occurrence.source_kind !== "github-repository" ||
+          occurrence.source_id !== "github.com:1331309458" ||
+          occurrence.source_revision_kind !== "git-commit-sha1" ||
+          occurrence.source_revision_value !== `sha1:${String(snapshot.source_commit_id)}`
+        ) {
+          throw new Error(`Core snapshot source linkage mismatch: ${snapshotId}`);
+        }
+      }
+      const definitionPayload = parseJson(String(definition.payload_json)) as Record<string, JsonValue>;
+      const activePayload = parseJson(String(fact.payload_json)) as Record<string, JsonValue>;
+      if (
+        definitionPayload.snapshotId !== snapshotId ||
+        definitionPayload.catalogDigest !== catalogDigest ||
+        definitionPayload.sourceCommitId !== String(snapshot.source_commit_id) ||
+        definitionPayload.sourceTreeId !== String(snapshot.source_tree_id) ||
+        definitionPayload.sourceUrl !== String(snapshot.source_url) ||
+        definitionPayload.sourceRef !== String(snapshot.source_ref) ||
+        definitionPayload.importedAt !== String(snapshot.imported_at) ||
+        Number(definitionPayload.fileCount) !== validated.fileCount ||
+        Number(definitionPayload.totalBytes) !== validated.totalBytes ||
+        Number(definitionPayload.repositoryCount) !== validated.repositoryCount ||
+        Number(definitionPayload.validFixtureCount) !== validated.validFixtureCount ||
+        Number(definitionPayload.invalidFixtureCount) !== validated.invalidFixtureCount ||
+        canonicalJson(definitionPayload.schemaDigests!) !==
+          canonicalJson(validated.schemaDigests as unknown as JsonValue) ||
+        snapshot.source_kind !== "github-repository" ||
+        snapshot.source_id !== "github.com:1331309458"
+      ) {
+        throw new Error(`Core snapshot definition payload mismatch: ${snapshotId}`);
+      }
+      if (
+        activePayload.snapshotId !== snapshotId ||
+        activePayload.catalogDigest !== catalogDigest ||
+        activePayload.sourceCommitId !== String(snapshot.source_commit_id) ||
+        activePayload.activatedAt !== String(snapshot.imported_at) ||
+        activePayload.databaseLineageId !== this.metadata().databaseLineageId ||
+        fact.subject_id !== this.metadata().databaseLineageId ||
+        String(fact.payload_json) !== String(event.payload_json)
+      ) {
+        throw new Error(`Core snapshot activation payload mismatch: ${snapshotId}`);
+      }
+    }
+
+    const active = this.db.prepare("SELECT * FROM core_active_snapshot WHERE singleton = 1").get() as Row | undefined;
+    const latest = snapshots.at(-1);
+    if (!latest && active) throw new Error("Core active snapshot exists without a retained snapshot");
+    if (
+      latest &&
+      (!active ||
+        active.snapshot_id !== latest.snapshot_id ||
+        active.fact_record_id !== latest.active_fact_record_id ||
+        Number(active.activated_transaction_sequence) !== Number(latest.activated_transaction_sequence) ||
+        active.activated_at !== latest.imported_at)
+    ) {
+      throw new Error("Core active snapshot does not match the latest activation fact");
+    }
+  }
+
   private verifyIdempotencyReceipts(): void {
     const rows = this.db.prepare("SELECT * FROM idempotency_receipts").all() as Row[];
     const metadata = this.metadata();
@@ -1565,9 +2091,13 @@ export class ControlPlaneStore {
         throw new Error(`idempotency receipt result is not canonical JSON: ${String(row.idempotency_key)}`);
       }
       if (commandKind === "control-plane.check-integrity") parseIntegrityCheckResult(result);
+      if (commandKind === "core.activate-snapshot") parseCoreSnapshotActivationResult(result);
       assertUtcInstant(String(row.retained_until), `idempotency receipt ${String(row.idempotency_key)} retention time`);
-      if (commandKind === "control-plane.check-integrity" && String(row.retained_until) !== IDEMPOTENCY_RETAINED_UNTIL) {
-        throw new Error(`integrity receipt retention mismatch: ${String(row.idempotency_key)}`);
+      if (
+        (commandKind === "control-plane.check-integrity" || commandKind === "core.activate-snapshot") &&
+        String(row.retained_until) !== IDEMPOTENCY_RETAINED_UNTIL
+      ) {
+        throw new Error(`idempotency receipt retention mismatch: ${String(row.idempotency_key)}`);
       }
       if (String(row.command_scope) !== `database:${metadata.databaseLineageId}`) {
         throw new Error(`idempotency receipt command scope mismatch: ${String(row.idempotency_key)}`);
@@ -1618,6 +2148,30 @@ export class ControlPlaneStore {
           )
         ) {
           throw new Error(`integrity receipt result output mismatch: ${String(row.idempotency_key)}`);
+        }
+      }
+      if (commandKind === "core.activate-snapshot") {
+        const activation = parseCoreSnapshotActivationResult(result);
+        if (
+          activation.transactionSequence !== Number(row.transaction_sequence) ||
+          activation.importedAt !== String(transaction.evaluation_time) ||
+          activation.importedAt !== String(transaction.recorded_at)
+        ) {
+          throw new Error(`Core activation receipt result transaction mismatch: ${String(row.idempotency_key)}`);
+        }
+        const outputs = this.db
+          .prepare(
+            `SELECT record_id FROM durable_occurrences
+             WHERE transaction_sequence = ? ORDER BY transaction_position`,
+          )
+          .all(row.transaction_sequence!) as Row[];
+        if (
+          outputs.length !== 3 ||
+          String(outputs[0]!.record_id) !== activation.definitionRecordId ||
+          String(outputs[1]!.record_id) !== activation.activeFactRecordId ||
+          String(outputs[2]!.record_id) !== activation.eventRecordId
+        ) {
+          throw new Error(`Core activation receipt result output mismatch: ${String(row.idempotency_key)}`);
         }
       }
     }
@@ -2048,6 +2602,8 @@ function decodeOccurrence(row: Row): DurableOccurrence {
     revisionValue: row.revision_value == null ? undefined : String(row.revision_value),
     sourceKind: String(row.source_kind),
     sourceId: String(row.source_id),
+    sourceRevisionKind: row.source_revision_kind == null ? undefined : String(row.source_revision_kind),
+    sourceRevisionValue: row.source_revision_value == null ? undefined : String(row.source_revision_value),
     informationClass,
     informationScope: parseJson(String(row.information_scope_json)),
     payload: parseJson(String(row.payload_json)),
@@ -2108,4 +2664,130 @@ function parseIntegrityCheckResult(value: JsonValue): IntegrityCheckResult {
     transactionPositions: [0, 1],
     transactionSequence: Number(result.transactionSequence),
   };
+}
+
+function parseCoreSnapshotActivationResult(value: JsonValue): CoreSnapshotActivationResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("invalid Core snapshot activation receipt result");
+  }
+  const result = value as Record<string, JsonValue>;
+  const expected = [
+    "snapshotId",
+    "definitionRecordId",
+    "activeFactRecordId",
+    "eventRecordId",
+    "catalogDigest",
+    "sourceCommitId",
+    "importedAt",
+    "transactionPositions",
+    "transactionSequence",
+  ].sort();
+  const keys = Object.keys(result).sort();
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
+    throw new Error("invalid Core snapshot activation receipt result fields");
+  }
+  if (
+    !isUuidV7(String(result.snapshotId)) ||
+    !isUuidV7(String(result.definitionRecordId)) ||
+    !isUuidV7(String(result.activeFactRecordId)) ||
+    !isUuidV7(String(result.eventRecordId)) ||
+    !/^sha256:[0-9a-f]{64}$/.test(String(result.catalogDigest)) ||
+    !/^[0-9a-f]{40}$/.test(String(result.sourceCommitId)) ||
+    !Array.isArray(result.transactionPositions) ||
+    result.transactionPositions.length !== 3 ||
+    result.transactionPositions[0] !== 0 ||
+    result.transactionPositions[1] !== 1 ||
+    result.transactionPositions[2] !== 2 ||
+    !Number.isSafeInteger(result.transactionSequence) ||
+    Number(result.transactionSequence) < 2
+  ) {
+    throw new Error("invalid Core snapshot activation receipt result values");
+  }
+  assertUtcInstant(String(result.importedAt), "Core snapshot import time");
+  return {
+    snapshotId: String(result.snapshotId),
+    definitionRecordId: String(result.definitionRecordId),
+    activeFactRecordId: String(result.activeFactRecordId),
+    eventRecordId: String(result.eventRecordId),
+    catalogDigest: String(result.catalogDigest),
+    sourceCommitId: String(result.sourceCommitId),
+    importedAt: String(result.importedAt),
+    transactionPositions: [0, 1, 2],
+    transactionSequence: Number(result.transactionSequence),
+  };
+}
+
+function assertCandidateReport(
+  candidate: InspectedCoreCandidate,
+  validated: ReturnType<typeof validateCoreCatalog>,
+): void {
+  const candidateReport = {
+    catalogDigest: candidate.catalogDigest,
+    fileCount: candidate.fileCount,
+    invalidFixtureCount: candidate.invalidFixtureCount,
+    repositories: candidate.repositories,
+    repositoryCount: candidate.repositoryCount,
+    schemaDigests: candidate.schemaDigests,
+    totalBytes: candidate.totalBytes,
+    validFixtureCount: candidate.validFixtureCount,
+  } as unknown as JsonValue;
+  const validatedReport = {
+    catalogDigest: validated.catalogDigest,
+    fileCount: validated.fileCount,
+    invalidFixtureCount: validated.invalidFixtureCount,
+    repositories: validated.repositories,
+    repositoryCount: validated.repositoryCount,
+    schemaDigests: validated.schemaDigests,
+    totalBytes: validated.totalBytes,
+    validFixtureCount: validated.validFixtureCount,
+  } as unknown as JsonValue;
+  if (canonicalJson(candidateReport) !== canonicalJson(validatedReport)) {
+    throw new Error("Core candidate validation report does not match its retained files");
+  }
+}
+
+function assertMaterializedCoreCandidate(candidate: InspectedCoreCandidate): void {
+  const allowedSourceUrls = new Set([
+    "https://github.com/frostyard/core.git",
+    "git@github.com:frostyard/core.git",
+    "ssh://git@github.com:frostyard/core.git",
+  ]);
+  if (!allowedSourceUrls.has(candidate.sourceUrl)) {
+    throw new Error("Core snapshot activation source must be the configured frostyard/core GitHub repository");
+  }
+  if (
+    !/^refs\/heads\/[A-Za-z0-9._/-]+$/.test(candidate.ref) ||
+    candidate.ref.includes("..") ||
+    candidate.ref.includes("//") ||
+    candidate.ref.includes("@{") ||
+    candidate.ref.endsWith("/") ||
+    candidate.ref.endsWith(".")
+  ) {
+    throw new Error("Core snapshot activation source ref is not canonical");
+  }
+  if (!/^[0-9a-f]{40}$/.test(candidate.commitId) || !/^[0-9a-f]{40}$/.test(candidate.treeId)) {
+    throw new Error("Core snapshot activation requires canonical SHA-1 Git object identities");
+  }
+  if (!Array.isArray(candidate.files) || candidate.files.length < 1 || candidate.files.length > 256) {
+    throw new Error("Core snapshot activation file count is outside the bounded source contract");
+  }
+  let totalBytes = 0;
+  for (const file of candidate.files) {
+    if (
+      (file.mode !== "100644" && file.mode !== "100755") ||
+      !/^[0-9a-f]{40}$/.test(file.objectId) ||
+      file.bytes.byteLength > 1_048_576 ||
+      Buffer.byteLength(file.path, "utf8") > 512 ||
+      file.path.split("/").length > 12 ||
+      file.path.split("/").some((component) => !component || component === "." || component === "..")
+    ) {
+      throw new Error(`Core snapshot activation file is outside the bounded source contract: ${file.path}`);
+    }
+    totalBytes += file.bytes.byteLength;
+  }
+  if (totalBytes > 8_388_608) throw new Error("Core snapshot activation bytes exceed the bounded source contract");
+}
+
+function sha256Bytes(value: Uint8Array): string {
+  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }

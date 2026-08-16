@@ -2,8 +2,9 @@
 
 This contract governs the read-only candidate verifier that consumes the
 supported `organization/` tree in `frostyard/core`. It produces a deterministic
-report for operators and later snapshot activation code; it creates no Fluent
-authority by itself.
+report for operators and the implemented
+[snapshot activation command](core-snapshot-activation.md); it creates no
+Fluent authority by itself.
 
 ## Interface
 
@@ -98,4 +99,5 @@ nonzero.
   enrollment semantics from
   [ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md)
 - Context: [core snapshot ingestion](../design/core-snapshot-ingestion.md)
+- Downstream authority contract: [Core snapshot activation](core-snapshot-activation.md)
 - Delivery: [core snapshot ingestion plan](../plans/core-snapshot-ingestion.md)

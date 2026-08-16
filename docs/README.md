@@ -76,6 +76,7 @@ Docs are split by the question they answer:
 - [Work queue](specs/work-queue.md)
 - [Control-plane kernel](specs/control-plane-kernel.md)
 - [Core snapshot verification](specs/core-snapshot-verification.md)
+- [Core snapshot activation](specs/core-snapshot-activation.md)
 
 ### Plans
 

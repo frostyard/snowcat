@@ -14,8 +14,8 @@ the bounded cutover in Phase 5 below.
 - The first executable substrate slice is documented by the current
   [control-plane kernel design](../design/control-plane-kernel.md) and
   [kernel specification](../specs/control-plane-kernel.md). It implements
-  database identity, a distinct stable implicit operator principal, registry
-  version 1, ordered initialization occurrences, and fail-closed startup; later
+  database identity, a distinct stable implicit operator principal, current
+  registry version 2, ordered initialization occurrences, and fail-closed startup; later
   Phase 1 fields and registries remain open.
 - Define the smallest v1 registries and exact envelopes required by
   [ADRs 0037–0043](../adr/0037-store-facts-with-a-separate-event-ledger.md):
@@ -44,6 +44,11 @@ the bounded cutover in Phase 5 below.
   SQLite integrity observation and event, with optimistic concurrency,
   idempotent replay, strict backward-clock refusal, and atomic rollback. General
   authenticated command binding and fact establishment remain open.
+- The first bounded predicate path now retains and activates verified Core
+  snapshots through the
+  [Core snapshot activation contract](../specs/core-snapshot-activation.md).
+  It exercises source-native identity, exact byte retention, fact precedence,
+  and rollback without exposing a generic fact writer or creating enrollment.
 - Implement fresh SQLite tables and transactional command primitives for
   database lineage, transaction sequence, subjects, typed durable records,
   facts, operational history events, and idempotency receipts.

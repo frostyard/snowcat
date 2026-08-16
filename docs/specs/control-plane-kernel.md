@@ -1,9 +1,9 @@
 # Spec: Control-plane kernel
 
-This contract governs initialization, validation, and the first rebuildable
-read models of the clean target SQLite database. It is consumed only by
-internal Fluent code and diagnostics; it exposes no generic record-writing,
-fact-writing, administrative, or worker interface.
+This contract governs initialization, validation, typed Core snapshot storage,
+and the first rebuildable read models of the clean target SQLite database. It
+is consumed only by internal Fluent code and host-local diagnostics; it exposes
+no generic record-writing, fact-writing, administrative, or worker interface.
 
 ## Interface
 
@@ -14,8 +14,8 @@ fact-writing, administrative, or worker interface.
 | Environment variable | `FLUENT_CONTROL_DB` | Optional; target database path |
 | Default path | `./data/control-plane.db` | Distinct from the queue-spike default |
 | SQLite application ID | `1179405908` | Decimal encoding of `FLNT` |
-| Schema version | `1` | Stored in both `PRAGMA user_version` and metadata |
-| Registry version | `1` | Stored in metadata and both initialization payloads |
+| Schema version | `2` | Stored in both `PRAGMA user_version` and metadata |
+| Registry version | `2` | Stored in metadata and both initialization payloads |
 | Node runtime | `>=24.0.0` | Required for the stable `node:sqlite` surface and online backup API |
 | Database lineage ID | UUIDv7 | Generated once by the server; never reused or inferred from path |
 | Operator principal ID | UUIDv7 | Generated once and stored separately from database, session, worker, or provider identity |
@@ -26,22 +26,31 @@ transaction sequence.
 `ControlPlaneStore.occurrences()` returns occurrences ordered by transaction
 sequence and position. Neither method mutates the database or returns a secret.
 
-### Closed registry version 1
+### Closed registry version 2
 
 | Registry | Name | Version or ID rule | Contract |
 | --- | --- | --- | --- |
 | Subject | `control-plane-database` | UUIDv7 | Fluent authority; accepts `sha256` and `transaction-sequence` revisions |
 | Subject | `operator-principal` | UUIDv7 | Fluent authority; accepts `sha256` revision |
+| Subject | `core-snapshot` | UUIDv7 | Fluent authority; accepts `core-catalog-sha256` revision |
 | Revision | `sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact payload digest |
 | Revision | `transaction-sequence` | Positive safe integer encoded as canonical decimal | Exact database state checked through that sequence |
+| Revision | `core-catalog-sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact retained Core catalog |
+| Revision | `git-commit-sha1` | `sha1:` plus 40 lowercase hexadecimal characters | Exact Git source commit |
 | Source | `fluent-system` | Only source ID `kernel` | Internal deterministic bootstrap source |
+| Source | `github-repository` | `github.com:` plus immutable positive numeric repository ID | Source revision must be `git-commit-sha1` |
 | Record | `control-plane.database-definition` | Schema 1 | Class `definition`; subject `control-plane-database`; minimum class `organization` |
 | Record | `principal.definition` | Schema 1 | Class `definition`; subject `operator-principal`; minimum class `organization` |
 | Record | `control-plane.integrity-observation` | Schema 1 | Class `observation`; subject `control-plane-database`; minimum class `organization` |
+| Record | `core.snapshot-definition` | Schema 1 | Class `definition`; subject `core-snapshot`; minimum class `organization` |
+| Record | `core.snapshot-active` | Schema 1 | Class `fact`; subject `control-plane-database`; minimum class `organization` |
 | Event | `control-plane.initialized` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
 | Event | `control-plane.integrity-checked` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
-| Command | `control-plane.initialize` | Schema 1 | Outputs the database definition, then initialization event |
+| Event | `core.snapshot-activated` | Schema 1 | Subject `core-snapshot`; minimum class `organization` |
+| Command | `control-plane.initialize` | Schema 1 | Outputs database definition, principal definition, then initialization event |
 | Command | `control-plane.check-integrity` | Schema 1 | Outputs the integrity observation, then integrity-checked event |
+| Command | `core.activate-snapshot` | Schema 1 | Outputs snapshot definition, active fact, then activation event |
+| Predicate | `core.snapshot-active` | Contract 1 | Established by `core.activate-snapshot`; latest transaction sequence wins |
 | Projection | `control-plane.subject-lookup` | Contract, transformation, and information-handling version 1 | Stable subjects and creation definitions for internal diagnostics |
 | Projection | `control-plane.event-cursor` | Contract, transformation, and information-handling version 1 | Payload-free event cursor for internal diagnostics and ProcessObserver |
 
@@ -52,8 +61,8 @@ invalid:
 {
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
   "operatorPrincipalId": "0198b0a6-c200-7abc-8def-0123456789ac",
-  "registryVersion": 1,
-  "schemaVersion": 1
+  "registryVersion": 2,
+  "schemaVersion": 2
 }
 ```
 
@@ -75,9 +84,9 @@ The integrity observation and event payload have this exact shape:
 {
   "checkedThroughSequence": 1,
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
-  "registryVersion": 1,
+  "registryVersion": 2,
   "result": "ok",
-  "schemaVersion": 1
+  "schemaVersion": 2
 }
 ```
 
@@ -94,6 +103,16 @@ An accepted result contains `result: "ok"`, the checked-through sequence,
 observation and event UUIDv7 record IDs, transaction sequence, fixed positions
 `[0, 1]`, and its evaluation and recorded UTC time. Equivalent replay returns
 the exact stored result. A key already bound to another input digest fails.
+
+### Core snapshot command
+
+`ControlPlaneStore.activateCoreSnapshot(input)` is the only implemented fact-
+establishment path. It accepts a verified materialized candidate and the exact
+positive current sequence expected by the caller. Its source, payloads, ordered
+outputs, retained catalog, idempotency, pointer, integrity, and excluded
+behavior are specified by
+[Core snapshot activation](core-snapshot-activation.md). No other predicate or
+caller-selected fact kind is writable.
 
 ### Projection interface
 
@@ -145,7 +164,7 @@ The manifest has this exact shape:
 | `lastTransactionSequence` | Highest durable source transaction in the artifact |
 | `nextTransactionSequence` | Exactly `lastTransactionSequence + 1` |
 | `controlTimeWatermark` | Preserved canonical UTC watermark |
-| `authoritativeDigest` | SHA-256 over canonical rows from metadata, transactions, subjects, occurrences, record/event subtypes, receipts, and SQLite's transaction allocation; projections excluded |
+| `authoritativeDigest` | SHA-256 over canonical rows from metadata, transactions, subjects, occurrences, record/event subtypes, receipts, Core snapshot metadata/file identities/parsed records, the active pointer, and SQLite's transaction allocation; raw bytes are transitively bound by startup-verified file digests and projections are excluded |
 | `createdAt` | Server UTC time at which backup creation began; not a control transaction time |
 
 `ControlPlaneStore.verifyBackup(manifest, expectation)` requires the caller's
@@ -193,6 +212,9 @@ source identity.
 | `durable_records` | Record subtype | Exactly one accepted non-event record class for each referenced occurrence |
 | `event_ledger` | Event subtype | Event occurrence reference; no record class |
 | `idempotency_receipts` | Registered command replay results | Composite command-scope key; payload digest, canonical retained result, transaction reference, and retention deadline |
+| `core_snapshots` | Retained snapshot lineage | Snapshot/source/catalog identities and definition/fact/event/transaction references |
+| `core_snapshot_files` | Exact snapshot contents | Path, mode, Git object, size, content digest, optional canonical parsed live declaration, and raw bytes |
+| `core_active_snapshot` | Checked current-authority pointer | Singleton reference to the latest snapshot activation fact and transaction |
 | `projection_generations` | Immutable read-model build metadata | Registered versions, source/output digests, source watermark, evaluation/build time, row count, and invariant result |
 | `projection_heads` | Active-generation pointers | One head per registered projection; atomically references one validated generation |
 | `projection_subject_lookup` | Subject lookup rows | Generation-scoped stable subject and creation-definition identity plus information class/scope |
@@ -240,7 +262,7 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
    initialization transaction.
 5. Older, newer, incomplete, unexpected, or differently identified schemas
    MUST fail closed. Unregistered indexes, triggers, and views are unexpected.
-   Version 1 defines no upgrade path.
+   Version 2 defines no upgrade path from the pre-production version 1 store.
 6. Subject, record, event, command, source, revision, record-class, and
    information-class names MUST come from the code-owned versioned registries.
    Payload validity alone MUST NOT create a kind.
@@ -358,16 +380,25 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
 41. The CLI MUST NOT expose generic SQL, record/fact mutation, live restore
     replacement, worker execution, provider credentials, lease tokens, or a way
     to reinterpret projection output as authority.
+42. `core.activate-snapshot` MUST be the only establishment path for predicate
+    `core.snapshot-active`; the latest accepted transaction sequence MUST define
+    precedence, and the singleton pointer MUST be validated against that fact.
+43. Startup MUST validate retained Core raw bytes, content and catalog digests,
+    canonical parsed live declarations, source revisions, ordered outputs,
+    idempotency receipts, and all snapshot/pointer occurrence lineage.
+44. Core activation MUST leave projections stale rather than synchronously
+    rebuilding them inside the authority transaction.
 
 ## Derived artifacts
 
 | Artifact | Derivation |
 | --- | --- |
-| SQLite v1 target schema | Created transactionally by `ControlPlaneStore` |
+| SQLite v2 target schema | Created transactionally by `ControlPlaneStore` |
 | Registry validation | Code-owned constants and validators in `src/control/registry.ts` |
 | Initialization definition and event | Fixed outputs of `control-plane.initialize` v1 |
 | Implicit operator identity | Fixed `operator-principal` subject and `principal.definition` initialization output |
 | Integrity observation, event, and receipt | Fixed outputs of `control-plane.check-integrity` v1 |
+| Core snapshot definition, fact, event, retained files, and receipt | Fixed outputs and source material of `core.activate-snapshot` v1 |
 | Subject lookup generations | Full deterministic rebuild from subjects and their creation definitions |
 | Event cursor generations | Full deterministic rebuild from event occurrences without payload copies |
 | Backup manifest | Verified metadata and canonical authoritative digest of one online SQLite backup artifact |
@@ -385,5 +416,6 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
   [ADR-0043](../adr/0043-order-records-by-transaction-sequence-not-timestamps.md),
   and [ADR-0044](../adr/0044-replace-the-queue-spike-database.md)
 - Context: [control-plane kernel](../design/control-plane-kernel.md)
+- Core authority contract: [Core snapshot activation](core-snapshot-activation.md)
 - Delivery: [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md)
 - Product: [GitHub organization agent fleet](../prd/agent-fleet.md)

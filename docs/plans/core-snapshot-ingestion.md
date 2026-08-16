@@ -21,18 +21,22 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
   fixtures, and one disabled `frostyard/core` declaration; schema drift,
   duplicate live keys, and Git symlinks fail closed.
 
-## Phase 2 — Persist and atomically activate snapshots (large)
+## Phase 2 — Persist and atomically activate snapshots (in progress)
 
-- Extend the code-owned control-plane registries with exact Core snapshot,
-  source-repository, import-attempt, activation, and failure contracts; expose
-  only typed commands.
-- Persist raw bytes, parsed records, per-file digests, validation report,
-  source/ref/commit/tree identities, import time, and catalog digest in one
-  transaction without manufacturing enrollment facts.
-- Make equivalent retry of one candidate idempotent and move the active pointer
-  only after every record and event succeeds. Preserve every prior snapshot.
+- The implemented [activation contract](../specs/core-snapshot-activation.md)
+  adds exact Core snapshot, immutable GitHub source, activation predicate,
+  occurrence, command, and storage vocabulary without a generic mutation path.
+- The typed command independently revalidates and atomically retains raw bytes,
+  canonical parsed live repository declarations, per-file digests, validation
+  report, source/ref/commit/tree identities, import time, catalog digest,
+  definition, active fact, event, receipt, and active pointer without
+  manufacturing enrollment facts.
+- Equivalent retry returns the original result; failure after retained file
+  writes rolls back authority and sequence allocation; every accepted prior
+  snapshot remains retained.
 - Record rejected candidate diagnostics without advancing the active pointer.
-- **Done when:** a failure injected after any snapshot write rolls back all
+- **Done when:** rejected fetch/validation/storage attempts have bounded durable
+  diagnostics, and a failure injected after any snapshot write rolls back all
   candidate authority and leaves the prior active snapshot byte-for-byte and
   sequence-for-sequence unchanged; retry returns the original snapshot identity.
 
@@ -74,16 +78,14 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
 
 ## Open questions
 
-- **Source repository principal:** settle the exact target-registry subject and
-  source identity shapes during Phase 2 alongside their typed command payloads;
-  do not reuse a display URL as identity.
 - **Retention:** set bounded failed-candidate diagnostic and raw snapshot
   retention before unattended polling begins.
 
 ## References
 
-- Implements: [core snapshot ingestion](../design/core-snapshot-ingestion.md)
-  and [core snapshot verification](../specs/core-snapshot-verification.md)
+- Implements: [core snapshot ingestion](../design/core-snapshot-ingestion.md),
+  [core snapshot verification](../specs/core-snapshot-verification.md), and
+  [Core snapshot activation](../specs/core-snapshot-activation.md)
 - Rationale:
   [ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md) and
   [ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md)

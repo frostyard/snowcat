@@ -11,9 +11,10 @@ The control-plane kernel is the separately identified SQLite store that will
 hold Fluent's typed authoritative records, operational history, and rebuildable
 read models. The implemented slices initialize the kernel and one stable
 implicit local-operator principal, execute one system integrity command, and
-publish subject-lookup and event-cursor projection generations. They do not yet
-expose work admission, fact establishment, sessions, grants, or worker
-operations.
+publish subject-lookup and event-cursor projection generations. The current
+kernel also retains and activates verified Core snapshots through one
+registered fact predicate. It does not yet expose work admission, general fact
+establishment, sessions, grants, or worker operations.
 
 ```text
 empty target file
@@ -44,7 +45,7 @@ spike. The path helper rejects equal resolved paths, while store startup also
 recognizes the spike tables and refuses to initialize over them.
 
 The target file identifies itself with SQLite application ID `1179405908`
-(`FLNT`), `PRAGMA user_version = 1`, a server-generated UUIDv7 database-lineage
+(`FLNT`), `PRAGMA user_version = 2`, a server-generated UUIDv7 database-lineage
 ID, a separately generated UUIDv7 operator-principal ID, schema version,
 registry version, control-time watermark, and last committed transaction
 sequence. Opening a current database validates those values and performs no
@@ -54,21 +55,29 @@ schemas fail rather than being guessed or upgraded by this slice.
 ### Closed registries
 
 [`registry.ts`](../../src/control/registry.ts) is the only owner of the current
-kernel vocabulary. Registry version 1 contains the minimum bootstrap contracts:
+kernel vocabulary. Registry version 2 contains the bootstrap and Core snapshot
+contracts:
 
 | Registry | Initial member | Meaning |
 | --- | --- | --- |
 | Subject kind | `control-plane-database` | One Fluent-native database lineage with UUIDv7 identity |
 | Subject kind | `operator-principal` | The stable human-authority identity implicitly bound by local stdio |
-| Revision kind | `sha256`, `transaction-sequence` | Exact payload bytes or an as-known database sequence |
+| Subject kind | `core-snapshot` | One Fluent-native retained catalog identity with UUIDv7 identity |
+| Revision kind | `sha256`, `transaction-sequence`, `core-catalog-sha256`, `git-commit-sha1` | Exact payload, database-state, catalog, or source-commit identity |
 | Source kind | `fluent-system` / `kernel` | The deterministic kernel bootstrap source |
+| Source kind | `github-repository` | Immutable GitHub repository ID plus typed Git commit revision |
 | Record kind | `control-plane.database-definition` v1 | An `organization`-class definition of the database lineage and schema/registry versions |
 | Record kind | `principal.definition` v1 | The `organization`-class definition of the implicit local operator |
 | Record kind | `control-plane.integrity-observation` v1 | The system's SQLite quick-check observation bound to the checked sequence |
+| Record kind | `core.snapshot-definition` v1 | Definition of one retained validated catalog and its source/report |
+| Record kind | `core.snapshot-active` v1 | Current-snapshot fact on the database subject |
 | Event kind | `control-plane.initialized` v1 | The past-tense account of successful initialization |
 | Event kind | `control-plane.integrity-checked` v1 | The past-tense account of the accepted integrity observation |
+| Event kind | `core.snapshot-activated` v1 | The past-tense account of selecting one snapshot |
 | Command kind | `control-plane.initialize` v1 | The fixed bootstrap transaction and its ordered outputs |
 | Command kind | `control-plane.check-integrity` v1 | An optimistic, idempotent system integrity check |
+| Command kind | `core.activate-snapshot` v1 | Atomic retention and activation of one independently revalidated candidate |
+| Predicate contract | `core.snapshot-active` v1 | Established only by activation; latest transaction sequence wins |
 | Projection contract | `control-plane.subject-lookup` v1 | Stable subject identity and creation-definition lookup |
 | Projection contract | `control-plane.event-cursor` v1 | Payload-free sequence/position cursor for accepted events |
 
@@ -90,9 +99,14 @@ class. `subjects` keeps typed identity separate from occurrence identity.
 
 `control_plane_metadata` holds the database lineage and persisted sequence and
 control-time watermarks. `idempotency_receipts` stores the retained result of
-the registered integrity command; initialization is naturally idempotent
+the registered integrity and Core activation commands; initialization is naturally idempotent
 because an existing target database is validated and returned, not initialized
 again. No generic record, fact, or event insertion API is exposed.
+
+`core_snapshots` and `core_snapshot_files` retain every accepted catalog,
+source identity, exact raw bytes, canonical parsed repository declaration, and
+durable occurrence lineage. `core_active_snapshot` is a checked singleton
+pointer to the latest accepted active fact; it is not independent authority.
 
 Payload and information-scope JSON use a deterministic canonical encoder.
 Their SHA-256 digest is verified when a database opens. Record IDs, transaction
@@ -135,6 +149,31 @@ at revision kind `transaction-sequence` using the pre-command sequence that was
 checked. The receipt, occurrences, transaction, and advanced watermarks commit
 atomically. The receipt is retained for the database lineage in this slice with
 an explicit maximum UTC deadline; no purge operation exists.
+
+### Registered Core snapshot activation
+
+`activateCoreSnapshot` is the first registered fact-establishment path. It
+accepts the expected control-plane sequence and one materialized candidate from
+the independent Core verifier. Before writing, it reruns validation over the
+candidate bytes and compares the complete report. Equivalent retry is keyed by
+the exact Git commit and returns its original result before current-sequence or
+clock evaluation.
+
+A new execution creates a `core-snapshot` subject and emits
+`core.snapshot-definition`, `core.snapshot-active`, and
+`core.snapshot-activated` at positions `0`, `1`, and `2`. The definition and
+event bind the new snapshot; the fact binds the database deployment whose
+authority changed. All outputs identify the immutable GitHub source repository
+and exact commit. The registered active predicate uses latest transaction
+sequence, while the relational pointer is verified against that fact on every
+open.
+
+Exact source bytes, per-file metadata and digests, canonical parsed live
+repository declarations, source/ref/commit/tree identities, validation summary,
+three occurrences, receipt, pointer, and watermarks commit together. Startup
+recomputes the file and catalog digests and checks all cross-table lineage. The
+exact contract and excluded enrollment/freshness/rollback behavior live in
+[Core snapshot activation](../specs/core-snapshot-activation.md).
 
 ### Rebuildable read models
 
@@ -213,7 +252,7 @@ that connection, so repair mode is not a general fail-open switch.
 
 ### Validation boundary
 
-Startup checks schema identity, the exact v1 table set and absence of
+Startup checks schema identity, the exact v2 table set and absence of
 unregistered indexes, triggers, or views, metadata versions,
 UUIDv7 lineage, transaction maximum and SQLite allocation watermark, control
 time, subject and revision kinds, source, information class, payload digest,
@@ -225,9 +264,10 @@ closed without disabling unrelated authoritative commands; explicit repair
 replaces the disposable generations.
 
 The public class currently offers secret-safe metadata and occurrence
-inspection plus the system-only integrity command. There is no administrative,
-worker, or generic mutation surface. Authentication, principal/session command
-binding, facts and reducers, operational state, authority-sensitive
+inspection plus the system-only integrity and Core activation commands. There
+is no administrative, worker, or generic mutation surface. Authentication,
+principal/session command binding, general predicates and reducers,
+operational state, authority-sensitive
 projections, bounded clock-rollback recovery, backup activation operations, and
 work lineage are later slices in the
 [kernel bootstrap plan](../plans/control-plane-kernel-bootstrap.md).
@@ -238,11 +278,11 @@ work lineage are later slices in the
   archive or temporary prototype input to humans, never a target initialization
   input.
 - The target file, WAL, and backups must be handled as `restricted` assets even
-  though the two initialization occurrences are `organization` class.
+  though the three initialization occurrences are `organization` class.
 - The production suitability of Node's built-in SQLite binding remains an open
   plan question. This slice deliberately uses the binding already exercised by
   the spike and does not settle deployment support.
-- A v1 schema mismatch is not repaired automatically. Preserve the file for
+- A schema/registry v1 mismatch is not repaired automatically. Preserve the file for
   diagnosis and use a new empty database during this pre-production slice.
 - Projection repair is narrower than schema repair: it discards only registered
   read-model generations after authoritative schema and records validate.
@@ -259,6 +299,7 @@ work lineage are later slices in the
   [ADR-0042](../adr/0042-use-rebuildable-projections-only-as-read-models.md),
   [ADR-0043](../adr/0043-order-records-by-transaction-sequence-not-timestamps.md),
   and [ADR-0044](../adr/0044-replace-the-queue-spike-database.md)
-- Contracts: [control-plane kernel](../specs/control-plane-kernel.md)
+- Contracts: [control-plane kernel](../specs/control-plane-kernel.md) and
+  [Core snapshot activation](../specs/core-snapshot-activation.md)
 - Built in: [control-plane kernel bootstrap — Phases 1–3](../plans/control-plane-kernel-bootstrap.md)
 - Product: [GitHub organization agent fleet](../prd/agent-fleet.md)

@@ -4,10 +4,12 @@ import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-import { inspectCoreCandidate } from "../src/core/git-source.ts";
+import { inspectCoreCandidate, type InspectedCoreCandidate } from "../src/core/git-source.ts";
 import { CoreValidationError, validateCoreCatalog, type CoreTreeEntry } from "../src/core/validator.ts";
+import { ControlPlaneStore } from "../src/control/store.ts";
 
 test("the bundled validator accepts the current core repository-authority shape without enrolling it", async () => {
   const entries = await validCoreEntries();
@@ -76,6 +78,91 @@ test("the Git source reads an exact commit through a bare mirror and rejects a s
     /accepts only regular Git blobs/,
   );
 });
+
+test("a validated Core candidate is retained and activated atomically with exact retry", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-core-activation-test-"));
+  const path = join(directory, "control-plane.db");
+  const candidate = await activationCandidate("a".repeat(40), "b".repeat(40));
+  const store = new ControlPlaneStore(path, () => new Date("2026-08-16T13:00:00.000Z"));
+
+  const before = store.authoritativeDigest();
+  const activated = store.activateCoreSnapshot({ candidate, expectedLastTransactionSequence: 1 });
+  assert.equal(activated.transactionSequence, 2);
+  assert.equal(activated.catalogDigest, candidate.catalogDigest);
+  assert.deepEqual(activated.transactionPositions, [0, 1, 2]);
+  assert.deepEqual(
+    store.occurrences().slice(-3).map((occurrence) => [occurrence.kind, occurrence.transactionPosition]),
+    [
+      ["core.snapshot-definition", 0],
+      ["core.snapshot-active", 1],
+      ["core.snapshot-activated", 2],
+    ],
+  );
+  assert.notEqual(store.authoritativeDigest(), before);
+  assert.deepEqual(
+    store.activateCoreSnapshot({ candidate, expectedLastTransactionSequence: 1 }),
+    activated,
+  );
+  const successor = await activationCandidate("e".repeat(40), "f".repeat(40));
+  const successorResult = store.activateCoreSnapshot({
+    candidate: successor,
+    expectedLastTransactionSequence: 2,
+  });
+  assert.equal(successorResult.transactionSequence, 3);
+  assert.notEqual(successorResult.snapshotId, activated.snapshotId);
+  assert.equal(store.occurrences().filter((occurrence) => occurrence.kind === "core.snapshot-definition").length, 2);
+  assert.equal(store.metadata().lastTransactionSequence, 3);
+  store.close();
+
+  const reopened = new ControlPlaneStore(path);
+  assert.equal(reopened.metadata().lastTransactionSequence, 3);
+  reopened.close();
+});
+
+test("Core snapshot failure rolls back retained bytes and byte tampering fails closed", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-core-rollback-test-"));
+  const failedPath = join(directory, "failed.db");
+  const candidate = await activationCandidate("c".repeat(40), "d".repeat(40));
+  const failed = new ControlPlaneStore(
+    failedPath,
+    () => new Date("2026-08-16T14:00:00.000Z"),
+    (point) => {
+      if (point === "after-core-snapshot-files") throw new Error("injected Core persistence failure");
+    },
+  );
+  const digest = failed.authoritativeDigest();
+  assert.throws(
+    () => failed.activateCoreSnapshot({ candidate, expectedLastTransactionSequence: 1 }),
+    /injected Core persistence failure/,
+  );
+  assert.equal(failed.authoritativeDigest(), digest);
+  assert.equal(failed.metadata().lastTransactionSequence, 1);
+  failed.close();
+
+  const tamperedPath = join(directory, "tampered.db");
+  const stored = new ControlPlaneStore(tamperedPath, () => new Date("2026-08-16T15:00:00.000Z"));
+  stored.activateCoreSnapshot({ candidate, expectedLastTransactionSequence: 1 });
+  stored.close();
+  const raw = new DatabaseSync(tamperedPath);
+  raw.prepare("UPDATE core_snapshot_files SET raw_bytes = ? WHERE path = ?").run(
+    Buffer.from("tampered"),
+    "organization/README.md",
+  );
+  raw.close();
+  assert.throws(() => new ControlPlaneStore(tamperedPath), /Core snapshot file (?:size|digest) mismatch/);
+});
+
+async function activationCandidate(commitId: string, treeId: string): Promise<InspectedCoreCandidate> {
+  const files = await validCoreEntries();
+  return {
+    sourceUrl: "https://github.com/frostyard/core.git",
+    ref: "refs/heads/main",
+    commitId,
+    treeId,
+    files,
+    ...validateCoreCatalog(files),
+  };
+}
 
 async function validCoreEntries(): Promise<CoreTreeEntry[]> {
   const repository = {

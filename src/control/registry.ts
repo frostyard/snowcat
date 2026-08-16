@@ -1,8 +1,8 @@
 import { isUuidV7, type JsonValue } from "./encoding.ts";
 
 export const CONTROL_PLANE_APPLICATION_ID = 1_179_405_908; // ASCII "FLNT"
-export const CONTROL_PLANE_SCHEMA_VERSION = 1;
-export const CONTROL_PLANE_REGISTRY_VERSION = 1;
+export const CONTROL_PLANE_SCHEMA_VERSION = 2;
+export const CONTROL_PLANE_REGISTRY_VERSION = 2;
 
 export const informationClasses = ["public", "organization", "restricted"] as const;
 export type InformationClass = (typeof informationClasses)[number];
@@ -37,6 +37,12 @@ export const subjectKindRegistry = {
     revisionKinds: ["sha256"],
     validateId: isUuidV7,
   },
+  "core-snapshot": {
+    authoritySystem: "fluent",
+    idScheme: "uuidv7",
+    revisionKinds: ["core-catalog-sha256"],
+    validateId: isUuidV7,
+  },
 } as const satisfies Record<string, SubjectKindContract>;
 
 export const revisionKindRegistry = {
@@ -46,12 +52,22 @@ export const revisionKindRegistry = {
   "transaction-sequence": {
     validate: (value: string) => /^[1-9][0-9]*$/.test(value) && Number.isSafeInteger(Number(value)),
   },
+  "core-catalog-sha256": {
+    validate: (value: string) => /^sha256:[0-9a-f]{64}$/.test(value),
+  },
+  "git-commit-sha1": {
+    validate: (value: string) => /^sha1:[0-9a-f]{40}$/.test(value),
+  },
 } as const;
 
 export const sourceKindRegistry = {
   "fluent-system": {
     validateId: (value: string) => value === "kernel",
     revisionKinds: [] as const,
+  },
+  "github-repository": {
+    validateId: (value: string) => /^github\.com:[1-9][0-9]{0,19}$/.test(value),
+    revisionKinds: ["git-commit-sha1"],
   },
 } as const;
 
@@ -77,6 +93,20 @@ export const recordKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isIntegrityPayload,
   },
+  "core.snapshot-definition": {
+    schemaVersion: 1,
+    recordClass: "definition",
+    subjectKinds: ["core-snapshot"],
+    minimumInformationClass: "organization",
+    validatePayload: isCoreSnapshotDefinitionPayload,
+  },
+  "core.snapshot-active": {
+    schemaVersion: 1,
+    recordClass: "fact",
+    subjectKinds: ["control-plane-database"],
+    minimumInformationClass: "organization",
+    validatePayload: isCoreSnapshotActivePayload,
+  },
 } as const;
 
 export const eventKindRegistry = {
@@ -92,6 +122,12 @@ export const eventKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isIntegrityPayload,
   },
+  "core.snapshot-activated": {
+    schemaVersion: 1,
+    subjectKinds: ["core-snapshot"],
+    minimumInformationClass: "organization",
+    validatePayload: isCoreSnapshotActivePayload,
+  },
 } as const;
 
 export const commandKindRegistry = {
@@ -102,6 +138,21 @@ export const commandKindRegistry = {
   "control-plane.check-integrity": {
     schemaVersion: 1,
     outputKinds: ["control-plane.integrity-observation", "control-plane.integrity-checked"],
+  },
+  "core.activate-snapshot": {
+    schemaVersion: 1,
+    outputKinds: ["core.snapshot-definition", "core.snapshot-active", "core.snapshot-activated"],
+  },
+} as const;
+
+export const predicateContractRegistry = {
+  "core.snapshot-active": {
+    contractVersion: 1,
+    recordClass: "fact",
+    subjectKinds: ["control-plane-database"],
+    establishedBy: ["core.activate-snapshot"],
+    precedence: "latest-transaction-sequence",
+    consumers: ["core-authority"],
   },
 } as const;
 
@@ -165,6 +216,31 @@ export interface IntegrityPayload extends Record<string, JsonValue> {
   schemaVersion: number;
 }
 
+export interface CoreSnapshotDefinitionPayload extends Record<string, JsonValue> {
+  snapshotId: string;
+  sourceRepositoryId: "github.com:1331309458";
+  sourceUrl: string;
+  sourceRef: string;
+  sourceCommitId: string;
+  sourceTreeId: string;
+  catalogDigest: string;
+  fileCount: number;
+  totalBytes: number;
+  repositoryCount: number;
+  validFixtureCount: number;
+  invalidFixtureCount: number;
+  schemaDigests: Record<string, JsonValue>;
+  importedAt: string;
+}
+
+export interface CoreSnapshotActivePayload extends Record<string, JsonValue> {
+  databaseLineageId: string;
+  snapshotId: string;
+  catalogDigest: string;
+  sourceCommitId: string;
+  activatedAt: string;
+}
+
 export function assertSubject(kind: string, id: string): asserts kind is SubjectKind {
   const contract = subjectKindRegistry[kind as SubjectKind];
   if (!contract) throw new Error(`unknown subject kind: ${kind}`);
@@ -191,6 +267,12 @@ export function assertSource(kind: string, id: string, revisionKind?: string): a
   if (revisionKind !== undefined && !contract.revisionKinds.includes(revisionKind as never)) {
     throw new Error(`source revision kind ${revisionKind} is not allowed for source kind ${kind}`);
   }
+}
+
+export function assertSourceRevision(kind: string, value: string): asserts kind is RevisionKind {
+  const revision = revisionKindRegistry[kind as RevisionKind];
+  if (!revision) throw new Error(`unknown source revision kind: ${kind}`);
+  if (!revision.validate(value)) throw new Error(`invalid ${kind} source revision: ${value}`);
 }
 
 export function informationClassAtLeast(actual: InformationClass, minimum: InformationClass): boolean {
@@ -233,6 +315,97 @@ function isIntegrityPayload(value: unknown): value is IntegrityPayload {
     value.registryVersion === CONTROL_PLANE_REGISTRY_VERSION &&
     value.result === "ok" &&
     value.schemaVersion === CONTROL_PLANE_SCHEMA_VERSION
+  );
+}
+
+function isCoreSnapshotDefinitionPayload(value: unknown): value is CoreSnapshotDefinitionPayload {
+  if (
+    !isExactObject(value, [
+      "snapshotId",
+      "sourceRepositoryId",
+      "sourceUrl",
+      "sourceRef",
+      "sourceCommitId",
+      "sourceTreeId",
+      "catalogDigest",
+      "fileCount",
+      "totalBytes",
+      "repositoryCount",
+      "validFixtureCount",
+      "invalidFixtureCount",
+      "schemaDigests",
+      "importedAt",
+    ])
+  ) {
+    return false;
+  }
+  const schemaDigests = value.schemaDigests;
+  if (!isExactObject(schemaDigests, ["repository", "surfaces", "governance"])) return false;
+  return (
+    typeof value.snapshotId === "string" &&
+    isUuidV7(value.snapshotId) &&
+    value.sourceRepositoryId === "github.com:1331309458" &&
+    typeof value.sourceUrl === "string" &&
+    /^(?:https:\/\/github\.com\/frostyard\/core\.git|git@github\.com:frostyard\/core\.git|ssh:\/\/git@github\.com:frostyard\/core\.git)$/.test(
+      value.sourceUrl,
+    ) &&
+    typeof value.sourceRef === "string" &&
+    isCanonicalCoreRef(value.sourceRef) &&
+    typeof value.sourceCommitId === "string" &&
+    /^[0-9a-f]{40}$/.test(value.sourceCommitId) &&
+    typeof value.sourceTreeId === "string" &&
+    /^[0-9a-f]{40}$/.test(value.sourceTreeId) &&
+    isSha256(value.catalogDigest) &&
+    isPositiveInteger(value.fileCount) &&
+    isNonNegativeInteger(value.totalBytes) &&
+    isNonNegativeInteger(value.repositoryCount) &&
+    isPositiveInteger(value.validFixtureCount) &&
+    isPositiveInteger(value.invalidFixtureCount) &&
+    Object.values(schemaDigests).every(isSha256) &&
+    isUtcInstant(value.importedAt)
+  );
+}
+
+function isCoreSnapshotActivePayload(value: unknown): value is CoreSnapshotActivePayload {
+  return (
+    isExactObject(value, ["databaseLineageId", "snapshotId", "catalogDigest", "sourceCommitId", "activatedAt"]) &&
+    typeof value.databaseLineageId === "string" &&
+    isUuidV7(value.databaseLineageId) &&
+    typeof value.snapshotId === "string" &&
+    isUuidV7(value.snapshotId) &&
+    isSha256(value.catalogDigest) &&
+    typeof value.sourceCommitId === "string" &&
+    /^[0-9a-f]{40}$/.test(value.sourceCommitId) &&
+    isUtcInstant(value.activatedAt)
+  );
+}
+
+function isSha256(value: unknown): value is string {
+  return typeof value === "string" && /^sha256:[0-9a-f]{64}$/.test(value);
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0;
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) > 0;
+}
+
+function isUtcInstant(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const parsed = new Date(value);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
+}
+
+function isCanonicalCoreRef(value: string): boolean {
+  return (
+    /^refs\/heads\/[A-Za-z0-9._/-]+$/.test(value) &&
+    !value.includes("..") &&
+    !value.includes("//") &&
+    !value.includes("@{") &&
+    !value.endsWith("/") &&
+    !value.endsWith(".")
   );
 }
 
