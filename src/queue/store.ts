@@ -13,6 +13,7 @@ import {
   type CompletionInput,
   type FollowUpInput,
   type ObservedWorkEvent,
+  type OperatorNote,
   type ProposedRootInput,
   type SeedWorkInput,
   type WorkArtifact,
@@ -32,6 +33,7 @@ const BUSY_TIMEOUT_MS = 5000;
 const MAX_SOURCE_REF_LENGTH = 512;
 const DEFAULT_EVENTS_SINCE_LIMIT = 100;
 const MAX_EVENTS_SINCE_LIMIT = 500;
+const MAX_OPERATOR_NOTE_LENGTH = 4000;
 
 /**
  * Schema version recorded in SQLite `PRAGMA user_version`. It equals the length
@@ -40,7 +42,7 @@ const MAX_EVENTS_SINCE_LIMIT = 500;
  * that newer code has already migrated; newer code upgrades an older database
  * in place, forward only, inside one write transaction.
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /**
  * Backup manifest emitted by `QueueStore.backup` and re-derived by
@@ -76,6 +78,21 @@ export interface QueueMetadata {
  * actors cannot be spoofed to look operator- or system-authored.
  */
 export const RESERVED_PRINCIPAL_PREFIXES = ["operator:", "policy:", "system:"] as const;
+
+/**
+ * Principals allowed to annotate work: the operator CLI and approved policy.
+ * Operator notes are advice from earlier leases and MUST NOT be forgeable by
+ * a worker, so `system:` and every worker namespace are rejected here.
+ */
+export function validateOperatorActor(actor: string, purpose: string): string {
+  const identity = actor.trim();
+  if (!identity) throw new Error(`${purpose} actor is required`);
+  const lowered = identity.toLowerCase();
+  if (!lowered.startsWith("operator:") && !lowered.startsWith("policy:")) {
+    throw new Error(`${purpose} actor "${identity}" must use the operator: or policy: principal namespace`);
+  }
+  return identity;
+}
 
 export function validateWorkerIdentity(worker: string): string {
   const identity = worker.trim();
@@ -636,14 +653,36 @@ export class QueueStore {
   }
 
   defer(id: string, actor: string, reason: string): WorkItem {
-    if (!actor.trim()) throw new Error("deferral actor is required");
-    if (!reason.trim()) throw new Error("deferral reason is required");
+    validateOperatorActor(actor, "deferral");
+    validateOperatorNoteReason(reason, "deferral reason");
     return this.transaction(() => {
       const item = this.getRequired(id);
       if (item.status !== "queued") throw new Error(`work item is not queued and admitted: ${id}`);
       const now = this.now();
-      this.db.prepare("UPDATE work_items SET admitted = 0, updated_at = ? WHERE id = ?").run(now, id);
+      this.db
+        .prepare("UPDATE work_items SET admitted = 0, operator_notes_json = ?, updated_at = ? WHERE id = ?")
+        .run(appendOperatorNote(item, { at: now, actor, action: "defer", reason }), now, id);
       this.addEvent(id, "work.deferred", actor, { reason });
+      return this.getRequired(id);
+    });
+  }
+
+  /**
+   * Appends one operator or policy note to an item without changing its
+   * status, admission, lease, or result, and records `work.noted`. The note is
+   * carried to the next lease through `operatorNotes`; it is advice about
+   * earlier leases, never a change to the definition.
+   */
+  note(id: string, actor: string, reason: string): WorkItem {
+    validateOperatorActor(actor, "note");
+    validateOperatorNoteReason(reason, "note text");
+    return this.transaction(() => {
+      const item = this.getRequired(id);
+      const now = this.now();
+      this.db
+        .prepare("UPDATE work_items SET operator_notes_json = ?, updated_at = ? WHERE id = ?")
+        .run(appendOperatorNote(item, { at: now, actor, action: "note", reason }), now, id);
+      this.addEvent(id, "work.noted", actor, { reason });
       return this.getRequired(id);
     });
   }
@@ -663,21 +702,33 @@ export class QueueStore {
     });
   }
 
+  /**
+   * Returns blocked work to the queue. The block result is not erased: it
+   * moves to the end of `previousResults`, and the operator's reason is
+   * appended to `operatorNotes`, so the next lease can read both what stopped
+   * the earlier one and what the operator said about it.
+   */
   requeue(id: string, actor: string, reason: string): WorkItem {
-    if (!actor.trim()) throw new Error("requeue actor is required");
-    if (!reason.trim()) throw new Error("requeue reason is required");
+    validateOperatorActor(actor, "requeue");
+    validateOperatorNoteReason(reason, "requeue reason");
     return this.transaction(() => {
       const item = this.getRequired(id);
       if (item.status !== "blocked") throw new Error(`work item is not blocked: ${id}`);
       const now = this.now();
+      const previousResults = item.result ? [...item.previousResults, item.result] : item.previousResults;
       this.db
         .prepare(
           `UPDATE work_items
-           SET status = 'queued', result_json = NULL, lease_owner = NULL, lease_token = NULL,
-               lease_expires_at = NULL, updated_at = ?
+           SET status = 'queued', result_json = NULL, previous_results_json = ?, operator_notes_json = ?,
+               lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = ?
            WHERE id = ?`,
         )
-        .run(now, id);
+        .run(
+          JSON.stringify(previousResults),
+          appendOperatorNote(item, { at: now, actor, action: "requeue", reason }),
+          now,
+          id,
+        );
       this.addEvent(id, "work.requeued", actor, { reason });
       return this.getRequired(id);
     });
@@ -974,7 +1025,18 @@ function decodeWorkItem(row: Row): WorkItem {
     leaseToken: row.lease_token == null ? undefined : String(row.lease_token),
     leaseExpiresAt: row.lease_expires_at == null ? undefined : String(row.lease_expires_at),
     result: row.result_json == null ? undefined : parseJson<WorkResult | undefined>(row.result_json, undefined),
+    operatorNotes: parseJson<OperatorNote[]>(row.operator_notes_json, []),
+    previousResults: parseJson<WorkResult[]>(row.previous_results_json, []),
   };
+}
+
+function appendOperatorNote(item: WorkItem, note: OperatorNote): string {
+  return JSON.stringify([...item.operatorNotes, note]);
+}
+
+function validateOperatorNoteReason(reason: string, name: string): void {
+  if (!reason.trim()) throw new Error(`${name} is required`);
+  if (reason.length > MAX_OPERATOR_NOTE_LENGTH) throw new Error(`${name} exceeds ${MAX_OPERATOR_NOTE_LENGTH} characters`);
 }
 
 function withDelivery(item: WorkItem): WorkItem {
@@ -1216,6 +1278,19 @@ const MIGRATIONS: readonly Migration[] = [
       CREATE UNIQUE INDEX IF NOT EXISTS work_items_source_ref
         ON work_items(repository, source_ref) WHERE source_ref IS NOT NULL;
     `);
+  },
+  // Rung 4: operator notes and requeue-superseded results carried on the item,
+  // so the next lease sees what happened on earlier ones.
+  (db) => {
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(work_items)").all() as Row[]).map((column) => String(column.name)),
+    );
+    if (!columns.has("operator_notes_json")) {
+      db.exec("ALTER TABLE work_items ADD COLUMN operator_notes_json TEXT NOT NULL DEFAULT '[]'");
+    }
+    if (!columns.has("previous_results_json")) {
+      db.exec("ALTER TABLE work_items ADD COLUMN previous_results_json TEXT NOT NULL DEFAULT '[]'");
+    }
   },
 ];
 

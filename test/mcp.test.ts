@@ -281,6 +281,82 @@ test("the MCP release path omits the old token and permits reclaim by another wo
   await client.close();
 });
 
+test("claim_work on a requeued item carries operator notes and prior results, and no MCP tool writes notes", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-mcp-notes-test-"));
+  const path = join(directory, "queue.db");
+  const setup = new QueueStore(path);
+  setup.setRepositoryEnabled("frostyard/updex", true);
+  const seed = setup.enqueueSeed({
+    repository: "frostyard/updex",
+    kind: "issue-resolution",
+    objective: "Resolve issue #2.",
+    instructions: "Open one pull request.",
+    acceptanceCriteria: ["A pull request is open."],
+    allowedActions: ["read", "write", "open-pr"],
+    delegableActions: [],
+    createdBy: "operator:test",
+  });
+  const first = setup.claim({ worker: "claude:updex:first" })!;
+  setup.block(seed.id, first.leaseToken!, "claude:updex:first", "Completion refused: PR artifact mismatch.");
+  setup.requeue(seed.id, "operator:cli", "PR #5 already exists — re-report it, no code change needed.");
+  setup.note(seed.id, "operator:cli", "Do not open a second pull request.");
+  setup.close();
+
+  const client = new Client({ name: "fluent-notes-test-worker", version: "0.1.0" });
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: ["--import", "tsx", "src/mcp/stdio.ts"],
+    cwd: process.cwd(),
+    env: stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path }),
+  });
+  await client.connect(transport);
+  test.after(async () => client.close());
+
+  const tools = (await client.listTools()).tools.map((tool) => tool.name).sort();
+  assert.deepEqual(tools, [
+    "block_work",
+    "claim_work",
+    "complete_work",
+    "get_work",
+    "heartbeat_work",
+    "list_work",
+    "release_work",
+  ]);
+
+  const before = parseToolText(await client.callTool({ name: "get_work", arguments: { id: seed.id } }));
+  assert.equal(before.leaseToken, undefined);
+  assert.equal(before.operatorNotes.length, 2);
+  assert.equal(before.previousResults.length, 1);
+
+  const claimed = parseToolText(
+    await client.callTool({
+      name: "claim_work",
+      arguments: { worker: "codex:updex:second", repository: "frostyard/updex", leaseSeconds: 60 },
+    }),
+  );
+  assert.equal(claimed.id, seed.id);
+  assert.match(claimed.leaseToken, /^[0-9a-f-]{36}$/);
+  assert.deepEqual(
+    claimed.operatorNotes.map((note: Record<string, unknown>) => [note.actor, note.action, note.reason]),
+    [
+      ["operator:cli", "requeue", "PR #5 already exists — re-report it, no code change needed."],
+      ["operator:cli", "note", "Do not open a second pull request."],
+    ],
+  );
+  assert.deepEqual(claimed.previousResults, [
+    { summary: "Completion refused: PR artifact mismatch.", evidence: [], artifacts: [] },
+  ]);
+  // The lease token appears in exactly one place: the top-level leaseToken field.
+  const { leaseToken, ...rest } = claimed;
+  assert.equal(JSON.stringify(rest).includes(leaseToken), false);
+  assert.equal(JSON.stringify(rest).includes(first.leaseToken!), false);
+
+  const listed = parseToolText(await client.callTool({ name: "list_work", arguments: { status: "claimed" } }));
+  assert.equal(listed[0].operatorNotes.length, 2);
+  assert.equal(listed[0].leaseToken, undefined);
+  await client.close();
+});
+
 async function callToolExpectingError(client: Client, name: string, args: Record<string, unknown>): Promise<string> {
   let result: { isError?: boolean; content: unknown[] };
   try {

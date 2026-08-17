@@ -444,9 +444,14 @@ test("an operator can defer admitted work and later approve it again", async () 
 
   assert.throws(() => queue.defer(seed.id, "", "later"), /actor is required/);
   assert.throws(() => queue.defer(seed.id, "operator:test", ""), /reason is required/);
+  assert.throws(() => queue.defer(seed.id, "claude:worker", "later"), /operator: or policy: principal namespace/);
   const deferred = queue.defer(seed.id, "operator:test", "Serialize repository writers.");
   assert.equal(deferred.status, "proposed");
   assert.equal(deferred.leaseOwner, undefined);
+  assert.deepEqual(
+    deferred.operatorNotes.map((note) => [note.actor, note.action, note.reason]),
+    [["operator:test", "defer", "Serialize repository writers."]],
+  );
   assert.equal(queue.claim({ worker: "claude:core:early" }), undefined);
   const deferredEvent = queue.events(seed.id).at(-1)!;
   assert.equal(deferredEvent.type, "work.deferred");
@@ -871,12 +876,20 @@ test("an operator can requeue blocked work and a different worker can claim it",
 
   assert.throws(() => queue.requeue(seed.id, "", "resume"), /actor is required/);
   assert.throws(() => queue.requeue(seed.id, "operator:test", ""), /reason is required/);
+  assert.throws(() => queue.requeue(seed.id, "claude:core:first", "resume"), /operator: or policy: principal namespace/);
   const requeued = queue.requeue(seed.id, "operator:test", "Input supplied.");
   assert.equal(requeued.status, "queued");
   assert.equal(requeued.result, undefined);
   assert.equal(requeued.leaseOwner, undefined);
   assert.equal(requeued.leaseToken, undefined);
   assert.equal(requeued.leaseExpiresAt, undefined);
+  // History is carried, not erased: the block reason and the requeue note travel to the next lease.
+  assert.deepEqual(requeued.previousResults, [{ summary: "Waiting for operator input.", evidence: [], artifacts: [] }]);
+  assert.equal(requeued.operatorNotes.length, 1);
+  assert.equal(requeued.operatorNotes[0]?.actor, "operator:test");
+  assert.equal(requeued.operatorNotes[0]?.action, "requeue");
+  assert.equal(requeued.operatorNotes[0]?.reason, "Input supplied.");
+  assert.equal(requeued.operatorNotes[0]?.at, requeued.updatedAt);
   assert.deepEqual(queue.events(seed.id).at(-1), {
     sequence: queue.events(seed.id).at(-1)?.sequence,
     workItemId: seed.id,
@@ -889,7 +902,69 @@ test("an operator can requeue blocked work and a different worker can claim it",
   const second = queue.claim({ worker: "codex:core:second" })!;
   assert.equal(second.id, seed.id);
   assert.notEqual(second.leaseToken, first.leaseToken);
+  assert.equal(second.operatorNotes[0]?.reason, "Input supplied.");
+  assert.equal(second.previousResults[0]?.summary, "Waiting for operator input.");
   assert.throws(() => queue.requeue(seed.id, "operator:test", "already active"), /not blocked/);
+
+  // A second block/requeue cycle appends rather than overwrites.
+  queue.block(seed.id, second.leaseToken!, "codex:core:second", "Still waiting.");
+  const again = queue.requeue(seed.id, "policy:auto-resume", "Retry once more.");
+  assert.deepEqual(
+    again.previousResults.map((result) => result.summary),
+    ["Waiting for operator input.", "Still waiting."],
+  );
+  assert.deepEqual(
+    again.operatorNotes.map((note) => [note.actor, note.action, note.reason]),
+    [
+      ["operator:test", "requeue", "Input supplied."],
+      ["policy:auto-resume", "requeue", "Retry once more."],
+    ],
+  );
+});
+
+test("an operator note appends to the item without changing its status, and workers cannot write one", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-note-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/core", true);
+  const seed = seedTestingGap(queue, "frostyard/core");
+  assert.deepEqual(seed.operatorNotes, []);
+  assert.deepEqual(seed.previousResults, []);
+
+  assert.throws(() => queue.note(seed.id, "", "hello"), /note actor is required/);
+  assert.throws(() => queue.note(seed.id, "operator:test", "  "), /note text is required/);
+  assert.throws(() => queue.note(seed.id, "claude:core:worker", "hello"), /operator: or policy: principal namespace/);
+  assert.throws(() => queue.note(seed.id, "system", "hello"), /operator: or policy: principal namespace/);
+  assert.throws(() => queue.note(seed.id, "system:expiry", "hello"), /operator: or policy: principal namespace/);
+  assert.throws(() => queue.note(seed.id, "operator:test", "x".repeat(4001)), /exceeds 4000 characters/);
+  assert.throws(() => queue.note("00000000-0000-0000-0000-000000000000", "operator:test", "hello"), /not found/);
+
+  const noted = queue.note(seed.id, "operator:test", "PR #5 already exists — re-report it, no code change needed.");
+  assert.equal(noted.status, "queued");
+  assert.equal(noted.result, undefined);
+  assert.equal(noted.leaseOwner, undefined);
+  assert.deepEqual(noted.operatorNotes, [
+    {
+      at: noted.updatedAt,
+      actor: "operator:test",
+      action: "note",
+      reason: "PR #5 already exists — re-report it, no code change needed.",
+    },
+  ]);
+  const event = queue.events(seed.id).at(-1)!;
+  assert.equal(event.type, "work.noted");
+  assert.equal(event.actor, "operator:test");
+  assert.deepEqual(event.payload, { reason: "PR #5 already exists — re-report it, no code change needed." });
+
+  // The note reaches the next lease and a claimed item can still be annotated.
+  const claimed = queue.claim({ worker: "claude:core:next" })!;
+  assert.equal(claimed.operatorNotes[0]?.reason, "PR #5 already exists — re-report it, no code change needed.");
+  const second = queue.note(seed.id, "policy:review", "Also close issue #2 in the PR body.");
+  assert.equal(second.status, "claimed");
+  assert.equal(second.leaseOwner, "claude:core:next");
+  assert.equal(second.operatorNotes.length, 2);
+  assert.equal(second.operatorNotes[1]?.action, "note");
+  assert.equal(queue.get(seed.id)?.leaseToken, claimed.leaseToken, "a note never disturbs the live lease");
 });
 
 test("cancelling the final blocked descendant makes its specialty inactive", async () => {

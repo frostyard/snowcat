@@ -158,7 +158,8 @@ operator step the guard cannot perform.
   or rebuild indexes. When `user_version` is behind the code, the forward-only
   migration ladder applies every missing rung inside a single write
   transaction; a newer database is refused. Rung 2 gives each database an
-  immutable `database_id` that backups carry.
+  immutable `database_id` that backups carry; rung 4 adds the operator-note
+  and previous-result columns with empty defaults.
 - Host layout for v1: one operator host, `FLUENT_QUEUE_DB` set to an absolute
   path outside the checkout (the default `./data/queue.db` is relative to the
   process working directory), MCP served over stdio from that host, and
@@ -214,7 +215,13 @@ operator step the guard cannot perform.
 - A blocked item is not claimable. Only the operator can resume it with
   `queue requeue <id> <reason>` or retire it with `queue cancel <id> <reason>`.
   Both paths record actor-attributed reason events; neither is exposed through
-  MCP.
+  MCP. Requeue does not erase the earlier lease: the block result moves to
+  `previousResults` and the reason becomes a `requeue` entry in
+  `operatorNotes`, both carried on the item and returned by `claim_work`, so
+  the next worker reads what happened before it starts. `queue note <id>
+  <text>` appends to `operatorNotes` with no state change; only operator and
+  policy actors can write notes, and no MCP tool does
+  ([spec rule 37](../specs/work-queue.md#rules)).
 - An operator can withdraw admission from queued, unclaimed work with `queue
   defer <id> <reason>`. The item remains in history as logical `proposed`,
   records `work.deferred`, and can later be approved or rejected normally.

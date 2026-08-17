@@ -47,6 +47,23 @@ export interface WorkResult {
   artifacts: WorkArtifact[];
 }
 
+export const operatorNoteActions = ["requeue", "defer", "prioritize", "note"] as const;
+export type OperatorNoteAction = (typeof operatorNoteActions)[number];
+
+/**
+ * One operator- or policy-authored annotation carried on the item itself, so
+ * the next lease sees what happened on earlier ones. Requeue and deferral
+ * append their reason; `note` appends without a state change. Workers never
+ * write these: the store rejects actors outside the operator and policy
+ * namespaces and no MCP tool exposes them.
+ */
+export interface OperatorNote {
+  at: string;
+  actor: string;
+  action: OperatorNoteAction;
+  reason: string;
+}
+
 /**
  * A worker-proposed child. It carries no priority: scheduling priority is
  * operator-owned and children inherit their parent's value.
@@ -84,6 +101,10 @@ export interface WorkItem {
   result?: WorkResult;
   /** Present on completed items: the delivery state derived from pull-request artifact verifications. */
   delivery?: DeliveryState;
+  /** Operator and policy annotations, oldest first; never written by workers. */
+  operatorNotes: OperatorNote[];
+  /** Results superseded by an operator requeue, oldest first: each is the block result the requeue cleared. */
+  previousResults: WorkResult[];
 }
 
 export function deriveDelivery(result: WorkResult | undefined): DeliveryState {

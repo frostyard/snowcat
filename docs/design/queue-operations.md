@@ -130,10 +130,22 @@ npm run --silent queue -- show <id>                     # full item plus its eve
 npm run --silent queue -- approve <id>                  # proposed → queued (claimable)
 npm run --silent queue -- reject <id> "<reason>"        # proposed → cancelled
 npm run --silent queue -- defer <id> "<reason>"         # queued, unclaimed → proposed again
+npm run --silent queue -- note <id> "<text>"            # annotate; no state change
 ```
 
 Worker follow-ups land as `proposed` children with `parentId`; approve them the
 same way. Their permissions can never exceed the parent's `delegableActions`.
+
+Every `defer` and `requeue` reason, and every `note`, is appended to the item's
+`operatorNotes` (`{ at, actor, action, reason }`) and travels with the item:
+`claim_work`, `get_work`, `list_work`, `list`, and `show` all return it, so
+the next worker reads what you said about earlier leases before it starts.
+Use `note` when there is nothing to move — an item you are about to approve
+that already has a pull request, a claimed item whose worker should know
+something — and keep the note about the item's history, not its definition:
+notes override nothing in the objective, instructions, or acceptance criteria
+(change those by cancelling and re-importing or re-seeding). Only the operator
+CLI and approved policy can write notes; workers cannot, and no MCP tool does.
 
 ## Run workers
 
@@ -237,9 +249,16 @@ events and leaves anything alone while GitHub is unavailable.
 **Blocked items** need an operator exit:
 
 ```bash
+npm run --silent queue -- show <id>                 # read result.summary: why the worker stopped
 npm run --silent queue -- requeue <id> "<reason>"   # back to queued, same definition
 npm run --silent queue -- cancel <id> "<reason>"    # terminal
 ```
+
+Write the requeue reason for the next worker, not for yourself: it becomes a
+`requeue` entry in `operatorNotes`, and the block reason it clears is kept as
+the last entry of `previousResults`, so the next lease sees both ("first lease
+blocked: completion refused; operator: PR #5 already exists — re-report it, no
+code change needed"). Nothing about earlier leases is erased by a requeue.
 
 A lease that expires (worker died) is not moved anywhere: the item stays
 `claimed` with its stale `leaseOwner` until the next claim re-leases it and

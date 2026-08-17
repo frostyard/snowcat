@@ -29,6 +29,8 @@ claim, renew, and resolve it.
 | `leaseExpiresAt` | timestamp | claimed only | UTC expiry |
 | `delivery` | enum | completed only | Derived from pull-request artifact verifications: `none` (no pull request reported), `unverified`, `open`, `closed`, or `merged`. Delivery is the merge of the reported pull request, not outcome achievement |
 | `result` | result | completed, blocked, or cancelled with a reason only | Completed: worker summary, evidence, and artifacts. Blocked: `summary` is the block reason with empty `evidence` and `artifacts`. Cancelled by proposal rejection or blocked-work cancellation: `summary` is the operator reason with empty `evidence` and `artifacts`. Absent on `proposed`, `queued`, and `claimed` items |
+| `operatorNotes` | note[] | yes | Operator and policy annotations carried on the item, oldest first, each `{ at, actor, action, reason }` with `action` one of `requeue`, `defer`, `prioritize`, or `note`. Appended by `requeue`, `defer`, and `note` (`prioritize` is reserved for the planned operator prioritize command); empty on creation; never written by a worker or through MCP |
+| `previousResults` | result[] | yes | Results superseded by an operator requeue, oldest first: each is the block `result` that requeue cleared. Empty until the first requeue; never trimmed |
 
 The action vocabulary is `read`, `write`, `run-tests`, `open-issue`,
 `open-pr`, and `create-followup`. Merge, release, and deploy are absent and
@@ -72,6 +74,7 @@ npm run queue -- reject <work-item-id> <reason>
 npm run queue -- defer <work-item-id> <reason>
 npm run queue -- requeue <work-item-id> <reason>
 npm run queue -- cancel <work-item-id> <reason>
+npm run queue -- note <work-item-id> <text>
 npm run queue -- list [proposed|queued|claimed|completed|blocked|cancelled]
 npm run queue -- show <work-item-id>
 npm run queue -- events [--since <sequence>] [--repository <owner/repo>] [--limit <1-500>]
@@ -106,10 +109,19 @@ prints one JSON line per new event until interrupted. Neither mutates the queue
 and neither is exposed through MCP.
 
 `requeue` and `cancel` are operator-only exits for `blocked` work. Requeue
-clears the block result and returns the admitted item to claimable `queued`
-state with a `work.requeued` event. Cancel stores the operator reason in
-`result.summary`, moves the item to terminal `cancelled`, and records
-`work.cancelled`. Neither operation is exposed through MCP.
+moves the block result to the end of `previousResults`, appends a `requeue`
+note with the operator reason to `operatorNotes`, and returns the admitted item
+to claimable `queued` state with a `work.requeued` event. Cancel stores the
+operator reason in `result.summary`, moves the item to terminal `cancelled`,
+and records `work.cancelled`. Neither operation is exposed through MCP.
+
+`note` appends one operator annotation to `operatorNotes` without changing the
+item's status, admission, lease, or result, and records `work.noted` with the
+text as its `reason`. It is how an operator tells the next lease what happened
+on earlier ones ("PR #5 already exists — re-report it, no code change needed")
+when no state change is due. Notes are advice, not definition: they override
+nothing in the objective, instructions, acceptance criteria, or actions. The
+command is not exposed through MCP.
 
 ## Rules
 
@@ -175,8 +187,10 @@ state with a `work.requeued` event. Cancel stores the operator reason in
     rung is idempotent, and `SCHEMA_VERSION` equals the ladder length. Rung 1
     is the baseline schema with admission triggers; rung 2 adds
     `queue_metadata` carrying an immutable per-database `database_id` and
-    `created_at`. Processes running code from before the version guard existed
-    are stopped by rule 20's database constraint, not by this check.
+    `created_at`; rung 3 adds `source_ref`; rung 4 adds `operator_notes_json`
+    and `previous_results_json` (rule 37). Processes running code from before
+    the version guard existed are stopped by rule 20's database constraint,
+    not by this check.
 22. Scheduling priority is operator-owned. Only operator-authored or
     approved-policy seed work MAY specify `priority`, and it MUST be a safe
     integer. A worker follow-up MUST NOT carry a `priority` field: the MCP
@@ -191,14 +205,18 @@ state with a `work.requeued` event. Cancel stores the operator reason in
     the MCP schema and `QueueStore`, so `createdBy` and event actors cannot be
     spoofed to look operator- or system-authored.
 24. A `blocked` item MUST leave that state only through an operator-attributed
-    requeue or cancellation. Requeue MUST preserve admission, clear the block
-    result and lease fields, return the item to claimable `queued`, and record
-    `work.requeued`. Cancellation MUST clear lease fields, store the operator
-    reason as `result.summary`, move the item to terminal `cancelled`, and
-    record `work.cancelled`. Neither operation is a worker MCP tool.
+    requeue or cancellation. Requeue MUST preserve admission, clear the lease
+    fields, move the block `result` to the end of `previousResults` rather than
+    discard it, append a `requeue` note carrying the operator reason to
+    `operatorNotes` (rule 37), return the item to claimable `queued`, and
+    record `work.requeued`. Cancellation MUST clear lease fields, store the
+    operator reason as `result.summary`, move the item to terminal
+    `cancelled`, and record `work.cancelled`. Neither operation is a worker
+    MCP tool.
 25. An operator MAY withdraw admission only from an admitted, unclaimed
     `queued` item. Deferral MUST preserve the definition and stored `queued`
     status, set `admitted = 0`, record `work.deferred` with actor and reason,
+    append a `defer` note carrying that reason to `operatorNotes` (rule 37),
     make the item logically `proposed` and unclaimable, and leave it eligible
     for the existing approval or rejection paths. Deferral MUST NOT be exposed
     through worker MCP.
@@ -309,6 +327,20 @@ state with a `work.requeued` event. Cancel stores the operator reason in
     operator-held repositories), MUST open the store per decision without
     creating it, and MUST throw when the configured database does not exist.
     Without the variable, opt-in alone governs.
+37. `operatorNotes` and `previousResults` are carried on the item so the next
+    lease sees what happened on earlier ones. Every note MUST record `at`,
+    `actor`, `action`, and a non-empty `reason` of at most 4,000 characters,
+    and MUST be appended, never edited, reordered, or removed. Only an actor in
+    the `operator:` or `policy:` namespace MAY append one: `QueueStore` MUST
+    reject every other actor for `requeue`, `defer`, and `note`, and no MCP
+    tool MAY write a note. `note <id> <text>` MUST append an `action = "note"`
+    entry and record `work.noted` without changing status, admission, lease,
+    or result. `claim_work`, `get_work`, `list_work`, `list`, and `show` MUST
+    return both arrays (empty on a fresh item) and MUST NOT reveal a lease
+    token through them. Notes are advice about earlier leases: they MUST NOT
+    change the objective, instructions, acceptance criteria, `allowedActions`,
+    or `delegableActions`. Rung 4 of the migration ladder adds both columns
+    with an empty-array default so pre-rung items read as note-free.
 
 ## Derived artifacts
 
