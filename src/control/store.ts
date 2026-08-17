@@ -1541,7 +1541,7 @@ export class ControlPlaneStore {
     }
   }
 
-  recordGitHubPullRequestDelivery(
+  recordVerifiedGitHubPullRequestDelivery(
     input: GitHubPullRequestDeliveryInput,
   ): GitHubPullRequestDeliveryResult {
     const normalized = normalizeGitHubPullRequestDeliveryInput(input);

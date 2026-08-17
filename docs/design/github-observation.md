@@ -33,10 +33,11 @@ GitHub read APIs ───► leased reconciler ─────► checkpoints /
 The initial implementation supports repository identity and enrollment facts
 already present in the target kernel. It now also includes the first internal
 typed source command for an already verified, allowlisted, same-repository
-pull-request delivery. HTTP HMAC verification, delivery audit, reconciliation
-checkpoints, truthful gap creation and repair, the other observation families,
-and retention pruning remain. The source adapter stays unregistered until that
-complete path is executable.
+pull-request delivery and the pure exact-body HMAC verifier/normalizer that
+precedes it. Callable HTTP routing, delivery audit, reconciliation checkpoints,
+truthful gap creation and repair, the other observation families, and retention
+pruning remain. The source adapter stays unregistered until that complete path
+is executable.
 
 ## Design
 
@@ -146,7 +147,7 @@ revision. Checkpoints and gaps use deterministic source
 own checkpoint or gap digest binds the repository subject, but is not
 misrepresented as a revision issued by GitHub.
 
-The implemented `recordGitHubPullRequestDelivery` store command begins after
+The implemented `recordVerifiedGitHubPullRequestDelivery` store command begins after
 raw-body authentication. It accepts only an enrolled immutable repository,
 registered pull-request action, request bound of 25 MiB, same-repository base
 and head, typed commit revisions, state/merge fields, actor and source times.
@@ -155,6 +156,13 @@ merge state, and GUID reuse with changed input. Its three occurrences are
 independently verified on database reopen. It deliberately does not create a
 source gap: a checkpointed coverage boundary must exist before a missing
 interval can be stated truthfully.
+
+The implemented verifier accepts configured App identity and secret plus the
+exact delivery/event/content-type/signature headers and raw body. It checks the
+25 MiB bound, authenticates the bytes in constant time before parsing, and maps
+only safe numeric identities, registered action, state, revisions, actor, and
+source times. It retains no raw body or free-form GitHub content. It is a pure
+boundary today; no network route invokes it yet.
 
 ### Reconciliation cycle
 
@@ -289,10 +297,11 @@ complete coverage.
   for repository identity only. It is not yet webhook ingress, pagination,
   App authentication, delivery audit, or the observation adapter described
   here.
-- `src/control/store.ts` implements only the trusted post-authentication
-  pull-request delivery transaction. It is not callable ingress and must not be
-  treated as proof that raw-body HMAC verification, delivery audit, source
-  checkpointing, gap repair, or retention enforcement exists.
+- `src/github/webhook.ts` and `src/control/store.ts` implement the pure
+  exact-body verifier/normalizer and trusted post-authentication pull-request
+  delivery transaction. They are not callable ingress and must not be treated
+  as proof that delivery audit, source checkpointing, gap repair, or retention
+  enforcement exists.
 - Follow the
   [required-check ruleset runbook](required-check-ruleset-operations.md) only
   when the adapter is ready for its real-repository acceptance test.

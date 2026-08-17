@@ -191,7 +191,21 @@ not already retained is materialized through the exact-commit Git source path.
 
 ### Verified pull-request delivery command
 
-`ControlPlaneStore.recordGitHubPullRequestDelivery(input)` is an internal typed
+`verifyAndNormalizeGitHubPullRequestWebhook(request)` is the implemented
+pre-transaction trust boundary. It accepts one configured positive App ID, a
+32–1024-byte secret, lowercase delivery GUID, event and content-type headers,
+`sha256=<lowercase-hex>` signature, and exact raw bytes. The body is non-empty
+and at most 25 MiB. The verifier authenticates those exact bytes with
+HMAC-SHA-256 and constant-time digest comparison before event dispatch or JSON
+parsing. It then requires `pull_request`, one registered action, safe positive
+numeric GitHub IDs, canonical UTC source times, and the selected repository,
+sender, base, head, state, draft, merge, and revision fields. It rejects fork
+heads and inconsistent action/state/merge shapes. The result contains only the
+typed command input; all other GitHub fields are discarded. Configuration,
+headers, authentication, body bounds, unsupported event/action/shape, and
+malformed payloads have closed non-source-derived failure codes.
+
+`ControlPlaneStore.recordVerifiedGitHubPullRequestDelivery(input)` is an internal typed
 acceptance boundary for a caller that has already verified an exact GitHub App
 webhook body. It is not an HTTP or signature-verification endpoint. Its input is
 an exact object containing App ID, lowercase delivery GUID, `sha256:` body
@@ -226,10 +240,11 @@ fails closed.
 
 Startup re-derives the selected-observation and command-input digests and checks
 the prior enrollment, subjects, revisions, sources, causal links, output order,
-result, and retention deadline. This slice does not implement raw-body HMAC
-verification, HTTP ingress, delivery audit, checkpoints, source gaps, repair,
-or durable-detail pruning. In particular it does not fabricate a source gap
-without an established checkpoint lower bound.
+result, and retention deadline. The pure verifier is implemented, but no HTTP
+route yet connects it to this command. This slice does not implement callable
+ingress, delivery audit, checkpoints, source gaps, repair, or durable-detail
+pruning. In particular it does not fabricate a source gap without an
+established checkpoint lower bound.
 
 ### Projection interface
 

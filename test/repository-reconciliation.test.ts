@@ -167,7 +167,7 @@ test("verified GitHub pull-request deliveries are enrollment-bound, replayable, 
   };
 
   assert.throws(
-    () => store.recordGitHubPullRequestDelivery(input),
+    () => store.recordVerifiedGitHubPullRequestDelivery(input),
     /previously enrolled repository/,
   );
   assert.equal(store.metadata().lastTransactionSequence, 1);
@@ -195,7 +195,7 @@ test("verified GitHub pull-request deliveries are enrollment-bound, replayable, 
 
   now = new Date("2026-08-17T12:10:00.000Z");
   const before = store.metadata().lastTransactionSequence;
-  const result = store.recordGitHubPullRequestDelivery(input);
+  const result = store.recordVerifiedGitHubPullRequestDelivery(input);
   assert.equal(result.transactionSequence, before + 1);
   assert.deepEqual(result.transactionPositions, [0, 1, 2]);
   assert.equal(store.projectionHealth()[0]?.status, "stale");
@@ -214,11 +214,11 @@ test("verified GitHub pull-request deliveries are enrollment-bound, replayable, 
   assert.equal("title" in observedPayload, false);
   assert.equal("body" in observedPayload, false);
 
-  const replay = store.recordGitHubPullRequestDelivery(input);
+  const replay = store.recordVerifiedGitHubPullRequestDelivery(input);
   assert.deepEqual(replay, result);
   assert.equal(store.metadata().lastTransactionSequence, result.transactionSequence);
   assert.throws(
-    () => store.recordGitHubPullRequestDelivery({ ...input, requestBytes: input.requestBytes + 1 }),
+    () => store.recordVerifiedGitHubPullRequestDelivery({ ...input, requestBytes: input.requestBytes + 1 }),
     /reused with different verified content/,
   );
   assert.equal(store.metadata().lastTransactionSequence, result.transactionSequence);
@@ -279,10 +279,10 @@ test("GitHub pull-request delivery rejects forks and closed-state test merge ide
       sourceUpdatedAt: "2026-08-17T12:59:00.000Z",
     },
   };
-  assert.throws(() => store.recordGitHubPullRequestDelivery(base), /inconsistent merge shape/);
+  assert.throws(() => store.recordVerifiedGitHubPullRequestDelivery(base), /inconsistent merge shape/);
   assert.throws(
     () =>
-      store.recordGitHubPullRequestDelivery({
+      store.recordVerifiedGitHubPullRequestDelivery({
         ...base,
         pullRequest: {
           ...base.pullRequest,
