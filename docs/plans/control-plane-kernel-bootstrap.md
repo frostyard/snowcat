@@ -1,13 +1,14 @@
 # Plan: Control-plane kernel bootstrap
 
-This plan replaces the disposable queue-spike database with a clean
-fact-oriented control-plane kernel under
-[ADR-0044](../adr/0044-replace-the-queue-spike-database.md). It is the detailed
-delivery plan for Phases 1 and 3 of the
-[product foundation roadmap](product-foundation-roadmap.md); the implemented
+This plan built the clean fact-oriented control-plane kernel originally
+motivated by [ADR-0044](../adr/0044-replace-the-queue-spike-database.md). It
+was the detailed delivery plan for Phases 1 and 3 of the
+[product foundation roadmap](product-foundation-roadmap.md). Under
+[ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md) the
 [queue execution boundary](../design/queue-execution-boundary.md) and
-[work-queue contract](../specs/work-queue.md) remain the live prototype until
-the bounded cutover in Phase 5 below.
+[work-queue contract](../specs/work-queue.md) are the v1 work engine, the
+kernel is an authority and observation sidecar, and Phase 5 below (cutover) is
+withdrawn; the [recovery plan](recover.md) carries the delivery order.
 
 ## Phase 1 — Specify the clean kernel boundary (medium)
 
@@ -129,8 +130,12 @@ the bounded cutover in Phase 5 below.
   over-capacity, held, or information-ineligible claim creates no attempt or
   lease.
 
-## Phase 5 — Cut over without importing spike records (medium)
+## Phase 5 — Cut over without importing spike records (withdrawn 2026-08-17)
 
+- Withdrawn by
+  [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md):
+  the queue store is the v1 work engine and there is no cutover. The steps
+  below are retained for history only.
 - Do not begin until the target work path and the roadmap prerequisites used by
   its authority checks are production-ready.
 - Run the [ADR-0044](../adr/0044-replace-the-queue-spike-database.md) cutover:

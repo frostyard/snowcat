@@ -6,8 +6,11 @@ Living document. Rationale:
 [ADR-0005](../adr/0005-admit-worker-created-work-before-claiming.md), and
 [ADR-0006](../adr/0006-enforce-admission-in-the-database.md), with the
 per-repository coordinator named by
-[ADR-0020](../adr/0020-call-the-repository-coordinator-repositorycontroller.md).
-Contracts: [work queue](../specs/work-queue.md).
+[ADR-0020](../adr/0020-call-the-repository-coordinator-repositorycontroller.md),
+and promotion to the v1 work engine by
+[ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md).
+Contracts: [work queue](../specs/work-queue.md). Delivery:
+[recovery plan](../plans/recover.md).
 
 ## Overview
 
@@ -207,8 +210,11 @@ operator step the guard cannot perform.
 - Product: [agent fleet PRD](../prd/agent-fleet.md)
 - Contracts: [work queue](../specs/work-queue.md)
 - Built in: [queue vertical spike](../plans/queue-vertical-spike.md)
-- Replacement decision and plan:
-  [ADR-0044](../adr/0044-replace-the-queue-spike-database.md) and
+- Promotion decision and plan:
+  [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md) and
+  [recovery plan](../plans/recover.md), superseding
+  [ADR-0044](../adr/0044-replace-the-queue-spike-database.md) and the
   [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md)
+  cutover
 - Source repository ownership:
   [ADR-0045](../adr/0045-host-fluent-under-frostyard.md)

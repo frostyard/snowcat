@@ -207,6 +207,9 @@ state with a `work.requeued` event. Cancel stores the operator reason in
 - Product: [maintenance fleet PRD](../prd/agent-fleet.md)
 - Context: [queue execution boundary](../design/queue-execution-boundary.md)
 - Delivery: [queue vertical spike](../plans/queue-vertical-spike.md)
-- Replacement decision and plan:
-  [ADR-0044](../adr/0044-replace-the-queue-spike-database.md) and
+- Promotion decision and plan:
+  [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md) and
+  [recovery plan](../plans/recover.md), superseding
+  [ADR-0044](../adr/0044-replace-the-queue-spike-database.md) and the
   [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md)
+  cutover

@@ -1,6 +1,6 @@
 # 0044 — Replace the queue spike database
 
-- **Status:** Accepted
+- **Status:** Superseded by [0059](0059-adopt-the-queue-store-as-the-v1-work-engine.md)
 - **Date:** 2026-08-16
 
 ## Context

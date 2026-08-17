@@ -73,6 +73,7 @@ Docs are split by the question they answer:
 - [0056 — Derive required checks from enforced GitHub rules](adr/0056-derive-required-checks-from-enforced-github-rules.md)
 - [0057 — Require webhook ingress for GitHub observation](adr/0057-require-webhook-ingress-for-github-observation.md)
 - [0058 — Bound GitHub observation recovery and retention](adr/0058-bound-github-observation-recovery-and-retention.md)
+- [0059 — Adopt the queue store as the v1 work engine](adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md)
 
 ### Domain language
 
@@ -111,6 +112,7 @@ Docs are split by the question they answer:
 - [Product foundation roadmap](plans/product-foundation-roadmap.md)
 - [Control-plane kernel bootstrap](plans/control-plane-kernel-bootstrap.md)
 - [Core snapshot ingestion](plans/core-snapshot-ingestion.md)
+- [Recover a working engine](plans/recover.md)
 
 ### Product requirements
 
