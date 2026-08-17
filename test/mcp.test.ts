@@ -312,6 +312,12 @@ test("claim_work on a requeued item carries operator notes and prior results, an
   await client.connect(transport);
   test.after(async () => client.close());
 
+  // Clients without the portable skill still get the check-for-existing-work
+  // rule from the server's own instructions.
+  assert.match(client.getInstructions() ?? "", /check whether the work already exists/);
+  assert.match(client.getInstructions() ?? "", /operatorNotes when present/);
+  assert.match(client.getInstructions() ?? "", /rather than opening a duplicate/);
+
   const tools = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(tools, [
     "block_work",

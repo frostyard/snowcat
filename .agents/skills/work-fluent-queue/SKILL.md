@@ -27,12 +27,23 @@ its sandbox; Fluent only owns queue authorization and bookkeeping.
    requeued past. If a note says the work already exists (for example a pull
    request is already open), verify it on GitHub and report it rather than
    redoing the work; if a note conflicts with the definition, block and say so.
-6. Keep the lease token private. Never write it into repository files, logs,
+6. Before changing anything, check whether the work already exists. Read
+   `operatorNotes` when present, and for an item with a `sourceRef` look for
+   open or merged pull requests that reference the issue (its linked pull
+   requests, or `gh pr list --state all --search "<number>"`) and for a branch
+   named for it. If a merged pull request resolves it, `complete_work`
+   re-reporting that pull request as the artifact with evidence and no code
+   change. If an open pull request resolves it, review it against the
+   acceptance criteria and either re-report it or block with what is missing.
+   Do not open a second pull request.
+7. Keep the lease token private. Never write it into repository files, logs,
    issues, pull requests, or attempt-report evidence.
 
 ## Do the work
 
 - Perform only actions listed in `allowedActions`. Absence means prohibition.
+- Pull the target repository's default branch immediately before branching,
+  so a lease taken seconds before a merge does not build on a stale base.
 - Treat execution isolation, credentials, tools, and network access as the
   client environment's responsibility; do not assume Fluent provided a sandbox.
 - Call `heartbeat_work` before and after a step likely to approach the lease
