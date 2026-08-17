@@ -16,6 +16,7 @@ import {
   type InspectedCoreCandidate,
 } from "../src/core/git-source.ts";
 import { CoreValidationError, validateCoreCatalog, type CoreTreeEntry } from "../src/core/validator.ts";
+import { synchronizeCoreSource } from "../src/core/synchronize.ts";
 import { ControlPlaneStore, CoreSnapshotPersistenceError } from "../src/control/store.ts";
 import { uuidV7 } from "../src/control/encoding.ts";
 
@@ -141,6 +142,7 @@ test("the Git source reads an exact commit through a bare mirror and rejects a s
       error.commitId !== undefined &&
       /accepts only regular Git blobs/.test(error.message),
   );
+
 });
 
 test("a Core candidate rejection is bounded, idempotent, queryable, and non-authoritative", async () => {
@@ -698,6 +700,35 @@ test("a validated Core candidate is retained and activated atomically with exact
   const reopened = new ControlPlaneStore(path);
   assert.equal(reopened.metadata().lastTransactionSequence, 4);
   reopened.close();
+});
+
+test("the shared source synchronizer activates and then records an unchanged eligible check", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-core-synchronizer-test-"));
+  let now = new Date("2026-08-16T13:30:00.000Z");
+  const store = new ControlPlaneStore(join(directory, "control-plane.db"), () => now);
+  const candidate = await activationCandidate("4".repeat(40), "5".repeat(40));
+  const config = {
+    sourceUrl: candidate.sourceUrl,
+    ref: candidate.ref,
+    mirrorPath: join(directory, "unused.git"),
+  };
+  const adapters = { inspectCandidate: async () => candidate };
+  const first = await synchronizeCoreSource(config, store, 1, adapters);
+  assert.equal(first.status, "accepted");
+  if (first.status !== "accepted") return;
+  assert.equal(first.activation, "activated");
+  assert.equal(first.activationResult?.transactionSequence, 2);
+  assert.equal(first.sourceCheck.transactionSequence, 3);
+
+  now = new Date("2026-08-16T13:45:00.000Z");
+  const unchanged = await synchronizeCoreSource(config, store, 3, adapters);
+  assert.equal(unchanged.status, "accepted");
+  if (unchanged.status !== "accepted") return;
+  assert.equal(unchanged.activation, "unchanged");
+  assert.equal(unchanged.activationResult, null);
+  assert.equal(unchanged.sourceCheck.transactionSequence, 4);
+  assert.equal(store.coreAdmissionReadiness().lastValidatedAt, now.toISOString());
+  store.close();
 });
 
 test("an attributed operator rollback creates a new snapshot and preserves later reactivation", async () => {

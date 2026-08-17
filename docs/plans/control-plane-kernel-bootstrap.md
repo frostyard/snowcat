@@ -71,8 +71,8 @@ the bounded cutover in Phase 5 below.
 - The first Phase 3 slice now implements registered immutable projection
   generations with source sequence and content digests, atomic shadow
   publication, explicit health, class/scope filtering, current-source recheck,
-  and projection-only repair. It has no operational-state source yet because no
-  target operational state exists.
+  and projection-only repair. The later Core polling slice adds one validated
+  operational-state singleton, but it is deliberately not a projection source.
 - The implemented subject lookup and payload-free event cursor rebuild from
   authoritative subjects, definitions, and events. Tests prove staleness is
   conservative, access is filtered, corruption fails the read closed, failed

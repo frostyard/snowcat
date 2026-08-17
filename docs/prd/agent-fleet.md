@@ -325,6 +325,11 @@ targets are required before this PRD can become Approved.
     active source commit. Rewinds, unrelated history, and rollbacks MUST require
     an attributed operator action and MUST NOT delete prior snapshots.
 65. V1 MUST support manual synchronization and configurable periodic polling.
+    The default healthy cadence MUST be 15 minutes from prior completion, with
+    one leased run, 30/60-minute consecutive source-outage backoff, and
+    suppression only for consecutive equivalent candidate-invalid or
+    continuity-blocked detail. Successful unchanged checks MUST remain durable
+    freshness evidence.
     After 24 hours without a successfully fetched and validated source ref, new
     goal-derived discovery and organization-dependent admission MUST fail
     closed by default while existing context and admitted work remain usable.
@@ -1874,15 +1879,17 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   automatic outcomes, deterministic 24-hour read, and typed override decision
   with its 24-hour cap are implemented. Ordinary source-check and rejection
   detail now has a typed 30-day/10,000-item retention boundary with protected
-  readiness and decision evidence. The kernel does not yet implement a target work,
-general fact, operational-state, controller, or worker mutation path and never
+  readiness and decision evidence. A leased deterministic `CoreSourceController`
+  now owns the first narrow operational-state singleton and periodic synchronization.
+  The kernel does not yet implement a target work, general fact, general
+operational-state, repository/fleet controller, or worker mutation path and never
 reads or imports the spike database.
 
 ### Remaining design and delivery tracks
 
 | Track | What remains before implementation is well specified |
 | --- | --- |
-| Core contract and migration | Remaining organization JSON Schemas and fixtures, canonical-surface migrations, polling controls, and enrollment reconciliation |
+| Core contract and migration | Remaining organization JSON Schemas and fixtures, canonical-surface migrations, and enrollment reconciliation |
 | Control-plane domain model | Execute the [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md): specify exact durable schemas, predicates, reducers, events, projections, invalidation, idempotency, and state machines in a fresh target database shared by RepositoryController, FleetController, ProcessObserver, scheduling, and decisions |
 | GitHub observation | GitHub App permissions, installation and actor mapping, CI/review/merge and artifact reconciliation, polling versus webhooks, forks, outage behavior, and external decision signals |
 | Workflow contracts | Versioned role briefs, evidence schemas, skills, attempt budgets, and deterministic gates for maintenance, planning, review, implementation, repair, and verification |
@@ -1959,8 +1966,8 @@ reads or imports the spike database.
   GitHub actors?
 - How do fork-based pull requests fit the actor, repository, head, and duplicate
   checks, and which enrolled repositories permit that contribution route?
-- What polling and backoff schedule should v1 use, when are GitHub webhooks
-  justified, and what explicit signal records maintainer acceptance?
+- When are GitHub webhooks justified beyond the implemented Core polling
+  controller, and what explicit signal records maintainer acceptance?
 - Which narrowly defined proposal classes, if any, may a future approved
   deterministic policy admit without individual operator action? V1 begins
   with explicit operator admission for every worker-created proposal.
@@ -2076,7 +2083,9 @@ reads or imports the spike database.
   with stale-source overrides capped by
   [ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md), and the
   check-detail retention boundary in
-  [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md), and the
+  [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md), with leased
+  polling defined by
+  [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md), and the
   [Fluent ubiquitous language](../domain/ubiquitous-language.md)
 - Designs: [queue execution boundary](../design/queue-execution-boundary.md),
   [control-plane kernel](../design/control-plane-kernel.md), and
@@ -2086,7 +2095,8 @@ reads or imports the spike database.
   [core snapshot verification](../specs/core-snapshot-verification.md), plus
   [Core snapshot activation](../specs/core-snapshot-activation.md) and
   [Core source readiness](../specs/core-source-readiness.md), plus
-  [Core check-detail retention](../specs/core-check-detail-retention.md)
+  [Core check-detail retention](../specs/core-check-detail-retention.md) and
+  [Core source polling](../specs/core-source-polling.md)
 - Delivery: [queue vertical spike](../plans/queue-vertical-spike.md),
   [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md),
   [core snapshot ingestion](../plans/core-snapshot-ingestion.md), and

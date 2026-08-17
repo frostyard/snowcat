@@ -14,7 +14,7 @@ no generic record-writing, fact-writing, administrative, or worker interface.
 | Environment variable | `FLUENT_CONTROL_DB` | Optional; target database path |
 | Default path | `./data/control-plane.db` | Distinct from the queue-spike default |
 | SQLite application ID | `1179405908` | Decimal encoding of `FLNT` |
-| Schema version | `2` | Stored in both `PRAGMA user_version` and metadata |
+| Schema version | `3` | Stored in both `PRAGMA user_version` and metadata |
 | Registry version | `8` | Stored in metadata and both initialization payloads |
 | Node runtime | `>=24.0.0` | Required for the stable `node:sqlite` surface and online backup API |
 | Database lineage ID | UUIDv7 | Generated once by the server; never reused or inferred from path |
@@ -78,7 +78,7 @@ invalid:
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
   "operatorPrincipalId": "0198b0a6-c200-7abc-8def-0123456789ac",
   "registryVersion": 8,
-  "schemaVersion": 2
+  "schemaVersion": 3
 }
 ```
 
@@ -102,7 +102,7 @@ The integrity observation and event payload have this exact shape:
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
   "registryVersion": 8,
   "result": "ok",
-  "schemaVersion": 2
+  "schemaVersion": 3
 }
 ```
 
@@ -198,7 +198,7 @@ The manifest has this exact shape:
 | `lastTransactionSequence` | Highest durable source transaction in the artifact |
 | `nextTransactionSequence` | Exactly `lastTransactionSequence + 1` |
 | `controlTimeWatermark` | Preserved canonical UTC watermark |
-| `authoritativeDigest` | SHA-256 over canonical rows from metadata, transactions, subjects, occurrences, record/event subtypes, receipts, Core snapshot metadata/file identities/parsed records, the active pointer, and SQLite's transaction allocation; raw bytes are transitively bound by startup-verified file digests and projections are excluded |
+| `authoritativeDigest` | SHA-256 over canonical rows from metadata, transactions, subjects, occurrences, record/event subtypes, receipts, Core snapshot metadata/file identities/parsed records, active pointer, Core poll operational state, and SQLite's transaction allocation; raw bytes are transitively bound by startup-verified file digests and projections are excluded |
 | `createdAt` | Server UTC time at which backup creation began; not a control transaction time |
 
 `ControlPlaneStore.verifyBackup(manifest, expectation)` requires the caller's
@@ -249,6 +249,7 @@ source identity.
 | `core_snapshots` | Retained snapshot lineage | Snapshot/source/catalog identities and definition/fact/event/transaction references |
 | `core_snapshot_files` | Exact snapshot contents | Path, mode, Git object, size, content digest, optional canonical parsed live declaration, and raw bytes |
 | `core_active_snapshot` | Checked current-authority pointer | Singleton reference to the latest snapshot activation fact and transaction |
+| `core_poll_state` | CoreSourceController operational state | Singleton schedule v1; bounded healthy interval; due/prune times; outage streak; one expiring lease; last completion and monotonic counters |
 | `projection_generations` | Immutable read-model build metadata | Registered versions, source/output digests, source watermark, evaluation/build time, row count, and invariant result |
 | `projection_heads` | Active-generation pointers | One head per registered projection; atomically references one validated generation |
 | `projection_subject_lookup` | Subject lookup rows | Generation-scoped stable subject and creation-definition identity plus information class/scope |
@@ -296,7 +297,7 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
    initialization transaction.
 5. Older, newer, incomplete, unexpected, or differently identified schemas
    MUST fail closed. Unregistered indexes, triggers, and views are unexpected.
-   Schema version 2 and registry version 8 define no upgrade path from earlier
+   Schema version 3 and registry version 8 define no upgrade path from earlier
    pre-production target stores.
 6. Subject, record, event, command, source, revision, record-class, and
    information-class names MUST come from the code-owned versioned registries.
@@ -453,18 +454,23 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
     eligible-detail bounds without deleting snapshots, decisions, current
     readiness anchors, or cited evidence. It MUST retain a typed digest-bearing
     result and rebuild every projection atomically from the post-prune source.
+52. Startup MUST validate the exact Core poll singleton, interval, times, lease,
+    completion linkage, outcome/disposition vocabulary, and counters. Poll
+    state MUST be covered by backup integrity but MUST NOT allocate or establish
+    a record, event, fact, decision, or transaction sequence.
 
 ## Derived artifacts
 
 | Artifact | Derivation |
 | --- | --- |
-| SQLite v2 target schema | Created transactionally by `ControlPlaneStore` |
+| SQLite v3 target schema | Created transactionally by `ControlPlaneStore` |
 | Registry validation | Code-owned constants and validators in `src/control/registry.ts` |
 | Initialization definition and event | Fixed outputs of `control-plane.initialize` v1 |
 | Implicit operator identity | Fixed `operator-principal` subject and `principal.definition` initialization output |
 | Integrity observation, event, and receipt | Fixed outputs of `control-plane.check-integrity` v1 |
 | Core snapshot definition, fact, event, retained files, and receipt | Fixed outputs and source material of `core.activate-snapshot` v1 |
 | Core candidate rejection observation, event, and receipt | Bounded fixed outputs of `core.record-candidate-rejection` v1 |
+| Core poll operational state | Validated singleton owned by `CoreSourceController` |
 | Subject lookup generations | Full deterministic rebuild from subjects and their creation definitions |
 | Event cursor generations | Full deterministic rebuild from event occurrences without payload copies |
 | Backup manifest | Verified metadata and canonical authoritative digest of one online SQLite backup artifact |
@@ -480,10 +486,12 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
   [ADR-0041](../adr/0041-enforce-three-information-classes-and-scoped-access.md),
   [ADR-0042](../adr/0042-use-rebuildable-projections-only-as-read-models.md),
   [ADR-0043](../adr/0043-order-records-by-transaction-sequence-not-timestamps.md),
-  [ADR-0044](../adr/0044-replace-the-queue-spike-database.md), and
-  [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md)
+  [ADR-0044](../adr/0044-replace-the-queue-spike-database.md),
+  [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md), and
+  [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md)
 - Context: [control-plane kernel](../design/control-plane-kernel.md)
 - Core authority contract: [Core snapshot activation](core-snapshot-activation.md)
 - Core diagnostic retention: [Core check-detail retention](core-check-detail-retention.md)
+- Core polling: [Core source polling](core-source-polling.md)
 - Delivery: [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md)
 - Product: [GitHub organization agent fleet](../prd/agent-fleet.md)

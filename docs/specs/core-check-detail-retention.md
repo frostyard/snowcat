@@ -78,5 +78,6 @@ kind is `core.check-detail-prune-observation`; its event kind is
 - Rationale: [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md)
 - Context: [Core snapshot ingestion](../design/core-snapshot-ingestion.md)
 - Source-state contract: [Core source readiness](core-source-readiness.md)
+- Periodic maintenance: [Core source polling](core-source-polling.md)
 - Substrate: [control-plane kernel](control-plane-kernel.md)
 - Delivery: [Core snapshot ingestion plan](../plans/core-snapshot-ingestion.md)

@@ -614,6 +614,16 @@ inspection, and snapshot activation.
 **Avoid:** sync attempt; health ping; verification result; activation result.
 ([ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md))
 
+#### Core poll run
+
+One leased operational invocation in which `CoreSourceController` inspects the
+configured Core ref and applies synchronization bookkeeping. A run may suppress
+unchanged hard-failure detail and therefore is not itself a Core source check,
+authority record, or freshness event.
+
+**Avoid:** Core source check; sync transaction; scheduler tick; agent run.
+([ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md))
+
 #### Core check detail
 
 The bounded diagnostic occurrences and retry receipt for one eligible Core
@@ -843,6 +853,16 @@ attestation. It never relabels or exposes a filtered view of the source record.
 ([ADR-0041](../adr/0041-enforce-three-information-classes-and-scoped-access.md))
 
 ### Controllers, programs, and delivery
+
+#### CoreSourceController
+
+The single leased deterministic coordinator for periodic Core source
+inspection, backoff, duplicate disposition, and retention maintenance. It owns
+operational schedule state but does not establish organization authority or
+decide admission readiness.
+
+**Avoid:** Core agent; snapshot authority; RepositoryController; polling worker.
+([ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md))
 
 #### RepositoryController
 

@@ -5,10 +5,12 @@ Living document. Rationale:
 [ADR-0044](../adr/0044-replace-the-queue-spike-database.md) and
 [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md),
 [ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md), and
-[ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md).
+[ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md), plus
+[ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md).
 Contracts: [control-plane kernel](../specs/control-plane-kernel.md) and
 [Core source readiness](../specs/core-source-readiness.md), plus
-[Core check-detail retention](../specs/core-check-detail-retention.md).
+[Core check-detail retention](../specs/core-check-detail-retention.md) and
+[Core source polling](../specs/core-source-polling.md).
 
 ## Overview
 
@@ -50,7 +52,7 @@ spike. The path helper rejects equal resolved paths, while store startup also
 recognizes the spike tables and refuses to initialize over them.
 
 The target file identifies itself with SQLite application ID `1179405908`
-(`FLNT`), `PRAGMA user_version = 2`, a server-generated UUIDv7 database-lineage
+(`FLNT`), `PRAGMA user_version = 3`, a server-generated UUIDv7 database-lineage
 ID, a separately generated UUIDv7 operator-principal ID, schema version,
 registry version, control-time watermark, and last committed transaction
 sequence. Opening a current database validates those values and performs no
@@ -60,7 +62,7 @@ schemas fail rather than being guessed or upgraded by this slice.
 ### Closed registries
 
 [`registry.ts`](../../src/control/registry.ts) is the only owner of the current
-kernel vocabulary. Registry version 7 contains the bootstrap, Core snapshot,
+kernel vocabulary. Registry version 8 contains the bootstrap, Core snapshot,
 source-check, and rollback contracts:
 
 | Registry | Initial member | Meaning |
@@ -210,6 +212,15 @@ deletes only complete unprotected check transactions beyond 30 days or the
 all projections atomically. Current-readiness anchors and evidence cited by
 retained decisions remain protected.
 
+`CoreSourceController` stores schedule and lease state in the validated
+`core_poll_state` singleton. Claim and completion are short `BEGIN IMMEDIATE`
+operational transactions around, never across, Git work. They do not allocate
+control-plane sequence or become authority. The controller schedules healthy
+runs 15 minutes from completion, backs consecutive source outages off to 30
+then 60 minutes, suppresses only consecutive equivalent validation/continuity
+detail, and invokes typed retention once daily. The exact behavior lives in
+[Core source polling](../specs/core-source-polling.md).
+
 An automatic check that matches the active commit appends an eligible-check
 observation and event without creating another snapshot. Rejection observations
 identify automatic configured-ref checks separately from exact-commit rollback
@@ -358,10 +369,12 @@ work lineage are later slices in the
   [ADR-0044](../adr/0044-replace-the-queue-spike-database.md), and
   [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md),
   [ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md), and
-  [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md)
+  [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md), and
+  [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md)
 - Contracts: [control-plane kernel](../specs/control-plane-kernel.md) and
   [Core snapshot activation](../specs/core-snapshot-activation.md), and
   [Core source readiness](../specs/core-source-readiness.md), and
-  [Core check-detail retention](../specs/core-check-detail-retention.md)
+  [Core check-detail retention](../specs/core-check-detail-retention.md), and
+  [Core source polling](../specs/core-source-polling.md)
 - Built in: [control-plane kernel bootstrap — Phases 1–3](../plans/control-plane-kernel-bootstrap.md)
 - Product: [GitHub organization agent fleet](../prd/agent-fleet.md)

@@ -97,7 +97,7 @@ The rejection payload has this exact shape:
 | `activeCommitId` | string or null | Required for continuity failure; exact active source commit used by the ancestry check |
 | `observedAt` | canonical UTC instant | Server evaluation and recorded time |
 
-Schema version `2` and registry version `8` govern three authority tables:
+Schema version `3` and registry version `8` govern three authority tables:
 
 | Table | Retained content |
 | --- | --- |
@@ -175,8 +175,9 @@ previous snapshot/commit, decision, operator, and reason.
     automatic outcomes to the separate
     [Core source readiness](core-source-readiness.md) contract. Typed pruning is
     implemented under [Core check-detail retention](core-check-detail-retention.md);
-    periodic polling remains a later controller operation.
-19. A schema version other than `2` or registry version other than `8` MUST fail
+    periodic execution is implemented under
+    [Core source polling](core-source-polling.md).
+19. A schema version other than `3` or registry version other than `8` MUST fail
     closed. This pre-production version defines no in-place upgrade; initialize
     a fresh target database.
 
@@ -197,9 +198,11 @@ previous snapshot/commit, decision, operator, and reason.
   [ADR-0039](../adr/0039-use-typed-source-native-subject-identities.md), and
   [ADR-0040](../adr/0040-establish-facts-through-registered-predicate-contracts.md),
   [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md),
-  and [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md)
+  [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md), and
+  [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md)
 - Context: [Core snapshot ingestion](../design/core-snapshot-ingestion.md)
 - Source gate: [Core source readiness](core-source-readiness.md)
 - Diagnostic retention: [Core check-detail retention](core-check-detail-retention.md)
+- Periodic execution: [Core source polling](core-source-polling.md)
 - Substrate: [control-plane kernel](control-plane-kernel.md)
 - Delivery: [Core snapshot ingestion plan](../plans/core-snapshot-ingestion.md)

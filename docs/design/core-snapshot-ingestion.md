@@ -8,11 +8,14 @@ Living document. Rationale:
 and [ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md).
 Retention rationale:
 [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md).
+Polling rationale:
+[ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md).
 Contracts: [core snapshot verification](../specs/core-snapshot-verification.md)
 [Core snapshot activation](../specs/core-snapshot-activation.md), and
 [Core source readiness](../specs/core-source-readiness.md).
 Retention contract:
 [Core check-detail retention](../specs/core-check-detail-retention.md).
+Polling contract: [Core source polling](../specs/core-source-polling.md).
 
 ## Overview
 
@@ -172,11 +175,22 @@ does not become activation precedence.
 
 `core verify` intentionally records nothing. `core activate` attempts rejection
 recording and preserves the original failure if diagnostics cannot be written.
-The current manual-only slice retains accepted rejection history and receipts
+Manual synchronization and `CoreSourceController` retain accepted rejection history and receipts
 subject to the implemented 30-day and 10,000-item
 [check-detail retention contract](../specs/core-check-detail-retention.md).
 Snapshots, decisions, current-readiness anchors, and cited evidence remain
-protected; periodic polling is still a later controller operation.
+protected.
+
+### Periodic source controller
+
+`CoreSourceController` claims one durable ten-minute lease before Git work and
+never holds the SQLite writer transaction across that work. Healthy completion
+schedules the next run after 15 minutes by default. Consecutive source outages
+back off to 30 and then 60 minutes; other outcomes reset the outage streak.
+Successful unchanged checks remain durable freshness evidence. Consecutive
+equivalent validation or continuity failures are inspected but suppress
+duplicate rejection detail. One due run invokes typed check-detail pruning no
+more than once per 24 hours.
 
 ## Operational notes
 
@@ -199,6 +213,12 @@ protected; periodic polling is still a later controller operation.
 - Run `npm run --silent core -- prune-check-history
   <expected-control-plane-sequence>` to apply check-detail retention and retain
   an auditable digest of complete deleted transactions.
+- Run `npm run --silent core -- poll` for the long-running leased controller,
+  `poll-once` for one due attempt, and `poll-state` for read-only schedule,
+  lease, backoff, and completion state.
+- `FLUENT_CORE_POLL_INTERVAL_SECONDS` defaults to `900` and accepts canonical
+  integers from `60` through `3600`; outage backoff remains fixed at the
+  accepted 30/60-minute boundaries.
 - `FLUENT_CORE_URL`, `FLUENT_CORE_REF`, and `FLUENT_CORE_MIRROR` select the
   exact allowed source, branch ref, and host-local mirror path.
 - A valid report proves compatibility with the implemented repository-authority
@@ -207,9 +227,8 @@ protected; periodic polling is still a later controller operation.
 - A failed fetch or validation before the first activation leaves no last-known-
   good state. Atomic activation now preserves an existing current snapshot;
   durable rejected-candidate diagnostics preserve the failure. The readiness
-  gate fails closed without active authority; periodic polling belongs to a
-  later phase of the
-  [ingestion plan](../plans/core-snapshot-ingestion.md).
+  gate fails closed without active authority; periodic polling continues to
+  inspect the configured source without weakening that gate.
 - The mirror contains organization-governed data and should be backed up and
   permissioned as an `organization` asset. It must never be mounted as an
   enrolled repository checkout or exposed to workers as a tool directory.
@@ -243,9 +262,11 @@ The exact record and read contract is
   [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md),
   and [ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md)
   and [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md)
+  and [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md)
 - Contracts: [core snapshot verification](../specs/core-snapshot-verification.md)
   [Core snapshot activation](../specs/core-snapshot-activation.md), and
   [Core source readiness](../specs/core-source-readiness.md)
   and [Core check-detail retention](../specs/core-check-detail-retention.md)
+  and [Core source polling](../specs/core-source-polling.md)
 - Built in: [Core snapshot ingestion — Phases 1–2](../plans/core-snapshot-ingestion.md)
 - Product: [GitHub organization agent fleet](../prd/agent-fleet.md)

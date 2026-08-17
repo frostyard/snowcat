@@ -2,13 +2,13 @@
 
 import {
   CoreCandidateInspectionError,
-  CoreSourceContinuityError,
   coreGitSourceConfig,
   inspectCoreCommit,
   inspectCoreCandidate,
-  verifyCoreSourceContinuity,
-  type InspectedCoreCandidate,
 } from "./git-source.ts";
+import { runCorePollOnce, runCorePollingLoop } from "./controller.ts";
+import { parseCorePollInterval } from "./poll-policy.ts";
+import { sanitizeCoreDiagnostic, synchronizeCoreSource } from "./synchronize.ts";
 import {
   ControlPlaneStore,
   CoreSnapshotPersistenceError,
@@ -26,110 +26,37 @@ try {
     console.log(JSON.stringify(summary, null, 2));
   } else if (command === "activate" && args.length === 1) {
     const expectedLastTransactionSequence = parsePositiveInteger(args[0]!);
-    const config = coreGitSourceConfig();
-    const checkId = uuidV7();
-    let candidate: InspectedCoreCandidate;
-    try {
-      candidate = await inspectCoreCandidate(config);
-    } catch (error) {
-      if (error instanceof CoreCandidateInspectionError) {
-        recordAndReportRejection({
-          checkId,
-          operation: "automatic-source-check",
-          stage: error.stage,
-          code: error.code,
-          summary: sanitizeDiagnostic(error.message),
-          details: error.details.slice(0, 8).map(sanitizeDiagnostic),
-          sourceUrl: error.sourceUrl,
-          sourceRef: error.ref,
-          commitId: error.commitId,
-          treeId: error.treeId,
-        });
-      }
-      throw error;
-    }
     const store = new ControlPlaneStore(controlPlaneDatabasePath());
     try {
-      const active = store.activeCoreSnapshot();
-      let continuityAncestorCommitId: string | undefined;
-      if (active && active.sourceCommitId !== candidate.commitId) {
-        try {
-          await verifyCoreSourceContinuity(config, candidate, active.sourceCommitId);
-          continuityAncestorCommitId = active.sourceCommitId;
-        } catch (error) {
-          if (error instanceof CoreSourceContinuityError) {
-            recordAndReportRejection(
-              {
-                checkId,
-                operation: "automatic-source-check",
-                stage: error.stage,
-                code: error.code,
-                summary: sanitizeDiagnostic(error.message),
-                details: error.details.slice(0, 8).map(sanitizeDiagnostic),
-                sourceUrl: error.sourceUrl,
-                sourceRef: error.ref,
-                commitId: error.commitId,
-                treeId: error.treeId,
-                catalogDigest: error.catalogDigest,
-                activeCommitId: error.activeCommitId,
-              },
-              store,
-            );
-          }
-          throw error;
+      const result = await synchronizeCoreSource(
+        coreGitSourceConfig(),
+        store,
+        expectedLastTransactionSequence,
+      );
+      if (result.status === "rejected") {
+        if (result.checkDisposition === "suppressed") {
+          console.error("Equivalent Core candidate rejection suppressed");
+        } else if (result.rejectionResult) {
+          console.error(`Core candidate rejection recorded: ${result.rejectionResult.observationRecordId}`);
         }
-      }
-      try {
-        const currentSequence = store.metadata().lastTransactionSequence;
-        const unchanged = active?.sourceCommitId === candidate.commitId && currentSequence === expectedLastTransactionSequence;
-        const activation = unchanged
-          ? undefined
-          : store.activateCoreSnapshot({
-              candidate,
-              expectedLastTransactionSequence,
-              continuityAncestorCommitId,
-            });
-        const sourceCheck = store.recordCoreSourceCheckEligible({
-          checkId,
-          candidate,
-          expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
-        });
-        const current = store.activeCoreSnapshot();
-        console.log(
-          JSON.stringify(
-            {
-              activation: activation ? "activated" : "unchanged",
-              activationResult: activation ?? null,
-              activeSnapshot: current,
-              sourceCheck,
-              readiness: store.coreAdmissionReadiness(),
-            },
-            null,
-            2,
-          ),
-        );
-      } catch (error) {
-        if (error instanceof CoreSnapshotPersistenceError) {
-          recordAndReportRejection(
-            {
-              checkId,
-              operation: "automatic-source-check",
-              stage: "persistence",
-              code: "persistence-failed",
-              summary: sanitizeDiagnostic(error.message),
-              details: [],
-              sourceUrl: candidate.sourceUrl,
-              sourceRef: candidate.ref,
-              commitId: candidate.commitId,
-              treeId: candidate.treeId,
-              catalogDigest: candidate.catalogDigest,
-              activeCommitId: active?.sourceCommitId,
-            },
-            store,
-          );
+        if (result.diagnosticError) {
+          console.error(`Core candidate rejection could not be recorded: ${result.diagnosticError.message}`);
         }
-        throw error;
+        throw result.failure;
       }
+      console.log(
+        JSON.stringify(
+          {
+            activation: result.activation,
+            activationResult: result.activationResult,
+            activeSnapshot: store.activeCoreSnapshot(),
+            sourceCheck: result.sourceCheck,
+            readiness: store.coreAdmissionReadiness(),
+          },
+          null,
+          2,
+        ),
+      );
     } finally {
       store.close();
     }
@@ -171,6 +98,49 @@ try {
     } finally {
       store.close();
     }
+  } else if (command === "poll-state" && args.length === 0) {
+    const store = new ControlPlaneStore(controlPlaneDatabasePath());
+    try {
+      console.log(JSON.stringify(store.corePollState(), null, 2));
+    } finally {
+      store.close();
+    }
+  } else if (command === "poll-once" && args.length === 0) {
+    const healthyIntervalSeconds = parseCorePollInterval(process.env.FLUENT_CORE_POLL_INTERVAL_SECONDS);
+    const store = new ControlPlaneStore(controlPlaneDatabasePath());
+    try {
+      const result = await runCorePollOnce(
+        store,
+        coreGitSourceConfig(),
+        healthyIntervalSeconds,
+      );
+      console.log(JSON.stringify(result, null, 2));
+      if (result.status === "claimed" && result.controllerError !== null) process.exitCode = 1;
+    } finally {
+      store.close();
+    }
+  } else if (command === "poll" && args.length === 0) {
+    const healthyIntervalSeconds = parseCorePollInterval(process.env.FLUENT_CORE_POLL_INTERVAL_SECONDS);
+    const store = new ControlPlaneStore(controlPlaneDatabasePath());
+    let stopping = false;
+    const stop = () => {
+      stopping = true;
+    };
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+    try {
+      await runCorePollingLoop(
+        store,
+        coreGitSourceConfig(),
+        healthyIntervalSeconds,
+        () => stopping,
+        (result) => console.log(JSON.stringify(result)),
+      );
+    } finally {
+      process.off("SIGINT", stop);
+      process.off("SIGTERM", stop);
+      store.close();
+    }
   } else if (command === "rollback" && args.length === 3) {
     const expectedLastTransactionSequence = parsePositiveInteger(args[0]!);
     const targetCommitId = args[1]!;
@@ -192,8 +162,8 @@ try {
                 operation: "operator-rollback",
                 stage: error.stage,
                 code: error.code,
-                summary: sanitizeDiagnostic(error.message),
-                details: error.details.slice(0, 8).map(sanitizeDiagnostic),
+                summary: sanitizeCoreDiagnostic(error.message),
+                details: error.details.slice(0, 8).map(sanitizeCoreDiagnostic),
                 sourceUrl: error.sourceUrl,
                 sourceRef: error.ref,
                 commitId: error.commitId,
@@ -222,7 +192,7 @@ try {
               operation: "operator-rollback",
               stage: "persistence",
               code: "persistence-failed",
-              summary: sanitizeDiagnostic(error.message),
+              summary: sanitizeCoreDiagnostic(error.message),
               details: [],
               sourceUrl: candidate.sourceUrl,
               sourceRef: candidate.ref,
@@ -247,7 +217,10 @@ try {
         "       npm run --silent core -- rejections [limit]\n" +
         "       npm run --silent core -- readiness\n" +
         "       npm run --silent core -- override-staleness <expected-control-plane-sequence> <expires-at> <reason>\n" +
-        "       npm run --silent core -- prune-check-history <expected-control-plane-sequence>",
+        "       npm run --silent core -- prune-check-history <expected-control-plane-sequence>\n" +
+        "       npm run --silent core -- poll-state\n" +
+        "       npm run --silent core -- poll-once\n" +
+        "       npm run --silent core -- poll",
     );
   }
 } catch (error) {
@@ -271,16 +244,6 @@ function recordAndReportRejection(input: CoreCandidateRejectionInput, existingSt
   } finally {
     if (!existingStore) store?.close();
   }
-}
-
-function sanitizeDiagnostic(value: string): string {
-  const normalized = value
-    .replace(/[\u0000-\u001f\u007f]+/g, " ")
-    .replace(/\b(token|password|secret|authorization)(\s*[:=]\s*)\S+/gi, "$1$2[redacted]")
-    .replace(/\s+/g, " ")
-    .trim();
-  const bounded = Buffer.from(normalized || "Unspecified Core candidate rejection", "utf8").subarray(0, 512);
-  return new TextDecoder("utf-8", { fatal: false }).decode(bounded).replace(/\uFFFD$/u, "");
 }
 
 function parsePositiveInteger(value: string): number {

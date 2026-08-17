@@ -63,6 +63,7 @@ Docs are split by the question they answer:
 - [0046 — Separate Core source freshness from admission readiness](adr/0046-separate-core-source-freshness-from-admission-readiness.md)
 - [0047 — Cap stale-source overrides at 24 hours](adr/0047-cap-stale-source-overrides-at-24-hours.md)
 - [0048 — Retain Core check detail for 30 days](adr/0048-retain-core-check-detail-for-30-days.md)
+- [0049 — Poll Core through one leased controller](adr/0049-poll-core-through-one-leased-controller.md)
 
 ### Domain language
 
@@ -82,6 +83,7 @@ Docs are split by the question they answer:
 - [Core snapshot activation](specs/core-snapshot-activation.md)
 - [Core source readiness](specs/core-source-readiness.md)
 - [Core check-detail retention](specs/core-check-detail-retention.md)
+- [Core source polling](specs/core-source-polling.md)
 
 ### Plans
 

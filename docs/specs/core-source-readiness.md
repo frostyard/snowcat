@@ -131,9 +131,11 @@ its causally linked event is `core.stale-source-override-issued`.
   [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md),
   [ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md),
   [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md),
+  [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md),
   [ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md), and
   [ADR-0035](../adr/0035-route-human-authority-through-typed-decisions.md)
 - Context: [Core snapshot ingestion](../design/core-snapshot-ingestion.md)
 - Activation substrate: [Core snapshot activation](core-snapshot-activation.md)
 - Evidence retention: [Core check-detail retention](core-check-detail-retention.md)
+- Periodic producer: [Core source polling](core-source-polling.md)
 - Delivery: [Core snapshot ingestion plan](../plans/core-snapshot-ingestion.md)

@@ -64,8 +64,10 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
   evidence and active snapshot, lasts at most 24 hours per decision, and
   relaxes only elapsed staleness—never candidate validity, continuity,
   persistence, or the requirement for active authority.
-- Add configurable periodic polling over the same typed sync operation; do not
-  add a model or webhook requirement.
+- The implemented leased `CoreSourceController` polls over the same typed sync
+  operation at a configurable 15-minute default, applies 30/60-minute source
+  outage backoff, suppresses only consecutive equivalent hard-failure detail,
+  and requires no model or webhook.
 - Retain raw snapshots and their authority history indefinitely; bound ordinary
   eligible-check and candidate-rejection detail before periodic polling can
   create unattended volume.
@@ -99,8 +101,8 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
 
 ## Open questions
 
-- None for the implemented manual synchronization and retention slice. Polling
-  cadence and backoff remain part of the next controller slice.
+- None for the implemented manual synchronization, polling, readiness, and
+  retention slice.
 
 ## References
 
@@ -108,12 +110,14 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
   [core snapshot verification](../specs/core-snapshot-verification.md), and
   [Core snapshot activation](../specs/core-snapshot-activation.md), and
   [Core source readiness](../specs/core-source-readiness.md), and
-  [Core check-detail retention](../specs/core-check-detail-retention.md)
+  [Core check-detail retention](../specs/core-check-detail-retention.md), and
+  [Core source polling](../specs/core-source-polling.md)
 - Rationale:
   [ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md) and
   [ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md), and
   [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md),
   and [ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md)
   and [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md)
+  and [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md)
 - Parent delivery order: [product foundation roadmap](product-foundation-roadmap.md)
 - Target substrate: [control-plane kernel bootstrap](control-plane-kernel-bootstrap.md)

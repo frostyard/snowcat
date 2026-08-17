@@ -1,7 +1,7 @@
 import { isUuidV7, type JsonValue } from "./encoding.ts";
 
 export const CONTROL_PLANE_APPLICATION_ID = 1_179_405_908; // ASCII "FLNT"
-export const CONTROL_PLANE_SCHEMA_VERSION = 2;
+export const CONTROL_PLANE_SCHEMA_VERSION = 3;
 export const CONTROL_PLANE_REGISTRY_VERSION = 8;
 
 export const informationClasses = ["public", "organization", "restricted"] as const;

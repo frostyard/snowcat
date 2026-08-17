@@ -12,6 +12,15 @@ import {
 import { validateCoreCatalog, type CoreTreeEntry } from "../core/validator.ts";
 import type { InspectedCoreCandidate } from "../core/git-source.ts";
 import {
+  CORE_POLL_DEFAULT_INTERVAL_SECONDS,
+  CORE_POLL_LEASE_SECONDS,
+  CORE_POLL_MAXIMUM_INTERVAL_SECONDS,
+  CORE_POLL_MINIMUM_INTERVAL_SECONDS,
+  CORE_POLL_PRUNE_INTERVAL_SECONDS,
+  addSeconds,
+  corePollDelaySeconds,
+} from "../core/poll-policy.ts";
+import {
   CONTROL_PLANE_APPLICATION_ID,
   CONTROL_PLANE_REGISTRY_VERSION,
   CONTROL_PLANE_SCHEMA_VERSION,
@@ -45,6 +54,7 @@ type Row = Record<string, SQLInputValue>;
 const BUSY_TIMEOUT_MS = 5_000;
 const TARGET_TABLES = [
   "core_active_snapshot",
+  "core_poll_state",
   "core_snapshot_files",
   "core_snapshots",
   "control_plane_metadata",
@@ -219,6 +229,49 @@ export type CoreSourceCheckOutcome =
   | "candidate-invalid"
   | "continuity-blocked"
   | "persistence-failed";
+
+export type CorePollRunStatus = "completed" | "controller-error";
+export type CorePollCheckDisposition = "recorded" | "suppressed" | "record-failed" | "none";
+
+export interface CorePollState {
+  scheduleVersion: 1;
+  healthyIntervalSeconds: number;
+  nextPollAt: string;
+  nextPruneAt: string;
+  sourceUnavailableStreak: number;
+  inFlightRunId: string | null;
+  inFlightStartedAt: string | null;
+  inFlightExpiresAt: string | null;
+  lastRunId: string | null;
+  lastStartedAt: string | null;
+  lastCompletedAt: string | null;
+  lastRunStatus: CorePollRunStatus | null;
+  lastSourceOutcome: CoreSourceCheckOutcome | null;
+  lastCheckDisposition: CorePollCheckDisposition | null;
+  completedRunCount: number;
+  suppressedCheckCount: number;
+}
+
+export type CorePollClaimResult =
+  | {
+      status: "claimed";
+      runId: string;
+      startedAt: string;
+      expiresAt: string;
+      controlPlaneSequence: number;
+      pruneDue: boolean;
+      state: CorePollState;
+    }
+  | { status: "not-due"; nextPollAt: string; state: CorePollState }
+  | { status: "in-flight"; runId: string; expiresAt: string; state: CorePollState };
+
+export interface CorePollCompletionInput {
+  runId: string;
+  runStatus: CorePollRunStatus;
+  sourceOutcome: CoreSourceCheckOutcome | null;
+  checkDisposition: CorePollCheckDisposition;
+  pruneRan: boolean;
+}
 
 export type CoreAdmissionReadinessReason =
   | "ready"
@@ -440,6 +493,179 @@ export class ControlPlaneStore {
       controlTimeWatermark: String(row.control_time_watermark),
       lastTransactionSequence: Number(row.last_transaction_sequence),
     };
+  }
+
+  corePollState(): CorePollState {
+    const row = this.db.prepare("SELECT * FROM core_poll_state WHERE singleton = 1").get() as Row | undefined;
+    if (!row) throw new Error("Core poll state is missing");
+    return decodeCorePollState(row);
+  }
+
+  claimCorePoll(healthyIntervalSeconds: number): CorePollClaimResult {
+    assertCorePollInterval(healthyIntervalSeconds);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.verifyExisting(this.applicationTables());
+      const now = this.now();
+      const metadata = this.metadata();
+      const state = this.corePollState();
+      if (now < metadata.controlTimeWatermark || (state.lastCompletedAt !== null && now < state.lastCompletedAt)) {
+        throw new Error("control-plane clock moved backwards behind durable Core poll state");
+      }
+      if (
+        state.inFlightRunId !== null &&
+        state.inFlightExpiresAt !== null &&
+        now < state.inFlightExpiresAt
+      ) {
+        this.db.exec("COMMIT");
+        return {
+          status: "in-flight",
+          runId: state.inFlightRunId,
+          expiresAt: state.inFlightExpiresAt,
+          state,
+        };
+      }
+      if (now < state.nextPollAt) {
+        this.db.exec("COMMIT");
+        return { status: "not-due", nextPollAt: state.nextPollAt, state };
+      }
+
+      const runId = uuidV7(new Date(now));
+      const expiresAt = addSeconds(now, CORE_POLL_LEASE_SECONDS);
+      this.db
+        .prepare(
+          `UPDATE core_poll_state
+           SET healthy_interval_seconds = ?, in_flight_run_id = ?,
+               in_flight_started_at = ?, in_flight_expires_at = ?
+           WHERE singleton = 1`,
+        )
+        .run(healthyIntervalSeconds, runId, now, expiresAt);
+      const claimedState = this.corePollState();
+      this.db.exec("COMMIT");
+      return {
+        status: "claimed",
+        runId,
+        startedAt: now,
+        expiresAt,
+        controlPlaneSequence: metadata.lastTransactionSequence,
+        pruneDue: now >= state.nextPruneAt,
+        state: claimedState,
+      };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  completeCorePoll(input: CorePollCompletionInput): CorePollState {
+    if (!isUuidV7(input.runId)) throw new Error("Core poll run ID must be UUIDv7");
+    if (input.runStatus === "completed" && input.sourceOutcome === null) {
+      throw new Error("a completed Core poll requires a source outcome");
+    }
+    if (input.sourceOutcome === null && input.checkDisposition !== "none") {
+      throw new Error("a Core poll without a source outcome cannot have a check disposition");
+    }
+    if (input.sourceOutcome !== null && input.checkDisposition === "none") {
+      throw new Error("a Core poll source outcome requires a check disposition");
+    }
+    if (!(["completed", "controller-error"] as const).includes(input.runStatus)) {
+      throw new Error("unknown Core poll run status");
+    }
+    if (!(["recorded", "suppressed", "record-failed", "none"] as const).includes(input.checkDisposition)) {
+      throw new Error("unknown Core poll check disposition");
+    }
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.verifyExisting(this.applicationTables());
+      const completedAt = this.now();
+      const metadata = this.metadata();
+      const state = this.corePollState();
+      if (state.inFlightRunId !== input.runId || state.inFlightStartedAt === null) {
+        throw new Error("Core poll completion does not own the active lease");
+      }
+      if (completedAt < metadata.controlTimeWatermark || completedAt < state.inFlightStartedAt) {
+        throw new Error("control-plane clock moved backwards during the Core poll run");
+      }
+      const sourceUnavailableStreak =
+        input.sourceOutcome === "source-unavailable"
+          ? state.sourceUnavailableStreak + 1
+          : input.sourceOutcome === null
+            ? state.sourceUnavailableStreak
+            : 0;
+      const delaySeconds = corePollDelaySeconds(
+        state.healthyIntervalSeconds,
+        input.sourceOutcome,
+        sourceUnavailableStreak,
+      );
+      const nextPollAt = addSeconds(completedAt, delaySeconds);
+      const nextPruneAt = input.pruneRan
+        ? addSeconds(completedAt, CORE_POLL_PRUNE_INTERVAL_SECONDS)
+        : state.nextPruneAt;
+      this.db
+        .prepare(
+          `UPDATE core_poll_state
+           SET next_poll_at = ?, next_prune_at = ?, source_unavailable_streak = ?,
+               in_flight_run_id = NULL, in_flight_started_at = NULL, in_flight_expires_at = NULL,
+               last_run_id = ?, last_started_at = ?, last_completed_at = ?,
+               last_run_status = ?, last_source_outcome = ?, last_check_disposition = ?,
+               completed_run_count = completed_run_count + 1,
+               suppressed_check_count = suppressed_check_count + ?
+           WHERE singleton = 1`,
+        )
+        .run(
+          nextPollAt,
+          nextPruneAt,
+          sourceUnavailableStreak,
+          input.runId,
+          state.inFlightStartedAt,
+          completedAt,
+          input.runStatus,
+          input.sourceOutcome,
+          input.checkDisposition,
+          input.checkDisposition === "suppressed" ? 1 : 0,
+        );
+      const completed = this.corePollState();
+      this.db.exec("COMMIT");
+      return completed;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  shouldSuppressCoreCandidateRejection(input: CoreCandidateRejectionInput): boolean {
+    if (
+      input.operation !== "automatic-source-check" ||
+      (input.stage !== "validation" && input.stage !== "continuity")
+    ) {
+      return false;
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT kind, payload_json FROM durable_occurrences
+         WHERE occurrence_type = 'record'
+           AND kind IN ('core.source-check-eligible-observation', 'core.candidate-rejection-observation')
+         ORDER BY transaction_sequence DESC, transaction_position DESC`,
+      )
+      .all() as Row[];
+    for (const row of rows) {
+      if (row.kind === "core.source-check-eligible-observation") return false;
+      const payload = parseJson(String(row.payload_json));
+      if (!recordKindRegistry["core.candidate-rejection-observation"].validatePayload(payload)) {
+        throw new Error("latest Core candidate rejection is invalid");
+      }
+      if (payload.operation !== "automatic-source-check") continue;
+      if (
+        payload.stage !== input.stage ||
+        payload.code !== input.code ||
+        payload.commitId !== (input.commitId ?? null)
+      ) {
+        return false;
+      }
+      return input.stage !== "continuity" || payload.activeCommitId === (input.activeCommitId ?? null);
+    }
+    return false;
   }
 
   occurrences(): DurableOccurrence[] {
@@ -704,6 +930,7 @@ export class ControlPlaneStore {
          FROM core_snapshot_files ORDER BY snapshot_id, path`,
       ),
       coreActiveSnapshot: this.queryJsonRows("SELECT * FROM core_active_snapshot ORDER BY singleton"),
+      corePollState: this.queryJsonRows("SELECT * FROM core_poll_state ORDER BY singleton"),
       transactionAllocation: this.sqliteTransactionAllocation(),
     } satisfies JsonValue;
     return sha256(canonicalJson(content));
@@ -2560,6 +2787,22 @@ export class ControlPlaneStore {
           evaluationTime,
           evaluationTime,
         );
+      this.db
+        .prepare(
+          `INSERT INTO core_poll_state (
+             singleton, schedule_version, healthy_interval_seconds,
+             next_poll_at, next_prune_at, source_unavailable_streak,
+             in_flight_run_id, in_flight_started_at, in_flight_expires_at,
+             last_run_id, last_started_at, last_completed_at, last_run_status,
+             last_source_outcome, last_check_disposition,
+             completed_run_count, suppressed_check_count
+           ) VALUES (1, 1, ?, ?, ?, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, 0)`,
+        )
+        .run(
+          CORE_POLL_DEFAULT_INTERVAL_SECONDS,
+          evaluationTime,
+          addSeconds(evaluationTime, CORE_POLL_PRUNE_INTERVAL_SECONDS),
+        );
 
       const transaction = this.db
         .prepare(
@@ -2795,6 +3038,45 @@ export class ControlPlaneStore {
         fact_record_id TEXT NOT NULL UNIQUE REFERENCES durable_records(record_id),
         activated_transaction_sequence INTEGER NOT NULL UNIQUE REFERENCES control_transactions(sequence),
         activated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE core_poll_state (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        schedule_version INTEGER NOT NULL CHECK (schedule_version = 1),
+        healthy_interval_seconds INTEGER NOT NULL CHECK (healthy_interval_seconds BETWEEN 60 AND 3600),
+        next_poll_at TEXT NOT NULL,
+        next_prune_at TEXT NOT NULL,
+        source_unavailable_streak INTEGER NOT NULL CHECK (source_unavailable_streak >= 0),
+        in_flight_run_id TEXT,
+        in_flight_started_at TEXT,
+        in_flight_expires_at TEXT,
+        last_run_id TEXT,
+        last_started_at TEXT,
+        last_completed_at TEXT,
+        last_run_status TEXT CHECK (last_run_status IN ('completed', 'controller-error')),
+        last_source_outcome TEXT CHECK (
+          last_source_outcome IN (
+            'eligible', 'source-unavailable', 'candidate-invalid', 'continuity-blocked', 'persistence-failed'
+          )
+        ),
+        last_check_disposition TEXT CHECK (
+          last_check_disposition IN ('recorded', 'suppressed', 'record-failed', 'none')
+        ),
+        completed_run_count INTEGER NOT NULL CHECK (completed_run_count >= 0),
+        suppressed_check_count INTEGER NOT NULL CHECK (
+          suppressed_check_count >= 0 AND suppressed_check_count <= completed_run_count
+        ),
+        CHECK (
+          (in_flight_run_id IS NULL AND in_flight_started_at IS NULL AND in_flight_expires_at IS NULL) OR
+          (in_flight_run_id IS NOT NULL AND in_flight_started_at IS NOT NULL AND in_flight_expires_at IS NOT NULL)
+        ),
+        CHECK (
+          (last_run_id IS NULL AND last_started_at IS NULL AND last_completed_at IS NULL AND
+           last_run_status IS NULL AND last_source_outcome IS NULL AND last_check_disposition IS NULL AND
+           completed_run_count = 0) OR
+          (last_run_id IS NOT NULL AND last_started_at IS NOT NULL AND last_completed_at IS NOT NULL AND
+           last_run_status IS NOT NULL AND last_check_disposition IS NOT NULL AND completed_run_count > 0)
+        )
       );
 
       CREATE TABLE projection_generations (
@@ -3270,6 +3552,7 @@ export class ControlPlaneStore {
     if (!isUuidV7(metadata.operatorPrincipalId)) throw new Error("control-plane operator principal ID is not UUIDv7");
     assertUtcInstant(metadata.createdAt, "database creation time");
     assertUtcInstant(metadata.controlTimeWatermark, "control-time watermark");
+    this.corePollState();
 
     const transactionRow = this.db.prepare("SELECT COALESCE(MAX(sequence), 0) AS maximum FROM control_transactions").get() as Row;
     const maximum = Number(transactionRow.maximum);
@@ -4336,6 +4619,124 @@ export class ControlPlaneStore {
     if (Number.isNaN(value.getTime())) throw new Error("control-plane clock returned an invalid instant");
     return value.toISOString();
   }
+}
+
+function assertCorePollInterval(value: number): void {
+  if (
+    !Number.isSafeInteger(value) ||
+    value < CORE_POLL_MINIMUM_INTERVAL_SECONDS ||
+    value > CORE_POLL_MAXIMUM_INTERVAL_SECONDS
+  ) {
+    throw new Error(
+      `Core poll interval must be from ${CORE_POLL_MINIMUM_INTERVAL_SECONDS} through ${CORE_POLL_MAXIMUM_INTERVAL_SECONDS} seconds`,
+    );
+  }
+}
+
+function decodeCorePollState(row: Row): CorePollState {
+  const healthyIntervalSeconds = Number(row.healthy_interval_seconds);
+  const sourceUnavailableStreak = Number(row.source_unavailable_streak);
+  const completedRunCount = Number(row.completed_run_count);
+  const suppressedCheckCount = Number(row.suppressed_check_count);
+  assertCorePollInterval(healthyIntervalSeconds);
+  if (Number(row.schedule_version) !== 1) throw new Error("unknown Core poll schedule version");
+  if (!Number.isSafeInteger(sourceUnavailableStreak) || sourceUnavailableStreak < 0) {
+    throw new Error("invalid Core poll source-unavailable streak");
+  }
+  if (
+    !Number.isSafeInteger(completedRunCount) ||
+    completedRunCount < 0 ||
+    !Number.isSafeInteger(suppressedCheckCount) ||
+    suppressedCheckCount < 0 ||
+    suppressedCheckCount > completedRunCount
+  ) {
+    throw new Error("invalid Core poll operational counters");
+  }
+  const nextPollAt = String(row.next_poll_at);
+  const nextPruneAt = String(row.next_prune_at);
+  assertUtcInstant(nextPollAt, "Core next poll time");
+  assertUtcInstant(nextPruneAt, "Core next prune time");
+
+  const inFlightRunId = row.in_flight_run_id === null ? null : String(row.in_flight_run_id);
+  const inFlightStartedAt = row.in_flight_started_at === null ? null : String(row.in_flight_started_at);
+  const inFlightExpiresAt = row.in_flight_expires_at === null ? null : String(row.in_flight_expires_at);
+  const inFlightValues = [inFlightRunId, inFlightStartedAt, inFlightExpiresAt];
+  if (inFlightValues.some((value) => value === null) !== inFlightValues.every((value) => value === null)) {
+    throw new Error("Core poll lease fields must be null or present together");
+  }
+  if (inFlightRunId !== null && inFlightStartedAt !== null && inFlightExpiresAt !== null) {
+    if (!isUuidV7(inFlightRunId)) throw new Error("Core poll lease run ID is not UUIDv7");
+    assertUtcInstant(inFlightStartedAt, "Core poll lease start");
+    assertUtcInstant(inFlightExpiresAt, "Core poll lease expiry");
+    if (addSeconds(inFlightStartedAt, CORE_POLL_LEASE_SECONDS) !== inFlightExpiresAt) {
+      throw new Error("Core poll lease duration is not ten minutes");
+    }
+  }
+
+  const lastRunId = row.last_run_id === null ? null : String(row.last_run_id);
+  const lastStartedAt = row.last_started_at === null ? null : String(row.last_started_at);
+  const lastCompletedAt = row.last_completed_at === null ? null : String(row.last_completed_at);
+  const lastRunStatus = row.last_run_status === null ? null : String(row.last_run_status);
+  const lastSourceOutcome = row.last_source_outcome === null ? null : String(row.last_source_outcome);
+  const lastCheckDisposition = row.last_check_disposition === null ? null : String(row.last_check_disposition);
+  const lastValues = [lastRunId, lastStartedAt, lastCompletedAt, lastRunStatus, lastCheckDisposition];
+  if (completedRunCount === 0) {
+    if (lastValues.some((value) => value !== null) || lastSourceOutcome !== null) {
+      throw new Error("Core poll state has last-run fields before a completion");
+    }
+  } else {
+    if (lastValues.some((value) => value === null) || lastRunId === null || lastStartedAt === null || lastCompletedAt === null) {
+      throw new Error("Core poll state is missing completed-run fields");
+    }
+    if (!isUuidV7(lastRunId)) throw new Error("Core last poll run ID is not UUIDv7");
+    assertUtcInstant(lastStartedAt, "Core last poll start");
+    assertUtcInstant(lastCompletedAt, "Core last poll completion");
+    if (lastCompletedAt < lastStartedAt) throw new Error("Core poll completion predates its start");
+    if (lastRunStatus !== "completed" && lastRunStatus !== "controller-error") {
+      throw new Error("unknown Core poll completion status");
+    }
+    if (
+      lastSourceOutcome !== null &&
+      !(["eligible", "source-unavailable", "candidate-invalid", "continuity-blocked", "persistence-failed"] as const)
+        .includes(lastSourceOutcome as CoreSourceCheckOutcome)
+    ) {
+      throw new Error("unknown Core poll source outcome");
+    }
+    if (
+      lastCheckDisposition !== "recorded" &&
+      lastCheckDisposition !== "suppressed" &&
+      lastCheckDisposition !== "record-failed" &&
+      lastCheckDisposition !== "none"
+    ) {
+      throw new Error("unknown Core poll check disposition");
+    }
+    if (
+      (lastSourceOutcome === null && lastCheckDisposition !== "none") ||
+      (lastSourceOutcome !== null && lastCheckDisposition === "none") ||
+      (lastRunStatus === "completed" && lastSourceOutcome === null)
+    ) {
+      throw new Error("Core poll completion source/disposition linkage is invalid");
+    }
+  }
+
+  return {
+    scheduleVersion: 1,
+    healthyIntervalSeconds,
+    nextPollAt,
+    nextPruneAt,
+    sourceUnavailableStreak,
+    inFlightRunId,
+    inFlightStartedAt,
+    inFlightExpiresAt,
+    lastRunId,
+    lastStartedAt,
+    lastCompletedAt,
+    lastRunStatus: lastRunStatus as CorePollRunStatus | null,
+    lastSourceOutcome: lastSourceOutcome as CoreSourceCheckOutcome | null,
+    lastCheckDisposition: lastCheckDisposition as CorePollCheckDisposition | null,
+    completedRunCount,
+    suppressedCheckCount,
+  };
 }
 
 function sqlRowJson(row: Row): JsonValue {

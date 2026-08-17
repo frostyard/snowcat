@@ -8,6 +8,7 @@ import {
   type CoreTreeEntry,
   type ValidatedCoreCatalog,
 } from "./validator.ts";
+import { CORE_POLL_GIT_TIMEOUT_MS } from "./poll-policy.ts";
 
 const CANDIDATE_REF = "refs/fluent/core-candidate";
 const ROLLBACK_CANDIDATE_REF = "refs/fluent/core-rollback-candidate";
@@ -383,7 +384,12 @@ function git(
     execFile(
       "git",
       secureArgs,
-      { encoding: "buffer", env: environment, maxBuffer: options.maxBuffer ?? 256 * 1024 },
+      {
+        encoding: "buffer",
+        env: environment,
+        maxBuffer: options.maxBuffer ?? 256 * 1024,
+        timeout: CORE_POLL_GIT_TIMEOUT_MS,
+      },
       (error, stdout, stderr) => {
         if (!error) {
           resolvePromise(Buffer.from(stdout));
@@ -401,7 +407,12 @@ function gitIsAncestor(args: readonly string[], allowFileSource: boolean): Promi
     execFile(
       "git",
       secureGitArgs(args, allowFileSource),
-      { encoding: "buffer", env: secureGitEnvironment(), maxBuffer: 256 * 1024 },
+      {
+        encoding: "buffer",
+        env: secureGitEnvironment(),
+        maxBuffer: 256 * 1024,
+        timeout: CORE_POLL_GIT_TIMEOUT_MS,
+      },
       (error, _stdout, stderr) => {
         if (!error) {
           resolvePromise(true);
