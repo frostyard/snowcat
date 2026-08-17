@@ -117,6 +117,13 @@ the bounded cutover in Phase 5 below.
 - Exercise duplicate claims, lease expiry and renewal, action ceilings,
   information access, bounded follow-up creation, cancellation, and failed
   authority rechecks under concurrent writers.
+- Bind each eligible repository work item to the versioned authority-context
+  digest from the
+  [held-work recovery contract](../specs/repository-held-work-recovery.md).
+  Persist its hold cause; auto-resume only an unchanged transient outage and
+  route every intentional, substantive, or changed-context recovery through an
+  attributed per-item disposition under
+  [ADR-0053](../adr/0053-resume-only-unchanged-transient-held-work.md).
 - **Done when:** a test worker with a bound session and grant can complete one
   target-native lineage while an otherwise identical stale, unauthorized,
   over-capacity, held, or information-ineligible claim creates no attempt or
@@ -183,12 +190,15 @@ the bounded cutover in Phase 5 below.
   [ADR-0041](../adr/0041-enforce-three-information-classes-and-scoped-access.md),
   [ADR-0042](../adr/0042-use-rebuildable-projections-only-as-read-models.md),
   [ADR-0043](../adr/0043-order-records-by-transaction-sequence-not-timestamps.md),
-  and [ADR-0044](../adr/0044-replace-the-queue-spike-database.md)
+  [ADR-0044](../adr/0044-replace-the-queue-spike-database.md),
+  and [ADR-0053](../adr/0053-resume-only-unchanged-transient-held-work.md)
 - Replaces the persistence implementation behind:
   [queue execution boundary](../design/queue-execution-boundary.md) and
   [work queue](../specs/work-queue.md)
 - Current target substrate:
   [control-plane kernel](../design/control-plane-kernel.md) and
   [control-plane kernel specification](../specs/control-plane-kernel.md)
+- Repository recovery input:
+  [repository held-work recovery](../specs/repository-held-work-recovery.md)
 - Delivery order: [product foundation roadmap](product-foundation-roadmap.md)
 - Completed predecessor: [queue vertical spike](queue-vertical-spike.md)

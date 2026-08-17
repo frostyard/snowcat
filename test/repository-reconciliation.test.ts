@@ -6,6 +6,12 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { ControlPlaneStore } from "../src/control/store.ts";
+import type {
+  RepositoryCoreAuthorityPayload,
+  RepositoryEnrollmentPayload,
+  RepositoryGitHubReconciliationPayload,
+  RepositorySurfaceReconciliationPayload,
+} from "../src/control/registry.ts";
 import type { InspectedCoreCandidate } from "../src/core/git-source.ts";
 import {
   CoreValidationError,
@@ -16,6 +22,10 @@ import {
   type RepositoryDeclaration,
 } from "../src/core/validator.ts";
 import { reconcileRepositories } from "../src/repository/controller.ts";
+import {
+  evaluateRepositoryHeldWorkRecovery,
+  repositoryAuthorityContextDigest,
+} from "../src/repository/authority-context.ts";
 import { inspectGitHubRepository } from "../src/repository/github.ts";
 import {
   inspectRepositorySurfaces,
@@ -67,6 +77,7 @@ test("active Core authority materializes separately from GitHub identity and enr
       surfaceResult: null,
       repositoryCommitId: null,
       enrollmentRecordId: null,
+      authorityContextDigest: null,
       operatorHold: null,
       effectiveState: "awaiting-github",
     },
@@ -249,6 +260,27 @@ test("enabled repository reconciliation converges across store handles without d
   assert.equal(firstPass.surfaces.length, 1);
   assert.equal(firstPass.enrollments.length, 1);
   assert.equal(firstPass.statuses[0]?.effectiveState, "enrolled");
+  const initialAuthorityContextDigest = firstPass.statuses[0]?.authorityContextDigest;
+  assert.match(initialAuthorityContextDigest ?? "", /^sha256:[0-9a-f]{64}$/);
+  const payloadFor = <T>(kind: string): T =>
+    firstStore.occurrences().find((occurrence) => occurrence.kind === kind)!.payload as T;
+  const changedSurface = structuredClone(
+    payloadFor<RepositorySurfaceReconciliationPayload>("repository.canonical-surfaces-reconciled"),
+  );
+  const changedEnrollment = structuredClone(
+    payloadFor<RepositoryEnrollmentPayload>("repository.enrolled"),
+  );
+  changedSurface.repositoryCommitId = "f".repeat(40);
+  changedEnrollment.repositoryCommitId = "f".repeat(40);
+  assert.notEqual(
+    repositoryAuthorityContextDigest({
+      authority: payloadFor<RepositoryCoreAuthorityPayload>("repository.core-authorized"),
+      github: payloadFor<RepositoryGitHubReconciliationPayload>("repository.github-identity-reconciled"),
+      surfaces: changedSurface,
+      enrollment: changedEnrollment,
+    }),
+    initialAuthorityContextDigest,
+  );
   const initialSurfaceDecision = firstStore
     .occurrences()
     .find((occurrence) => occurrence.kind === "repository.enrollment-checkpoint-policy-decision");
@@ -295,8 +327,28 @@ test("enabled repository reconciliation converges across store handles without d
   );
   const outage = await reconcileRepositories(firstStore, async () => ({ kind: "unavailable" }), inspectSurfaces);
   assert.equal(outage.statuses[0]?.effectiveState, "github-held");
+  assert.equal(outage.statuses[0]?.authorityContextDigest, null);
+  assert.deepEqual(
+    evaluateRepositoryHeldWorkRecovery({
+      cause: "github-unavailable",
+      heldAuthorityContextDigest: initialAuthorityContextDigest!,
+      currentAuthorityContextDigest: outage.statuses[0]?.authorityContextDigest ?? null,
+      currentRepositoryState: outage.statuses[0]!.effectiveState,
+    }),
+    { decision: "remain-held", reason: "repository-not-enrolled" },
+  );
   const recovery = await reconcileRepositories(firstStore, inspect, inspectSurfaces);
   assert.equal(recovery.statuses[0]?.effectiveState, "enrolled");
+  assert.equal(recovery.statuses[0]?.authorityContextDigest, initialAuthorityContextDigest);
+  assert.deepEqual(
+    evaluateRepositoryHeldWorkRecovery({
+      cause: "github-unavailable",
+      heldAuthorityContextDigest: initialAuthorityContextDigest!,
+      currentAuthorityContextDigest: recovery.statuses[0]?.authorityContextDigest ?? null,
+      currentRepositoryState: recovery.statuses[0]!.effectiveState,
+    }),
+    { decision: "resume-automatically", reason: "unchanged-transient-outage" },
+  );
   assert.equal(firstStore.metadata().lastTransactionSequence, 11);
   assert.equal(
     firstStore.occurrences().filter((occurrence) => occurrence.kind === "repository.github-identity-reconciled").length,
@@ -317,6 +369,7 @@ test("enabled repository reconciliation converges across store handles without d
   );
   assert.equal(surfaceOutage.statuses[0]?.effectiveState, "surface-held");
   assert.equal(surfaceOutage.statuses[0]?.surfaceResult, "unavailable");
+  assert.equal(surfaceOutage.statuses[0]?.authorityContextDigest, null);
   const outageDecision = firstStore
     .occurrences()
     .filter((occurrence) => occurrence.kind === "repository.enrollment-checkpoint-policy-decision")
@@ -351,6 +404,7 @@ test("enabled repository reconciliation converges across store handles without d
   assert.notEqual(invalidDecision.requirementResults[1]?.evidenceDigest, null);
   const surfaceRecovery = await reconcileRepositories(firstStore, inspect, inspectSurfaces);
   assert.equal(surfaceRecovery.statuses[0]?.effectiveState, "enrolled");
+  assert.equal(surfaceRecovery.statuses[0]?.authorityContextDigest, initialAuthorityContextDigest);
   assert.equal(firstStore.metadata().lastTransactionSequence, 17);
   assert.equal(
     firstStore.occurrences().filter((occurrence) => occurrence.kind === "repository.canonical-surfaces-reconciled").length,
@@ -376,6 +430,7 @@ test("enabled repository reconciliation converges across store handles without d
     hold,
   );
   assert.equal(firstStore.repositoryStatuses()[0]?.effectiveState, "operator-held");
+  assert.equal(firstStore.repositoryStatuses()[0]?.authorityContextDigest, null);
   assert.deepEqual(firstStore.repositoryStatuses()[0]?.operatorHold?.affectedGates, [
     "discovery",
     "admission",
@@ -482,12 +537,58 @@ test("enabled repository reconciliation converges across store handles without d
   const afterClear = await reconcileRepositories(firstStore, inspect, inspectSurfaces);
   assert.equal(afterClear.statuses[0]?.effectiveState, "enrolled");
   assert.equal(afterClear.statuses[0]?.coreSnapshotId, nextActivation.snapshotId);
+  assert.notEqual(afterClear.statuses[0]?.authorityContextDigest, initialAuthorityContextDigest);
+  assert.deepEqual(
+    evaluateRepositoryHeldWorkRecovery({
+      cause: "operator-hold",
+      heldAuthorityContextDigest: initialAuthorityContextDigest!,
+      currentAuthorityContextDigest: afterClear.statuses[0]?.authorityContextDigest ?? null,
+      currentRepositoryState: afterClear.statuses[0]!.effectiveState,
+    }),
+    { decision: "require-operator-disposition", reason: "authority-context-changed" },
+  );
   assert.equal(firstStore.metadata().lastTransactionSequence, 25);
   secondStore.close();
   firstStore.close();
   const reopened = new ControlPlaneStore(path);
   assert.equal(reopened.repositoryStatuses()[0]?.effectiveState, "enrolled");
+  assert.equal(
+    reopened.repositoryStatuses()[0]?.authorityContextDigest,
+    afterClear.statuses[0]?.authorityContextDigest,
+  );
   reopened.close();
+});
+
+test("held work never auto-resumes after a non-transient hold even when context is unchanged", () => {
+  const digest = `sha256:${"a".repeat(64)}`;
+  for (const cause of [
+    "core-paused",
+    "core-disabled",
+    "operator-hold",
+    "github-reconciliation-failure",
+    "surface-validation-failure",
+    "authority-context-changed",
+  ] as const) {
+    assert.deepEqual(
+      evaluateRepositoryHeldWorkRecovery({
+        cause,
+        heldAuthorityContextDigest: digest,
+        currentAuthorityContextDigest: digest,
+        currentRepositoryState: "enrolled",
+      }),
+      { decision: "require-operator-disposition", reason: "non-transient-hold" },
+    );
+  }
+  assert.throws(
+    () =>
+      evaluateRepositoryHeldWorkRecovery({
+        cause: "github-unavailable",
+        heldAuthorityContextDigest: "not-a-digest",
+        currentAuthorityContextDigest: digest,
+        currentRepositoryState: "enrolled",
+      }),
+    /valid authority-context digest/,
+  );
 });
 
 test("repository declaration removal fails validation while disabled retention remains valid", async () => {

@@ -375,8 +375,13 @@ targets are required before this PRD can become Approved.
     provenance but MUST NOT restore authority or admit follow-ups.
 73. An enrolled declaration MUST be changed to `disabled`, not deleted. Fluent
     MUST reject removal of a declaration present in its active snapshot. A later
-    core PR MAY re-enable it, but held work MUST require attributed operator
-    reconciliation before becoming claimable.
+    core PR MAY re-enable it. Held work MUST require attributed operator
+    reconciliation before becoming claimable, except that work held solely by transient
+    GitHub or canonical-surface unavailability MAY instead resume automatically
+    after successful reconciliation only when its exact versioned repository
+    authority-context digest is unchanged. Core pause/disable, an operator hold,
+    any substantive reconciliation failure, or any changed digest MUST require
+    an attributed per-item `resume` or `cancel` disposition.
 74. The operator MUST be able to impose and clear an immediate local repository
     hold with actor, reason, affected gates, recovery rule, and time. That hold
     MAY only narrow the active core declaration; it MUST NOT enable a
@@ -1896,7 +1901,11 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   decisions and a separate enrollment transaction that creates the
   RepositoryController definition without work. Attributed non-expiring local
   operator holds now block four fixed repository gates across Core revisions
-  until the exact hold is cleared, without changing enrollment history.
+  until the exact hold is cleared, without changing enrollment history. Enrolled
+  repository status now exposes a stable semantic authority-context digest and
+  a closed evaluator permits automatic held-work recovery only after unchanged
+  transient GitHub or surface outages; target work persistence and operator
+  disposition commands remain.
   The kernel does not yet implement target work, general fact mutation, general
   operational state, fleet coordination, or worker mutation and never reads or
   imports the spike database.
@@ -1905,7 +1914,7 @@ elapsed source freshness from the stricter new-admission gate. Its durable
 
 | Track | What remains before implementation is well specified |
 | --- | --- |
-| Core contract and migration | Remaining organization JSON Schemas and fixtures, canonical-surface migrations, and held-work reconciliation |
+| Core contract and migration | Remaining organization JSON Schemas and fixtures and canonical-surface migrations; the held-work digest and recovery evaluator are implemented, while target-work persistence and disposition commands remain in the control-plane track |
 | Control-plane domain model | Execute the [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md): specify exact durable schemas, predicates, reducers, events, projections, invalidation, idempotency, and state machines in a fresh target database shared by RepositoryController, FleetController, ProcessObserver, scheduling, and decisions |
 | GitHub observation | GitHub App permissions, installation and actor mapping, CI/review/merge and artifact reconciliation, polling versus webhooks, forks, outage behavior, and external decision signals |
 | Workflow contracts | Versioned role briefs, evidence schemas, skills, attempt budgets, and deterministic gates for maintenance, planning, review, implementation, repair, and verification |
@@ -2107,7 +2116,9 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   with exact-commit surface selection and enrollment separation in
   [ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md),
   with explicit local operator holds in
-  [ADR-0052](../adr/0052-bind-local-repository-holds-to-explicit-operator-decisions.md), and the
+  [ADR-0052](../adr/0052-bind-local-repository-holds-to-explicit-operator-decisions.md),
+  with unchanged transient recovery in
+  [ADR-0053](../adr/0053-resume-only-unchanged-transient-held-work.md), and the
   [Fluent ubiquitous language](../domain/ubiquitous-language.md)
 - Designs: [queue execution boundary](../design/queue-execution-boundary.md),
   [control-plane kernel](../design/control-plane-kernel.md), and
@@ -2122,7 +2133,8 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   [Core source polling](../specs/core-source-polling.md), plus
   [repository authority reconciliation](../specs/repository-authority-reconciliation.md)
   and [repository surface reconciliation](../specs/repository-surface-reconciliation.md),
-  and [local repository holds](../specs/repository-local-holds.md)
+  and [local repository holds](../specs/repository-local-holds.md), and
+  [held-work recovery](../specs/repository-held-work-recovery.md)
 - Delivery: [queue vertical spike](../plans/queue-vertical-spike.md),
   [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md),
   [core snapshot ingestion](../plans/core-snapshot-ingestion.md), and

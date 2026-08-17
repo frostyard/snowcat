@@ -803,6 +803,16 @@ identity match alone does not establish enrollment.
 **Avoid:** repository sync as one status; GitHub lookup as enrollment; agent
 onboarding. ([ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md))
 
+#### Repository authority-context digest
+
+The versioned digest of the semantic Core, GitHub identity, exact repository
+commit, canonical-surface, checkpoint, program, and action-ceiling inputs that
+established one repository enrollment. Equivalent retry records and check times
+do not change it; changed authority or repository content does.
+
+**Avoid:** snapshot ID alone; current status hash; event digest; proof that work
+is correct. ([ADR-0053](../adr/0053-resume-only-unchanged-transient-held-work.md))
+
 #### Canonical surface
 
 The one declared path and format from which Fluent reads a type of repository or
@@ -1074,6 +1084,16 @@ Core pause, external reconciliation failure, drain, or held-work disposition.
 
 **Avoid:** suspension; local pause; repository toggle; automatic expiry.
 ([ADR-0052](../adr/0052-bind-local-repository-holds-to-explicit-operator-decisions.md))
+
+#### Held-work recovery
+
+The deterministic act that keeps, automatically resumes, or presents a
+per-item operator disposition after the repository condition that held work is
+gone. Only an unchanged authority-context digest after a transient GitHub or
+surface outage permits automatic recovery.
+
+**Avoid:** clearing a repository hold; blocked-work requeue; unconditional
+resume; batch approval. ([ADR-0053](../adr/0053-resume-only-unchanged-transient-held-work.md))
 
 #### Andon
 

@@ -67,6 +67,7 @@ Docs are split by the question they answer:
 - [0050 — Reconcile repository enrollment as separate facts](adr/0050-reconcile-repository-enrollment-as-separate-facts.md)
 - [0051 — Pin surfaces to the observed default-branch head](adr/0051-pin-surfaces-to-the-observed-default-branch-head.md)
 - [0052 — Bind local repository holds to explicit operator decisions](adr/0052-bind-local-repository-holds-to-explicit-operator-decisions.md)
+- [0053 — Resume only unchanged transient held work](adr/0053-resume-only-unchanged-transient-held-work.md)
 
 ### Domain language
 
@@ -91,6 +92,7 @@ Docs are split by the question they answer:
 - [Repository authority reconciliation](specs/repository-authority-reconciliation.md)
 - [Repository surface reconciliation](specs/repository-surface-reconciliation.md)
 - [Local repository holds](specs/repository-local-holds.md)
+- [Repository held-work recovery](specs/repository-held-work-recovery.md)
 
 ### Plans
 

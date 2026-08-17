@@ -4,11 +4,13 @@ Living document. Rationale:
 [ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md) and
 [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md),
 and [ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md),
-and [ADR-0052](../adr/0052-bind-local-repository-holds-to-explicit-operator-decisions.md).
+and [ADR-0052](../adr/0052-bind-local-repository-holds-to-explicit-operator-decisions.md),
+and [ADR-0053](../adr/0053-resume-only-unchanged-transient-held-work.md).
 Contracts:
 [repository authority reconciliation](../specs/repository-authority-reconciliation.md)
 and [repository surface reconciliation](../specs/repository-surface-reconciliation.md),
-and [local repository holds](../specs/repository-local-holds.md).
+and [local repository holds](../specs/repository-local-holds.md), and
+[held-work recovery](../specs/repository-held-work-recovery.md).
 
 ## Overview
 
@@ -92,6 +94,21 @@ RepositoryController skips both GitHub adapters while it applies, and direct
 enrollment independently rejects it. A Core revision neither clears nor hides
 the hold; clearing restores only the authority that remains applicable.
 
+For every currently enrolled repository, status derives a versioned
+authority-context digest from the semantic enrollment chain. Exact retry record
+identities and check times are excluded; the Core snapshot and declaration,
+GitHub identity, repository commit, surface and governance inputs, checkpoint
+evidence, programs, and ceiling are included. Status exposes null while that
+chain is not current.
+
+Target work will retain the digest from its last eligible context and the cause
+that held it. GitHub- or surface-unavailable work resumes automatically only
+after enrollment returns with the identical digest. Core pause/disable,
+operator hold, substantive reconciliation failures, or any digest change
+require one attributed per-item `resume` or `cancel` disposition. The current
+implementation provides the digest and closed recovery evaluator; it does not
+yet persist target work or those future decisions.
+
 Core admission readiness gates declaration materialization. Existing facts
 remain readable when readiness later becomes false. GitHub reconciliation can
 only consume an already-materialized fact from the active snapshot and cannot
@@ -108,7 +125,9 @@ Bearer header; it is never logged or stored. `FLUENT_GITHUB_API_URL` is fixed to
 An interrupted pass may leave later repositories visibly `awaiting-authority`,
 `awaiting-surfaces`, or `awaiting-enrollment`. Rerunning converges through
 command receipts. GitHub and surface `unavailable` results are durable and
-retryable. Held-work reconciliation remains a subsequent narrowing control.
+retryable. Target-work binding and persisted per-item dispositions remain a
+subsequent narrowing control; the digest and recovery classification they use
+are implemented.
 
 ## References
 
@@ -119,9 +138,11 @@ retryable. Held-work reconciliation remains a subsequent narrowing control.
   [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md),
   and [ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md)
   and [ADR-0052](../adr/0052-bind-local-repository-holds-to-explicit-operator-decisions.md)
+  and [ADR-0053](../adr/0053-resume-only-unchanged-transient-held-work.md)
 - Contracts:
   [repository authority reconciliation](../specs/repository-authority-reconciliation.md)
   and [repository surface reconciliation](../specs/repository-surface-reconciliation.md)
   and [local repository holds](../specs/repository-local-holds.md)
+  and [held-work recovery](../specs/repository-held-work-recovery.md)
 - Built in:
   [Core snapshot ingestion plan — Phase 4](../plans/core-snapshot-ingestion.md#phase-4-materialize-repository-authority-without-premature-work-large)

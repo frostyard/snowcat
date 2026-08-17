@@ -76,6 +76,7 @@ import {
   type RepositorySurfaceProbeInput,
   type RepositorySurfaceTreeEntry,
 } from "../repository/surfaces.ts";
+import { repositoryAuthorityContextDigest } from "../repository/authority-context.ts";
 
 type Row = Record<string, SQLInputValue>;
 
@@ -525,6 +526,7 @@ export interface RepositoryStatus {
   surfaceResult: RepositorySurfaceResult | null;
   repositoryCommitId: string | null;
   enrollmentRecordId: string | null;
+  authorityContextDigest: string | null;
   operatorHold: RepositoryOperatorHoldDecisionPayload | null;
   effectiveState: RepositoryState;
 }
@@ -1104,6 +1106,7 @@ export class ControlPlaneStore {
           surfaceResult: null,
           repositoryCommitId: null,
           enrollmentRecordId: null,
+          authorityContextDigest: null,
           operatorHold,
           effectiveState: "awaiting-authority",
         });
@@ -1151,6 +1154,15 @@ export class ControlPlaneStore {
         surfaceResult: surface?.payload.result ?? null,
         repositoryCommitId: surface?.payload.repositoryCommitId ?? null,
         enrollmentRecordId: enrollment?.recordId ?? null,
+        authorityContextDigest:
+          effectiveState === "enrolled" && github && surface && enrollment
+            ? repositoryAuthorityContextDigest({
+                authority: authority.payload,
+                github: github.payload,
+                surfaces: surface.payload,
+                enrollment: enrollment.payload,
+              })
+            : null,
         operatorHold,
         effectiveState,
       });

@@ -157,6 +157,10 @@ does not itself enroll the repository in the fleet.
 - Implement typed proposal, block, stale-artifact, grant, and temporary-hold
   decisions through one shared CLI/API contract from
   [ADR-0035](../adr/0035-route-human-authority-through-typed-decisions.md).
+- Carry the implemented repository authority-context digest into target work
+  and complete the per-item resume/cancel path from
+  [ADR-0053](../adr/0053-resume-only-unchanged-transient-held-work.md) and the
+  [held-work recovery contract](../specs/repository-held-work-recovery.md).
 - **Done when:** an operator imports one enrolled repository from core, issues a
   repository-dedicated grant, starts an external worker, receives one matched
   item, and sees every authorization, lease, report, artifact, observation, and
@@ -285,6 +289,8 @@ does not itself enroll the repository in the fleet.
   [core snapshot ingestion](../design/core-snapshot-ingestion.md) and
   [core snapshot verification](../specs/core-snapshot-verification.md)
 - Current contract: [work queue](../specs/work-queue.md)
+- Repository recovery contract:
+  [repository held-work recovery](../specs/repository-held-work-recovery.md)
 - Completed predecessor: [queue vertical spike](queue-vertical-spike.md)
 - Detailed kernel delivery:
   [control-plane kernel bootstrap](control-plane-kernel-bootstrap.md)
@@ -305,4 +311,6 @@ does not itself enroll the repository in the fleet.
   and clean replacement of the queue-spike database from
   [ADR-0044](../adr/0044-replace-the-queue-spike-database.md), with canonical
   source ownership established by
-  [ADR-0045](../adr/0045-host-fluent-under-frostyard.md)
+  [ADR-0045](../adr/0045-host-fluent-under-frostyard.md), and held-work recovery
+  bounded by
+  [ADR-0053](../adr/0053-resume-only-unchanged-transient-held-work.md)

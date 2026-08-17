@@ -27,6 +27,7 @@ One status row has this logical shape:
 | `fleetState` | enum | `enabled`, `paused`, or `disabled` |
 | `maintenancePrograms`, `actionCeiling`, `accountableOwners` | arrays | Exact declaration values |
 | `surfaceContractVersion` | integer | Currently `1` |
+| `authorityContextDigest` | SHA-256 or null | Current semantic enrollment context; non-null only for `enrolled` |
 | `githubReconciliationRecordId` | UUIDv7 or null | Applicable result bound to the authority fact |
 | `githubResult` | enum or null | `matched`, `missing`, `locator-mismatch`, `identity-mismatch`, `archived`, or `unavailable` |
 | `effectiveState` | enum | `awaiting-authority`, `disabled`, `paused`, `awaiting-github`, `github-held`, or `awaiting-surfaces` |
@@ -67,6 +68,9 @@ observed locator and ID or null, archive flag or null, one closed result,
    authority fact exists, it MUST use `awaiting-authority` and a null authority
    record ID; otherwise it MUST derive effective state using the table in the
    design document. `matched` MUST derive `awaiting-surfaces`, never `enrolled`.
+   A current `enrolled` chain MUST expose its versioned semantic digest under
+   the [held-work recovery contract](repository-held-work-recovery.md); every
+   other effective state MUST expose null.
 10. No command in this contract may create work, admission, a claim, a lease, a
     worker session, a local hold, or canonical-surface authority.
 11. This prior gate now participates in schema version `5` and registry version
@@ -83,10 +87,12 @@ observed locator and ID or null, archive flag or null, one closed result,
 ## References
 
 - Rationale:
-  [ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md) and
-  [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md)
+  [ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md),
+  [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md),
+  and [ADR-0053](../adr/0053-resume-only-unchanged-transient-held-work.md)
 - Context: [repository enrollment](../design/repository-enrollment.md)
 - Source authority: [Core snapshot activation](core-snapshot-activation.md)
 - Admission gate: [Core source readiness](core-source-readiness.md)
 - Next gate: [repository surface reconciliation](repository-surface-reconciliation.md)
+- Recovery: [repository held-work recovery](repository-held-work-recovery.md)
 - Delivery: [Core snapshot ingestion plan](../plans/core-snapshot-ingestion.md)

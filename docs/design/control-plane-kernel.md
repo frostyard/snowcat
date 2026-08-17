@@ -9,14 +9,16 @@ Living document. Rationale:
 [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md), and
 [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md),
 [ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md),
-and [ADR-0052](../adr/0052-bind-local-repository-holds-to-explicit-operator-decisions.md).
+and [ADR-0052](../adr/0052-bind-local-repository-holds-to-explicit-operator-decisions.md),
+and [ADR-0053](../adr/0053-resume-only-unchanged-transient-held-work.md).
 Contracts: [control-plane kernel](../specs/control-plane-kernel.md) and
 [Core source readiness](../specs/core-source-readiness.md), plus
 [Core check-detail retention](../specs/core-check-detail-retention.md) and
 [Core source polling](../specs/core-source-polling.md), plus
 [repository authority reconciliation](../specs/repository-authority-reconciliation.md),
 [repository surface reconciliation](../specs/repository-surface-reconciliation.md),
-and [local repository holds](../specs/repository-local-holds.md).
+and [local repository holds](../specs/repository-local-holds.md), and
+[held-work recovery](../specs/repository-held-work-recovery.md).
 
 ## Overview
 
@@ -27,8 +29,9 @@ implicit local-operator principal, execute one system integrity command, and
 publish subject-lookup and event-cursor projection generations. The current
 kernel also retains and activates verified Core snapshots through one
 registered fact predicate and separately materializes Core repository authority
-and bounded GitHub identity facts. It does not yet expose work admission,
-canonical-surface authority, sessions, grants, or worker operations.
+and bounded GitHub identity facts, canonical-surface decisions, enrollment,
+local repository holds, and semantic authority-context digests. It does not yet
+expose target work admission, sessions, grants, or worker operations.
 
 ```text
 empty target file
