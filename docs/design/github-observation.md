@@ -82,10 +82,25 @@ The App subscribes only to events needed by a registered observation contract:
 changes needed to detect lost access. A new event or action is unsupported until
 its schema and disposition are registered. Unknown relevant input creates a
 source gap instead of being silently ignored.
+The exact v1 event-name set is `branch_protection_rule`, `check_run`,
+`check_suite`, `installation`, `installation_repositories`, `pull_request`,
+`push`, `repository_ruleset`, and `status`.
 
 The App private key and webhook secret are host-injected runtime secrets.
 Installation IDs, App integration ID, hook identity, repository IDs, delivery
 GUIDs, and non-secret source revisions are provenance and may be retained.
+
+The implemented `inspectGitHubRepositoryInstallation` boundary calls the
+App-JWT-only repository-installation endpoint for one already reconciled
+repository locator. It permits one bounded same-origin repository-installation
+redirect, refreshes the JWT for that request, caps the response at 1 MiB and 30
+seconds, and returns only App, installation, immutable repository, target type,
+repository-selection, access classification, exact-response digest, and
+observation time. Account content and raw permission/event objects are
+discarded. `active` requires the exact v1 read-only permissions and subscribed
+events above; absence, suspension, a permission/event mismatch, and source
+unavailability remain distinct. This acquisition does not itself create a
+durable binding or change enrollment.
 
 ### Webhook ingress
 

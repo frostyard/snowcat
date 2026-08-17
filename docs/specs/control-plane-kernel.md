@@ -338,6 +338,33 @@ A later direct webhook may still be retained as its own source occurrence.
 This command records repair evidence but does not by itself close a source gap
 or establish a checkpoint.
 
+### Observer installation acquisition
+
+`inspectGitHubRepositoryInstallation(input)` performs the implemented read-only
+source acquisition for one configured App and already known immutable
+repository. It calls only
+`GET /repos/<owner>/<repository>/installation` with a fresh App JWT, the pinned
+GitHub media type, user agent, and API version. It permits one same-origin
+redirect whose path is still a repository-installation endpoint, rejects a
+second or unsafe redirect, and bounds the request to 30 seconds and the body to
+1 MiB.
+
+A `200` response must contain a positive installation ID, the exact configured
+App ID, Organization or User target type, `all` or `selected` repository
+selection, nullable suspension time, and the exact v1 permission/event profile.
+Only metadata, contents, pull requests, checks, commit statuses, and
+administration at `read` are accepted, with only the subscribed events listed
+in the GitHub observation design. Extra or write permission and a missing or
+extra event produce `permission-mismatch`; suspension produces `suspended`.
+`404` is `not-installed`; all other status, authentication, transport, bound,
+or normalization failures are `unavailable`.
+
+The result retains no JWT, token, raw response, account object, permission map,
+or event array. An observed result contains only App, installation, repository,
+target type, repository selection, access classification, exact-response
+digest, and server observation time. This acquisition establishes no durable
+record or enrollment; the typed persistence command remains the next slice.
+
 ### Pull-request-delivery coverage commands
 
 Registry v17 fixes one coverage scope:

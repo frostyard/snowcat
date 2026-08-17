@@ -1943,8 +1943,10 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   persistence are implemented without manufacturing a webhook receipt.
   Content-gap closure now requires exact affected delivery GUIDs, matching
   retained API repair audits, and a complete interval audit. Installation
-  binding, scheduling and leases, automatic gap creation, remaining observation
-  families, and retention pruning remain.
+  binding persistence, scheduling and leases, automatic gap creation, remaining
+  observation families, and retention pruning remain. The preceding bounded
+  App-JWT repository-installation acquisition and exact read-only profile check
+  are implemented.
   The kernel does not yet implement target work, general fact mutation, general
   operational state, fleet coordination, or worker mutation and never reads or
   imports the spike database.
@@ -1955,7 +1957,7 @@ elapsed source freshness from the stricter new-admission gate. Its durable
 | --- | --- |
 | Core contract and migration | Remaining organization JSON Schemas, fixtures, and canonical-surface migrations; verification-profile and Goal import are implemented, while all remaining record kinds, Goal application, source adapters, evidence retention, and fact establishment remain |
 | Control-plane domain model | Execute the [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md): specify exact durable schemas, predicates, reducers, events, projections, invalidation, idempotency, and state machines in a fresh target database shared by RepositoryController, FleetController, ProcessObserver, scheduling, and decisions |
-| GitHub observation | Complete the accepted webhook-plus-polling boundary on the registered v17 vocabulary and ADR-0058 operating bounds; exact-body HMAC verification, allowlisted same-repository normalization, an unmounted bounded router, durable acceptance, typed pull-request-delivery checkpoint/gap/repair persistence with explicit interval-versus-content failure kind, bounded App delivery-list/detail acquisition, receipt-free API repair persistence, and exact evidence-citing content-gap closure are implemented, while production listener lifecycle, automatic gap creation, scheduled leases, remaining records and commands, installation and actor mapping, CI/review/merge and artifact predicates, forks, and external decision signals remain |
+| GitHub observation | Complete the accepted webhook-plus-polling boundary on the registered v17 vocabulary and ADR-0058 operating bounds; exact-body HMAC verification, allowlisted same-repository normalization, an unmounted bounded router, durable acceptance, typed pull-request-delivery checkpoint/gap/repair persistence with explicit interval-versus-content failure kind, bounded App delivery-list/detail and repository-installation acquisition, exact read-only App profile checks, receipt-free API repair persistence, and exact evidence-citing content-gap closure are implemented, while production listener lifecycle, durable installation binding, automatic gap creation, scheduled leases, remaining records and commands, actor mapping, CI/review/merge and artifact predicates, forks, and external decision signals remain |
 | Workflow contracts | Versioned role briefs, evidence schemas, skills, attempt budgets, and deterministic gates for maintenance, planning, review, implementation, repair, and verification |
 | Restricted security | Exact forbidden-content detectors, retention, embargo, reviewer roles, declassification profiles, and private disclosure contracts for high and critical findings |
 | Scheduling and routing details | Capability and grant schemas, information-scope and restricted-compartment schemas, WIP defaults, priority mapping, fair-queue credits, cooldowns, capacity reservations, and capacity-gap UX |

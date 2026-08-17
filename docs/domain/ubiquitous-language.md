@@ -413,6 +413,18 @@ missing webhook receipt or its exact-body digest.
 **Avoid:** webhook receipt; redelivery request; source checkpoint.
 ([ADR-0057](../adr/0057-require-webhook-ingress-for-github-observation.md))
 
+#### GitHub observer installation binding
+
+An authenticated GitHub source observation that the configured read-only
+observer App has one identified installation with current access to an
+immutable repository and the required permission/event profile. It is mutable
+source access, not Core authorization, repository enrollment, or a credential.
+
+**Avoid:** enrolled App; repository authorization; installation token.
+([ADR-0039](../adr/0039-use-typed-source-native-subject-identities.md),
+[ADR-0057](../adr/0057-require-webhook-ingress-for-github-observation.md),
+[ADR-0058](../adr/0058-bound-github-observation-recovery-and-retention.md))
+
 #### Source checkpoint
 
 A durable adapter observation that completely enumerates one declared source

@@ -138,6 +138,11 @@ removed. -->
   exact matching, post-gap `github.delivery-audit-observation` citations plus
   a complete interval audit. Never fabricate a webhook receipt or close from a
   digest alone.
+- Use `inspectGitHubRepositoryInstallation` in
+  [`src/github/installation.ts`](src/github/installation.ts) for App-JWT
+  repository-access acquisition. Treat only its `active` result as a healthy
+  observer installation binding; suspension, absence, overprivilege, and
+  unavailability remain distinct from repository enrollment.
 - Keep the target control-plane store separate from the disposable queue-spike
   store. Target schema and startup live in
   [`src/control/store.ts`](src/control/store.ts); closed vocabulary lives only

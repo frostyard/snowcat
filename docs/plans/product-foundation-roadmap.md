@@ -145,8 +145,11 @@ does not itself enroll the repository in the fleet.
   delivery and atomically retain distinct API audit and normalized
   pull-request observations without fabricating a receipt. Content gaps now
   require exact affected delivery identities, matching retained API repair
-  audits, and complete interval audit before closure. Automatic gap creation,
-  installation binding, scheduling, and leases remain.
+  audits, and complete interval audit before closure. Bounded App-JWT
+  repository-installation acquisition now classifies exact read-only access,
+  suspension, absence, mismatch, and unavailability without changing
+  enrollment. Durable installation binding, automatic gap creation,
+  scheduling, and leases remain.
 - The source-independent `conclusive-run-rate:v1` arithmetic evaluator is
   implemented under
   [ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md)
