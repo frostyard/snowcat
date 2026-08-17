@@ -164,15 +164,21 @@ by hand:
 - **Deployment story** (held for design discussion): systemd timers for
   `seed-dogfood`, `verify-artifacts`, and `backup`; where the checkout, the
   databases, and worker clients live; how upgrades restart MCP servers.
-- **Operator dashboard** (held for design discussion): the CLI is complete
-  but not operator-friendly; the roadmap's Phase 10 operator surface should
-  be brought forward as a read-only view over `list`/`show`/`events` first,
-  with approve/reject/defer as its first mutations. Same authenticated
-  contract as the CLI, per the roadmap.
+- **Operator surface**: decided in
+  [ADR-0060](../adr/0060-bring-the-operator-surface-forward-as-a-read-first-inbox.md)
+  and designed in [operator surface](../design/operator-surface.md) — a
+  read-first inbox, repository board, and item page over the same store
+  methods, with the CLI's operator mutations carrying stale-intent
+  preconditions; local-first behind `FLUENT_APP_TOKEN`; server-rendered per
+  the `frostyard-design` skill, which must be synchronized from
+  `frostyard/core` into `.agents/skills` before UI code lands.
+  [frostyard/fluent#1](https://github.com/frostyard/fluent/issues/1) and
+  [#2](https://github.com/frostyard/fluent/issues/2) are its prerequisites.
 - **Enrolling Fluent itself** so its own maintenance items are claimable
-  under `FLUENT_CONTROL_DB` (needs a Core declaration and the governance
-  surface in this repository), or a documented per-worker choice to run
-  without the enrollment gate.
+  under `FLUENT_CONTROL_DB`: open as
+  [core#84](https://github.com/frostyard/core/pull/84) (declaration) and
+  [fluent#3](https://github.com/frostyard/fluent/pull/3) (governance
+  surface).
 
 
 ## Later / ideas

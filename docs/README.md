@@ -74,6 +74,7 @@ Docs are split by the question they answer:
 - [0057 — Require webhook ingress for GitHub observation](adr/0057-require-webhook-ingress-for-github-observation.md)
 - [0058 — Bound GitHub observation recovery and retention](adr/0058-bound-github-observation-recovery-and-retention.md)
 - [0059 — Adopt the queue store as the v1 work engine](adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md)
+- [0060 — Bring the operator surface forward as a read-first inbox](adr/0060-bring-the-operator-surface-forward-as-a-read-first-inbox.md)
 
 ### Domain language
 
@@ -89,6 +90,7 @@ Docs are split by the question they answer:
 - [Operating enforced required checks](design/required-check-ruleset-operations.md)
 - [GitHub observation and reconciliation](design/github-observation.md)
 - [Operating the work queue](design/queue-operations.md)
+- [Operator surface](design/operator-surface.md)
 
 ### Specs
 

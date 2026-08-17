@@ -307,8 +307,9 @@ state with a `work.requeued` event. Cancel stores the operator reason in
   database-enforced admission from
   [ADR-0006](../adr/0006-enforce-admission-in-the-database.md)
 - Product: [maintenance fleet PRD](../prd/agent-fleet.md)
-- Context: [queue execution boundary](../design/queue-execution-boundary.md)
-  and the [operations runbook](../design/queue-operations.md)
+- Context: [queue execution boundary](../design/queue-execution-boundary.md),
+  the [operations runbook](../design/queue-operations.md), and the planned
+  [operator surface](../design/operator-surface.md)
 - Delivery: [queue vertical spike](../plans/queue-vertical-spike.md)
 - Promotion decision and plan:
   [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md) and

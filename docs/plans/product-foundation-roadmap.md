@@ -304,7 +304,11 @@ long-range direction, not the next work.
 - Build the Frostyard-design-system operator surface over the same authenticated
   APIs as CLI: fleet and repository views, OperatorInbox, decisions, grants,
   capacity gaps, holds, process health, restricted views, and evidence drill-
-  down.
+  down. The read-first inbox, repository board, and item page were brought
+  forward by
+  [ADR-0060](../adr/0060-bring-the-operator-surface-forward-as-a-read-first-inbox.md)
+  ([operator surface](../design/operator-surface.md)); this phase extends
+  that surface rather than starting one.
 - Package the single-host service, SQLite backup/restore, secrets injection,
   health and ingestion monitoring, log redaction, upgrades, and disaster
   recovery for the operator's server.
