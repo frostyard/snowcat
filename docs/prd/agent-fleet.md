@@ -1999,10 +1999,11 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   verification profiles and closed Fluent mechanism versions ship for
   delivery, which named roles satisfy attestation policies, and what evidence
   retention, expiry, and confounding rules apply to each profile?
-- What exact registered record schemas, command outputs, polling and delivery-
-  audit bounds, conservative repair deadline, pagination proof, and retention
-  limits complete the webhook-plus-reconciliation model fixed by ADR-0057 on
-  the implemented v12 subject and revision identities? Merge queues, forks,
+- Do the cadence, 48-hour safety deadline, and protected 30-day/100,000-per-
+  repository/1,000,000-fleet retention policy in proposed ADR-0058 become the
+  v1 operational contract? Exact registered record schemas, command outputs,
+  pagination proof, and mechanical request/item limits still remain on the
+  implemented v12 subject and revision identities. Merge queues, forks,
   classic protection, and changing rule sets remain explicit post-v1 adapter
   work.
 - What reviewer capability profile, trigger UX, fingerprint algorithm,

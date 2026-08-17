@@ -5,6 +5,8 @@ Living document. Rationale:
 [ADR-0056](../adr/0056-derive-required-checks-from-enforced-github-rules.md),
 and
 [ADR-0057](../adr/0057-require-webhook-ingress-for-github-observation.md).
+Proposed operational bounds:
+[ADR-0058](../adr/0058-bound-github-observation-recovery-and-retention.md).
 Adjacent contracts:
 [control-plane kernel](../specs/control-plane-kernel.md) and
 [conclusive-run-rate evaluator](../specs/conclusive-run-rate-evaluator.md).
@@ -169,11 +171,12 @@ that changes incompatibly during enumeration prevents a checkpoint. Ordinary
 unchanged polls may reuse ETags or response validators only when the endpoint's
 contract proves the same scoped representation.
 
-The healthy periodic interval and delivery-audit interval will be bounded
-configuration with conservative defaults in the implementing spec. The audit
-must run substantially more often than GitHub's three-day recent-delivery
-horizon. Backoff may reduce load after failures but cannot extend the claimed
-coverage interval or make an overdue audit healthy.
+Subject to acceptance of ADR-0058, healthy repository reconciliation defaults
+to 15 minutes and App delivery audit to 5 minutes. Both are completion-relative
+leased schedules; webhook triggers only make the affected repository due.
+Source-unavailable retry uses 1, 5, then 15 minutes, while a later explicit
+GitHub rate-limit time wins. Backoff cannot extend the claimed coverage
+interval or make an overdue audit healthy.
 
 ### Coverage over an observation window
 
@@ -230,12 +233,13 @@ does not fabricate the absent exact-body digest or HMAC verification. Fluent
 does not ask GitHub to redeliver or treat a successful HTTP status in GitHub's
 history as proof that local normalization committed.
 
-GitHub documents recent deliveries for the past three days. V1 therefore uses
-a shorter conservative repair deadline, set by the implementing spec, and
-marks an unaudited interval as a source gap before GitHub's boundary. Restart
-always audits deliveries before admitting a new baseline or closing a window.
-An outage beyond the repair deadline may still recover current projections but
-cannot claim complete historical coverage.
+GitHub documents recent deliveries for the past three days. Proposed ADR-0058
+sets a 48-hour safety deadline, leaving 24 hours of operating margin. Crossing
+that deadline surfaces an andon and blocks a new baseline or window closure; it
+does not assert that exact later repair is impossible. Restart always audits
+deliveries before admitting a new baseline or closing a window. If the exact
+interval is no longer available, the gap remains open and overlapping results
+remain `unable`.
 
 ### Information handling and retention
 
@@ -247,9 +251,12 @@ content unless another accepted contract explicitly selects them.
 
 Receipts, checkpoints, gaps, and observations cited by an open window, retained
 evidence population, fact, decision, or audit explanation are protected from
-ordinary pruning. Later retention contracts may prune uncited delivery detail
-and duplicate diagnostics, preserving digests and protected anchors. A prune
-cannot turn missing coverage into complete coverage.
+ordinary pruning. Proposed ADR-0058 retains other detail for 30 days and bounds
+purge-eligible history to the newest 100,000 transactions per repository and
+1,000,000 across the fleet. Open gaps and compact closed-gap/repair history
+remain protected. Pruning removes complete unprotected transactions, preserves
+deletion digests and sequence gaps, and cannot turn missing coverage into
+complete coverage.
 
 ## Operational notes
 
@@ -278,6 +285,8 @@ cannot turn missing coverage into complete coverage.
   [ADR-0056](../adr/0056-derive-required-checks-from-enforced-github-rules.md),
   and
   [ADR-0057](../adr/0057-require-webhook-ingress-for-github-observation.md)
+- Proposed operations:
+  [ADR-0058](../adr/0058-bound-github-observation-recovery-and-retention.md)
 - Adjacent contracts:
   [control-plane kernel](../specs/control-plane-kernel.md) and
   [conclusive-run-rate evaluator](../specs/conclusive-run-rate-evaluator.md)
