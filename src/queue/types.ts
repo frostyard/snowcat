@@ -11,11 +11,35 @@ export const allowedActions = [
 ] as const;
 export type AllowedAction = (typeof allowedActions)[number];
 
+/**
+ * Fluent's own observation of a reported issue or pull request, taken through
+ * the GitHub API at completion time and refreshed by `verify-artifacts`.
+ * Workers never supply it; the MCP boundary rejects it as input.
+ */
+export type ArtifactVerification =
+  | {
+      status: "verified";
+      verifiedAt: string;
+      number: number;
+      state: "open" | "closed" | "merged";
+      headSha?: string;
+      mergedAt?: string;
+      closedAt?: string;
+    }
+  | { status: "unverified"; attemptedAt: string; reason: string };
+
 export interface WorkArtifact {
   kind: "issue" | "pull-request" | "commit" | "report" | "other";
   url: string;
   description?: string;
+  verification?: ArtifactVerification;
 }
+
+/**
+ * Derived from a completed item's pull-request artifacts. Delivery is the
+ * merge of the reported pull request, not the achievement of an outcome.
+ */
+export type DeliveryState = "none" | "unverified" | "open" | "closed" | "merged";
 
 export interface WorkResult {
   summary: string;
@@ -58,6 +82,20 @@ export interface WorkItem {
   leaseToken?: string;
   leaseExpiresAt?: string;
   result?: WorkResult;
+  /** Present on completed items: the delivery state derived from pull-request artifact verifications. */
+  delivery?: DeliveryState;
+}
+
+export function deriveDelivery(result: WorkResult | undefined): DeliveryState {
+  const pullRequests = (result?.artifacts ?? []).filter((artifact) => artifact.kind === "pull-request");
+  if (pullRequests.length === 0) return "none";
+  const states = pullRequests.map((artifact) =>
+    artifact.verification?.status === "verified" ? artifact.verification.state : "unverified",
+  );
+  if (states.includes("merged")) return "merged";
+  if (states.includes("unverified")) return "unverified";
+  if (states.includes("open")) return "open";
+  return "closed";
 }
 
 export type ObservableWorkItem = Omit<WorkItem, "leaseToken">;

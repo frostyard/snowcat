@@ -103,6 +103,16 @@ Each open issue with the label becomes one proposed `issue-resolution` item
 whose `sourceRef` is the issue URL; re-running the import creates nothing new,
 and only approved items are claimable.
 
+When a worker completes an item citing an issue or pull request, Fluent checks
+it against GitHub before accepting: a wrong repository, number, or kind is
+refused and the item stays claimed; a GitHub outage records `unverified`
+instead. Re-check later and watch delivery:
+
+```bash
+npm run queue -- verify-artifacts --repository frostyard/updex
+npm run queue -- list completed     # each item carries delivery: none|unverified|open|closed|merged
+```
+
 Operator queue controls are local CLI commands and never expose a lease token:
 
 ```bash

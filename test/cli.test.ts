@@ -276,3 +276,27 @@ test("operator CLI validates import-issues and seed-dogfood flags before touchin
   assert.equal(result.created.length, 4);
   assert.deepEqual(result.cooledKinds, []);
 });
+
+test("operator CLI verify-artifacts validates its flags and reports an empty pass without touching GitHub", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-verify-test-"));
+  const path = join(directory, "queue.db");
+  new QueueStore(path).close();
+  const env = stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path });
+  const run = (...args: string[]) =>
+    spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env,
+    });
+
+  const badLimit = run("verify-artifacts", "--limit", "500");
+  assert.notEqual(badLimit.status, 0);
+  assert.match(badLimit.stderr, /limit must be between 1 and 100/);
+  const badRepository = run("verify-artifacts", "--repository", "not-a-repo");
+  assert.notEqual(badRepository.status, 0);
+  assert.match(badRepository.stderr, /repository/i);
+
+  const empty = run("verify-artifacts");
+  assert.equal(empty.status, 0, empty.stderr);
+  assert.deepEqual(JSON.parse(empty.stdout), { checked: 0, updated: [], unavailable: [], rejected: [] });
+});

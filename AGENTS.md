@@ -163,7 +163,9 @@ removed. -->
   Import work with `queue -- import-issues <owner/repo> --label <label>`
   (proposed roots keyed by issue URL `sourceRef`; operator approval admits
   them) and repeat `seed-dogfood` freely — its no-finding cooldown suppresses
-  re-asking.
+  re-asking. `complete_work` verifies issue and pull-request artifacts against
+  GitHub (refuse on mismatch, `unverified` on outage); run `queue --
+  verify-artifacts` to refresh and to derive `delivery`.
 - Keep the target control-plane store separate from the queue store. It is an
   authority and observation sidecar: target schema and startup live in
   [`src/control/store.ts`](src/control/store.ts); closed vocabulary lives only

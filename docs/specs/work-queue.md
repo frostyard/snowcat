@@ -27,6 +27,7 @@ claim, renew, and resolve it.
 | `leaseOwner` | string | claimed only | Worker identity supplied at claim |
 | `leaseToken` | UUID | claim response only | Secret mutation capability; omitted by every other response |
 | `leaseExpiresAt` | timestamp | claimed only | UTC expiry |
+| `delivery` | enum | completed only | Derived from pull-request artifact verifications: `none` (no pull request reported), `unverified`, `open`, `closed`, or `merged`. Delivery is the merge of the reported pull request, not outcome achievement |
 | `result` | result | completed, blocked, or cancelled with a reason only | Completed: worker summary, evidence, and artifacts. Blocked: `summary` is the block reason with empty `evidence` and `artifacts`. Cancelled by proposal rejection or blocked-work cancellation: `summary` is the operator reason with empty `evidence` and `artifacts`. Absent on `proposed`, `queued`, and `claimed` items |
 
 The action vocabulary is `read`, `write`, `run-tests`, `open-issue`,
@@ -37,8 +38,12 @@ An artifact has a `kind` (`issue`, `pull-request`, `commit`, `report`, or
 `other`), an HTTPS `url`, and an optional description. GitHub issue, pull
 request, and commit artifacts MUST name the work item's repository and use the
 path shape for their kind. This validates the claim's scope, not the artifact's
-existence. A completion result has a non-empty summary, an evidence string
-array, and an artifact array.
+existence. Issue and pull-request artifacts additionally carry a
+`verification`, Fluent's own observation of the artifact through the GitHub
+API: `{ status: "verified", verifiedAt, number, state: open | closed | merged,
+headSha?, mergedAt?, closedAt? }` or `{ status: "unverified", attemptedAt,
+reason }`. Workers never supply it. A completion result has a non-empty
+summary, an evidence string array, and an artifact array.
 
 ### MCP tools
 
@@ -48,7 +53,7 @@ array, and an artifact array.
 | `get_work` | Read one item and its lineage fields | None; never returns lease token |
 | `claim_work` | Lease the highest-priority eligible item | Worker identity outside the reserved principal namespaces; optional repository/kind filters |
 | `heartbeat_work` | Renew an active lease for 30–3600 seconds | Matching item, worker, and lease token |
-| `complete_work` | Atomically store a result and up to ten child items | Matching item, worker, and lease token |
+| `complete_work` | Verify reported issues and pull requests against GitHub, then atomically store a result and up to ten child items | Matching item, worker, and lease token |
 | `block_work` | Preserve an item as blocked; the reason is stored as `result.summary` and in the `work.blocked` event payload | Matching item, worker, and lease token |
 | `release_work` | Return unstarted or mismatched work to the queue | Matching item, worker, and lease token |
 
@@ -236,6 +241,34 @@ state with a `work.requeued` event. Cancel stores the operator reason in
     repository is `completed` within the window and proposed no child MUST be
     skipped and reported as cooled; a kind whose latest root proposed a child
     or is older than the window is offered again once its lineage is inactive.
+33. `complete_work` MUST verify every `issue` and `pull-request` artifact
+    against the GitHub API before the completion transaction, using the item's
+    repository. When GitHub answers that the artifact does not exist, resolves
+    to another location or number, targets or belongs to another repository,
+    or is an issue reported as a pull request or the reverse, the completion
+    MUST be refused and the item MUST stay `claimed` so the worker can correct
+    the report. When GitHub confirms it, the stored artifact MUST carry
+    `verification.status = "verified"` with the observed state (`merged` when
+    a pull request is merged) and, for pull requests, the head SHA. When
+    GitHub is unavailable, returns a non-200 answer other than not-found, or
+    an unreadable body, the completion MUST be accepted with
+    `verification.status = "unverified"` and the reason, never refused for
+    that cause. The MCP artifact schema MUST reject a worker-supplied
+    `verification` as an unknown key rather than strip it.
+34. `verify-artifacts [--repository <owner/repo>] [--limit <1-100>]` MUST
+    re-check completed items' issue and pull-request artifacts that are
+    `unverified` or verified but still `open`, MUST record each changed
+    observation through `recordArtifactVerification` with an
+    `artifact.verified` event naming the URL, kind, status, state, and prior
+    state, MUST record a now-rejected artifact as `unverified` with a
+    `rejected:` reason rather than delete it, and MUST leave the previous
+    verification in place when GitHub is unavailable. Merged and closed
+    artifacts are terminal and are not re-checked.
+35. `delivery` MUST be derived on read from a completed item's pull-request
+    artifacts, never stored separately: `merged` if any is merged, otherwise
+    `unverified` if any lacks a verified state, otherwise `open` if any is
+    open, otherwise `closed`; `none` when no pull request was reported. Issues,
+    commits, and reports do not constitute delivery.
 
 ## Derived artifacts
 
@@ -244,6 +277,7 @@ state with a `work.requeued` event. Cancel stores the operator reason in
 | SQLite schema | Created and upgraded by `QueueStore`'s migration ladder from this work-item model; admission triggers and `user_version` per rules 20–21 |
 | Backup manifest | Derived by `backup` and re-derived by `verify-backup` per rules 28–29 |
 | Issue import | `import-issues` maps labeled open GitHub issues to proposed `issue-resolution` roots per rules 30–31 |
+| Artifact verification | Completion-time and `verify-artifacts` observations per rules 33–35; `delivery` derived per rule 35 |
 | MCP worker behavior | Portable `work-fluent-queue` skill constrained by this contract |
 | Testing-gap seed | Deterministic CLI instance of this contract |
 

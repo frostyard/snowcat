@@ -5,8 +5,10 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 
 import {
   allowedActions,
+  deriveDelivery,
   workStatuses,
   type AllowedAction,
+  type ArtifactVerification,
   type ClaimInput,
   type CompletionInput,
   type FollowUpInput,
@@ -329,7 +331,7 @@ export class QueueStore {
 
   get(id: string): WorkItem | undefined {
     const row = this.db.prepare("SELECT * FROM work_items WHERE id = ?").get(id) as Row | undefined;
-    return row ? decodeWorkItem(row) : undefined;
+    return row ? withDelivery(decodeWorkItem(row)) : undefined;
   }
 
   list(options: { status?: WorkStatus; repository?: string; limit?: number } = {}): WorkItem[] {
@@ -353,7 +355,7 @@ export class QueueStore {
     const rows = this.db
       .prepare(`SELECT * FROM work_items ${where} ORDER BY priority DESC, created_at ASC LIMIT ?`)
       .all(...params, limit) as Row[];
-    return rows.map(decodeWorkItem);
+    return rows.map((row) => withDelivery(decodeWorkItem(row)));
   }
 
   /**
@@ -660,6 +662,40 @@ export class QueueStore {
     });
   }
 
+  /**
+   * Replaces the verification of one artifact on a completed item and records
+   * `artifact.verified`. Used by the completion-time verifier's later refresh
+   * pass; the artifact itself (kind, URL, description) never changes.
+   */
+  recordArtifactVerification(id: string, url: string, verification: ArtifactVerification, actor: string): WorkItem {
+    if (!actor.trim()) throw new Error("verification actor is required");
+    validateVerification(verification);
+    return this.transaction(() => {
+      const item = this.getRequired(id);
+      if (item.status !== "completed" || !item.result) throw new Error(`work item is not completed: ${id}`);
+      const index = item.result.artifacts.findIndex((artifact) => artifact.url === url);
+      if (index === -1) throw new Error(`work item ${id} has no artifact ${url}`);
+      const artifact = item.result.artifacts[index]!;
+      if (artifact.kind !== "issue" && artifact.kind !== "pull-request") {
+        throw new Error(`artifact ${artifact.kind} is not verifiable: ${url}`);
+      }
+      const artifacts = item.result.artifacts.slice();
+      artifacts[index] = { ...artifact, verification };
+      const now = this.now();
+      this.db
+        .prepare("UPDATE work_items SET result_json = ?, updated_at = ? WHERE id = ?")
+        .run(JSON.stringify({ ...item.result, artifacts }), now, id);
+      this.addEvent(id, "artifact.verified", actor, {
+        url,
+        kind: artifact.kind,
+        status: verification.status,
+        state: verification.status === "verified" ? verification.state : undefined,
+        previousState: artifact.verification?.status === "verified" ? artifact.verification.state : undefined,
+      });
+      return this.getRequired(id);
+    });
+  }
+
   events(id: string): WorkEvent[] {
     return (this.db.prepare("SELECT * FROM work_events WHERE work_item_id = ? ORDER BY sequence").all(id) as Row[]).map(
       (row) => ({
@@ -855,6 +891,11 @@ function decodeWorkItem(row: Row): WorkItem {
   };
 }
 
+function withDelivery(item: WorkItem): WorkItem {
+  if (item.status !== "completed") return item;
+  return { ...item, delivery: deriveDelivery(item.result) };
+}
+
 function parseJson<T>(value: SQLInputValue | undefined, fallback: T): T {
   if (typeof value !== "string") return fallback;
   try {
@@ -867,6 +908,22 @@ function parseJson<T>(value: SQLInputValue | undefined, fallback: T): T {
 function validateSourceRef(sourceRef: string): void {
   if (!sourceRef.trim() || sourceRef !== sourceRef.trim()) throw new Error("sourceRef must be a non-empty trimmed string");
   if (sourceRef.length > MAX_SOURCE_REF_LENGTH) throw new Error(`sourceRef exceeds ${MAX_SOURCE_REF_LENGTH} characters`);
+}
+
+function validateVerification(verification: ArtifactVerification): void {
+  if (verification.status === "verified") {
+    if (!Number.isSafeInteger(verification.number) || verification.number < 1) throw new Error("verification number is invalid");
+    if (!["open", "closed", "merged"].includes(verification.state)) throw new Error("verification state is invalid");
+    if (!verification.verifiedAt.trim()) throw new Error("verification verifiedAt is required");
+    return;
+  }
+  if (verification.status === "unverified") {
+    if (!verification.attemptedAt.trim() || !verification.reason.trim()) {
+      throw new Error("unverified verification needs attemptedAt and reason");
+    }
+    return;
+  }
+  throw new Error("verification status is invalid");
 }
 
 function validateRepository(repository: string): void {
@@ -903,6 +960,12 @@ function validateResult(result: WorkResult): void {
   if (!result.summary.trim()) throw new Error("result summary is required");
   if (result.evidence.some((evidence) => !evidence.trim())) throw new Error("evidence entries must not be empty");
   for (const artifact of result.artifacts) {
+    if (artifact.verification !== undefined) {
+      if (artifact.kind !== "issue" && artifact.kind !== "pull-request") {
+        throw new Error(`artifact ${artifact.kind} cannot carry verification`);
+      }
+      validateVerification(artifact.verification);
+    }
     let url: URL;
     try {
       url = new URL(artifact.url);

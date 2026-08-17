@@ -222,8 +222,24 @@ operator step the guard cannot perform.
   The issue URL is the item's `sourceRef` and the idempotency key, so the
   command is safe to repeat; nothing is claimable until the operator approves
   it. Fluent reads issues with the optional `FLUENT_GITHUB_TOKEN`; the issue
-  body is quoted to the worker as untrusted context. Closure sync and artifact
-  verification are separate steps in the recovery plan.
+  body is quoted to the worker as untrusted context. Closure sync is a later
+  step in the recovery plan.
+- Artifact verification: `complete_work` checks each reported issue and pull
+  request against the GitHub API under Fluent's own credential before the
+  completion transaction. Wrong repository, wrong number, wrong kind, or
+  nonexistent → the completion is refused and the item stays claimed. Confirmed
+  → the artifact carries `verification` (state, head SHA, merge time). GitHub
+  unavailable → the completion is accepted as `unverified` with the reason;
+  `npm run queue -- verify-artifacts` re-checks unverified and still-open
+  artifacts later and records `artifact.verified` events, so a GitHub outage
+  costs a delayed observation, not a lost completion. Completed items expose a
+  derived `delivery` (`none`, `unverified`, `open`, `closed`, `merged`) — the
+  merge of the reported pull request, kept distinct from outcome achievement
+  ([ADR-0031](../adr/0031-separate-delivery-from-outcome-achievement.md)).
+  This is the bounded on-demand form of
+  [ADR-0018](../adr/0018-bind-worker-sessions-and-verify-github-artifacts.md);
+  webhook observation stays parked under
+  [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md).
 - The Lemonade smoke result establishes endpoint compatibility only. It does
   not establish model sufficiency for queue planning or general orchestration.
 

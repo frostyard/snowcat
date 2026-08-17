@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { refreshArtifactVerifications } from "./artifact-verification.ts";
 import { importLabeledIssues } from "./github-issues.ts";
 import { QueueStore, queueDatabasePath } from "./store.ts";
 import { DEFAULT_DOGFOOD_COOLDOWN_SECONDS, enqueueDogfoodBatch, enqueueTestingGap } from "./seeds.ts";
@@ -57,6 +58,11 @@ try {
     print(withoutLeaseToken(queue.cancel(id, "operator:cli", reason)));
   } else if (command === "list") {
     print(queue.list({ status: parseStatus(args[0]) }).map(withoutLeaseToken));
+  } else if (command === "verify-artifacts") {
+    const flags = parseFlags(args, ["repository", "limit"]);
+    const limit = flags.limit === undefined ? undefined : parseNonNegativeInteger(flags.limit, "limit");
+    if (limit !== undefined && (limit < 1 || limit > 100)) throw new Error("limit must be between 1 and 100");
+    print(await refreshArtifactVerifications(queue, { repository: flags.repository, limit }));
   } else if (command === "metadata") {
     print(queue.metadata());
   } else if (command === "backup") {
@@ -77,6 +83,7 @@ try {
     console.error("       npm run queue -- requeue <work-item-id> <reason>");
     console.error("       npm run queue -- cancel <work-item-id> <reason>");
     console.error("       npm run queue -- list [proposed|queued|claimed|completed|blocked|cancelled]");
+    console.error("       npm run queue -- verify-artifacts [--repository <owner/repo>] [--limit <1-100>]");
     console.error("       npm run queue -- metadata");
     console.error("       npm run queue -- backup <new-file-path>");
     console.error("       npm run queue -- verify-backup <backup-file-path>");

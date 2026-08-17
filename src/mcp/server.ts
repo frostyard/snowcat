@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 
+import { verifyCompletionArtifacts, type ArtifactVerifierOptions } from "../queue/artifact-verification.ts";
 import { QueueStore, queueDatabasePath, validateWorkerIdentity } from "../queue/store.ts";
 import { allowedActions, withoutLeaseToken, workStatuses } from "../queue/types.ts";
 
@@ -18,7 +19,9 @@ const workerSchema = z.string().min(1).refine(
   },
   { message: "worker identity uses a reserved principal namespace (operator:, policy:, system:)" },
 );
-const artifactSchema = z.object({
+// Strict: `verification` is Fluent's own observation, computed by the server
+// at completion time; a worker-supplied value is rejected, not stripped.
+const artifactSchema = z.strictObject({
   kind: z.enum(["issue", "pull-request", "commit", "report", "other"]),
   url: z.url().startsWith("https://"),
   description: z.string().min(1).optional(),
@@ -34,7 +37,7 @@ const followUpSchema = z.strictObject({
   delegableActions: z.array(actionSchema),
 });
 
-export function buildQueueMcpServer(path = queueDatabasePath()): McpServer {
+export function buildQueueMcpServer(path = queueDatabasePath(), verifier: ArtifactVerifierOptions = {}): McpServer {
   const queue = new QueueStore(path);
   const server = new McpServer(
     { name: "fluent-queue", version: "0.1.0" },
@@ -121,7 +124,17 @@ export function buildQueueMcpServer(path = queueDatabasePath()): McpServer {
         followUps: z.array(followUpSchema).max(10),
       }),
     },
-    async (input) => toolResult(queue.complete(input)),
+    async (input) => {
+      // Verify reported issues and pull requests against GitHub before the
+      // completion transaction. A rejected artifact leaves the item claimed so
+      // the worker can correct the report; an unavailable GitHub records
+      // `unverified` and the later verify-artifacts pass closes the loop.
+      const item = queue.get(input.id);
+      const artifacts = item
+        ? await verifyCompletionArtifacts(item.repository, input.result.artifacts, verifier)
+        : input.result.artifacts;
+      return toolResult(queue.complete({ ...input, result: { ...input.result, artifacts } }));
+    },
   );
 
   server.registerTool(

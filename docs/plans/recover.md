@@ -66,7 +66,7 @@ schema with no upgrade path.
   created none, and after `approve` one item was claimed over a stdio MCP
   server while the two still-proposed roots stayed unclaimable.
 
-## Phase 3 — Verify artifacts, not just record them (small)
+## Phase 3 — Verify artifacts, not just record them (completed 2026-08-17)
 
 - On `complete_work` with an `issue` or `pull-request` artifact, resolve the
   URL through `githubApiJson`, confirm it belongs to the item's repository,
@@ -78,7 +78,14 @@ schema with no upgrade path.
 - Polling on demand only; webhook ingress stays parked.
 - **Done when:** a completion citing a pull request in the wrong repository
   is rejected, one citing a real pull request stores verification, and a
-  later `verify-artifacts` records its merge.
+  later `verify-artifacts` records its merge. Verified 2026-08-17 against
+  live GitHub in a scratch queue: `complete_work` refused a nonexistent
+  `frostyard/updex` pull request and left the item claimed, then accepted the
+  same item citing merged PR #293 with `verification.state = merged`, its head
+  SHA and merge time, and derived `delivery: merged`; the refresh pass then
+  correctly re-checked nothing. Outage handling (accept as `unverified`,
+  refresh later) is covered by tests, GitHub having been intermittently
+  returning 5xx during the day.
 
 ## Phase 4 — Wire Core enrollment as a claim filter (small)
 

@@ -50,6 +50,11 @@ its sandbox; Fluent only owns queue authorization and bookkeeping.
 - Keep every child action inside the parent's `delegableActions`. A follow-up is
   not permission to escalate autonomy.
 - Report created issues, pull requests, commits, and reports as artifacts.
+  Fluent checks each reported issue and pull request against GitHub when you
+  call `complete_work`: report the exact URL in the item's repository. A
+  refused completion names the artifact that did not match; correct the report
+  and complete again — the item is still yours. Never add a `verification`
+  field yourself.
 - Call `block_work` when operator input or an external state change is required.
   Call `release_work` when no substantive work began and another worker can
   safely retry.
