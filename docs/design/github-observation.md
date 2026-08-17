@@ -120,7 +120,7 @@ observed subject.
 
 ### Durable observation families
 
-Registry version 15 assigns the source-native subject identities and purpose-
+Registry version 16 assigns the source-native subject identities and purpose-
 specific revision kinds below. The implementing records and commands will
 assign exact registered kinds and payload schemas without changing these
 identity joins:
@@ -140,7 +140,7 @@ identity joins:
 
 Every family in this table uses or will use a registered `observation` record
 kind; the design does not introduce another generic record class. Registry
-version 15 additionally registers the direct delivery receipt, API delivery
+version 16 additionally registers the direct delivery receipt, API delivery
 audit, pull-request, checkpoint, gap, and repair observation records plus their
 atomic events and commands. Pull-request observation schema 2 names either its
 direct receipt or API audit as the acquisition record. Other rows remain
@@ -270,13 +270,17 @@ These labels are a future projection, not a universal status or authoritative
 record. An open or settling window evaluates `unable`.
 
 Each gap binds a registered scope and begins at the last established coverage
-boundary. Its affected interval remains open until exact repair observations
-establish an exclusive end. Recovery may fetch a missed delivery, complete
-pagination, reconcile ancestry, or obtain a previously unavailable exact
-source record. The repair appends typed observations that cite the gap; it does
-not delete the gap, impersonate the missing ingress receipt, or move its
-original transaction sequence. If exact repair becomes impossible, the gap
-remains and every overlapping population is incomplete.
+boundary. Interval failures carry no invented delivery identity. Content
+failures carry a bounded exact set of affected delivery GUIDs. Their interval
+remains open until a complete audit establishes an exclusive end; a content
+failure additionally requires retained API repair observations whose App,
+installation, repository, and GUID set exactly match the gap. Recovery may
+fetch a missed delivery, complete pagination, reconcile ancestry, or obtain a
+previously unavailable exact source record. The repair cites its evidence and
+appends typed observations; it does not delete the gap, impersonate the missing
+ingress receipt, or move its original transaction sequence. If exact repair
+becomes impossible, the gap remains and every overlapping population is
+incomplete.
 
 ### Resolving the required-check revision
 

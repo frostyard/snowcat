@@ -714,6 +714,7 @@ export interface GitHubSourceGapInput {
   installationId: string;
   checkpointRecordId: string;
   cause: GitHubSourceGapCause;
+  affectedDeliveryGuids: string[];
 }
 
 export interface GitHubSourceGapResult {
@@ -725,6 +726,7 @@ export interface GitHubSourceGapResult {
   eventRecordId: string;
   lowerBoundAt: string;
   cause: GitHubSourceGapCause;
+  affectedDeliveryGuids: string[];
   gapDigest: string;
   detectedAt: string;
   transactionPositions: readonly [0, 1];
@@ -733,6 +735,7 @@ export interface GitHubSourceGapResult {
 
 export interface GitHubSourceGapRepairInput extends Omit<GitHubSourceCheckpointInput, "coveredFrom"> {
   gapRecordId: string;
+  repairAuditRecordIds: string[];
 }
 
 export interface GitHubSourceGapRepairResult {
@@ -746,6 +749,8 @@ export interface GitHubSourceGapRepairResult {
   eventRecordId: string;
   lowerBoundAt: string;
   exclusiveEndAt: string;
+  repairMethod: "complete-delivery-audit" | "delivery-observations-and-complete-audit";
+  repairAuditRecordIds: string[];
   checkpointDigest: string;
   repairDigest: string;
   repairedAt: string;
@@ -2326,6 +2331,7 @@ export class ControlPlaneStore {
         gapId: gapRecordId,
         lowerBoundAt: checkpoint.coveredThrough,
         cause: normalized.cause,
+        affectedDeliveryGuids: normalized.affectedDeliveryGuids,
         detectedAt,
       }));
       const payload = {
@@ -2340,6 +2346,7 @@ export class ControlPlaneStore {
         lowerBoundAt: checkpoint.coveredThrough,
         upperBoundAt: null,
         cause: normalized.cause,
+        affectedDeliveryGuids: normalized.affectedDeliveryGuids,
         gapDigest,
         detectedAt,
       } satisfies GitHubSourceGapPayload;
@@ -2371,6 +2378,7 @@ export class ControlPlaneStore {
         eventRecordId,
         lowerBoundAt: checkpoint.coveredThrough,
         cause: normalized.cause,
+        affectedDeliveryGuids: normalized.affectedDeliveryGuids,
         gapDigest,
         detectedAt,
         transactionPositions: [0, 1],
@@ -2412,8 +2420,11 @@ export class ControlPlaneStore {
       ) {
         throw new Error("GitHub source-gap repair requires the current open gap");
       }
-      if (gap.cause === "unsupported-relevant-delivery" || gap.cause === "normalization-failed") {
-        throw new Error("GitHub source-gap cause requires retained normalized repair observations");
+      const contentGap = gap.cause === "unsupported-relevant-delivery" || gap.cause === "normalization-failed";
+      if (contentGap) {
+        this.assertGitHubContentGapRepairEvidence(gap, normalized.repairAuditRecordIds);
+      } else if (normalized.repairAuditRecordIds.length !== 0) {
+        throw new Error("GitHub interval source-gap repair cannot cite delivery repair audits");
       }
       if (new Date(normalized.coveredThrough).getTime() <= new Date(gap.lowerBoundAt).getTime()) {
         throw new Error("GitHub source-gap repair must establish a later exclusive end");
@@ -2424,6 +2435,9 @@ export class ControlPlaneStore {
       const eventRecordId = uuidV7(new Date(repairedAt));
       const checkpointInput = { ...normalized, coveredFrom: gap.lowerBoundAt };
       const checkpointDigest = githubCheckpointDigest(checkpointInput);
+      const repairMethod = contentGap
+        ? "delivery-observations-and-complete-audit" as const
+        : "complete-delivery-audit" as const;
       const checkpointPayload = {
         repositoryId: normalized.repositoryId,
         scope: githubSourceScope,
@@ -2455,7 +2469,8 @@ export class ControlPlaneStore {
         eventRecordId,
         lowerBoundAt: gap.lowerBoundAt,
         exclusiveEndAt: normalized.coveredThrough,
-        repairMethod: "complete-delivery-audit",
+        repairMethod,
+        repairAuditRecordIds: normalized.repairAuditRecordIds,
         repairedAt,
       }));
       const repairPayload = {
@@ -2472,7 +2487,8 @@ export class ControlPlaneStore {
         eventRecordId,
         lowerBoundAt: gap.lowerBoundAt,
         exclusiveEndAt: normalized.coveredThrough,
-        repairMethod: "complete-delivery-audit",
+        repairMethod,
+        repairAuditRecordIds: normalized.repairAuditRecordIds,
         repairDigest,
         repairedAt,
       } satisfies GitHubSourceGapRepairPayload;
@@ -2481,7 +2497,7 @@ export class ControlPlaneStore {
       this.insertGitHubCoverageOccurrence({ recordId: checkpointRecordId, occurrenceType: "record", kind: "github.source-checkpoint-observation", recordClass: "observation", repositoryId: normalized.repositoryId, revisionKind: "github-source-checkpoint-sha256", revisionValue: checkpointDigest, payloadJson: canonicalJson(checkpointPayload), correlationId: normalized.runId, causationRecordId: gap.gapRecordId, sequence, position: 0, recordedAt: repairedAt, scopeJson });
       this.insertGitHubCoverageOccurrence({ recordId: repairRecordId, occurrenceType: "record", kind: "github.source-gap-repair-observation", recordClass: "observation", repositoryId: normalized.repositoryId, revisionKind: "github-source-gap-sha256", revisionValue: repairDigest, payloadJson: canonicalJson(repairPayload), correlationId: normalized.runId, causationRecordId: checkpointRecordId, sequence, position: 1, recordedAt: repairedAt, scopeJson });
       this.insertGitHubCoverageOccurrence({ recordId: eventRecordId, occurrenceType: "event", kind: "github.source-gap-repaired", repositoryId: normalized.repositoryId, revisionKind: "github-source-gap-sha256", revisionValue: repairDigest, payloadJson: canonicalJson(repairPayload), correlationId: normalized.runId, causationRecordId: repairRecordId, sequence, position: 2, recordedAt: repairedAt, scopeJson });
-      const result: GitHubSourceGapRepairResult = { repositoryId: normalized.repositoryId, runId: normalized.runId, gapId: gap.gapId, gapRecordId: gap.gapRecordId, priorCheckpointRecordId: gap.checkpointRecordId, checkpointRecordId, repairRecordId, eventRecordId, lowerBoundAt: gap.lowerBoundAt, exclusiveEndAt: normalized.coveredThrough, checkpointDigest, repairDigest, repairedAt, transactionPositions: [0, 1, 2], transactionSequence: sequence };
+      const result: GitHubSourceGapRepairResult = { repositoryId: normalized.repositoryId, runId: normalized.runId, gapId: gap.gapId, gapRecordId: gap.gapRecordId, priorCheckpointRecordId: gap.checkpointRecordId, checkpointRecordId, repairRecordId, eventRecordId, lowerBoundAt: gap.lowerBoundAt, exclusiveEndAt: normalized.coveredThrough, repairMethod, repairAuditRecordIds: normalized.repairAuditRecordIds, checkpointDigest, repairDigest, repairedAt, transactionPositions: [0, 1, 2], transactionSequence: sequence };
       this.insertReceipt(commandScope, "github.repair-source-gap", idempotencyKey, commandPayloadDigest, result, sequence, addSeconds(repairedAt, 30 * 24 * 60 * 60));
       this.advanceControlMetadata(repairedAt, sequence);
       this.db.exec("COMMIT");
@@ -5157,13 +5173,15 @@ export class ControlPlaneStore {
   }
 
   private commandReceipt(commandScope: string, commandKind: string, idempotencyKey: string): Row | undefined {
+    const command = commandKindRegistry[commandKind as keyof typeof commandKindRegistry];
+    if (!command) throw new Error(`unknown command kind: ${commandKind}`);
     return this.db
       .prepare(
         `SELECT payload_digest, result_json FROM idempotency_receipts
          WHERE command_scope = ? AND command_kind = ?
-           AND command_schema_version = 1 AND idempotency_key = ?`,
+           AND command_schema_version = ? AND idempotency_key = ?`,
       )
-      .get(commandScope, commandKind, idempotencyKey) as Row | undefined;
+      .get(commandScope, commandKind, command.schemaVersion, idempotencyKey) as Row | undefined;
   }
 
   private findDirectGitHubDeliveryReceipt(
@@ -5257,6 +5275,46 @@ export class ControlPlaneStore {
     return payload;
   }
 
+  private assertGitHubContentGapRepairEvidence(
+    gap: GitHubSourceGapPayload,
+    repairAuditRecordIds: readonly string[],
+    beforeTransactionSequence?: number,
+  ): void {
+    if (repairAuditRecordIds.length !== gap.affectedDeliveryGuids.length) {
+      throw new Error("GitHub content source-gap repair must cite every affected delivery exactly once");
+    }
+    const gapRow = this.db
+      .prepare("SELECT transaction_sequence FROM durable_occurrences WHERE record_id = ? AND kind = 'github.source-gap-observation'")
+      .get(gap.gapRecordId) as Row | undefined;
+    if (!gapRow) throw new Error("GitHub content source-gap repair requires its retained gap");
+    const repairedGuids: string[] = [];
+    for (const auditRecordId of repairAuditRecordIds) {
+      const row = this.db
+        .prepare(
+          `SELECT payload_json, transaction_sequence FROM durable_occurrences
+           WHERE record_id = ? AND kind = 'github.delivery-audit-observation'`,
+        )
+        .get(auditRecordId) as Row | undefined;
+      const audit = row ? parseJson(String(row.payload_json)) : undefined;
+      if (
+        !row ||
+        !audit ||
+        !recordKindRegistry["github.delivery-audit-observation"].validatePayload(audit) ||
+        Number(row.transaction_sequence) <= Number(gapRow.transaction_sequence) ||
+        (beforeTransactionSequence !== undefined && Number(row.transaction_sequence) >= beforeTransactionSequence) ||
+        audit.repositoryId !== gap.repositoryId ||
+        audit.appId !== gap.appId ||
+        audit.installationId !== gap.installationId
+      ) {
+        throw new Error("GitHub content source-gap repair cites an ineligible delivery audit");
+      }
+      repairedGuids.push(audit.deliveryGuid);
+    }
+    if (canonicalJson(repairedGuids.sort()) !== canonicalJson(gap.affectedDeliveryGuids)) {
+      throw new Error("GitHub content source-gap repair evidence does not match affected deliveries");
+    }
+  }
+
   private insertGitHubCoverageTransaction(input: {
     commandKind: "github.record-source-checkpoint" | "github.open-source-gap" | "github.repair-source-gap";
     idempotencyKey: string;
@@ -5269,11 +5327,12 @@ export class ControlPlaneStore {
            transaction_id, command_kind, command_schema_version, principal_kind,
            principal_id, session_id, idempotency_key, payload_digest,
            evaluation_time, recorded_at
-         ) VALUES (?, ?, 1, 'fluent-system', 'github-observer', NULL, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, 'fluent-system', 'github-observer', NULL, ?, ?, ?, ?)`,
       )
       .run(
         uuidV7(new Date(input.evaluationTime)),
         input.commandKind,
+        commandKindRegistry[input.commandKind].schemaVersion,
         input.idempotencyKey,
         input.commandPayloadDigest,
         input.evaluationTime,
@@ -5302,7 +5361,9 @@ export class ControlPlaneStore {
       recordId: input.recordId,
       occurrenceType: input.occurrenceType,
       kind: input.kind,
-      schemaVersion: 1,
+      schemaVersion: input.occurrenceType === "record"
+        ? recordKindRegistry[input.kind as keyof typeof recordKindRegistry].schemaVersion
+        : eventKindRegistry[input.kind as keyof typeof eventKindRegistry].schemaVersion,
       recordClass: input.recordClass,
       subjectKind: "github-repository",
       subjectId: input.repositoryId,
@@ -5810,11 +5871,12 @@ export class ControlPlaneStore {
         `INSERT INTO idempotency_receipts (
            command_scope, command_kind, command_schema_version, idempotency_key,
            payload_digest, result_json, transaction_sequence, retained_until
-         ) VALUES (?, ?, 1, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         commandScope,
         commandKind,
+        commandKindRegistry[commandKind].schemaVersion,
         idempotencyKey,
         payloadDigest,
         canonicalJson(result as unknown as JsonValue),
@@ -7315,6 +7377,9 @@ export class ControlPlaneStore {
         .prepare("SELECT record_id, kind, causation_record_id, payload_json FROM durable_occurrences WHERE transaction_sequence = ? ORDER BY transaction_position")
         .all(row.transaction_sequence!) as Row[];
       const repairCommand = transaction.command_kind === "github.repair-source-gap";
+      const repairPayload = repairCommand && outputs[1]
+        ? parseJson(String(outputs[1].payload_json))
+        : undefined;
       const commandInput = repairCommand
         ? {
             expectedLastTransactionSequence: Number(row.transaction_sequence) - 1,
@@ -7328,6 +7393,10 @@ export class ControlPlaneStore {
             pageProofDigest: checkpoint.pageProofDigest,
             selectedResponseDigest: checkpoint.selectedResponseDigest,
             gapRecordId: String(row.causation_record_id),
+            repairAuditRecordIds:
+              repairPayload && recordKindRegistry["github.source-gap-repair-observation"].validatePayload(repairPayload)
+                ? repairPayload.repairAuditRecordIds
+                : [],
           }
         : {
             expectedLastTransactionSequence: Number(row.transaction_sequence) - 1,
@@ -7387,6 +7456,7 @@ export class ControlPlaneStore {
         gapId: gap.gapId,
         lowerBoundAt: gap.lowerBoundAt,
         cause: gap.cause,
+        affectedDeliveryGuids: gap.affectedDeliveryGuids,
         detectedAt: gap.detectedAt,
       }));
       const outputs = this.db
@@ -7400,6 +7470,7 @@ export class ControlPlaneStore {
         installationId: gap.installationId,
         checkpointRecordId: gap.checkpointRecordId,
         cause: gap.cause,
+        affectedDeliveryGuids: gap.affectedDeliveryGuids,
       };
       const earlierOpenGap = this.db
         .prepare(
@@ -7472,6 +7543,7 @@ export class ControlPlaneStore {
       lowerBoundAt: repair.lowerBoundAt,
       exclusiveEndAt: repair.exclusiveEndAt,
       repairMethod: repair.repairMethod,
+      repairAuditRecordIds: repair.repairAuditRecordIds,
       repairedAt: repair.repairedAt,
     }));
     const outputs = this.db
@@ -7490,6 +7562,7 @@ export class ControlPlaneStore {
           pageProofDigest: checkpoint.pageProofDigest,
           selectedResponseDigest: checkpoint.selectedResponseDigest,
           gapRecordId: repair.gapRecordId,
+          repairAuditRecordIds: repair.repairAuditRecordIds,
         }
       : undefined;
     if (
@@ -7510,8 +7583,21 @@ export class ControlPlaneStore {
       gap.repositoryId !== repair.repositoryId ||
       gap.appId !== repair.appId ||
       gap.installationId !== repair.installationId ||
-      gap.cause === "unsupported-relevant-delivery" ||
-      gap.cause === "normalization-failed" ||
+      ((gap.cause === "unsupported-relevant-delivery" || gap.cause === "normalization-failed")
+        ? repair.repairMethod !== "delivery-observations-and-complete-audit" ||
+          (() => {
+            try {
+              this.assertGitHubContentGapRepairEvidence(
+                gap as GitHubSourceGapPayload,
+                repair.repairAuditRecordIds,
+                Number(row.transaction_sequence),
+              );
+              return false;
+            } catch {
+              return true;
+            }
+          })()
+        : repair.repairMethod !== "complete-delivery-audit" || repair.repairAuditRecordIds.length !== 0) ||
       gap.checkpointRecordId !== repair.priorCheckpointRecordId ||
       gap.lowerBoundAt !== repair.lowerBoundAt ||
       checkpoint.previousCheckpointRecordId !== repair.priorCheckpointRecordId ||
@@ -8290,6 +8376,7 @@ export class ControlPlaneStore {
           payload.checkpointRecordId !== gap.checkpointRecordId ||
           payload.lowerBoundAt !== gap.lowerBoundAt ||
           payload.cause !== gap.cause ||
+          canonicalJson(payload.affectedDeliveryGuids) !== canonicalJson(gap.affectedDeliveryGuids) ||
           payload.gapDigest !== gap.gapDigest
         ) {
           throw new Error(`GitHub gap receipt output mismatch: ${String(row.idempotency_key)}`);
@@ -8320,6 +8407,8 @@ export class ControlPlaneStore {
           checkpointPayload.coveredThrough !== repair.exclusiveEndAt ||
           checkpointPayload.checkpointDigest !== repair.checkpointDigest ||
           repairPayload.gapRecordId !== repair.gapRecordId ||
+          repairPayload.repairMethod !== repair.repairMethod ||
+          canonicalJson(repairPayload.repairAuditRecordIds) !== canonicalJson(repair.repairAuditRecordIds) ||
           repairPayload.repairDigest !== repair.repairDigest
         ) {
           throw new Error(`GitHub repair receipt output mismatch: ${String(row.idempotency_key)}`);
@@ -8985,7 +9074,7 @@ function normalizeGitHubSourceGapInput(input: GitHubSourceGapInput): GitHubSourc
     typeof input !== "object" ||
     Array.isArray(input) ||
     Object.keys(input).sort().join(",") !==
-      "appId,cause,checkpointRecordId,expectedLastTransactionSequence,installationId,repositoryId,runId"
+      "affectedDeliveryGuids,appId,cause,checkpointRecordId,expectedLastTransactionSequence,installationId,repositoryId,runId"
   ) {
     throw new Error("GitHub source gap must be one exact typed input");
   }
@@ -8996,7 +9085,11 @@ function normalizeGitHubSourceGapInput(input: GitHubSourceGapInput): GitHubSourc
     !/^[1-9][0-9]{0,19}$/.test(input.appId) ||
     !/^github\.com:installation:[1-9][0-9]{0,19}$/.test(input.installationId) ||
     !/^github\.com:[1-9][0-9]{0,19}$/.test(input.repositoryId) ||
-    !githubSourceGapCauses.includes(input.cause)
+    !githubSourceGapCauses.includes(input.cause) ||
+    !isCanonicalGitHubDeliveryGuidSet(input.affectedDeliveryGuids) ||
+    ((input.cause === "unsupported-relevant-delivery" || input.cause === "normalization-failed")
+      ? input.affectedDeliveryGuids.length === 0
+      : input.affectedDeliveryGuids.length !== 0)
   ) {
     throw new Error("GitHub source gap contains invalid identities or cause");
   }
@@ -9009,7 +9102,7 @@ function normalizeGitHubSourceGapRepairInput(input: GitHubSourceGapRepairInput):
     typeof input !== "object" ||
     Array.isArray(input) ||
     Object.keys(input).sort().join(",") !==
-      "appId,coveredThrough,deliveryCount,expectedLastTransactionSequence,gapRecordId,installationId,pageCount,pageProofDigest,repositoryId,runId,selectedResponseDigest"
+      "appId,coveredThrough,deliveryCount,expectedLastTransactionSequence,gapRecordId,installationId,pageCount,pageProofDigest,repairAuditRecordIds,repositoryId,runId,selectedResponseDigest"
   ) {
     throw new Error("GitHub source-gap repair must be one exact typed input");
   }
@@ -9027,6 +9120,15 @@ function normalizeGitHubSourceGapRepairInput(input: GitHubSourceGapRepairInput):
     selectedResponseDigest: input.selectedResponseDigest,
   });
   if (!isUuidV7(input.gapRecordId)) throw new Error("GitHub source-gap repair requires a UUIDv7 gap record");
+  if (
+    !Array.isArray(input.repairAuditRecordIds) ||
+    input.repairAuditRecordIds.length > 100 ||
+    !input.repairAuditRecordIds.every(isUuidV7) ||
+    new Set(input.repairAuditRecordIds).size !== input.repairAuditRecordIds.length ||
+    canonicalJson(input.repairAuditRecordIds) !== canonicalJson([...input.repairAuditRecordIds].sort())
+  ) {
+    throw new Error("GitHub source-gap repair audit citations must be sorted unique UUIDv7 values");
+  }
   return {
     expectedLastTransactionSequence: normalized.expectedLastTransactionSequence,
     runId: normalized.runId,
@@ -9039,7 +9141,16 @@ function normalizeGitHubSourceGapRepairInput(input: GitHubSourceGapRepairInput):
     pageProofDigest: normalized.pageProofDigest,
     selectedResponseDigest: normalized.selectedResponseDigest,
     gapRecordId: input.gapRecordId,
+    repairAuditRecordIds: [...input.repairAuditRecordIds],
   };
+}
+
+function isCanonicalGitHubDeliveryGuidSet(value: unknown): value is string[] {
+  return Array.isArray(value) &&
+    value.length <= 100 &&
+    value.every((entry) => typeof entry === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(entry)) &&
+    new Set(value).size === value.length &&
+    canonicalJson(value) === canonicalJson([...value].sort());
 }
 
 function githubCheckpointDigest(
@@ -9409,6 +9520,7 @@ function parseGitHubSourceGapResult(value: JsonValue): GitHubSourceGapResult {
       "eventRecordId",
       "lowerBoundAt",
       "cause",
+      "affectedDeliveryGuids",
       "gapDigest",
       "detectedAt",
       "transactionPositions",
@@ -9427,6 +9539,11 @@ function parseGitHubSourceGapResult(value: JsonValue): GitHubSourceGapResult {
     !isUuidV7(value.eventRecordId) ||
     typeof value.lowerBoundAt !== "string" ||
     !githubSourceGapCauses.includes(value.cause as GitHubSourceGapCause) ||
+    !isCanonicalGitHubDeliveryGuidSet(value.affectedDeliveryGuids) ||
+    (((value.cause as GitHubSourceGapCause) === "unsupported-relevant-delivery" ||
+      (value.cause as GitHubSourceGapCause) === "normalization-failed")
+      ? value.affectedDeliveryGuids.length === 0
+      : value.affectedDeliveryGuids.length !== 0) ||
     typeof value.gapDigest !== "string" ||
     !/^sha256:[0-9a-f]{64}$/.test(value.gapDigest) ||
     typeof value.detectedAt !== "string" ||
@@ -9448,6 +9565,7 @@ function parseGitHubSourceGapResult(value: JsonValue): GitHubSourceGapResult {
     eventRecordId: value.eventRecordId,
     lowerBoundAt: value.lowerBoundAt,
     cause: value.cause as GitHubSourceGapCause,
+    affectedDeliveryGuids: [...value.affectedDeliveryGuids],
     gapDigest: value.gapDigest,
     detectedAt: value.detectedAt,
     transactionPositions: [0, 1],
@@ -9468,6 +9586,8 @@ function parseGitHubSourceGapRepairResult(value: JsonValue): GitHubSourceGapRepa
       "eventRecordId",
       "lowerBoundAt",
       "exclusiveEndAt",
+      "repairMethod",
+      "repairAuditRecordIds",
       "checkpointDigest",
       "repairDigest",
       "repairedAt",
@@ -9492,6 +9612,16 @@ function parseGitHubSourceGapRepairResult(value: JsonValue): GitHubSourceGapRepa
     new Set([value.checkpointRecordId, value.repairRecordId, value.eventRecordId]).size !== 3 ||
     typeof value.lowerBoundAt !== "string" ||
     typeof value.exclusiveEndAt !== "string" ||
+    !(value.repairMethod === "complete-delivery-audit" ||
+      value.repairMethod === "delivery-observations-and-complete-audit") ||
+    !Array.isArray(value.repairAuditRecordIds) ||
+    value.repairAuditRecordIds.length > 100 ||
+    !value.repairAuditRecordIds.every((entry) => typeof entry === "string" && isUuidV7(entry)) ||
+    new Set(value.repairAuditRecordIds).size !== value.repairAuditRecordIds.length ||
+    canonicalJson(value.repairAuditRecordIds) !== canonicalJson([...value.repairAuditRecordIds].sort()) ||
+    (value.repairMethod === "complete-delivery-audit"
+      ? value.repairAuditRecordIds.length !== 0
+      : value.repairAuditRecordIds.length === 0) ||
     typeof value.checkpointDigest !== "string" ||
     !/^sha256:[0-9a-f]{64}$/.test(value.checkpointDigest) ||
     typeof value.repairDigest !== "string" ||
@@ -9519,6 +9649,8 @@ function parseGitHubSourceGapRepairResult(value: JsonValue): GitHubSourceGapRepa
     eventRecordId: value.eventRecordId,
     lowerBoundAt: value.lowerBoundAt,
     exclusiveEndAt: value.exclusiveEndAt,
+    repairMethod: value.repairMethod,
+    repairAuditRecordIds: [...value.repairAuditRecordIds] as string[],
     checkpointDigest: value.checkpointDigest,
     repairDigest: value.repairDigest,
     repairedAt: value.repairedAt,

@@ -7,12 +7,21 @@ import {
   assertSource,
   assertSourceRevision,
   assertSubject,
+  commandKindRegistry,
+  eventKindRegistry,
+  recordKindRegistry,
 } from "../src/control/registry.ts";
 
 const digest = `sha256:${"a".repeat(64)}`;
 
 test("GitHub observation subjects use exact source-native identities", () => {
-  assert.equal(CONTROL_PLANE_REGISTRY_VERSION, 15);
+  assert.equal(CONTROL_PLANE_REGISTRY_VERSION, 16);
+  assert.equal(commandKindRegistry["github.open-source-gap"].schemaVersion, 2);
+  assert.equal(commandKindRegistry["github.repair-source-gap"].schemaVersion, 2);
+  assert.equal(recordKindRegistry["github.source-gap-observation"].schemaVersion, 2);
+  assert.equal(recordKindRegistry["github.source-gap-repair-observation"].schemaVersion, 2);
+  assert.equal(eventKindRegistry["github.source-gap-opened"].schemaVersion, 2);
+  assert.equal(eventKindRegistry["github.source-gap-repaired"].schemaVersion, 2);
 
   assert.doesNotThrow(() => assertSubject("github-app-hook", "github.com:app:12345:hook"));
   assert.doesNotThrow(() => assertSubject("github-pull-request", "github.com:987:pull:42"));

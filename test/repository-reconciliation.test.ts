@@ -479,6 +479,7 @@ test("GitHub delivery-audit checkpoints lower-bound gaps and close them only thr
         installationId: "github.com:installation:7654",
         checkpointRecordId: "0198ba6b-7c00-7000-8000-00000000000e",
         cause: "source-unavailable",
+        affectedDeliveryGuids: [],
       }),
     /requires the latest checkpoint boundary/,
   );
@@ -504,6 +505,7 @@ test("GitHub delivery-audit checkpoints lower-bound gaps and close them only thr
     installationId: "github.com:installation:7654",
     checkpointRecordId: first.checkpointRecordId,
     cause: "delivery-audit-incomplete",
+    affectedDeliveryGuids: [],
   });
   assert.equal(gap.lowerBoundAt, first.coveredThrough);
   assert.equal(gap.gapId, gap.gapRecordId);
@@ -532,6 +534,7 @@ test("GitHub delivery-audit checkpoints lower-bound gaps and close them only thr
     deliveryCount: 3,
     pageProofDigest: `sha256:${"3".repeat(64)}`,
     selectedResponseDigest: `sha256:${"4".repeat(64)}`,
+    repairAuditRecordIds: [],
   });
   assert.equal(repair.lowerBoundAt, gap.lowerBoundAt);
   assert.equal(repair.exclusiveEndAt, "2026-08-17T14:08:00.000Z");
@@ -559,7 +562,9 @@ test("GitHub delivery-audit checkpoints lower-bound gaps and close them only thr
     installationId: "github.com:installation:7654",
     checkpointRecordId: next.checkpointRecordId,
     cause: "unsupported-relevant-delivery",
+    affectedDeliveryGuids: ["52345678-1234-4234-8234-123456789abc"],
   });
+  now = new Date("2026-08-17T14:21:00.000Z");
   assert.throws(
     () =>
       store.repairGitHubSourceGap({
@@ -574,13 +579,95 @@ test("GitHub delivery-audit checkpoints lower-bound gaps and close them only thr
         deliveryCount: 1,
         pageProofDigest: `sha256:${"7".repeat(64)}`,
         selectedResponseDigest: `sha256:${"8".repeat(64)}`,
+        repairAuditRecordIds: [],
       }),
-    /requires retained normalized repair observations/,
+    /must cite every affected delivery exactly once/,
   );
+
+  const repairPullRequest = {
+    number: 17,
+    actorId: "github.com:user:31415",
+    state: "open" as const,
+    draft: false,
+    merged: false,
+    baseRepositoryId: "github.com:9001",
+    baseRef: "main",
+    baseCommitId: `sha1:${"a".repeat(40)}`,
+    headRepositoryId: "github.com:9001",
+    headRef: "feature/content-repair",
+    headCommitId: `sha1:${"b".repeat(40)}`,
+    observedTestMergeCommitId: `sha1:${"c".repeat(40)}`,
+    mergedAt: null,
+    mergeCommitId: null,
+    sourceUpdatedAt: "2026-08-17T14:18:00.000Z",
+  };
+  const unrelatedDelivery = store.recordAuditedGitHubPullRequestDelivery({
+    expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+    appId: "4567",
+    deliveryId: "7100",
+    deliveryGuid: "62345678-1234-4234-8234-123456789abc",
+    deliveredAt: "2026-08-17T14:18:00.000Z",
+    redelivery: false,
+    statusCode: 200,
+    responseDigest: `sha256:${"9".repeat(64)}`,
+    installationId: "github.com:installation:7654",
+    repositoryId: "github.com:9001",
+    action: "synchronize",
+    pullRequest: repairPullRequest,
+  });
+  assert.throws(
+    () => store.repairGitHubSourceGap({
+      expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+      runId: "0198ba82-5fb0-7000-8000-000000000016",
+      repositoryId: "github.com:9001",
+      appId: "4567",
+      installationId: "github.com:installation:7654",
+      gapRecordId: unsupportedGap.gapRecordId,
+      coveredThrough: "2026-08-17T14:19:00.000Z",
+      pageCount: 1,
+      deliveryCount: 1,
+      pageProofDigest: `sha256:${"7".repeat(64)}`,
+      selectedResponseDigest: `sha256:${"8".repeat(64)}`,
+      repairAuditRecordIds: [unrelatedDelivery.auditRecordId],
+    }),
+    /does not match affected deliveries/,
+  );
+  now = new Date("2026-08-17T14:22:00.000Z");
+  const repairedDelivery = store.recordAuditedGitHubPullRequestDelivery({
+    expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+    appId: "4567",
+    deliveryId: "7101",
+    deliveryGuid: unsupportedGap.affectedDeliveryGuids[0]!,
+    deliveredAt: "2026-08-17T14:18:00.000Z",
+    redelivery: false,
+    statusCode: 200,
+    responseDigest: `sha256:${"f".repeat(64)}`,
+    installationId: "github.com:installation:7654",
+    repositoryId: "github.com:9001",
+    action: "synchronize",
+    pullRequest: repairPullRequest,
+  });
+  now = new Date("2026-08-17T14:25:00.000Z");
+  const contentRepair = store.repairGitHubSourceGap({
+    expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+    runId: "0198ba82-5fb0-7000-8000-000000000017",
+    repositoryId: "github.com:9001",
+    appId: "4567",
+    installationId: "github.com:installation:7654",
+    gapRecordId: unsupportedGap.gapRecordId,
+    coveredThrough: "2026-08-17T14:24:00.000Z",
+    pageCount: 1,
+    deliveryCount: 1,
+    pageProofDigest: `sha256:${"d".repeat(64)}`,
+    selectedResponseDigest: `sha256:${"e".repeat(64)}`,
+    repairAuditRecordIds: [repairedDelivery.auditRecordId],
+  });
+  assert.equal(contentRepair.repairMethod, "delivery-observations-and-complete-audit");
+  assert.deepEqual(contentRepair.repairAuditRecordIds, [repairedDelivery.auditRecordId]);
   store.close();
 
   const reopened = new ControlPlaneStore(path);
-  assert.equal(reopened.metadata().lastTransactionSequence, unsupportedGap.transactionSequence);
+  assert.equal(reopened.metadata().lastTransactionSequence, contentRepair.transactionSequence);
   reopened.close();
 
   const raw = new DatabaseSync(path);

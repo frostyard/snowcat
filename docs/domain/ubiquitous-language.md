@@ -428,7 +428,9 @@ before or after it.
 A registered source scope and lower-bounded interval for which Fluent cannot
 establish required coverage. Its end remains open until exact repair evidence
 bounds it; repair never erases the gap occurrence or what Fluent knew when it
-was recorded.
+was recorded. A content-caused gap names the affected source identities and
+requires matching repaired observations plus restored interval coverage; an
+interval-only gap carries no invented source identity.
 
 **Avoid:** source outage; missing expected occurrence; failed verification.
 ([ADR-0057](../adr/0057-require-webhook-ingress-for-github-observation.md))
