@@ -16,10 +16,12 @@ import {
   type InspectedCoreCandidate,
 } from "../src/core/git-source.ts";
 import {
+  assertGoalRetention,
   assertVerificationProfileRetention,
   CoreValidationError,
   validateCoreCatalog,
   type CoreTreeEntry,
+  type OrganizationGoal,
 } from "../src/core/validator.ts";
 import { synchronizeCoreSource } from "../src/core/synchronize.ts";
 import { ControlPlaneStore, CoreSnapshotPersistenceError } from "../src/control/store.ts";
@@ -73,6 +75,71 @@ test("the bundled validator accepts profile-capable Core while preserving legacy
     () => assertVerificationProfileRetention(withLiveProfile, capable),
     /verification profile versions are immutable and retained/,
   );
+});
+
+test("the bundled validator accepts Goal-capable Core and enforces retained lifecycle", async () => {
+  const legacyEntries = await validCoreEntries();
+  const contractEntries = [
+    ...legacyEntries,
+    ...(await verificationProfileContractEntries()),
+    ...(await goalContractEntries()),
+  ];
+  const capable = validateCoreCatalog(contractEntries);
+
+  assert.equal(capable.goalCount, 0);
+  assert.deepEqual(capable.goals, []);
+  assert.equal(
+    capable.schemaDigests.envelope,
+    "sha256:07eb4ca0d97de3668e3d71227c675562f69c451647ab5e6fa33e6fe9de80eb5f",
+  );
+  assert.equal(
+    capable.schemaDigests.goal,
+    "sha256:76341409e4dc33fbc50d1432d2488e1ecec767263733939f0abe9bf173aada0b",
+  );
+  assert.equal(capable.validFixtureCount, 5);
+  assert.equal(capable.invalidFixtureCount, 4);
+
+  const liveProfile = entryFor(
+    "organization/contracts/verification-profiles/required-check-reliability/v1.json",
+    json(validVerificationProfile()),
+  );
+  const liveGoalPath = "organization/goals/improve-ci-reliability-2026-q4.json";
+  assert.throws(
+    () =>
+      validateCoreCatalog([
+        ...contractEntries,
+        liveProfile,
+        entryFor(liveGoalPath, json(validGoal("active"))),
+      ]),
+    /references unsupported verification mechanisms/,
+  );
+
+  const catalogWithGoal = (status: Parameters<typeof validGoal>[0]) => ({
+    ...capable,
+    goalCount: 1,
+    goals: [
+      {
+        path: liveGoalPath,
+        contentDigest: `sha256:${"0".repeat(64)}`,
+        goal: validGoal(status),
+      },
+    ],
+  });
+  const active = catalogWithGoal("active");
+  const paused = catalogWithGoal("paused");
+  const completed = catalogWithGoal("completed");
+
+  assert.doesNotThrow(() => assertGoalRetention(active, paused));
+  assert.doesNotThrow(() => assertGoalRetention(paused, completed));
+  assert.throws(
+    () => assertGoalRetention(completed, active),
+    /Goals must be retained with valid lifecycle transitions/,
+  );
+  assert.throws(
+    () => assertGoalRetention(active, capable),
+    /Goals must be retained with valid lifecycle transitions/,
+  );
+  assert.doesNotThrow(() => assertGoalRetention(validateCoreCatalog(legacyEntries), capable));
 });
 
 test("schema byte drift and duplicate live keys fail the candidate", async () => {
@@ -1202,6 +1269,62 @@ async function verificationProfileContractEntries(): Promise<CoreTreeEntry[]> {
       json(externalReference),
     ),
   ];
+}
+
+async function goalContractEntries(): Promise<CoreTreeEntry[]> {
+  const [envelopeSchema, goalSchema] = await Promise.all([
+    readFile(new URL("../src/core/schemas/v1/envelope.schema.json", import.meta.url)),
+    readFile(new URL("../src/core/schemas/v1/goal.schema.json", import.meta.url)),
+  ]);
+  const invalidGoal = validGoal("active");
+  invalidGoal.spec.success_measures[0]!.required = false;
+  return [
+    entryFor("organization/schemas/v1/envelope.schema.json", envelopeSchema),
+    entryFor("organization/schemas/v1/goal.schema.json", goalSchema),
+    entryFor("organization/fixtures/v1/valid/goal.json", json(validGoal("active"))),
+    entryFor(
+      "organization/fixtures/v1/invalid/goal-no-required-measure.json",
+      json(invalidGoal),
+    ),
+  ];
+}
+
+function validGoal(status: OrganizationGoal["metadata"]["status"]): OrganizationGoal {
+  return {
+    schema_version: 1,
+    kind: "goal",
+    metadata: {
+      id: "improve-ci-reliability-2026-q4",
+      status,
+      owners: [{ kind: "github-user", id: "github.com:37492", login: "bketelsen" }],
+      applies_to: {
+        repository_selection: "selected",
+        repository_ids: ["github.com:1331309458"],
+      },
+    },
+    spec: {
+      starts_on: "2026-10-01",
+      ends_on: "2026-12-31",
+      priority: "high",
+      outcome: "Required checks remain conclusive and reliable while repositories evolve.",
+      success_measures: [
+        {
+          id: "required-checks-stay-reliable",
+          required: true,
+          evidence_mode: "observational",
+          subject: { kind: "github-repository", id: "github.com:1331309458" },
+          observation_window: {
+            starts_at: "2026-10-01T00:00:00.000Z",
+            ends_at: "2026-10-31T23:59:59.999Z",
+          },
+          verification_profile: { id: "required-check-reliability", version: 1 },
+          parameters: { minimum_rate: 0.95 },
+        },
+      ],
+      encouraged_work: ["Improve required-check reliability."],
+      excluded_work: ["Do not weaken required checks."],
+    },
+  };
 }
 
 function validVerificationProfile(): Record<string, unknown> {

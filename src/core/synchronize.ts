@@ -18,6 +18,7 @@ import {
 } from "../control/store.ts";
 import { uuidV7 } from "../control/encoding.ts";
 import {
+  assertGoalRetention,
   assertRepositoryDeclarationRetention,
   CoreValidationError,
 } from "./validator.ts";
@@ -94,8 +95,10 @@ export async function synchronizeCoreSource(
       const activeCandidate = store.retainedCoreCandidate(active.sourceCommitId);
       if (!activeCandidate) throw new Error("active Core candidate is not retained");
       assertRepositoryDeclarationRetention(activeCandidate, candidate);
+      assertGoalRetention(activeCandidate, candidate);
     }
     store.assertVerificationProfileHistoryRetention(candidate);
+    store.assertGoalHistoryRetention(candidate);
   } catch (error) {
     if (!(error instanceof CoreValidationError)) throw error;
     const inspectionError = new CoreCandidateInspectionError(

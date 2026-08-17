@@ -4,21 +4,24 @@ Living document. Rationale:
 [ADR-0031](../adr/0031-separate-delivery-from-outcome-achievement.md) and
 [ADR-0054](../adr/0054-bind-success-measures-to-versioned-verification-profiles.md).
 Current contract:
-[verification-profile ingestion](../specs/verification-profile-ingestion.md).
+[verification-profile ingestion](../specs/verification-profile-ingestion.md)
+and [Goal ingestion](../specs/goal-ingestion.md).
 
 ## Overview
 
 Success-measure verification connects reviewed outcome intent in Core to
 versioned executable mechanisms in Fluent without executing repository-authored
 code or treating a model verdict as authority. The implemented foundation
-imports and retains profile definitions. Goal resolution, evidence collection,
-evaluation, attestation, and aggregation remain later delivery work.
+imports and retains profile definitions and validates Goal fixtures, references,
+parameters, and lifecycle rules. Mechanism implementations, Goal application,
+evidence collection, evaluation, attestation, and aggregation remain later
+delivery work.
 
 ```text
 Core profile + measure declaration
           │ strict snapshot validation and exact retention
           ▼
-profile resolution + parameter validation          (planned)
+profile resolution + parameter validation          (Goal import implemented)
           │ closed Fluent mechanism registry
           ▼
 trusted observations / deterministic facts / attestation
@@ -73,14 +76,16 @@ profile active ──operator rollback──► retained legacy      allowed
 
 ### Measure resolution
 
-The future goal and delivery-plan validators will resolve each measure against
-the active snapshot before it can influence admission or verification. A
+The Goal candidate validator now resolves each live measure against the same
+candidate before activation. A future delivery-plan validator will perform the
+same resolution before a plan can influence verification. A
 measure contains a stable local ID, required/optional designation, repeated
 evidence mode, typed subject, absolute start/end instants, exact profile ID and
 version, and parameters. Resolution fails when the profile is absent, the mode
 differs, parameters fail its embedded schema, the subject kind is unsupported,
 the window is invalid, or any named mechanism version is absent from Fluent's
-closed registry.
+closed registry. That registry currently has no implementations, so the merged
+fixture-only Goal contract validates while a live Goal fails closed.
 
 Profiles may be published before they are referenced. Publication alone does
 not claim executable support, create a controller timer, collect observations,
@@ -104,14 +109,14 @@ ADR-0031; it never converts merge count or elapsed time into outcome success.
 
 ## Operational notes
 
-- Deploy profile-capable Fluent before merging the producer contract in Core.
+- Deploy Goal-capable Fluent before publishing the first live Goal in Core.
 - A candidate rejection naming the profile schema digest indicates producer/
   consumer byte drift, not a retryable source outage.
 - A profile fixture failure rejects the complete candidate and leaves the last
   active snapshot authoritative.
-- Imported profiles currently have no execution surface. Operators should not
-  interpret a successful Core activation as evidence that a future measure is
-  supported until the closed mechanism registry and goal validator land.
+- Imported profiles currently have no execution surface. Goal fixtures prove
+  the contract, but a live Goal cannot activate until its closed mechanism
+  implementations land.
 - Keep old retained snapshots and profile bytes available for rollback and
   historical evidence explanation.
 
@@ -121,8 +126,9 @@ ADR-0031; it never converts merge count or elapsed time into outcome success.
   [ADR-0031](../adr/0031-separate-delivery-from-outcome-achievement.md) and
   [ADR-0054](../adr/0054-bind-success-measures-to-versioned-verification-profiles.md)
 - Contracts:
-  [verification-profile ingestion](../specs/verification-profile-ingestion.md)
-  and [Core snapshot verification](../specs/core-snapshot-verification.md)
+  [verification-profile ingestion](../specs/verification-profile-ingestion.md),
+  [Goal ingestion](../specs/goal-ingestion.md), and
+  [Core snapshot verification](../specs/core-snapshot-verification.md)
 - Built in:
   [product foundation roadmap — Phases 2 and 9](../plans/product-foundation-roadmap.md)
 - Product: [agent fleet PRD](../prd/agent-fleet.md)

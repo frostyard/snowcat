@@ -89,3 +89,4 @@ payloads without that field and with the original three schema digests.
 - Producer contract:
   [Core organization verification profiles](https://github.com/frostyard/core/blob/main/docs/specs/organization-verification-profiles.md)
 - Delivery: [product foundation roadmap](../plans/product-foundation-roadmap.md)
+- Consumer: [Goal ingestion](goal-ingestion.md)

@@ -7,22 +7,28 @@ import { getNodeValue, parseTree, printParseErrorCode, type Node as JsonNode } f
 import { canonicalJson, sha256, type JsonValue } from "../control/encoding.ts";
 
 const SCHEMA_PATHS = {
+  envelope: "organization/schemas/v1/envelope.schema.json",
   repository: "organization/schemas/v1/repository.schema.json",
   surfaces: "organization/schemas/v1/repository-surfaces.schema.json",
   governance: "organization/schemas/v1/repository-agent-governance.schema.json",
   verificationProfile: "organization/schemas/v1/verification-profile.schema.json",
+  goal: "organization/schemas/v1/goal.schema.json",
 } as const;
 const BUNDLED_SCHEMA_URLS = {
+  envelope: new URL("./schemas/v1/envelope.schema.json", import.meta.url),
   repository: new URL("./schemas/v1/repository.schema.json", import.meta.url),
   surfaces: new URL("./schemas/v1/repository-surfaces.schema.json", import.meta.url),
   governance: new URL("./schemas/v1/repository-agent-governance.schema.json", import.meta.url),
   verificationProfile: new URL("./schemas/v1/verification-profile.schema.json", import.meta.url),
+  goal: new URL("./schemas/v1/goal.schema.json", import.meta.url),
 } as const;
 const EXPECTED_SCHEMA_DIGESTS = {
+  envelope: "sha256:07eb4ca0d97de3668e3d71227c675562f69c451647ab5e6fa33e6fe9de80eb5f",
   repository: "sha256:2419d096faac298b8c4a75a3a83b617f4797e4e5f190ccd918ead73ba604bead",
   surfaces: "sha256:b6742c283148d9a75f56d7fc8482d9309955ca5bab669170ac0cade92829670d",
   governance: "sha256:254e131a94c5477e861b0ec792defa1fd05ddebe380fc4e062d03cefc3ab8ebe",
   verificationProfile: "sha256:5562df1740d133ff32a7bcfc488907b3783a3eda9ba8e8e1d9559a07f44a4507",
+  goal: "sha256:76341409e4dc33fbc50d1432d2488e1ecec767263733939f0abe9bf173aada0b",
 } as const;
 const SURFACE_CONTRACT_PATH = "organization/contracts/repository-surfaces/v1.json";
 const STATIC_PATHS = new Set([
@@ -35,16 +41,25 @@ const STATIC_PATHS = new Set([
 const REPOSITORY_PATH = /^organization\/repositories\/([^/]+)\/([^/]+)\.json$/;
 const VERIFICATION_PROFILE_PATH =
   /^organization\/contracts\/verification-profiles\/([a-z0-9]+(?:-[a-z0-9]+)*)\/v([1-9][0-9]*)\.json$/;
+const GOAL_PATH = /^organization\/goals\/([a-z0-9]+(?:-[a-z0-9]+)*)\.json$/;
 const FIXTURE_PATH =
-  /^organization\/fixtures\/v1\/(valid|invalid)\/(repository-agent-governance|repository-surfaces|repository|verification-profile)(?:-[a-z0-9-]+)?\.json$/;
+  /^organization\/fixtures\/v1\/(valid|invalid)\/(repository-agent-governance|repository-surfaces|repository|verification-profile|goal)(?:-[a-z0-9-]+)?\.json$/;
 const MAX_VERIFICATION_PROFILE_BYTES = 65_536;
+const MAX_GOAL_BYTES = 65_536;
+const SUPPORTED_VERIFICATION_MECHANISMS = Object.freeze({
+  evaluators: new Set<string>(),
+  sourceAdapters: new Set<string>(),
+  attestationPolicies: new Set<string>(),
+});
 
 type SchemaKind = keyof typeof SCHEMA_PATHS;
-type RequiredSchemaKind = Exclude<SchemaKind, "verificationProfile">;
-type ParsedSchemas = Record<RequiredSchemaKind, unknown> & Partial<Record<"verificationProfile", unknown>>;
-type SchemaDigests = Record<RequiredSchemaKind, string> & Partial<Record<"verificationProfile", string>>;
+type FixtureKind = Exclude<SchemaKind, "envelope">;
+type OptionalSchemaKind = "verificationProfile" | "envelope" | "goal";
+type RequiredSchemaKind = Exclude<SchemaKind, OptionalSchemaKind>;
+type ParsedSchemas = Record<RequiredSchemaKind, unknown> & Partial<Record<OptionalSchemaKind, unknown>>;
+type SchemaDigests = Record<RequiredSchemaKind, string> & Partial<Record<OptionalSchemaKind, string>>;
 type Validators = Record<RequiredSchemaKind, ValidateFunction> &
-  Partial<Record<"verificationProfile", ValidateFunction>>;
+  Partial<Record<OptionalSchemaKind, ValidateFunction>>;
 
 export interface CoreTreeEntry {
   path: string;
@@ -115,6 +130,47 @@ export interface ValidatedVerificationProfile {
   profile: VerificationProfile;
 }
 
+export type GoalStatus = "planned" | "active" | "paused" | "completed" | "cancelled";
+
+export interface OrganizationGoal {
+  schema_version: 1;
+  kind: "goal";
+  metadata: {
+    id: string;
+    status: GoalStatus;
+    owners: Array<
+      | { kind: "github-user"; id: string; login: string }
+      | { kind: "github-team"; id: string; slug: string }
+    >;
+    applies_to:
+      | { repository_selection: "all-enrolled" }
+      | { repository_selection: "selected"; repository_ids: string[] };
+  };
+  spec: {
+    starts_on: string;
+    ends_on: string;
+    priority: "high" | "normal" | "low";
+    outcome: string;
+    success_measures: Array<{
+      id: string;
+      required: boolean;
+      evidence_mode: "deterministic" | "observational" | "human-attested";
+      subject: { kind: "github-repository"; id: string };
+      observation_window: { starts_at: string; ends_at: string };
+      verification_profile: { id: string; version: number };
+      parameters: Record<string, JsonValue>;
+    }>;
+    encouraged_work: string[];
+    excluded_work: string[];
+  };
+}
+
+export interface ValidatedOrganizationGoal {
+  path: string;
+  contentDigest: string;
+  goal: OrganizationGoal;
+}
+
 export interface ValidatedCoreCatalog {
   catalogDigest: string;
   fileCount: number;
@@ -122,10 +178,12 @@ export interface ValidatedCoreCatalog {
   schemaDigests: SchemaDigests;
   repositoryCount: number;
   verificationProfileCount: number;
+  goalCount: number;
   validFixtureCount: number;
   invalidFixtureCount: number;
   repositories: ValidatedRepositoryDeclaration[];
   verificationProfiles: ValidatedVerificationProfile[];
+  goals: ValidatedOrganizationGoal[];
 }
 
 export class CoreValidationError extends Error {
@@ -176,14 +234,14 @@ export function validateCoreCatalog(inputEntries: readonly CoreTreeEntry[]): Val
   assertSurfaceInvariants(surfaces, surfaceEntry.path, availablePaths);
 
   const verificationProfiles: ValidatedVerificationProfile[] = [];
-  const verificationProfileIds = new Set<string>();
+  const verificationProfileIds = new Map<string, VerificationProfile>();
   for (const entry of entries.filter((item) => VERIFICATION_PROFILE_PATH.test(item.path))) {
     const profile = validateVerificationProfile(entry, validators.verificationProfile);
     const key = `${profile.profile.id}:v${profile.profile.version}`;
     if (verificationProfileIds.has(key)) {
       throw new CoreValidationError(`${entry.path}: duplicate verification profile ${key}`);
     }
-    verificationProfileIds.add(key);
+    verificationProfileIds.set(key, profile);
     verificationProfiles.push({
       path: entry.path,
       contentDigest: digestBytes(entry.bytes),
@@ -191,24 +249,78 @@ export function validateCoreCatalog(inputEntries: readonly CoreTreeEntry[]): Val
     });
   }
 
+  const canonicalRepositoryIds = new Set(
+    [...repositoryIds.keys()].map((repositoryId) => `github.com:${repositoryId}`),
+  );
+  const goals: ValidatedOrganizationGoal[] = [];
+  const goalIds = new Set<string>();
+  for (const entry of entries.filter((item) => GOAL_PATH.test(item.path))) {
+    const goal = validateGoal(
+      entry,
+      validators.goal,
+      canonicalRepositoryIds,
+      verificationProfileIds,
+    );
+    if (goalIds.has(goal.metadata.id)) {
+      throw new CoreValidationError(`${entry.path}: duplicate Goal ${goal.metadata.id}`);
+    }
+    goalIds.add(goal.metadata.id);
+    goals.push({ path: entry.path, contentDigest: digestBytes(entry.bytes), goal });
+  }
+
+  const validFixtureEntries = entries.filter(
+    (entry) => FIXTURE_PATH.exec(entry.path)?.[1] === "valid",
+  );
+  const fixtureRepositoryIds = new Set<string>();
+  for (const entry of validFixtureEntries) {
+    if (fixtureContract(entry.path).kind !== "repository") continue;
+    const repository = validateOne(entry, validators.repository) as RepositoryDeclaration;
+    assertRepositoryInvariants(repository, entry.path);
+    fixtureRepositoryIds.add(`github.com:${repository.repository.repository_id}`);
+  }
+  const fixtureVerificationProfiles = new Map<string, VerificationProfile>();
+  for (const entry of validFixtureEntries) {
+    if (fixtureContract(entry.path).kind !== "verificationProfile") continue;
+    const profile = validateVerificationProfile(entry, validators.verificationProfile);
+    fixtureVerificationProfiles.set(`${profile.profile.id}:v${profile.profile.version}`, profile);
+  }
+
   let validFixtureCount = 0;
   let invalidFixtureCount = 0;
   let validVerificationProfileFixtureCount = 0;
   let invalidVerificationProfileFixtureCount = 0;
+  let validGoalFixtureCount = 0;
+  let invalidGoalFixtureCount = 0;
   for (const entry of entries.filter((item) => FIXTURE_PATH.test(item.path))) {
     const fixture = fixtureContract(entry.path);
     if (fixture.expectation === "valid") {
-      validateFixture(entry, fixture.kind, validators, availablePaths);
+      validateFixture(
+        entry,
+        fixture.kind,
+        validators,
+        availablePaths,
+        fixtureRepositoryIds,
+        fixtureVerificationProfiles,
+      );
       validFixtureCount += 1;
       if (fixture.kind === "verificationProfile") validVerificationProfileFixtureCount += 1;
+      if (fixture.kind === "goal") validGoalFixtureCount += 1;
       continue;
     }
     try {
-      validateFixture(entry, fixture.kind, validators, availablePaths);
+      validateFixture(
+        entry,
+        fixture.kind,
+        validators,
+        availablePaths,
+        fixtureRepositoryIds,
+        fixtureVerificationProfiles,
+      );
     } catch (error) {
       if (!(error instanceof CoreValidationError)) throw error;
       invalidFixtureCount += 1;
       if (fixture.kind === "verificationProfile") invalidVerificationProfileFixtureCount += 1;
+      if (fixture.kind === "goal") invalidGoalFixtureCount += 1;
       continue;
     }
     throw new CoreValidationError(`${entry.path}: invalid fixture was unexpectedly accepted`);
@@ -223,6 +335,9 @@ export function validateCoreCatalog(inputEntries: readonly CoreTreeEntry[]): Val
     throw new CoreValidationError(
       "verification profile support requires valid and invalid conformance fixtures",
     );
+  }
+  if (validators.goal && (validGoalFixtureCount === 0 || invalidGoalFixtureCount === 0)) {
+    throw new CoreValidationError("Goal support requires valid and invalid conformance fixtures");
   }
 
   const catalogMaterial = entries.map((entry) => ({
@@ -240,10 +355,12 @@ export function validateCoreCatalog(inputEntries: readonly CoreTreeEntry[]): Val
     schemaDigests: schemas.digests,
     repositoryCount: repositories.length,
     verificationProfileCount: verificationProfiles.length,
+    goalCount: goals.length,
     validFixtureCount,
     invalidFixtureCount,
     repositories,
     verificationProfiles,
+    goals,
   };
 }
 
@@ -296,6 +413,42 @@ export function assertVerificationProfileRetention(
   }
 }
 
+const GOAL_TRANSITIONS: Readonly<Record<GoalStatus, readonly GoalStatus[]>> = {
+  planned: ["planned", "active", "paused", "cancelled"],
+  active: ["active", "paused", "completed", "cancelled"],
+  paused: ["paused", "active", "completed", "cancelled"],
+  completed: ["completed"],
+  cancelled: ["cancelled"],
+};
+
+export function assertGoalRetention(
+  active: Pick<ValidatedCoreCatalog, "schemaDigests" | "goals">,
+  candidate: Pick<ValidatedCoreCatalog, "schemaDigests" | "goals">,
+): void {
+  if (active.schemaDigests.goal && (!candidate.schemaDigests.envelope || !candidate.schemaDigests.goal)) {
+    throw new CoreValidationError("Goal schemas must be retained after automatic activation");
+  }
+  const candidateGoals = new Map(candidate.goals.map((goal) => [goal.goal.metadata.id, goal]));
+  const violations: string[] = [];
+  for (const goal of active.goals) {
+    const next = candidateGoals.get(goal.goal.metadata.id);
+    if (!next) {
+      violations.push(`removed ${goal.path}`);
+      continue;
+    }
+    const previousStatus = goal.goal.metadata.status;
+    const nextStatus = next.goal.metadata.status;
+    if (!GOAL_TRANSITIONS[previousStatus].includes(nextStatus)) {
+      violations.push(
+        `${goal.goal.metadata.id}: ${previousStatus} cannot transition to ${nextStatus}`,
+      );
+    }
+  }
+  if (violations.length > 0) {
+    throw new CoreValidationError("Goals must be retained with valid lifecycle transitions", violations);
+  }
+}
+
 export function validatedRepositorySurfaceContract(
   inputEntries: readonly CoreTreeEntry[],
   version: number,
@@ -340,7 +493,9 @@ function loadBundledSchemas(entries: Map<string, CoreTreeEntry>): {
   for (const kind of Object.keys(SCHEMA_PATHS) as SchemaKind[]) {
     const bundledBytes = readFileSync(BUNDLED_SCHEMA_URLS[kind]);
     const fetched = entries.get(SCHEMA_PATHS[kind]);
-    if (!fetched && kind === "verificationProfile") continue;
+    if (!fetched && (["verificationProfile", "envelope", "goal"] satisfies OptionalSchemaKind[]).includes(kind as OptionalSchemaKind)) {
+      continue;
+    }
     if (!fetched) {
       throw new CoreValidationError(`${SCHEMA_PATHS[kind]}: required authority file is missing`);
     }
@@ -360,11 +515,20 @@ function loadBundledSchemas(entries: Map<string, CoreTreeEntry>): {
     parsed[kind] = bundledSchema;
     digests[kind] = expectedDigest;
   }
+  const hasEnvelope = parsed.envelope !== undefined;
+  const hasGoal = parsed.goal !== undefined;
+  if (hasEnvelope !== hasGoal) {
+    throw new CoreValidationError("organization Goal support requires both envelope and Goal schemas");
+  }
+  if (hasGoal && parsed.verificationProfile === undefined) {
+    throw new CoreValidationError("organization Goal support requires the verification profile schema");
+  }
   return { parsed, digests };
 }
 
 function createValidators(schemas: ParsedSchemas): Validators {
   const ajv = new Ajv2020({ allErrors: true, strict: true });
+  if (schemas.envelope) ajv.addSchema(schemas.envelope as object);
   const validators: Validators = {
     repository: ajv.compile(schemas.repository as object),
     surfaces: ajv.compile(schemas.surfaces as object),
@@ -373,17 +537,24 @@ function createValidators(schemas: ParsedSchemas): Validators {
   if (schemas.verificationProfile) {
     validators.verificationProfile = ajv.compile(schemas.verificationProfile as object);
   }
+  if (schemas.goal) validators.goal = ajv.compile(schemas.goal as object);
   return validators;
 }
 
 function validateFixture(
   entry: CoreTreeEntry,
-  kind: SchemaKind,
+  kind: FixtureKind,
   validators: Validators,
   availablePaths: Set<string>,
+  repositoryIds: Set<string>,
+  verificationProfiles: Map<string, VerificationProfile>,
 ): void {
   if (kind === "verificationProfile") {
     validateVerificationProfile(entry, validators.verificationProfile);
+    return;
+  }
+  if (kind === "goal") {
+    validateGoal(entry, validators.goal, repositoryIds, verificationProfiles, false);
     return;
   }
   const data = validateOne(entry, validators[kind]);
@@ -409,6 +580,158 @@ function validateVerificationProfile(
   const data = validateOne(entry, validator) as VerificationProfile;
   assertVerificationProfileInvariants(data, entry.path);
   return data;
+}
+
+function validateGoal(
+  entry: CoreTreeEntry,
+  validator: ValidateFunction | undefined,
+  repositoryIds: Set<string>,
+  verificationProfiles: Map<string, VerificationProfile>,
+  requireExecutable = true,
+): OrganizationGoal {
+  if (!validator) {
+    throw new CoreValidationError(`${entry.path}: Goal contract requires ${SCHEMA_PATHS.goal}`);
+  }
+  if (entry.bytes.byteLength > MAX_GOAL_BYTES) {
+    throw new CoreValidationError(`${entry.path}: Goal exceeds ${MAX_GOAL_BYTES} bytes`);
+  }
+  const goal = validateOne(entry, validator) as OrganizationGoal;
+  assertGoalInvariants(goal, entry.path, repositoryIds, verificationProfiles, requireExecutable);
+  return goal;
+}
+
+function assertGoalInvariants(
+  goal: OrganizationGoal,
+  path: string,
+  repositoryIds: Set<string>,
+  verificationProfiles: Map<string, VerificationProfile>,
+  requireExecutable: boolean,
+): void {
+  const pathMatch = GOAL_PATH.exec(path);
+  if (pathMatch && goal.metadata.id !== pathMatch[1]) {
+    throw new CoreValidationError(`${path}: Goal identity does not match its path`);
+  }
+  const owners = new Set<string>();
+  for (const owner of goal.metadata.owners) {
+    if (owners.has(owner.id)) throw new CoreValidationError(`${path}: duplicate Goal owner ${owner.id}`);
+    owners.add(owner.id);
+  }
+  if (goal.metadata.applies_to.repository_selection === "selected") {
+    for (const repositoryId of goal.metadata.applies_to.repository_ids) {
+      if (!repositoryIds.has(repositoryId)) {
+        throw new CoreValidationError(`${path}: applicable repository is not declared: ${repositoryId}`);
+      }
+    }
+  }
+  assertRealUtcDate(goal.spec.starts_on, `${path}: spec.starts_on`);
+  assertRealUtcDate(goal.spec.ends_on, `${path}: spec.ends_on`);
+  if (goal.spec.starts_on > goal.spec.ends_on) {
+    throw new CoreValidationError(`${path}: Goal start date is after its end date`);
+  }
+  const measureIds = new Set<string>();
+  let requiredMeasureCount = 0;
+  for (const measure of goal.spec.success_measures) {
+    if (measureIds.has(measure.id)) {
+      throw new CoreValidationError(`${path}: duplicate success measure ${measure.id}`);
+    }
+    measureIds.add(measure.id);
+    if (measure.required) requiredMeasureCount += 1;
+    if (!repositoryIds.has(measure.subject.id)) {
+      throw new CoreValidationError(
+        `${path}: success-measure subject is not declared: ${measure.subject.id}`,
+      );
+    }
+    assertCanonicalUtcInstant(
+      measure.observation_window.starts_at,
+      `${path}: success measure ${measure.id} observation_window.starts_at`,
+    );
+    assertCanonicalUtcInstant(
+      measure.observation_window.ends_at,
+      `${path}: success measure ${measure.id} observation_window.ends_at`,
+    );
+    if (measure.observation_window.starts_at >= measure.observation_window.ends_at) {
+      throw new CoreValidationError(
+        `${path}: success measure ${measure.id} observation window is empty or reversed`,
+      );
+    }
+    const profileKey = `${measure.verification_profile.id}:v${measure.verification_profile.version}`;
+    const profile = verificationProfiles.get(profileKey);
+    if (!profile) throw new CoreValidationError(`${path}: unknown verification profile ${profileKey}`);
+    if (measure.evidence_mode !== profile.evidence_mode) {
+      throw new CoreValidationError(
+        `${path}: success measure ${measure.id} evidence mode does not match ${profileKey}`,
+      );
+    }
+    const validateParameters = new Ajv2020({ allErrors: true, strict: true }).compile(
+      profile.parameter_schema,
+    );
+    if (!validateParameters(measure.parameters)) {
+      throw new CoreValidationError(
+        `${path}: success measure ${measure.id} parameters do not satisfy ${profileKey}`,
+        (validateParameters.errors ?? []).map(
+          (error) =>
+            `${path}/spec/success_measures/${measure.id}/parameters${error.instancePath || "/"} ${error.message ?? "is invalid"}`,
+        ),
+      );
+    }
+    if (requireExecutable) assertVerificationProfileExecutable(profile, path, measure.id);
+  }
+  if (requiredMeasureCount === 0) {
+    throw new CoreValidationError(`${path}: Goal must contain at least one required success measure`);
+  }
+}
+
+function assertVerificationProfileExecutable(
+  profile: VerificationProfile,
+  path: string,
+  measureId: string,
+): void {
+  const mechanismKey = (mechanism: { id: string; version: number }) =>
+    `${mechanism.id}:v${mechanism.version}`;
+  const unsupported: string[] = [];
+  if (profile.mechanism.kind === "deterministic-evaluator") {
+    const key = mechanismKey(profile.mechanism.evaluator);
+    if (!SUPPORTED_VERIFICATION_MECHANISMS.evaluators.has(key)) unsupported.push(`evaluator ${key}`);
+  } else if (profile.mechanism.kind === "observational-evaluator") {
+    const adapterKey = mechanismKey(profile.mechanism.source_adapter);
+    const evaluatorKey = mechanismKey(profile.mechanism.evaluator);
+    if (!SUPPORTED_VERIFICATION_MECHANISMS.sourceAdapters.has(adapterKey)) {
+      unsupported.push(`source adapter ${adapterKey}`);
+    }
+    if (!SUPPORTED_VERIFICATION_MECHANISMS.evaluators.has(evaluatorKey)) {
+      unsupported.push(`evaluator ${evaluatorKey}`);
+    }
+  } else {
+    const key = mechanismKey(profile.mechanism.attestation_policy);
+    if (!SUPPORTED_VERIFICATION_MECHANISMS.attestationPolicies.has(key)) {
+      unsupported.push(`attestation policy ${key}`);
+    }
+  }
+  if (unsupported.length > 0) {
+    throw new CoreValidationError(
+      `${path}: success measure ${measureId} references unsupported verification mechanisms`,
+      unsupported,
+    );
+  }
+}
+
+function assertRealUtcDate(value: string, label: string): void {
+  const [year, month, day] = value.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year!, month! - 1, day));
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month! - 1 ||
+    parsed.getUTCDate() !== day
+  ) {
+    throw new CoreValidationError(`${label} is not a real UTC calendar date`);
+  }
+}
+
+function assertCanonicalUtcInstant(value: string, label: string): void {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.valueOf()) || parsed.toISOString() !== value) {
+    throw new CoreValidationError(`${label} is not a canonical UTC millisecond instant`);
+  }
 }
 
 function validateOne(entry: CoreTreeEntry, validate: ValidateFunction): unknown {
@@ -561,7 +884,7 @@ function assertVerificationProfileInvariants(data: VerificationProfile, path: st
   }
 }
 
-function fixtureContract(path: string): { expectation: "valid" | "invalid"; kind: SchemaKind } {
+function fixtureContract(path: string): { expectation: "valid" | "invalid"; kind: FixtureKind } {
   const match = FIXTURE_PATH.exec(path)!;
   const name = match[2]!;
   return {
@@ -573,6 +896,8 @@ function fixtureContract(path: string): { expectation: "valid" | "invalid"; kind
           ? "surfaces"
           : name === "verification-profile"
             ? "verificationProfile"
+            : name === "goal"
+              ? "goal"
             : "governance",
   };
 }
@@ -581,8 +906,11 @@ function isRecognizedPath(path: string): boolean {
   return (
     STATIC_PATHS.has(path) ||
     path === SCHEMA_PATHS.verificationProfile ||
+    path === SCHEMA_PATHS.envelope ||
+    path === SCHEMA_PATHS.goal ||
     REPOSITORY_PATH.test(path) ||
     VERIFICATION_PROFILE_PATH.test(path) ||
+    GOAL_PATH.test(path) ||
     FIXTURE_PATH.test(path)
   );
 }

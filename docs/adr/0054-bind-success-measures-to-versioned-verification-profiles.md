@@ -118,6 +118,7 @@ measurement evidence, or establish outcome facts.
 
 - Shapes: [success-measure verification](../design/success-measure-verification.md),
   [verification-profile ingestion](../specs/verification-profile-ingestion.md),
+  [Goal ingestion](../specs/goal-ingestion.md),
   and [product foundation roadmap](../plans/product-foundation-roadmap.md)
 - Builds on: [ADR-0004](0004-keep-models-outside-the-control-path.md),
   [ADR-0009](0009-apply-goals-through-discovery-and-admission.md),

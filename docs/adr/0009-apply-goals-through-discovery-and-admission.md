@@ -116,4 +116,4 @@ and does not ask a model to resolve their precedence.
   [ADR-0005](0005-admit-worker-created-work-before-claiming.md)
 - Product: [maintenance fleet PRD](../prd/agent-fleet.md), especially
   [goal application](../prd/agent-fleet.md#goal-application)
-- Implementation design, contract, and delivery plan: not yet authored
+- Import contract: [Goal ingestion](../specs/goal-ingestion.md)

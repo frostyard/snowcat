@@ -10,6 +10,7 @@ import {
   selectCoreCheckDetailForPrune,
 } from "./check-detail-retention.ts";
 import {
+  assertGoalRetention,
   assertRepositoryDeclarationRetention,
   assertVerificationProfileRetention,
   CoreValidationError,
@@ -2284,6 +2285,34 @@ export class ControlPlaneStore {
     }
   }
 
+  assertGoalHistoryRetention(candidate: InspectedCoreCandidate): void {
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT file.path
+         FROM core_snapshot_files file
+         WHERE file.path IN (
+           'organization/schemas/v1/envelope.schema.json',
+           'organization/schemas/v1/goal.schema.json'
+         ) OR file.path LIKE 'organization/goals/%'`,
+      )
+      .all() as Row[];
+    const candidateGoalPaths = new Set(candidate.goals.map((goal) => goal.path));
+    const missing: string[] = [];
+    for (const row of rows) {
+      const path = String(row.path);
+      if (path === "organization/schemas/v1/envelope.schema.json") {
+        if (!candidate.schemaDigests.envelope) missing.push(`removed ${path}`);
+      } else if (path === "organization/schemas/v1/goal.schema.json") {
+        if (!candidate.schemaDigests.goal) missing.push(`removed ${path}`);
+      } else if (!candidateGoalPaths.has(path)) {
+        missing.push(`removed ${path}`);
+      }
+    }
+    if (missing.length > 0) {
+      throw new CoreValidationError("Goals and their schemas must be retained", missing.sort());
+    }
+  }
+
   authoritativeDigest(): string {
     const content = {
       metadata: this.queryJsonRows("SELECT * FROM control_plane_metadata ORDER BY singleton"),
@@ -2741,11 +2770,13 @@ export class ControlPlaneStore {
       }
       const active = this.activeCoreSnapshot();
       this.assertVerificationProfileHistoryRetention(candidate);
+      this.assertGoalHistoryRetention(candidate);
       if (active) {
         const activeCandidate = this.retainedCoreCandidate(active.sourceCommitId);
         if (!activeCandidate) throw new Error("active Core candidate is not retained");
         assertRepositoryDeclarationRetention(activeCandidate, validated);
         assertVerificationProfileRetention(activeCandidate, validated);
+        assertGoalRetention(activeCandidate, validated);
         if (input.continuityAncestorCommitId !== active.sourceCommitId) {
           throw new Error(
             `automatic Core activation requires source continuity from active commit ${active.sourceCommitId}`,
@@ -2773,6 +2804,7 @@ export class ControlPlaneStore {
         totalBytes: validated.totalBytes,
         repositoryCount: validated.repositoryCount,
         verificationProfileCount: validated.verificationProfileCount,
+        ...(validated.schemaDigests.goal ? { goalCount: validated.goalCount } : {}),
         validFixtureCount: validated.validFixtureCount,
         invalidFixtureCount: validated.invalidFixtureCount,
         schemaDigests: validated.schemaDigests,
@@ -3079,6 +3111,7 @@ export class ControlPlaneStore {
         totalBytes: validated.totalBytes,
         repositoryCount: validated.repositoryCount,
         verificationProfileCount: validated.verificationProfileCount,
+        ...(validated.schemaDigests.goal ? { goalCount: validated.goalCount } : {}),
         validFixtureCount: validated.validFixtureCount,
         invalidFixtureCount: validated.invalidFixtureCount,
         schemaDigests: validated.schemaDigests,
@@ -5748,6 +5781,9 @@ export class ControlPlaneStore {
 
     let verificationProfileSchemaSeen = false;
     const verificationProfileHistory = new Map<string, string>();
+    let goalSchemaSeen = false;
+    const goalPathHistory = new Set<string>();
+    let previousValidated: ReturnType<typeof validateCoreCatalog> | undefined;
 
     for (const snapshot of snapshots) {
       const snapshotId = String(snapshot.snapshot_id);
@@ -5846,6 +5882,7 @@ export class ControlPlaneStore {
       const candidateProfiles = new Map(
         validated.verificationProfiles.map((profile) => [profile.path, profile.contentDigest]),
       );
+      const candidateGoalPaths = new Set(validated.goals.map((goal) => goal.path));
       if (event.kind === "core.snapshot-activated") {
         if (verificationProfileSchemaSeen && !validated.schemaDigests.verificationProfile) {
           throw new Error(`Core snapshot removed verification profile schema: ${snapshotId}`);
@@ -5853,6 +5890,24 @@ export class ControlPlaneStore {
         for (const [profilePath, profileDigest] of verificationProfileHistory) {
           if (candidateProfiles.get(profilePath) !== profileDigest) {
             throw new Error(`Core snapshot removed or changed verification profile: ${profilePath}`);
+          }
+        }
+        if (goalSchemaSeen && (!validated.schemaDigests.envelope || !validated.schemaDigests.goal)) {
+          throw new Error(`Core snapshot removed Goal schemas: ${snapshotId}`);
+        }
+        for (const goalPath of goalPathHistory) {
+          if (!candidateGoalPaths.has(goalPath)) {
+            throw new Error(`Core snapshot removed Goal: ${goalPath}`);
+          }
+        }
+        if (previousValidated) {
+          try {
+            assertGoalRetention(previousValidated, validated);
+          } catch (error) {
+            if (!(error instanceof CoreValidationError)) throw error;
+            throw new Error(
+              `Core snapshot Goal lifecycle mismatch: ${error.details.join("; ") || error.message}`,
+            );
           }
         }
       }
@@ -5864,6 +5919,9 @@ export class ControlPlaneStore {
         verificationProfileHistory.set(profilePath, profileDigest);
       }
       if (validated.schemaDigests.verificationProfile) verificationProfileSchemaSeen = true;
+      if (validated.schemaDigests.goal) goalSchemaSeen = true;
+      for (const goalPath of candidateGoalPaths) goalPathHistory.add(goalPath);
+      previousValidated = validated;
       for (const occurrence of [definition, fact, event]) {
         if (
           occurrence.source_kind !== "github-repository" ||
@@ -5889,6 +5947,8 @@ export class ControlPlaneStore {
         Number(definitionPayload.repositoryCount) !== validated.repositoryCount ||
         (definitionPayload.verificationProfileCount !== undefined &&
           Number(definitionPayload.verificationProfileCount) !== validated.verificationProfileCount) ||
+        (definitionPayload.goalCount !== undefined &&
+          Number(definitionPayload.goalCount) !== validated.goalCount) ||
         Number(definitionPayload.validFixtureCount) !== validated.validFixtureCount ||
         Number(definitionPayload.invalidFixtureCount) !== validated.invalidFixtureCount ||
         canonicalJson(definitionPayload.schemaDigests!) !==
@@ -8077,6 +8137,8 @@ function assertCandidateReport(
     validFixtureCount: candidate.validFixtureCount,
     verificationProfileCount: candidate.verificationProfileCount,
     verificationProfiles: candidate.verificationProfiles,
+    goalCount: candidate.goalCount,
+    goals: candidate.goals,
   } as unknown as JsonValue;
   const validatedReport = {
     catalogDigest: validated.catalogDigest,
@@ -8089,6 +8151,8 @@ function assertCandidateReport(
     validFixtureCount: validated.validFixtureCount,
     verificationProfileCount: validated.verificationProfileCount,
     verificationProfiles: validated.verificationProfiles,
+    goalCount: validated.goalCount,
+    goals: validated.goals,
   } as unknown as JsonValue;
   if (canonicalJson(candidateReport) !== canonicalJson(validatedReport)) {
     throw new Error("Core candidate validation report does not match its retained files");

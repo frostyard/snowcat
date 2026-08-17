@@ -96,6 +96,7 @@ Docs are split by the question they answer:
 - [Local repository holds](specs/repository-local-holds.md)
 - [Repository held-work recovery](specs/repository-held-work-recovery.md)
 - [Verification-profile ingestion](specs/verification-profile-ingestion.md)
+- [Goal ingestion](specs/goal-ingestion.md)
 
 ### Plans
 

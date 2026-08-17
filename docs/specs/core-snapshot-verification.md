@@ -30,12 +30,14 @@ Success emits one JSON object with these fields:
 | `commitId`, `treeId` | string | Exact 40- or 64-lowercase-hex Git commit and `organization` tree objects |
 | `catalogDigest` | SHA-256 string | Digest of the canonical path-sorted file catalog |
 | `fileCount`, `totalBytes` | integer | Bounded materialized tree totals |
-| `schemaDigests` | object | Exact expected/fetched schema-blob digests by contract kind; the verification-profile digest is absent only for a legacy catalog |
+| `schemaDigests` | object | Exact expected/fetched schema-blob digests by contract kind; profile and Goal-extension digests are absent from earlier catalog shapes |
 | `repositoryCount` | integer | Number of valid live repository declarations |
 | `verificationProfileCount` | integer | Number of valid live verification profiles; zero for a legacy catalog |
+| `goalCount` | integer | Number of executable live Goals; reported as zero when the Goal extension has no live records |
 | `validFixtureCount`, `invalidFixtureCount` | integer | Conformance fixtures that behaved as declared |
 | `repositories` | array | Declaration path, byte digest, and strictly validated declaration |
 | `verificationProfiles` | array | Profile path, byte digest, and strictly validated profile; empty for a legacy catalog |
+| `goals` | array | Goal path, byte digest, and strictly validated Goal; empty until referenced mechanisms are supported |
 
 Failure emits no success JSON, writes a bounded diagnostic to stderr, and exits
 nonzero.
@@ -66,6 +68,8 @@ nonzero.
    repository-surface contract MUST exist. The optional profile-capable
    extension MUST satisfy the
    [verification-profile ingestion contract](verification-profile-ingestion.md).
+   The optional Goal-capable extension MUST satisfy the
+   [Goal ingestion contract](goal-ingestion.md).
    Every present schema blob MUST match Fluent's exact expected SHA-256 digest
    before its fetched content is used for parity comparison.
 8. Fluent MUST compile its bundled schemas, not dynamically trust a changed
@@ -75,7 +79,8 @@ nonzero.
    without comments, trailing commas, empty content, or duplicate object keys.
 10. Live records, contracts, and conformance fixtures MUST satisfy their schema
     and the path, identity, owner, surface, repository-ID, protected-boundary,
-    and verification-profile invariants implemented by Core PRs #80 and #81.
+    verification-profile, and Goal invariants implemented by Core PRs #80,
+    #81, and #82.
 11. Every recognized valid fixture MUST pass and every recognized invalid
     fixture MUST fail. At least one of each MUST exist.
 12. The catalog digest MUST cover every recognized tree entry's path, regular
@@ -104,5 +109,6 @@ nonzero.
   [ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md)
 - Context: [core snapshot ingestion](../design/core-snapshot-ingestion.md)
 - Extension: [verification-profile ingestion](verification-profile-ingestion.md)
+- Goal extension: [Goal ingestion](goal-ingestion.md)
 - Downstream authority contract: [Core snapshot activation](core-snapshot-activation.md)
 - Delivery: [core snapshot ingestion plan](../plans/core-snapshot-ingestion.md)

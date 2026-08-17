@@ -110,7 +110,8 @@ Schema version `5` and registry version `11` govern three Core authority tables:
 
 The exact definition payload contains snapshot ID, fixed source repository ID,
 source URL/ref/commit/tree, catalog digest, file/byte/repository/fixture counts,
-the three schema digests, and import time. The active fact and activation event
+required and supported-extension schema digests, optional profile and Goal
+counts, and import time. The active fact and activation event
 share the exact payload `{ databaseLineageId, snapshotId, catalogDigest,
 sourceCommitId, activatedAt }` for automatic activation. A rollback keeps that
 fact payload but uses its separately registered event payload to retain the
@@ -184,6 +185,10 @@ previous snapshot/commit, decision, operator, and reason.
 19. A schema version other than `5` or registry version other than `11` MUST fail
     closed. This pre-production version defines no in-place upgrade; initialize
     a fresh target database.
+20. Automatic activation MUST apply the
+    [Goal ingestion](goal-ingestion.md) schema/path retention and lifecycle
+    transition checks. Operator rollback remains the only path that may select
+    an exact retained pre-Goal snapshot; it does not delete later Goal history.
 
 ## Derived artifacts
 
@@ -208,6 +213,7 @@ previous snapshot/commit, decision, operator, and reason.
 - Context: [Core snapshot ingestion](../design/core-snapshot-ingestion.md)
 - Source gate: [Core source readiness](core-source-readiness.md)
 - Diagnostic retention: [Core check-detail retention](core-check-detail-retention.md)
+- Goal extension: [Goal ingestion](goal-ingestion.md)
 - Periodic execution: [Core source polling](core-source-polling.md)
 - Downstream repository reconciliation:
   [repository authority reconciliation](repository-authority-reconciliation.md)

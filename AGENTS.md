@@ -60,6 +60,10 @@ removed. -->
   [`src/core/git-source.ts`](src/core/git-source.ts). Verification is read-only
   with respect to the control plane: it never activates a Core snapshot,
   creates enrollment, or writes `FLUENT_CONTROL_DB`.
+- Keep live Core Goals behind the closed verification-mechanism registry in
+  [`src/core/validator.ts`](src/core/validator.ts). Goal fixtures validate
+  without implementations; a live Goal fails activation until every referenced
+  adapter, evaluator, or attestation policy has a real versioned registry entry.
 - Use `npm run --silent core -- activate <expected-control-plane-sequence>` for
   automatic Core authority mutation. After the first activation it
   verifies Git ancestry from the active source commit, then independently

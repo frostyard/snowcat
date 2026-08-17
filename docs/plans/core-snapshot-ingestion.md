@@ -39,6 +39,10 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
   bounded observation plus audit event. `core verify` stays read-only;
   `core rejections` exposes the newest bounded result set; rejection creates no
   fact and never advances the active pointer.
+- The optional [Goal ingestion contract](../specs/goal-ingestion.md) now pins
+  Core PR #82's envelope and Goal schemas, validates isolated fixtures and
+  cross-record measures, retains future Goal paths and lifecycle safety, and
+  rejects live Goals until their verification mechanisms are implemented.
 - **Done when:** rejected fetch/validation/storage attempts have mechanically
   bounded durable diagnostics; a failure injected after any snapshot write
   rolls back all candidate authority and allocation before its separate audit
@@ -129,6 +133,7 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
 - Implements: [core snapshot ingestion](../design/core-snapshot-ingestion.md),
   [core snapshot verification](../specs/core-snapshot-verification.md), and
   [Core snapshot activation](../specs/core-snapshot-activation.md), and
+  [Goal ingestion](../specs/goal-ingestion.md), and
   [Core source readiness](../specs/core-source-readiness.md), and
   [Core check-detail retention](../specs/core-check-detail-retention.md), and
   [Core source polling](../specs/core-source-polling.md), and

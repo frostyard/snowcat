@@ -19,6 +19,7 @@ Contracts: [core snapshot verification](../specs/core-snapshot-verification.md)
 [Core source readiness](../specs/core-source-readiness.md).
 Profile contract:
 [verification-profile ingestion](../specs/verification-profile-ingestion.md).
+Goal contract: [Goal ingestion](../specs/goal-ingestion.md).
 Retention contract:
 [Core check-detail retention](../specs/core-check-detail-retention.md).
 Polling contract: [Core source polling](../specs/core-source-polling.md).
@@ -80,11 +81,13 @@ object graph must be present in the fetched mirror exactly as addressed.
 
 ### Bundled contract and parity
 
-Fluent bundles the three required schema documents implemented by merged core
+Fluent bundles the three required schema documents implemented by merged Core
 PR #80: repository declaration, repository surfaces, and repository agent
-governance. It also bundles the profile-capable extension proposed in Core PR
-#81. Legacy candidates remain accepted without that extension; any profile
-path requires its exact schema and profile-specific conformance fixtures.
+governance. It also bundles the profile-capable extension merged in Core PR
+#81 and the common-envelope and Goal extension merged in Core PR #82. Legacy
+candidates remain accepted without those extensions; any profile path requires
+its exact schema and profile-specific conformance fixtures. Goal support
+requires both Goal schemas, the profile schema, and Goal-specific fixtures.
 The expected SHA-256 digest of each exact core schema blob is compiled into
 Fluent. A fetched schema must match that byte digest, and its parsed canonical
 content must match the bundled validator schema, before validation begins.
@@ -99,6 +102,10 @@ profile identity and size, mode/mechanism agreement, closed embedded parameter
 schemas, document-local references, and strict schema compilation. It runs
 every recognized valid and invalid fixture and refuses a corpus without both
 classes or without both profile-fixture classes once that extension exists.
+Goal-capable validation additionally resolves applicability and subjects to
+declared immutable repository IDs, resolves exact profiles and parameters,
+checks dates, windows, owners, required measures, and fixture isolation, and
+refuses a live Goal whose mechanisms have no registered implementation.
 
 ### Candidate catalog
 
@@ -107,6 +114,9 @@ byte size, and content digest to a path-sorted canonical catalog digest. The
 reported candidate binds source URL, source ref, commit ID, organization tree
 ID, schema digests, fixture counts, parsed repository declarations, and
 validated verification profiles when present.
+Goal-capable reports also retain strictly validated executable live Goals when
+present. The currently empty mechanism registry means the merged fixture-only
+Core contract is accepted while any live Goal fails closed.
 Repository declarations remain declarations: the merged `frostyard/core`
 declaration is currently `disabled`, and even a future `enabled` declaration
 will not become enrollment until the snapshot is active, its declaration and
@@ -171,6 +181,13 @@ profile schema and every historically activated profile identity/content digest
 must be retained by later automatic candidates, including after rollback. An
 attributed operator rollback may still select an exact retained legacy
 snapshot.
+
+The Goal extension follows the same one-way compatibility boundary. Automatic
+activation retains both Goal schemas and every historically activated Goal
+path, including after rollback, and checks lifecycle transitions relative to
+the active snapshot. Goal content may evolve; terminal completion and
+cancellation cannot be reopened automatically. Rollback may select exact older
+authority but never erases retained Goal history.
 
 Startup revalidates the durable envelope and source vocabulary, recomputes each
 file and complete catalog digest, checks parsed declarations against raw bytes,
@@ -249,10 +266,10 @@ more than once per 24 hours.
   accepted 30/60-minute boundaries.
 - `FLUENT_CORE_URL`, `FLUENT_CORE_REF`, and `FLUENT_CORE_MIRROR` select the
   exact allowed source, branch ref, and host-local mirror path.
-- A valid report proves compatibility with the implemented repository-authority
-  and verification-profile contract slices only. Profile import does not claim
-  mechanism support or execute a measure. Core roadmap record kinds that do not
-  yet exist remain unsupported and any unknown `organization/` path fails
+- A valid report proves compatibility with the implemented repository,
+  verification-profile, and fixture-only Goal contract slices. Profile import
+  does not claim mechanism support or execute a measure. Other Core roadmap
+  record kinds remain unsupported and any unknown `organization/` path fails
   closed.
 - A failed fetch or validation before the first activation leaves no last-known-
   good state. Atomic activation now preserves an existing current snapshot;

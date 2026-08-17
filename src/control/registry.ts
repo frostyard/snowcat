@@ -889,14 +889,23 @@ function isCoreSnapshotDefinitionPayload(value: unknown): value is CoreSnapshotD
   ];
   if (
     !isExactObject(value, requiredKeys) &&
-    !isExactObject(value, [...requiredKeys, "verificationProfileCount"])
+    !isExactObject(value, [...requiredKeys, "verificationProfileCount"]) &&
+    !isExactObject(value, [...requiredKeys, "verificationProfileCount", "goalCount"])
   ) {
     return false;
   }
   const schemaDigests = value.schemaDigests;
   if (
     !isExactObject(schemaDigests, ["repository", "surfaces", "governance"]) &&
-    !isExactObject(schemaDigests, ["repository", "surfaces", "governance", "verificationProfile"])
+    !isExactObject(schemaDigests, ["repository", "surfaces", "governance", "verificationProfile"]) &&
+    !isExactObject(schemaDigests, [
+      "repository",
+      "surfaces",
+      "governance",
+      "verificationProfile",
+      "envelope",
+      "goal",
+    ])
   ) {
     return false;
   }
@@ -920,6 +929,8 @@ function isCoreSnapshotDefinitionPayload(value: unknown): value is CoreSnapshotD
     isNonNegativeInteger(value.repositoryCount) &&
     (value.verificationProfileCount === undefined ||
       isNonNegativeInteger(value.verificationProfileCount)) &&
+    (value.goalCount === undefined || isNonNegativeInteger(value.goalCount)) &&
+    (value.goalCount !== undefined) === (schemaDigests.goal !== undefined) &&
     isPositiveInteger(value.validFixtureCount) &&
     isPositiveInteger(value.invalidFixtureCount) &&
     Object.values(schemaDigests).every(isSha256) &&

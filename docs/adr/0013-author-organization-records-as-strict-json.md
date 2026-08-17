@@ -171,4 +171,4 @@ import.
 - Format standard: [JSON Schema Draft 2020-12](https://json-schema.org/draft/2020-12)
 - Product: [maintenance fleet PRD](../prd/agent-fleet.md), especially
   [core authoring and snapshot import](../prd/agent-fleet.md#core-authoring-and-snapshot-import)
-- Implementation design, contract, and delivery plan: not yet authored
+- Goal import contract: [Goal ingestion](../specs/goal-ingestion.md)
