@@ -714,6 +714,7 @@ export interface GitHubSourceGapInput {
   installationId: string;
   checkpointRecordId: string;
   cause: GitHubSourceGapCause;
+  coverageFailureKind: "interval-coverage" | "delivery-content";
   affectedDeliveryGuids: string[];
 }
 
@@ -726,6 +727,7 @@ export interface GitHubSourceGapResult {
   eventRecordId: string;
   lowerBoundAt: string;
   cause: GitHubSourceGapCause;
+  coverageFailureKind: "interval-coverage" | "delivery-content";
   affectedDeliveryGuids: string[];
   gapDigest: string;
   detectedAt: string;
@@ -2331,6 +2333,7 @@ export class ControlPlaneStore {
         gapId: gapRecordId,
         lowerBoundAt: checkpoint.coveredThrough,
         cause: normalized.cause,
+        coverageFailureKind: normalized.coverageFailureKind,
         affectedDeliveryGuids: normalized.affectedDeliveryGuids,
         detectedAt,
       }));
@@ -2346,6 +2349,7 @@ export class ControlPlaneStore {
         lowerBoundAt: checkpoint.coveredThrough,
         upperBoundAt: null,
         cause: normalized.cause,
+        coverageFailureKind: normalized.coverageFailureKind,
         affectedDeliveryGuids: normalized.affectedDeliveryGuids,
         gapDigest,
         detectedAt,
@@ -2378,6 +2382,7 @@ export class ControlPlaneStore {
         eventRecordId,
         lowerBoundAt: checkpoint.coveredThrough,
         cause: normalized.cause,
+        coverageFailureKind: normalized.coverageFailureKind,
         affectedDeliveryGuids: normalized.affectedDeliveryGuids,
         gapDigest,
         detectedAt,
@@ -2420,7 +2425,7 @@ export class ControlPlaneStore {
       ) {
         throw new Error("GitHub source-gap repair requires the current open gap");
       }
-      const contentGap = gap.cause === "unsupported-relevant-delivery" || gap.cause === "normalization-failed";
+      const contentGap = gap.coverageFailureKind === "delivery-content";
       if (contentGap) {
         this.assertGitHubContentGapRepairEvidence(gap, normalized.repairAuditRecordIds);
       } else if (normalized.repairAuditRecordIds.length !== 0) {
@@ -7456,6 +7461,7 @@ export class ControlPlaneStore {
         gapId: gap.gapId,
         lowerBoundAt: gap.lowerBoundAt,
         cause: gap.cause,
+        coverageFailureKind: gap.coverageFailureKind,
         affectedDeliveryGuids: gap.affectedDeliveryGuids,
         detectedAt: gap.detectedAt,
       }));
@@ -7470,6 +7476,7 @@ export class ControlPlaneStore {
         installationId: gap.installationId,
         checkpointRecordId: gap.checkpointRecordId,
         cause: gap.cause,
+        coverageFailureKind: gap.coverageFailureKind,
         affectedDeliveryGuids: gap.affectedDeliveryGuids,
       };
       const earlierOpenGap = this.db
@@ -7583,7 +7590,7 @@ export class ControlPlaneStore {
       gap.repositoryId !== repair.repositoryId ||
       gap.appId !== repair.appId ||
       gap.installationId !== repair.installationId ||
-      ((gap.cause === "unsupported-relevant-delivery" || gap.cause === "normalization-failed")
+      (gap.coverageFailureKind === "delivery-content"
         ? repair.repairMethod !== "delivery-observations-and-complete-audit" ||
           (() => {
             try {
@@ -8376,6 +8383,7 @@ export class ControlPlaneStore {
           payload.checkpointRecordId !== gap.checkpointRecordId ||
           payload.lowerBoundAt !== gap.lowerBoundAt ||
           payload.cause !== gap.cause ||
+          payload.coverageFailureKind !== gap.coverageFailureKind ||
           canonicalJson(payload.affectedDeliveryGuids) !== canonicalJson(gap.affectedDeliveryGuids) ||
           payload.gapDigest !== gap.gapDigest
         ) {
@@ -9074,7 +9082,7 @@ function normalizeGitHubSourceGapInput(input: GitHubSourceGapInput): GitHubSourc
     typeof input !== "object" ||
     Array.isArray(input) ||
     Object.keys(input).sort().join(",") !==
-      "affectedDeliveryGuids,appId,cause,checkpointRecordId,expectedLastTransactionSequence,installationId,repositoryId,runId"
+      "affectedDeliveryGuids,appId,cause,checkpointRecordId,coverageFailureKind,expectedLastTransactionSequence,installationId,repositoryId,runId"
   ) {
     throw new Error("GitHub source gap must be one exact typed input");
   }
@@ -9086,10 +9094,9 @@ function normalizeGitHubSourceGapInput(input: GitHubSourceGapInput): GitHubSourc
     !/^github\.com:installation:[1-9][0-9]{0,19}$/.test(input.installationId) ||
     !/^github\.com:[1-9][0-9]{0,19}$/.test(input.repositoryId) ||
     !githubSourceGapCauses.includes(input.cause) ||
+    !(input.coverageFailureKind === "interval-coverage" || input.coverageFailureKind === "delivery-content") ||
     !isCanonicalGitHubDeliveryGuidSet(input.affectedDeliveryGuids) ||
-    ((input.cause === "unsupported-relevant-delivery" || input.cause === "normalization-failed")
-      ? input.affectedDeliveryGuids.length === 0
-      : input.affectedDeliveryGuids.length !== 0)
+    !isGitHubSourceGapShape(input.cause, input.coverageFailureKind, input.affectedDeliveryGuids)
   ) {
     throw new Error("GitHub source gap contains invalid identities or cause");
   }
@@ -9151,6 +9158,23 @@ function isCanonicalGitHubDeliveryGuidSet(value: unknown): value is string[] {
     value.every((entry) => typeof entry === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(entry)) &&
     new Set(value).size === value.length &&
     canonicalJson(value) === canonicalJson([...value].sort());
+}
+
+function isGitHubSourceGapShape(
+  cause: GitHubSourceGapCause,
+  coverageFailureKind: "interval-coverage" | "delivery-content",
+  affectedDeliveryGuids: readonly string[],
+): boolean {
+  if (cause === "unsupported-relevant-delivery" && coverageFailureKind !== "delivery-content") return false;
+  if (
+    (cause === "delivery-audit-incomplete" ||
+      cause === "pagination-incomplete" ||
+      cause === "recovery-horizon-expired") &&
+    coverageFailureKind !== "interval-coverage"
+  ) return false;
+  return coverageFailureKind === "delivery-content"
+    ? affectedDeliveryGuids.length > 0
+    : affectedDeliveryGuids.length === 0;
 }
 
 function githubCheckpointDigest(
@@ -9520,6 +9544,7 @@ function parseGitHubSourceGapResult(value: JsonValue): GitHubSourceGapResult {
       "eventRecordId",
       "lowerBoundAt",
       "cause",
+      "coverageFailureKind",
       "affectedDeliveryGuids",
       "gapDigest",
       "detectedAt",
@@ -9539,11 +9564,13 @@ function parseGitHubSourceGapResult(value: JsonValue): GitHubSourceGapResult {
     !isUuidV7(value.eventRecordId) ||
     typeof value.lowerBoundAt !== "string" ||
     !githubSourceGapCauses.includes(value.cause as GitHubSourceGapCause) ||
+    !(value.coverageFailureKind === "interval-coverage" || value.coverageFailureKind === "delivery-content") ||
     !isCanonicalGitHubDeliveryGuidSet(value.affectedDeliveryGuids) ||
-    (((value.cause as GitHubSourceGapCause) === "unsupported-relevant-delivery" ||
-      (value.cause as GitHubSourceGapCause) === "normalization-failed")
-      ? value.affectedDeliveryGuids.length === 0
-      : value.affectedDeliveryGuids.length !== 0) ||
+    !isGitHubSourceGapShape(
+      value.cause as GitHubSourceGapCause,
+      value.coverageFailureKind,
+      value.affectedDeliveryGuids,
+    ) ||
     typeof value.gapDigest !== "string" ||
     !/^sha256:[0-9a-f]{64}$/.test(value.gapDigest) ||
     typeof value.detectedAt !== "string" ||
@@ -9565,6 +9592,7 @@ function parseGitHubSourceGapResult(value: JsonValue): GitHubSourceGapResult {
     eventRecordId: value.eventRecordId,
     lowerBoundAt: value.lowerBoundAt,
     cause: value.cause as GitHubSourceGapCause,
+    coverageFailureKind: value.coverageFailureKind,
     affectedDeliveryGuids: [...value.affectedDeliveryGuids],
     gapDigest: value.gapDigest,
     detectedAt: value.detectedAt,

@@ -479,6 +479,7 @@ test("GitHub delivery-audit checkpoints lower-bound gaps and close them only thr
         installationId: "github.com:installation:7654",
         checkpointRecordId: "0198ba6b-7c00-7000-8000-00000000000e",
         cause: "source-unavailable",
+        coverageFailureKind: "interval-coverage",
         affectedDeliveryGuids: [],
       }),
     /requires the latest checkpoint boundary/,
@@ -495,6 +496,20 @@ test("GitHub delivery-audit checkpoints lower-bound gaps and close them only thr
   assert.equal(first.previousCheckpointRecordId, null);
   assert.equal(first.coveredFrom, first.coveredThrough);
   assert.deepEqual(store.recordGitHubSourceCheckpoint(firstInput), first);
+  assert.throws(
+    () => store.openGitHubSourceGap({
+      expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+      runId: "0198ba70-0ff0-7000-8000-000000000009",
+      repositoryId: "github.com:9001",
+      appId: "4567",
+      installationId: "github.com:installation:7654",
+      checkpointRecordId: first.checkpointRecordId,
+      cause: "unsupported-relevant-delivery",
+      coverageFailureKind: "interval-coverage",
+      affectedDeliveryGuids: [],
+    }),
+    /invalid identities or cause/,
+  );
 
   now = new Date("2026-08-17T14:05:00.000Z");
   const gap = store.openGitHubSourceGap({
@@ -504,7 +519,8 @@ test("GitHub delivery-audit checkpoints lower-bound gaps and close them only thr
     appId: "4567",
     installationId: "github.com:installation:7654",
     checkpointRecordId: first.checkpointRecordId,
-    cause: "delivery-audit-incomplete",
+    cause: "normalization-failed",
+    coverageFailureKind: "interval-coverage",
     affectedDeliveryGuids: [],
   });
   assert.equal(gap.lowerBoundAt, first.coveredThrough);
@@ -562,6 +578,7 @@ test("GitHub delivery-audit checkpoints lower-bound gaps and close them only thr
     installationId: "github.com:installation:7654",
     checkpointRecordId: next.checkpointRecordId,
     cause: "unsupported-relevant-delivery",
+    coverageFailureKind: "delivery-content",
     affectedDeliveryGuids: ["52345678-1234-4234-8234-123456789abc"],
   });
   now = new Date("2026-08-17T14:21:00.000Z");

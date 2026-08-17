@@ -15,7 +15,7 @@ no generic record-writing, fact-writing, administrative, or worker interface.
 | Default path | `./data/control-plane.db` | Distinct from the queue-spike default |
 | SQLite application ID | `1179405908` | Decimal encoding of `FLNT` |
 | Schema version | `7` | Stored in both `PRAGMA user_version` and metadata |
-| Registry version | `16` | Stored in metadata and both initialization payloads |
+| Registry version | `17` | Stored in metadata and both initialization payloads |
 | Node runtime | `>=24.0.0` | Required for the stable `node:sqlite` surface and online backup API |
 | Database lineage ID | UUIDv7 | Generated once by the server; never reused or inferred from path |
 | Operator principal ID | UUIDv7 | Generated once and stored separately from database, session, worker, or provider identity |
@@ -26,7 +26,7 @@ transaction sequence.
 `ControlPlaneStore.occurrences()` returns occurrences ordered by transaction
 sequence and position. Neither method mutates the database or returns a secret.
 
-### Closed registry version 16
+### Closed registry version 17
 
 | Registry | Name | Version or ID rule | Contract |
 | --- | --- | --- | --- |
@@ -77,8 +77,8 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Record | `github.delivery-audit-observation` | Schema 1 | Class `observation`; subject `github-app-hook`; API delivery identity, response provenance, and absence of a prior direct receipt |
 | Record | `github.pull-request-observation` | Schema 2 | Class `observation`; subject `github-pull-request`; allowlisted same-repository state and revisions with direct-webhook or API-repair acquisition provenance |
 | Record | `github.source-checkpoint-observation` | Schema 1 | Class `observation`; subject `github-repository`; complete bounded audit boundary for one registered scope |
-| Record | `github.source-gap-observation` | Schema 2 | Class `observation`; subject `github-repository`; open interval lower-bounded by the latest checkpoint, with exact affected delivery GUIDs for content causes |
-| Record | `github.source-gap-repair-observation` | Schema 2 | Class `observation`; subject `github-repository`; terminal complete-audit repair, with exact API-audit citations when content was missing |
+| Record | `github.source-gap-observation` | Schema 3 | Class `observation`; subject `github-repository`; open interval lower-bounded by the latest checkpoint, with explicit interval or delivery-content failure kind |
+| Record | `github.source-gap-repair-observation` | Schema 3 | Class `observation`; subject `github-repository`; terminal complete-audit repair, with exact API-audit citations for delivery-content gaps |
 | Event | `control-plane.initialized` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
 | Event | `control-plane.integrity-checked` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
 | Event | `core.snapshot-activated` | Schema 1 | Subject `core-snapshot`; minimum class `organization` |
@@ -95,8 +95,8 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Event | `github.delivery-recorded` | Schema 1 | Subject `github-app-hook`; causally linked receipt disposition |
 | Event | `github.delivery-repair-recorded` | Schema 1 | Subject `github-app-hook`; causally linked API repair disposition |
 | Event | `github.source-checkpoint-recorded` | Schema 1 | Subject `github-repository`; checkpoint accepted |
-| Event | `github.source-gap-opened` | Schema 2 | Subject `github-repository`; lower-bounded gap opened |
-| Event | `github.source-gap-repaired` | Schema 2 | Subject `github-repository`; exact evidence-bound repair accepted |
+| Event | `github.source-gap-opened` | Schema 3 | Subject `github-repository`; lower-bounded gap opened |
+| Event | `github.source-gap-repaired` | Schema 3 | Subject `github-repository`; exact evidence-bound repair accepted |
 | Command | `control-plane.initialize` | Schema 1 | Outputs database definition, principal definition, then initialization event |
 | Command | `control-plane.check-integrity` | Schema 1 | Outputs the integrity observation, then integrity-checked event |
 | Command | `core.activate-snapshot` | Schema 1 | Outputs snapshot definition, active fact, then activation event |
@@ -113,8 +113,8 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Command | `github.record-pull-request-delivery` | Schema 1 | Outputs receipt observation, pull-request observation, then delivery event |
 | Command | `github.record-pull-request-delivery-repair` | Schema 1 | Outputs delivery-audit observation, pull-request observation, then repair event |
 | Command | `github.record-source-checkpoint` | Schema 1 | Outputs checkpoint observation, then event |
-| Command | `github.open-source-gap` | Schema 2 | Outputs open-gap observation, then event |
-| Command | `github.repair-source-gap` | Schema 2 | Outputs successor checkpoint, terminal repair observation, then event |
+| Command | `github.open-source-gap` | Schema 3 | Outputs open-gap observation, then event |
+| Command | `github.repair-source-gap` | Schema 3 | Outputs successor checkpoint, terminal repair observation, then event |
 | Predicate | `core.snapshot-active` | Contract 1 | Established by automatic activation or operator rollback; latest transaction sequence wins |
 | Predicate | `repository.core-authorized` | Contract 1 | Established only from an active retained Core declaration |
 | Predicate | `repository.github-identity-reconciled` | Contract 1 | Established only from bounded GitHub metadata and bound Core authority |
@@ -130,7 +130,7 @@ invalid:
 {
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
   "operatorPrincipalId": "0198b0a6-c200-7abc-8def-0123456789ac",
-  "registryVersion": 16,
+  "registryVersion": 17,
   "schemaVersion": 7
 }
 ```
@@ -153,7 +153,7 @@ The integrity observation and event payload have this exact shape:
 {
   "checkedThroughSequence": 1,
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
-  "registryVersion": 16,
+  "registryVersion": 17,
   "result": "ok",
   "schemaVersion": 7
 }
@@ -340,7 +340,7 @@ or establish a checkpoint.
 
 ### Pull-request-delivery coverage commands
 
-Registry v16 fixes one coverage scope:
+Registry v17 fixes one coverage scope:
 `github.pull-request-deliveries:v1`. These commands accept bounded results from
 a deterministic delivery-audit controller after network acquisition; they do
 not call GitHub or independently prove caller-supplied pagination digests.
@@ -365,11 +365,15 @@ from `delivery-audit-incomplete`, `source-unavailable`,
 and no gap is written. The immutable gap uses its observation record ID as
 `gapId`, begins at the checkpoint upper boundary, has a null upper bound, and
 prevents a second open gap for the same v1 scope.
-For `unsupported-relevant-delivery` and `normalization-failed`, the command also
-requires 1–100 sorted unique affected delivery GUIDs. Every interval-only cause
-requires an empty affected-delivery set. A malformed acquisition that cannot
-be attributed to both a repository and delivery GUID cannot use this
-repository-scoped command.
+The command classifies the missing evidence independently from its cause.
+`coverageFailureKind=interval-coverage` requires an empty affected-delivery set;
+`delivery-content` requires 1–100 sorted unique affected delivery GUIDs. This
+distinction matters because source unavailability, request-budget exhaustion,
+or normalization failure can occur at either App-list or known-delivery detail
+scope. Unsupported relevant deliveries require `delivery-content`; incomplete
+audit, pagination, and expired-horizon causes require `interval-coverage`.
+A malformed acquisition that cannot be attributed to a repository uses
+the future App-wide controller boundary rather than inventing a repository gap.
 
 `repairGitHubSourceGap(input)` requires that exact current open gap and a
 complete audit ending strictly after its lower bound. It atomically emits a
@@ -546,7 +550,7 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
    initialization transaction.
 5. Older, newer, incomplete, unexpected, or differently identified schemas
    MUST fail closed. Unregistered indexes, triggers, and views are unexpected.
-   Schema version 7 and registry version 16 define no upgrade path from earlier
+   Schema version 7 and registry version 17 define no upgrade path from earlier
    pre-production target stores.
 6. Subject, record, event, command, source, revision, record-class, and
    information-class names MUST come from the code-owned versioned registries.

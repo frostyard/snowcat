@@ -428,7 +428,7 @@ before or after it.
 A registered source scope and lower-bounded interval for which Fluent cannot
 establish required coverage. Its end remains open until exact repair evidence
 bounds it; repair never erases the gap occurrence or what Fluent knew when it
-was recorded. A content-caused gap names the affected source identities and
+was recorded. A delivery-content gap names the affected source identities and
 requires matching repaired observations plus restored interval coverage; an
 interval-only gap carries no invented source identity.
 

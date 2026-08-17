@@ -131,8 +131,10 @@ removed. -->
   `awaiting-surfaces`; enrollment requires a valid exact-commit surface fact.
   The implementation lives in
   [`src/repository/controller.ts`](src/repository/controller.ts).
-- Keep GitHub content-gap closure evidence-bound. A content gap names sorted
-  affected delivery GUIDs; `github.repair-source-gap` may close it only with
+- Keep GitHub content-gap closure evidence-bound. Gap schema v3 distinguishes
+  `interval-coverage` from `delivery-content` independently of failure cause.
+  A content gap names sorted affected delivery GUIDs;
+  `github.repair-source-gap` may close it only with
   exact matching, post-gap `github.delivery-audit-observation` citations plus
   a complete interval audit. Never fabricate a webhook receipt or close from a
   digest alone.

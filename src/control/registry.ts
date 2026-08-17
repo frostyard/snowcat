@@ -2,7 +2,7 @@ import { isUuidV7, type JsonValue } from "./encoding.ts";
 
 export const CONTROL_PLANE_APPLICATION_ID = 1_179_405_908; // ASCII "FLNT"
 export const CONTROL_PLANE_SCHEMA_VERSION = 7;
-export const CONTROL_PLANE_REGISTRY_VERSION = 16;
+export const CONTROL_PLANE_REGISTRY_VERSION = 17;
 
 export const informationClasses = ["public", "organization", "restricted"] as const;
 export type InformationClass = (typeof informationClasses)[number];
@@ -337,14 +337,14 @@ export const recordKindRegistry = {
     validatePayload: isGitHubSourceCheckpointPayload,
   },
   "github.source-gap-observation": {
-    schemaVersion: 2,
+    schemaVersion: 3,
     recordClass: "observation",
     subjectKinds: ["github-repository"],
     minimumInformationClass: "organization",
     validatePayload: isGitHubSourceGapPayload,
   },
   "github.source-gap-repair-observation": {
-    schemaVersion: 2,
+    schemaVersion: 3,
     recordClass: "observation",
     subjectKinds: ["github-repository"],
     minimumInformationClass: "organization",
@@ -456,13 +456,13 @@ export const eventKindRegistry = {
     validatePayload: isGitHubSourceCheckpointPayload,
   },
   "github.source-gap-opened": {
-    schemaVersion: 2,
+    schemaVersion: 3,
     subjectKinds: ["github-repository"],
     minimumInformationClass: "organization",
     validatePayload: isGitHubSourceGapPayload,
   },
   "github.source-gap-repaired": {
-    schemaVersion: 2,
+    schemaVersion: 3,
     subjectKinds: ["github-repository"],
     minimumInformationClass: "organization",
     validatePayload: isGitHubSourceGapRepairPayload,
@@ -569,11 +569,11 @@ export const commandKindRegistry = {
     outputKinds: ["github.source-checkpoint-observation", "github.source-checkpoint-recorded"],
   },
   "github.open-source-gap": {
-    schemaVersion: 2,
+    schemaVersion: 3,
     outputKinds: ["github.source-gap-observation", "github.source-gap-opened"],
   },
   "github.repair-source-gap": {
-    schemaVersion: 2,
+    schemaVersion: 3,
     outputKinds: [
       "github.source-checkpoint-observation",
       "github.source-gap-repair-observation",
@@ -1103,6 +1103,7 @@ export interface GitHubSourceGapPayload extends Record<string, JsonValue> {
   lowerBoundAt: string;
   upperBoundAt: null;
   cause: GitHubSourceGapCause;
+  coverageFailureKind: "interval-coverage" | "delivery-content";
   affectedDeliveryGuids: string[];
   gapDigest: string;
   detectedAt: string;
@@ -2185,6 +2186,7 @@ function isGitHubSourceGapPayload(value: unknown): value is GitHubSourceGapPaylo
       "lowerBoundAt",
       "upperBoundAt",
       "cause",
+      "coverageFailureKind",
       "affectedDeliveryGuids",
       "gapDigest",
       "detectedAt",
@@ -2200,7 +2202,12 @@ function isGitHubSourceGapPayload(value: unknown): value is GitHubSourceGapPaylo
     isUtcInstant(value.lowerBoundAt) &&
     value.upperBoundAt === null &&
     githubSourceGapCauses.includes(value.cause as GitHubSourceGapCause) &&
-    isGitHubSourceGapDeliverySet(value.cause as GitHubSourceGapCause, value.affectedDeliveryGuids) &&
+    (value.coverageFailureKind === "interval-coverage" || value.coverageFailureKind === "delivery-content") &&
+    isGitHubSourceGapDeliverySet(
+      value.cause as GitHubSourceGapCause,
+      value.coverageFailureKind,
+      value.affectedDeliveryGuids,
+    ) &&
     isSha256(value.gapDigest) &&
     isUtcInstant(value.detectedAt) &&
     new Date(value.detectedAt).getTime() >= new Date(value.lowerBoundAt).getTime()
@@ -2262,11 +2269,21 @@ function isGitHubSourceGapRepairPayload(value: unknown): value is GitHubSourceGa
   return evidenceShape && end > lower && new Date(value.repairedAt).getTime() >= end;
 }
 
-function isGitHubSourceGapDeliverySet(cause: GitHubSourceGapCause, value: unknown): value is string[] {
+function isGitHubSourceGapDeliverySet(
+  cause: GitHubSourceGapCause,
+  coverageFailureKind: "interval-coverage" | "delivery-content",
+  value: unknown,
+): value is string[] {
   if (!Array.isArray(value) || value.length > 100 || !value.every(isGitHubDeliveryGuid)) return false;
   if (new Set(value).size !== value.length || canonicalStringArray(value) !== value.join("\n")) return false;
-  const contentGap = cause === "unsupported-relevant-delivery" || cause === "normalization-failed";
-  return contentGap ? value.length > 0 : value.length === 0;
+  if (cause === "unsupported-relevant-delivery" && coverageFailureKind !== "delivery-content") return false;
+  if (
+    (cause === "delivery-audit-incomplete" ||
+      cause === "pagination-incomplete" ||
+      cause === "recovery-horizon-expired") &&
+    coverageFailureKind !== "interval-coverage"
+  ) return false;
+  return coverageFailureKind === "delivery-content" ? value.length > 0 : value.length === 0;
 }
 
 function canonicalStringArray(value: readonly string[]): string {

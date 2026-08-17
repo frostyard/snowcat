@@ -128,7 +128,7 @@ does not itself enroll the repository in the fleet.
 
 ## Phase 4 — Observe GitHub without impersonating workers (large)
 
-- Registry v16 and schema v7 implement the first internal, enrollment-bound
+- Registry v17 and schema v7 implement the first internal, enrollment-bound
   post-authentication transaction for an allowlisted same-repository
   pull-request delivery. It writes a distinct receipt observation,
   pull-request observation, and audit event with exact replay, 30-day receipt

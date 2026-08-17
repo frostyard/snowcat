@@ -120,7 +120,7 @@ observed subject.
 
 ### Durable observation families
 
-Registry version 16 assigns the source-native subject identities and purpose-
+Registry version 17 assigns the source-native subject identities and purpose-
 specific revision kinds below. The implementing records and commands will
 assign exact registered kinds and payload schemas without changing these
 identity joins:
@@ -140,7 +140,7 @@ identity joins:
 
 Every family in this table uses or will use a registered `observation` record
 kind; the design does not introduce another generic record class. Registry
-version 16 additionally registers the direct delivery receipt, API delivery
+version 17 additionally registers the direct delivery receipt, API delivery
 audit, pull-request, checkpoint, gap, and repair observation records plus their
 atomic events and commands. Pull-request observation schema 2 names either its
 direct receipt or API audit as the acquisition record. Other rows remain
@@ -197,12 +197,11 @@ boundary; a failure before any checkpoint remains baseline-unavailable. While
 the gap is open, ordinary checkpoints are rejected. A complete repair audit
 atomically appends the successor checkpoint and terminal repair observation,
 leaving the original gap intact. The store bounds each accepted audit to 100
-pages and 10,000 deliveries and verifies the entire chain on reopen. GitHub API
-acquisition, pagination, scheduling, leases, and recovery attempts remain to be
-implemented outside these short transactions.
-The complete-audit method deliberately cannot repair an unsupported or failed-
-normalization delivery; those gaps require future retained API-sourced
-normalized observations and remain open today.
+pages and 10,000 deliveries and verifies the entire chain on reopen. Bounded
+GitHub API list/detail acquisition and receipt-free normalized API repair are
+also implemented; scheduling, leases, and automatic recovery attempts remain
+outside these short transactions. A delivery-content repair requires exact
+post-gap API-audit citations as well as a complete interval audit.
 
 ### Reconciliation cycle
 
@@ -270,8 +269,10 @@ These labels are a future projection, not a universal status or authoritative
 record. An open or settling window evaluates `unable`.
 
 Each gap binds a registered scope and begins at the last established coverage
-boundary. Interval failures carry no invented delivery identity. Content
-failures carry a bounded exact set of affected delivery GUIDs. Their interval
+boundary. Each gap explicitly classifies missing evidence as interval coverage
+or delivery content, independently of the mechanical failure cause. Interval
+failures carry no invented delivery identity. Delivery-content failures carry
+a bounded exact set of affected delivery GUIDs. Their interval
 remains open until a complete audit establishes an exclusive end; a content
 failure additionally requires retained API repair observations whose App,
 installation, repository, and GUID set exactly match the gap. Recovery may

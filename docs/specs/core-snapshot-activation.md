@@ -100,7 +100,7 @@ The rejection payload has this exact shape:
 | `activeCommitId` | string or null | Required for continuity failure; exact active source commit used by the ancestry check |
 | `observedAt` | canonical UTC instant | Server evaluation and recorded time |
 
-Schema version `7` and registry version `16` govern three Core authority tables:
+Schema version `7` and registry version `17` govern three Core authority tables:
 
 | Table | Retained content |
 | --- | --- |
@@ -182,7 +182,7 @@ previous snapshot/commit, decision, operator, and reason.
     implemented under [Core check-detail retention](core-check-detail-retention.md);
     periodic execution is implemented under
     [Core source polling](core-source-polling.md).
-19. A schema version other than `7` or registry version other than `16` MUST fail
+19. A schema version other than `7` or registry version other than `17` MUST fail
     closed. This pre-production version defines no in-place upgrade; initialize
     a fresh target database.
 20. Automatic activation MUST apply the

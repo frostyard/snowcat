@@ -75,7 +75,7 @@ the identity states.
 11. A newer Core authorization, identity result, default-branch head, or
     surface result MUST make older evidence inapplicable without deleting it.
 12. Schema version `7` has no in-place migration from the pre-production target;
-    initialize a fresh database. Registry version is `16`.
+    initialize a fresh database. Registry version is `17`.
 
 ## Derived artifacts
 
