@@ -1044,3 +1044,93 @@ function seedTestingGap(queue: QueueStore, repository: string) {
     createdBy: "operator:test",
   });
 }
+
+test("eventsSince reads the ledger across items in global order with joined item fields and no lease token", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-events-since-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  for (const repository of ["frostyard/updex", "frostyard/lodge"]) queue.setRepositoryEnabled(repository, true);
+
+  const updex = queue.enqueueSeed({
+    repository: "frostyard/updex",
+    kind: "test-implementation",
+    objective: "Land a test via pull request.",
+    instructions: "Write the test and open a pull request.",
+    acceptanceCriteria: ["The pull request contains the new test."],
+    allowedActions: ["read", "write", "run-tests", "open-pr"],
+    delegableActions: [],
+    createdBy: "operator:test",
+  });
+  const [lodge] = queue.enqueueProposedRoots("frostyard/lodge", [
+    {
+      kind: "issue-resolution",
+      objective: "Resolve lodge#4.",
+      instructions: "Read the issue.",
+      acceptanceCriteria: ["A pull request closes the issue."],
+      allowedActions: ["read"],
+      delegableActions: [],
+      createdBy: "operator:import-issues",
+      sourceRef: "https://github.com/frostyard/lodge/issues/4",
+    },
+  ]).created;
+  const claimed = queue.claim({ worker: "codex:updex:events", repository: "frostyard/updex" })!;
+  queue.heartbeat(claimed.id, claimed.leaseToken!, "codex:updex:events");
+  const pullRequest = "https://github.com/frostyard/updex/pull/9";
+  queue.complete({
+    id: claimed.id,
+    leaseToken: claimed.leaseToken!,
+    worker: "codex:updex:events",
+    result: { summary: "Opened the pull request.", evidence: ["test/queue.test.ts"], artifacts: [{ kind: "pull-request", url: pullRequest }] },
+    followUps: [],
+  });
+  queue.recordArtifactVerification(
+    claimed.id,
+    pullRequest,
+    { status: "verified", verifiedAt: "2026-08-17T00:00:00.000Z", number: 9, state: "open", headSha: "abc" },
+    "operator:test",
+  );
+
+  const all = queue.eventsSince(0);
+  assert.deepEqual(
+    all.map((event) => event.type),
+    ["work.queued", "work.proposed", "work.claimed", "lease.renewed", "work.completed", "artifact.verified"],
+  );
+  assert.deepEqual(
+    all.map((event) => event.sequence),
+    all.map((_, index) => index + 1),
+    "events come back in global sequence order",
+  );
+  assert.equal(all.every((event, index) => index === 0 || event.sequence > all[index - 1]!.sequence), true);
+  const first = all[0]!;
+  assert.equal(first.workItemId, updex.id);
+  assert.equal(first.repository, "frostyard/updex");
+  assert.equal(first.kind, "test-implementation");
+  assert.equal(first.sourceRef, undefined);
+  assert.equal(first.status, "completed", "joined status is the item's current status, not the status at event time");
+  const proposed = all[1]!;
+  assert.equal(proposed.workItemId, lodge!.id);
+  assert.equal(proposed.repository, "frostyard/lodge");
+  assert.equal(proposed.kind, "issue-resolution");
+  assert.equal(proposed.sourceRef, "https://github.com/frostyard/lodge/issues/4");
+  assert.equal(proposed.status, "proposed");
+  assert.equal(all.at(-1)?.payload.url, pullRequest);
+
+  const later = queue.eventsSince(2);
+  assert.deepEqual(later.map((event) => event.sequence), [3, 4, 5, 6]);
+  assert.deepEqual(queue.eventsSince(6), []);
+  assert.deepEqual(
+    queue.eventsSince(0, { repository: "frostyard/lodge" }).map((event) => event.type),
+    ["work.proposed"],
+  );
+  assert.deepEqual(queue.eventsSince(0, { limit: 2 }).map((event) => event.sequence), [1, 2]);
+
+  const serialized = JSON.stringify(all);
+  assert.equal(serialized.includes(claimed.leaseToken!), false, "no event, including work.claimed, carries the lease token");
+  assert.equal(/leaseToken/.test(serialized), false);
+  for (const event of all) assert.equal("leaseToken" in event, false);
+
+  assert.throws(() => queue.eventsSince(-1), /non-negative integer/);
+  assert.throws(() => queue.eventsSince(0, { limit: 0 }), /between 1 and 500/);
+  assert.throws(() => queue.eventsSince(0, { limit: 501 }), /between 1 and 500/);
+  assert.throws(() => queue.eventsSince(0, { repository: "not-a-slug" }));
+});

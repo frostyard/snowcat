@@ -73,6 +73,9 @@ npm run queue -- defer <work-item-id> <reason>
 npm run queue -- requeue <work-item-id> <reason>
 npm run queue -- cancel <work-item-id> <reason>
 npm run queue -- list [proposed|queued|claimed|completed|blocked|cancelled]
+npm run queue -- show <work-item-id>
+npm run queue -- events [--since <sequence>] [--repository <owner/repo>] [--limit <1-500>]
+npm run queue -- watch [--repository <owner/repo>] [--interval <seconds>]
 ```
 
 `seed-testing-gap` creates exactly one read-only discovery item that may create
@@ -94,6 +97,13 @@ definition or history. The item becomes logical `proposed`, is no longer
 claimable, records `work.deferred` with the operator reason, and may later pass
 through the normal `approve` or `reject` review path. It is not exposed through
 MCP.
+
+`events` and `watch` are the read-only observation surface over the event
+ledger. `events` prints the events strictly after a global sequence, oldest
+first, each joined with its item's repository, kind, source reference, and
+current status; `watch` polls the same read from the current last sequence and
+prints one JSON line per new event until interrupted. Neither mutates the queue
+and neither is exposed through MCP.
 
 `requeue` and `cancel` are operator-only exits for `blocked` work. Requeue
 clears the block result and returns the admitted item to claimable `queued`
@@ -203,7 +213,17 @@ state with a `work.requeued` event. Cancel stores the operator reason in
     item with its complete event history; neither MAY reveal a lease token.
     `metadata` MUST report the resolved database path, `database_id`,
     schema version, creation time, item and event counts, and the last event
-    sequence, without exposing any lease token.
+    sequence, without exposing any lease token. `QueueStore.eventsSince
+    (sequence, { repository?, limit? })` and the `events [--since <sequence>]
+    [--repository <owner/repo>] [--limit <1-500>]` command over it MUST
+    return only events whose global `sequence` is strictly greater than the
+    cursor, in ascending sequence order across all items, each joined with its
+    item's `repository`, `kind`, `sourceRef`, and current logical status;
+    `watch [--repository <owner/repo>] [--interval <seconds>]` MUST poll that
+    read from the last sequence at startup (default every 10 seconds, never
+    more often than every 2 seconds), print one JSON line per new event, and
+    stop on SIGINT or SIGTERM. Both are read-only, MUST NOT reveal a lease
+    token in any event, and MUST NOT be exposed through MCP.
 28. `backup <path>` MUST refuse `:memory:`, the live database path, and any
     existing path; MUST reserve the new file with mode `0600` before writing;
     MUST copy a consistent snapshot with `VACUUM INTO` on the live connection;

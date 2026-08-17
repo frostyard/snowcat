@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
+import { createInterface } from "node:readline";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -348,4 +350,142 @@ test("operator CLI list filters by repository and kind, and show prints an item 
   const missing = run("show", "00000000-0000-4000-8000-000000000000");
   assert.notEqual(missing.status, 0);
   assert.match(missing.stderr, /not found/);
+});
+
+test("operator CLI events reads the ledger since a sequence as JSON without lease tokens", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-events-test-"));
+  const path = join(directory, "queue.db");
+  const queue = new QueueStore(path);
+  for (const repository of ["frostyard/updex", "frostyard/lodge"]) queue.setRepositoryEnabled(repository, true);
+  const seedOne = (repository: string) =>
+    queue.enqueueSeed({
+      repository,
+      kind: "quality-gap-discovery",
+      objective: `quality for ${repository}`,
+      instructions: "Read only.",
+      acceptanceCriteria: ["One gap."],
+      allowedActions: ["read"],
+      delegableActions: [],
+      createdBy: "operator:test",
+    });
+  const updex = seedOne("frostyard/updex");
+  seedOne("frostyard/lodge");
+  const claimed = queue.claim({ worker: "claude:events-test", repository: "frostyard/updex" })!;
+  queue.close();
+  const env = stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path });
+  const run = (...args: string[]) =>
+    spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], { cwd: process.cwd(), encoding: "utf8", env });
+
+  const all = run("events");
+  assert.equal(all.status, 0, all.stderr);
+  const events = JSON.parse(all.stdout) as Array<Record<string, unknown>>;
+  assert.deepEqual(events.map((event) => event.type), ["work.queued", "work.queued", "work.claimed"]);
+  assert.deepEqual(events.map((event) => event.sequence), [1, 2, 3]);
+  assert.equal(events[2]?.workItemId, updex.id);
+  assert.equal(events[2]?.repository, "frostyard/updex");
+  assert.equal(events[2]?.kind, "quality-gap-discovery");
+  assert.equal(events[2]?.status, "claimed");
+  assert.equal(all.stdout.includes(claimed.leaseToken!), false);
+  assert.equal(all.stdout.includes("leaseToken"), false);
+
+  const since = run("events", "--since", "1");
+  assert.equal(since.status, 0, since.stderr);
+  assert.deepEqual((JSON.parse(since.stdout) as Array<{ sequence: number }>).map((event) => event.sequence), [2, 3]);
+  const filtered = run("events", "--since", "0", "--repository", "frostyard/lodge", "--limit", "500");
+  assert.equal(filtered.status, 0, filtered.stderr);
+  assert.deepEqual((JSON.parse(filtered.stdout) as Array<{ sequence: number }>).map((event) => event.sequence), [2]);
+  const tail = run("events", "--since", "3");
+  assert.equal(tail.status, 0, tail.stderr);
+  assert.deepEqual(JSON.parse(tail.stdout), []);
+
+  const badLimit = run("events", "--limit", "501");
+  assert.notEqual(badLimit.status, 0);
+  assert.match(badLimit.stderr, /limit must be between 1 and 500/);
+  const badSince = run("events", "--since", "-1");
+  assert.notEqual(badSince.status, 0);
+  assert.match(badSince.stderr, /since must not be negative/);
+  const badFlag = run("events", "--kind", "x");
+  assert.notEqual(badFlag.status, 0);
+  assert.match(badFlag.stderr, /unknown flag: --kind/);
+});
+
+test("operator CLI watch tails new events as JSON lines and stops cleanly when signalled", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-watch-test-"));
+  const path = join(directory, "queue.db");
+  const queue = new QueueStore(path);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/updex", true);
+  const seeded = queue.enqueueSeed({
+    repository: "frostyard/updex",
+    kind: "quality-gap-discovery",
+    objective: "quality for updex",
+    instructions: "Read only.",
+    acceptanceCriteria: ["One gap."],
+    allowedActions: ["read"],
+    delegableActions: [],
+    createdBy: "operator:test",
+  });
+  const env = stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path });
+
+  const invalid = spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", "watch", "--interval", "0"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env,
+  });
+  assert.notEqual(invalid.status, 0);
+  assert.match(invalid.stderr, /interval must be at least 1 second/);
+
+  const child = spawn(
+    process.execPath,
+    ["--import", "tsx", "src/queue/cli.ts", "watch", "--repository", "frostyard/updex", "--interval", "1"],
+    { cwd: process.cwd(), env, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  const exited = once(child, "exit");
+  const stderr: string[] = [];
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => stderr.push(chunk));
+  const lines: string[] = [];
+  const reader = createInterface({ input: child.stdout });
+  // Every observable change (stdout line, stderr chunk, exit) pokes the current waiter.
+  let announce: (() => void) | undefined;
+  reader.on("line", (line) => {
+    lines.push(line);
+    announce?.();
+  });
+  child.stderr.on("data", () => announce?.());
+  child.on("exit", () => announce?.());
+  const waitFor = (predicate: () => boolean, what: string, timeoutMs: number) =>
+    new Promise<void>((resolve, reject) => {
+      if (predicate()) return resolve();
+      const timer = setTimeout(() => reject(new Error(`timed out waiting for ${what}; stderr: ${stderr.join("")}`)), timeoutMs);
+      announce = () => {
+        if (!predicate()) return;
+        clearTimeout(timer);
+        announce = undefined;
+        resolve();
+      };
+    });
+  try {
+    // The tail starts at the current last sequence; the seed above predates it and must not print.
+    await waitFor(() => stderr.join("").includes("watching frostyard/updex from sequence 1 every 2s"), "watch startup", 15_000);
+    assert.equal(child.exitCode, null, `watch exited early: ${stderr.join("")}`);
+    const claimed = queue.claim({ worker: "claude:watch-test", repository: "frostyard/updex" })!;
+    assert.equal(claimed.id, seeded.id);
+    await waitFor(() => lines.length >= 1, "the claim event", 10_000);
+    const event = JSON.parse(lines[0]!) as Record<string, unknown>;
+    assert.equal(event.type, "work.claimed");
+    assert.equal(event.sequence, 2);
+    assert.equal(event.workItemId, seeded.id);
+    assert.equal(event.repository, "frostyard/updex");
+    assert.equal(event.status, "claimed");
+    assert.equal(lines[0]!.includes(claimed.leaseToken!), false);
+    assert.equal(lines[0]!.includes("leaseToken"), false);
+  } finally {
+    child.kill("SIGTERM");
+  }
+  const [code, signal] = (await exited) as [number | null, NodeJS.Signals | null];
+  assert.equal(signal, null, "watch handles SIGTERM itself instead of dying from it");
+  assert.equal(code, 0);
+  assert.equal(lines.length, 1, `only the claim was printed: ${lines.join("\n")}`);
+  reader.close();
 });

@@ -12,6 +12,7 @@ import {
   type ClaimInput,
   type CompletionInput,
   type FollowUpInput,
+  type ObservedWorkEvent,
   type ProposedRootInput,
   type SeedWorkInput,
   type WorkArtifact,
@@ -29,6 +30,8 @@ const MAX_FOLLOW_UPS = 10;
 const MAX_LINEAGE_DEPTH = 4;
 const BUSY_TIMEOUT_MS = 5000;
 const MAX_SOURCE_REF_LENGTH = 512;
+const DEFAULT_EVENTS_SINCE_LIMIT = 100;
+const MAX_EVENTS_SINCE_LIMIT = 500;
 
 /**
  * Schema version recorded in SQLite `PRAGMA user_version`. It equals the length
@@ -736,15 +739,49 @@ export class QueueStore {
 
   events(id: string): WorkEvent[] {
     return (this.db.prepare("SELECT * FROM work_events WHERE work_item_id = ? ORDER BY sequence").all(id) as Row[]).map(
-      (row) => ({
-        sequence: Number(row.sequence),
-        workItemId: String(row.work_item_id),
-        type: String(row.event_type),
-        actor: String(row.actor),
-        payload: parseJson<Record<string, unknown>>(row.payload_json, {}),
-        occurredAt: String(row.occurred_at),
-      }),
+      decodeWorkEvent,
     );
+  }
+
+  /**
+   * Reads ledger events across items strictly after a global `sequence`,
+   * oldest first, each joined with its item's `repository`, `kind`,
+   * `sourceRef`, and current logical status. This is the read-only operator
+   * observation surface behind `events` and `watch`; it never exposes a lease
+   * token because event payloads never carry one and the join selects none.
+   */
+  eventsSince(sequence: number, options: { repository?: string; limit?: number } = {}): ObservedWorkEvent[] {
+    if (!Number.isSafeInteger(sequence) || sequence < 0) throw new Error("sequence must be a non-negative integer");
+    const limit = options.limit ?? DEFAULT_EVENTS_SINCE_LIMIT;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_EVENTS_SINCE_LIMIT) {
+      throw new Error(`limit must be between 1 and ${MAX_EVENTS_SINCE_LIMIT}`);
+    }
+    const clauses = ["e.sequence > ?"];
+    const params: SQLInputValue[] = [sequence];
+    if (options.repository) {
+      validateRepository(options.repository);
+      clauses.push("w.repository = ?");
+      params.push(options.repository);
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT e.sequence, e.work_item_id, e.event_type, e.actor, e.payload_json, e.occurred_at,
+                w.repository, w.kind, w.source_ref,
+                CASE WHEN w.status = 'queued' AND w.admitted = 0 THEN 'proposed' ELSE w.status END AS logical_status
+         FROM work_events e
+         JOIN work_items w ON w.id = e.work_item_id
+         WHERE ${clauses.join(" AND ")}
+         ORDER BY e.sequence
+         LIMIT ?`,
+      )
+      .all(...params, limit) as Row[];
+    return rows.map((row) => ({
+      ...decodeWorkEvent(row),
+      repository: String(row.repository),
+      kind: String(row.kind),
+      sourceRef: row.source_ref == null ? undefined : String(row.source_ref),
+      status: String(row.logical_status) as WorkStatus,
+    }));
   }
 
   private migrate(): void {
@@ -902,6 +939,17 @@ export class QueueStore {
       throw error;
     }
   }
+}
+
+function decodeWorkEvent(row: Row): WorkEvent {
+  return {
+    sequence: Number(row.sequence),
+    workItemId: String(row.work_item_id),
+    type: String(row.event_type),
+    actor: String(row.actor),
+    payload: parseJson<Record<string, unknown>>(row.payload_json, {}),
+    occurredAt: String(row.occurred_at),
+  };
 }
 
 function decodeWorkItem(row: Row): WorkItem {

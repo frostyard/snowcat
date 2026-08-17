@@ -148,3 +148,15 @@ export interface WorkEvent {
   payload: Record<string, unknown>;
   occurredAt: string;
 }
+
+/**
+ * One ledger event joined with its item's identifying fields and current
+ * logical status, as read across items by `QueueStore.eventsSince`. Event
+ * payloads never carry a lease token, and neither does this projection.
+ */
+export interface ObservedWorkEvent extends WorkEvent {
+  repository: string;
+  kind: string;
+  sourceRef?: string;
+  status: WorkStatus;
+}

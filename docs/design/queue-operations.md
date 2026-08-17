@@ -184,17 +184,42 @@ already-open process refuses its next write once the schema moves.
 
 ## Watch the work
 
+Tail the event ledger instead of looping over `show`. Every claim, lease
+renewal, completion, proposal, block, release, operator decision, and artifact
+verification is one event with a global, monotonic `sequence`:
+
+```bash
+npm run --silent queue -- watch                                 # one JSON line per new event, until Ctrl-C
+npm run --silent queue -- watch --repository frostyard/updex --interval 5
+npm run --silent queue -- events --since 0 --limit 500          # replay from the start (or any sequence)
+npm run --silent queue -- events --repository frostyard/updex   # newest 100 after sequence 0, oldest first
+npm run --silent queue -- show <id>                             # one item in full: result, artifacts, verification, events
+```
+
+`watch [--repository <owner/repo>] [--interval <seconds>]` starts at the
+current last sequence, polls `eventsSince` every 10 seconds by default (values
+below 2 are raised to 2), and prints each new event as one JSON line on
+stdout; its startup line on stderr names the starting sequence. Stop it with
+Ctrl-C or SIGTERM. `events [--since <sequence>] [--repository <owner/repo>]
+[--limit <1-500>]` prints the events strictly after `--since` (default 0),
+oldest first, so `metadata`'s `lastEventSequence` or the last printed
+`sequence` is the cursor for the next call. Each event carries its item's
+`repository`, `kind`, `sourceRef`, and *current* `status` alongside the event
+`type`, `actor`, `payload`, and `occurredAt`. Both are read-only and are not
+MCP tools; lease tokens never appear in any event or listing.
+
+For a snapshot by status, `list` still answers:
+
 ```bash
 npm run --silent queue -- list claimed                          # what is leased right now
 npm run --silent queue -- list blocked                          # needs you
 npm run --silent queue -- list completed --repository frostyard/updex --limit 100
 npm run --silent queue -- list --kind issue-resolution          # any status, one kind
-npm run --silent queue -- show <id>                             # result, artifacts, verification, events
 ```
 
 Filters: `list [status] [--repository <owner/repo>] [--kind <kind>]
 [--limit <1-100>]`. Statuses: `proposed`, `queued`, `claimed`, `completed`,
-`blocked`, `cancelled`. Lease tokens never appear in any listing.
+`blocked`, `cancelled`.
 
 Every completed item shows `delivery`: `none` (no pull request reported),
 `unverified` (GitHub could not be asked at completion time), `open`, `closed`,
