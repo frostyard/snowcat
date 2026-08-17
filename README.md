@@ -84,9 +84,24 @@ npm run check
 
 For bounded dogfooding, `npm run queue -- seed-dogfood <owner/repo>` creates at
 most one active read-only root for quality, CI, security, and architecture.
-Repeated or concurrent feeder invocations do not duplicate an active specialty.
-Worker-created children appear under `list proposed` and require operator
-admission before any worker can claim them.
+Repeated or concurrent feeder invocations do not duplicate an active specialty,
+and a specialty that just completed with no finding is cooled for 24 hours
+(`--cooldown-hours <n>`; `0` disables). Worker-created children appear under
+`list proposed` and require operator admission before any worker can claim
+them.
+
+Real work comes from labeled GitHub issues:
+
+```bash
+export FLUENT_GITHUB_TOKEN=...   # optional; raises the API rate limit and reads private repositories
+npm run queue -- import-issues frostyard/updex --label fluent --priority 10
+npm run queue -- list proposed
+npm run queue -- approve <work-item-id>
+```
+
+Each open issue with the label becomes one proposed `issue-resolution` item
+whose `sourceRef` is the issue URL; re-running the import creates nothing new,
+and only approved items are claimable.
 
 Operator queue controls are local CLI commands and never expose a lease token:
 

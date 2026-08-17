@@ -92,7 +92,7 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
   const directory = await mkdtemp(join(tmpdir(), "fluent-ladder-test-"));
   const path = join(directory, "queue.db");
   const { itemId } = createVersionOneDatabase(path);
-  assert.equal(SCHEMA_VERSION, 2, "this test pins the ladder at rung 2; extend it when a rung is added");
+  assert.equal(SCHEMA_VERSION, 3, "this test pins the ladder at rung 3; extend it when a rung is added");
 
   const queue = new QueueStore(path);
   test.after(() => queue.close());
@@ -111,6 +111,23 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
   assert.equal(item?.priority, 3);
   const claimed = queue.claim({ worker: "claude:ladder-test" });
   assert.equal(claimed?.id, itemId);
+
+  // Rung 3 arrived too: imported roots can be recorded and deduplicated on the upgraded database.
+  const imported = queue.enqueueProposedRoots("frostyard/updex", [
+    {
+      sourceRef: "https://github.com/frostyard/updex/issues/7",
+      kind: "issue-resolution",
+      objective: "Resolve #7",
+      instructions: "Do it.",
+      acceptanceCriteria: ["PR open."],
+      allowedActions: ["read", "write", "open-pr"],
+      delegableActions: [],
+      createdBy: "operator:test",
+    },
+  ]);
+  assert.equal(imported.created.length, 1);
+  assert.equal(imported.created[0]?.status, "proposed");
+  assert.equal(imported.created[0]?.sourceRef, "https://github.com/frostyard/updex/issues/7");
 
   // Re-opening runs no rungs and preserves the identity assigned during upgrade.
   const again = new QueueStore(path);

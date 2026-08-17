@@ -213,7 +213,17 @@ operator step the guard cannot perform.
 - The dogfood feeder creates missing specialty roots as one SQLite write
   transaction. Its uncapped active-lineage check and all inserts share that
   lock, so concurrent feeder processes serialize without creating duplicate
-  active roots and a partial batch cannot survive an error.
+  active roots and a partial batch cannot survive an error. Run it on a timer;
+  a kind whose last assessment completed within the cooldown (default 24 h)
+  without proposing a child is reported as cooled rather than re-asked.
+- Work sources: besides operator seeds and worker proposals, `npm run queue --
+  import-issues <owner/repo> --label <label>` turns labeled open GitHub issues
+  into `proposed` roots of kind `issue-resolution` with `open-pr` authority.
+  The issue URL is the item's `sourceRef` and the idempotency key, so the
+  command is safe to repeat; nothing is claimable until the operator approves
+  it. Fluent reads issues with the optional `FLUENT_GITHUB_TOKEN`; the issue
+  body is quoted to the worker as untrusted context. Closure sync and artifact
+  verification are separate steps in the recovery plan.
 - The Lemonade smoke result establishes endpoint compatibility only. It does
   not establish model sufficiency for queue planning or general orchestration.
 

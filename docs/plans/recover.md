@@ -48,7 +48,7 @@ schema with no upgrade path.
   queue (51 items, 170 events) upgraded from version 1 to 2 in place, its
   backup manifest re-derived byte for byte, and `npm run check` passes.
 
-## Phase 2 — Real work sources (small)
+## Phase 2 — Real work sources (completed 2026-08-17)
 
 - Add `npm run queue -- import-issues <owner/repo> --label <label>` using
   `githubApiJson` in `src/repository/github-api.ts`: each labeled open issue
@@ -60,7 +60,11 @@ schema with no upgrade path.
   duplicating active lineage.
 - **Done when:** a labeled issue on an opted-in repository appears as one
   proposed item, re-running the import creates nothing new, and an approved
-  item is claimable over MCP.
+  item is claimable over MCP. Verified 2026-08-17 against live GitHub in a
+  scratch queue: `import-issues frostyard/updex --label testing` proposed
+  three `issue-resolution` roots (#294–#296), the re-import fetched three and
+  created none, and after `approve` one item was claimed over a stdio MCP
+  server while the two still-proposed roots stayed unclaimable.
 
 ## Phase 3 — Verify artifacts, not just record them (small)
 

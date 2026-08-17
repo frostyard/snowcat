@@ -160,6 +160,10 @@ removed. -->
   migration ladder and bumping `SCHEMA_VERSION`; never edit or reorder a rung.
   Use `npm run --silent queue -- metadata | backup <new-path> | verify-backup
   <path>` for host operations; no queue command overwrites a live database.
+  Import work with `queue -- import-issues <owner/repo> --label <label>`
+  (proposed roots keyed by issue URL `sourceRef`; operator approval admits
+  them) and repeat `seed-dogfood` freely — its no-finding cooldown suppresses
+  re-asking.
 - Keep the target control-plane store separate from the queue store. It is an
   authority and observation sidecar: target schema and startup live in
   [`src/control/store.ts`](src/control/store.ts); closed vocabulary lives only

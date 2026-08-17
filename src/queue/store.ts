@@ -10,6 +10,7 @@ import {
   type ClaimInput,
   type CompletionInput,
   type FollowUpInput,
+  type ProposedRootInput,
   type SeedWorkInput,
   type WorkArtifact,
   type WorkEvent,
@@ -25,6 +26,7 @@ const MAX_LEASE_SECONDS = 60 * 60;
 const MAX_FOLLOW_UPS = 10;
 const MAX_LINEAGE_DEPTH = 4;
 const BUSY_TIMEOUT_MS = 5000;
+const MAX_SOURCE_REF_LENGTH = 512;
 
 /**
  * Schema version recorded in SQLite `PRAGMA user_version`. It equals the length
@@ -33,7 +35,7 @@ const BUSY_TIMEOUT_MS = 5000;
  * that newer code has already migrated; newer code upgrades an older database
  * in place, forward only, inside one write transaction.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /**
  * Backup manifest emitted by `QueueStore.backup` and re-derived by
@@ -233,22 +235,40 @@ export class QueueStore {
     });
   }
 
+  /**
+   * Creates the candidate roots whose kind has no active lineage in the
+   * repository. With `cooldownSeconds`, a kind whose most recent root completed
+   * within that window without proposing any child (a no-finding assessment)
+   * is also skipped and reported in `cooledKinds`, so a repeating feeder does
+   * not re-ask a question that was just answered "nothing to do".
+   */
   enqueueInactiveRootBatch(
     repository: string,
     candidates: Array<Omit<SeedWorkInput, "repository">>,
-  ): { created: WorkItem[]; skippedKinds: string[] } {
+    options: { cooldownSeconds?: number } = {},
+  ): { created: WorkItem[]; skippedKinds: string[]; cooledKinds: string[] } {
     validateRepository(repository);
+    const cooldownSeconds = options.cooldownSeconds ?? 0;
+    if (!Number.isSafeInteger(cooldownSeconds) || cooldownSeconds < 0) {
+      throw new Error("cooldownSeconds must be a non-negative safe integer");
+    }
     return this.transaction(() => {
       this.assertRepositoryEnabled(repository);
       const activeKinds = new Set(this.activeRootKinds(repository));
+      const cooled = cooldownSeconds > 0 ? new Set(this.recentNoFindingRootKinds(repository, cooldownSeconds)) : new Set<string>();
       const created: WorkItem[] = [];
       const skippedKinds: string[] = [];
+      const cooledKinds: string[] = [];
 
       for (const candidate of candidates) {
         const input: SeedWorkInput = { ...candidate, repository };
         validateWorkDefinition(input);
         if (activeKinds.has(input.kind)) {
           skippedKinds.push(input.kind);
+          continue;
+        }
+        if (cooled.has(input.kind)) {
+          cooledKinds.push(input.kind);
           continue;
         }
 
@@ -259,7 +279,51 @@ export class QueueStore {
         created.push(this.getRequired(id));
         activeKinds.add(input.kind);
       }
-      return { created, skippedKinds };
+      return { created, skippedKinds, cooledKinds };
+    });
+  }
+
+  /**
+   * Creates one `proposed` root per candidate whose `sourceRef` is not already
+   * present for the repository, in one transaction. Nothing here is claimable
+   * until an operator approves it; repeated imports of the same source create
+   * nothing new, whatever the earlier item's status became.
+   */
+  enqueueProposedRoots(
+    repository: string,
+    candidates: ProposedRootInput[],
+  ): { created: WorkItem[]; skippedSourceRefs: string[] } {
+    validateRepository(repository);
+    return this.transaction(() => {
+      this.assertRepositoryEnabled(repository);
+      const created: WorkItem[] = [];
+      const skippedSourceRefs: string[] = [];
+      const seen = new Set<string>();
+      for (const candidate of candidates) {
+        const { sourceRef, ...definition } = candidate;
+        const input: SeedWorkInput = { ...definition, repository };
+        validateWorkDefinition(input);
+        validateSourceRef(sourceRef);
+        if (seen.has(sourceRef) || this.sourceRefExists(repository, sourceRef)) {
+          skippedSourceRefs.push(sourceRef);
+          continue;
+        }
+        seen.add(sourceRef);
+        const id = randomUUID();
+        const now = this.now();
+        this.insertWork({
+          ...input,
+          id,
+          rootId: id,
+          priority: input.priority ?? 0,
+          admitted: false,
+          createdAt: now,
+          sourceRef,
+        });
+        this.addEvent(id, "work.proposed", input.createdBy, { root: true, sourceRef });
+        created.push(this.getRequired(id));
+      }
+      return { created, skippedSourceRefs };
     });
   }
 
@@ -309,6 +373,36 @@ export class QueueStore {
       )
       .all(repository) as Row[];
     return rows.map((row) => String(row.kind));
+  }
+
+  /**
+   * Kinds whose most recent root in the repository completed within the window
+   * and proposed no child: the assessment ran and found nothing actionable.
+   */
+  private recentNoFindingRootKinds(repository: string, cooldownSeconds: number): string[] {
+    const cutoff = new Date(this.clock().getTime() - cooldownSeconds * 1000).toISOString();
+    const rows = this.db
+      .prepare(
+        `SELECT latest.kind AS kind
+         FROM work_items latest
+         WHERE latest.repository = ? AND latest.parent_id IS NULL
+           AND latest.updated_at = (
+             SELECT MAX(root.updated_at) FROM work_items root
+             WHERE root.repository = latest.repository AND root.parent_id IS NULL AND root.kind = latest.kind
+           )
+           AND latest.status = 'completed' AND latest.updated_at >= ?
+           AND NOT EXISTS (SELECT 1 FROM work_items child WHERE child.parent_id = latest.id)
+         ORDER BY latest.kind`,
+      )
+      .all(repository, cutoff) as Row[];
+    return rows.map((row) => String(row.kind));
+  }
+
+  private sourceRefExists(repository: string, sourceRef: string): boolean {
+    const row = this.db
+      .prepare("SELECT 1 AS present FROM work_items WHERE repository = ? AND source_ref = ? LIMIT 1")
+      .get(repository, sourceRef) as Row | undefined;
+    return row !== undefined;
   }
 
   counts(): Record<WorkStatus, number> {
@@ -632,14 +726,15 @@ export class QueueStore {
     createdBy: string;
     admitted: boolean;
     createdAt: string;
+    sourceRef?: string;
   }): void {
     this.db
       .prepare(
         `INSERT INTO work_items (
           id, root_id, parent_id, repository, kind, objective, instructions,
           acceptance_criteria_json, allowed_actions_json, delegable_actions_json,
-          priority, status, admitted, created_by, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
+          priority, status, admitted, created_by, created_at, updated_at, source_ref
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
       )
       .run(
         input.id,
@@ -657,6 +752,7 @@ export class QueueStore {
         input.createdBy,
         input.createdAt,
         input.createdAt,
+        input.sourceRef ?? null,
       );
   }
 
@@ -749,6 +845,7 @@ function decodeWorkItem(row: Row): WorkItem {
     priority: Number(row.priority),
     status: row.status === "queued" && Number(row.admitted) === 0 ? "proposed" : (String(row.status) as WorkStatus),
     createdBy: String(row.created_by),
+    sourceRef: row.source_ref == null ? undefined : String(row.source_ref),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     leaseOwner: row.lease_owner == null ? undefined : String(row.lease_owner),
@@ -765,6 +862,11 @@ function parseJson<T>(value: SQLInputValue | undefined, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function validateSourceRef(sourceRef: string): void {
+  if (!sourceRef.trim() || sourceRef !== sourceRef.trim()) throw new Error("sourceRef must be a non-empty trimmed string");
+  if (sourceRef.length > MAX_SOURCE_REF_LENGTH) throw new Error(`sourceRef exceeds ${MAX_SOURCE_REF_LENGTH} characters`);
 }
 
 function validateRepository(repository: string): void {
@@ -954,6 +1056,17 @@ const MIGRATIONS: readonly Migration[] = [
     `);
     db.prepare("INSERT OR IGNORE INTO queue_metadata (key, value) VALUES ('database_id', ?)").run(randomUUID());
     db.prepare("INSERT OR IGNORE INTO queue_metadata (key, value) VALUES ('created_at', ?)").run(now);
+  },
+  // Rung 3: external source reference for imported roots, unique per repository.
+  (db) => {
+    const columns = db.prepare("PRAGMA table_info(work_items)").all() as Row[];
+    if (!columns.some((column) => String(column.name) === "source_ref")) {
+      db.exec("ALTER TABLE work_items ADD COLUMN source_ref TEXT");
+    }
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS work_items_source_ref
+        ON work_items(repository, source_ref) WHERE source_ref IS NOT NULL;
+    `);
   },
 ];
 

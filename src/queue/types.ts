@@ -50,6 +50,8 @@ export interface WorkItem {
   priority: number;
   status: WorkStatus;
   createdBy: string;
+  /** Stable external origin of an imported root (for example a GitHub issue URL); unique per repository. */
+  sourceRef?: string;
   createdAt: string;
   updatedAt: string;
   leaseOwner?: string;
@@ -75,6 +77,14 @@ export interface SeedWorkInput {
   delegableActions: AllowedAction[];
   priority?: number;
   createdBy: string;
+}
+
+/**
+ * A root imported from an external source. It starts as `proposed` and needs
+ * operator admission; `sourceRef` makes repeated imports idempotent.
+ */
+export interface ProposedRootInput extends Omit<SeedWorkInput, "repository"> {
+  sourceRef: string;
 }
 
 export interface ClaimInput {

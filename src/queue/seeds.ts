@@ -93,12 +93,17 @@ export function enqueueTestingGap(queue: QueueStore, repository: string, created
   });
 }
 
+/** Default no-finding cooldown for the repeating dogfood feeder: one day. */
+export const DEFAULT_DOGFOOD_COOLDOWN_SECONDS = 24 * 60 * 60;
+
 export function enqueueDogfoodBatch(
   queue: QueueStore,
   repository: string,
-): { created: WorkItem[]; skippedKinds: string[] } {
+  options: { cooldownSeconds?: number } = {},
+): { created: WorkItem[]; skippedKinds: string[]; cooledKinds: string[] } {
   return queue.enqueueInactiveRootBatch(
     repository,
     dogfoodTemplates.map((template) => ({ ...template, createdBy: "operator:dogfood" })),
+    { cooldownSeconds: options.cooldownSeconds ?? DEFAULT_DOGFOOD_COOLDOWN_SECONDS },
   );
 }

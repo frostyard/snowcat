@@ -242,3 +242,70 @@ test("concurrent dogfood feeders create exactly one active root per specialty", 
   assert.equal(verify.list({ repository: DOGFOOD_REPOSITORY, limit: 100 }).length, 4);
   verify.close();
 });
+
+test("a no-finding assessment cools its kind for the window, while a finding does not", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-dogfood-cooldown-test-"));
+  let now = new Date("2026-08-17T12:00:00.000Z");
+  const queue = new QueueStore(join(directory, "queue.db"), () => now);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled(DOGFOOD_REPOSITORY, true);
+
+  const first = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY);
+  assert.equal(first.created.length, 4);
+  assert.deepEqual(first.cooledKinds, []);
+
+  // Quality finds nothing; CI finds something and proposes a child.
+  const quality = queue.claim({ worker: "claude:fluent:dogfood", kinds: ["quality-gap-discovery"] })!;
+  queue.complete({
+    id: quality.id,
+    leaseToken: quality.leaseToken!,
+    worker: "claude:fluent:dogfood",
+    result: { summary: "No quality gap found.", evidence: ["src/"], artifacts: [] },
+    followUps: [],
+  });
+  const ci = queue.claim({ worker: "claude:fluent:dogfood", kinds: ["ci-gap-discovery"] })!;
+  const ciCompletion = queue.complete({
+    id: ci.id,
+    leaseToken: ci.leaseToken!,
+    worker: "claude:fluent:dogfood",
+    result: { summary: "Found one CI gap.", evidence: [".github/workflows/check.yml"], artifacts: [] },
+    followUps: [
+      {
+        kind: "ci-implementation",
+        objective: "Close the CI gap.",
+        instructions: "Smallest change; run checks.",
+        acceptanceCriteria: ["The check passes."],
+        allowedActions: ["read", "write", "run-tests"],
+        delegableActions: [],
+      },
+    ],
+  });
+  queue.reject(ciCompletion.followUps[0]!.id, "operator:test", "Not now.");
+
+  // Ten minutes later: quality is cooled (answered "nothing"), CI is re-offered (it found something).
+  now = new Date("2026-08-17T12:10:00.000Z");
+  const second = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY);
+  assert.deepEqual(second.created.map((item) => item.kind), ["ci-gap-discovery"]);
+  assert.deepEqual(second.cooledKinds, ["quality-gap-discovery"]);
+  assert.deepEqual(second.skippedKinds, ["security-gap-discovery", "architecture-gap-discovery"]);
+
+  // Cooldown zero disables the suppression; a shorter window that has elapsed also re-offers.
+  const uncooled = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { cooldownSeconds: 0 });
+  assert.deepEqual(uncooled.created.map((item) => item.kind), ["quality-gap-discovery"]);
+  assert.deepEqual(uncooled.cooledKinds, []);
+  const qualityAgain = queue.claim({ worker: "claude:fluent:dogfood", kinds: ["quality-gap-discovery"] })!;
+  queue.complete({
+    id: qualityAgain.id,
+    leaseToken: qualityAgain.leaseToken!,
+    worker: "claude:fluent:dogfood",
+    result: { summary: "Still nothing.", evidence: ["src/"], artifacts: [] },
+    followUps: [],
+  });
+  now = new Date("2026-08-17T12:20:00.000Z");
+  assert.deepEqual(enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { cooldownSeconds: 3600 }).cooledKinds, ["quality-gap-discovery"]);
+  now = new Date("2026-08-17T14:00:00.000Z");
+  const later = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { cooldownSeconds: 3600 });
+  assert.deepEqual(later.created.map((item) => item.kind), ["quality-gap-discovery"]);
+
+  assert.throws(() => enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { cooldownSeconds: -1 }), /non-negative/);
+});

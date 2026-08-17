@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
+import { importLabeledIssues } from "./github-issues.ts";
 import { QueueStore, queueDatabasePath } from "./store.ts";
-import { enqueueDogfoodBatch, enqueueTestingGap } from "./seeds.ts";
+import { DEFAULT_DOGFOOD_COOLDOWN_SECONDS, enqueueDogfoodBatch, enqueueTestingGap } from "./seeds.ts";
 import { withoutLeaseToken, workStatuses, type WorkStatus } from "./types.ts";
 
 const queue = new QueueStore(queueDatabasePath());
@@ -21,7 +22,20 @@ try {
     print(enqueueTestingGap(queue, repository));
   } else if (command === "seed-dogfood") {
     const repository = required(args[0], "repository");
-    print(enqueueDogfoodBatch(queue, repository));
+    const flags = parseFlags(args.slice(1), ["cooldown-hours"]);
+    const cooldownHours = flags["cooldown-hours"] === undefined ? undefined : parseNonNegativeInteger(flags["cooldown-hours"], "cooldown-hours");
+    print(
+      enqueueDogfoodBatch(queue, repository, {
+        cooldownSeconds: cooldownHours === undefined ? DEFAULT_DOGFOOD_COOLDOWN_SECONDS : cooldownHours * 3600,
+      }),
+    );
+  } else if (command === "import-issues") {
+    const repository = required(args[0], "repository");
+    const flags = parseFlags(args.slice(1), ["label", "priority"]);
+    const label = required(flags.label, "--label");
+    const priority = flags.priority === undefined ? undefined : parseSafeInteger(flags.priority, "priority");
+    const result = await importLabeledIssues(queue, repository, label, { priority });
+    print({ ...result, created: result.created.map(withoutLeaseToken) });
   } else if (command === "approve") {
     const id = required(args[0], "work item id");
     print(withoutLeaseToken(queue.approve(id, "operator:cli")));
@@ -55,7 +69,8 @@ try {
     console.error("Usage: npm run queue -- opt-in <owner/repo>");
     console.error("       npm run queue -- opt-out <owner/repo>");
     console.error("       npm run queue -- seed-testing-gap <owner/repo>");
-    console.error("       npm run queue -- seed-dogfood <owner/repo>");
+    console.error("       npm run queue -- seed-dogfood <owner/repo> [--cooldown-hours <n>]");
+    console.error("       npm run queue -- import-issues <owner/repo> --label <label> [--priority <n>]");
     console.error("       npm run queue -- approve <work-item-id>");
     console.error("       npm run queue -- reject <work-item-id> <reason>");
     console.error("       npm run queue -- defer <work-item-id> <reason>");
@@ -78,6 +93,33 @@ function parseStatus(value: string | undefined): WorkStatus | undefined {
   if (value === undefined) return undefined;
   if ((workStatuses as readonly string[]).includes(value)) return value as WorkStatus;
   throw new Error(`unknown status: ${value} (expected one of ${workStatuses.join(", ")})`);
+}
+
+function parseFlags(args: string[], known: string[]): Record<string, string | undefined> {
+  const flags: Record<string, string | undefined> = {};
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (!arg.startsWith("--")) throw new Error(`unexpected argument: ${arg}`);
+    const name = arg.slice(2);
+    if (!known.includes(name)) throw new Error(`unknown flag: ${arg} (expected ${known.map((flag) => `--${flag}`).join(", ")})`);
+    const value = args[index + 1];
+    if (value === undefined || value.startsWith("--")) throw new Error(`--${name} requires a value`);
+    flags[name] = value;
+    index += 1;
+  }
+  return flags;
+}
+
+function parseSafeInteger(value: string, name: string): number {
+  const parsed = Number(value);
+  if (!/^-?\d+$/.test(value) || !Number.isSafeInteger(parsed)) throw new Error(`${name} must be an integer`);
+  return parsed;
+}
+
+function parseNonNegativeInteger(value: string, name: string): number {
+  const parsed = parseSafeInteger(value, name);
+  if (parsed < 0) throw new Error(`${name} must not be negative`);
+  return parsed;
 }
 
 function required(value: string | undefined, name: string): string {

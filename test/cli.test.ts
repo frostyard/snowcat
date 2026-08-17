@@ -239,3 +239,40 @@ test("operator CLI reports metadata, backs up to a new path, and verifies the co
   assert.notEqual(foreign.status, 0);
   assert.match(foreign.stderr, /does not exist/);
 });
+
+test("operator CLI validates import-issues and seed-dogfood flags before touching GitHub or the queue", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-import-test-"));
+  const path = join(directory, "queue.db");
+  const queue = new QueueStore(path);
+  queue.setRepositoryEnabled("frostyard/updex", true);
+  queue.close();
+  const env = stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path });
+  const run = (...args: string[]) =>
+    spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env,
+    });
+
+  const noLabel = run("import-issues", "frostyard/updex");
+  assert.notEqual(noLabel.status, 0);
+  assert.match(noLabel.stderr, /--label is required/);
+  const unknownFlag = run("import-issues", "frostyard/updex", "--label", "fluent", "--bogus", "1");
+  assert.notEqual(unknownFlag.status, 0);
+  assert.match(unknownFlag.stderr, /unknown flag: --bogus/);
+  const badPriority = run("import-issues", "frostyard/updex", "--label", "fluent", "--priority", "high");
+  assert.notEqual(badPriority.status, 0);
+  assert.match(badPriority.stderr, /priority must be an integer/);
+  const danglingValue = run("import-issues", "frostyard/updex", "--label");
+  assert.notEqual(danglingValue.status, 0);
+  assert.match(danglingValue.stderr, /--label requires a value/);
+
+  const badCooldown = run("seed-dogfood", "frostyard/updex", "--cooldown-hours", "-2");
+  assert.notEqual(badCooldown.status, 0);
+  assert.match(badCooldown.stderr, /must not be negative/);
+  const seeded = run("seed-dogfood", "frostyard/updex", "--cooldown-hours", "0");
+  assert.equal(seeded.status, 0, seeded.stderr);
+  const result = JSON.parse(seeded.stdout) as { created: unknown[]; skippedKinds: string[]; cooledKinds: string[] };
+  assert.equal(result.created.length, 4);
+  assert.deepEqual(result.cooledKinds, []);
+});

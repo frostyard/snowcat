@@ -23,6 +23,7 @@ claim, renew, and resolve it.
 | `priority` | integer | yes | Safe integer; higher values claim first, creation time breaks ties. Chosen only by operator or policy seeds; worker-created children inherit the parent's value |
 | `status` | enum | yes | `proposed`, `queued`, `claimed`, `completed`, `blocked`, or `cancelled` |
 | `createdBy` | string | yes | Operator, policy, or worker provenance |
+| `sourceRef` | string | imported roots only | Stable external origin (for example the GitHub issue URL); unique per repository, at most 512 characters, never changes |
 | `leaseOwner` | string | claimed only | Worker identity supplied at claim |
 | `leaseToken` | UUID | claim response only | Secret mutation capability; omitted by every other response |
 | `leaseExpiresAt` | timestamp | claimed only | UTC expiry |
@@ -212,6 +213,29 @@ state with a `work.requeued` event. Cancel stores the operator reason in
     MUST precede restore: opening a backup with `QueueStore` switches it to
     WAL mode and changes its digest. Restore is an operator file operation into
     a new path; no queue command overwrites a live database.
+30. An imported root MUST be created as `proposed` (`admitted = 0`) with a
+    `sourceRef`, in one transaction with every other root of the same import,
+    on an opted-in repository. A candidate whose `sourceRef` already exists for
+    the repository — in any status, including `completed` and `cancelled` —
+    MUST be skipped and reported, so repeating an import creates nothing new;
+    the database MUST enforce that uniqueness. Import MUST record
+    `work.proposed` with the `sourceRef`, and MUST NOT create anything when the
+    source listing is missing, unavailable, non-200, or contains a malformed
+    entry.
+31. `import-issues <owner/repo> --label <label> [--priority <n>]` MUST list
+    only open issues carrying exactly that label through the GitHub REST API,
+    following page-size pagination up to a bounded page count and reporting
+    truncation, MUST drop pull requests from the listing, and MUST accept an
+    entry only when its `html_url` is that repository's canonical issue URL,
+    which becomes the `sourceRef`. Each issue becomes one root of kind
+    `issue-resolution` whose `allowedActions` include `open-pr`, whose
+    instructions quote the issue body as untrusted GitHub-authored context
+    (bounded to 16,000 characters), and whose priority is operator-supplied.
+32. The dogfood feeder MUST accept a no-finding cooldown (default 24 hours,
+    `--cooldown-hours 0` disables it). A kind whose most recent root in the
+    repository is `completed` within the window and proposed no child MUST be
+    skipped and reported as cooled; a kind whose latest root proposed a child
+    or is older than the window is offered again once its lineage is inactive.
 
 ## Derived artifacts
 
@@ -219,6 +243,7 @@ state with a `work.requeued` event. Cancel stores the operator reason in
 | --- | --- |
 | SQLite schema | Created and upgraded by `QueueStore`'s migration ladder from this work-item model; admission triggers and `user_version` per rules 20–21 |
 | Backup manifest | Derived by `backup` and re-derived by `verify-backup` per rules 28–29 |
+| Issue import | `import-issues` maps labeled open GitHub issues to proposed `issue-resolution` roots per rules 30–31 |
 | MCP worker behavior | Portable `work-fluent-queue` skill constrained by this contract |
 | Testing-gap seed | Deterministic CLI instance of this contract |
 
