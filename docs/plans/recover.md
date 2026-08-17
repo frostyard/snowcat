@@ -87,7 +87,7 @@ schema with no upgrade path.
   refresh later) is covered by tests, GitHub having been intermittently
   returning 5xx during the day.
 
-## Phase 4 — Wire Core enrollment as a claim filter (completed 2026-08-17; Core-side declaration pending)
+## Phase 4 — Wire Core enrollment as a claim filter (completed 2026-08-17)
 
 - Add an injectable claim-eligibility hook to `QueueStore.claim()`. When
   `FLUENT_CONTROL_DB` is configured, the CLI and MCP server wire it to
@@ -102,7 +102,15 @@ schema with no upgrade path.
   no `policies/agent-governance.json`, so no repository can reach `enrolled`
   yet. The change is on the Core side (enable a declaration and add the
   governance surface to that repository); it is an operator decision which
-  repository goes first and is not made from this repository.
+  repository goes first and is not made from this repository. Resolved
+  2026-08-17: [core#83](https://github.com/frostyard/core/pull/83) and
+  [updex#297](https://github.com/frostyard/updex/pull/297) merged; a fresh
+  control plane at `/var/lib/fluent/control-plane.db` activated Core `main`
+  (`ee59e66`) and reconciled `frostyard/updex` as `enrolled` (identity
+  matched, surfaces at `ac1d899`), and an admitted updex item was claimed
+  with `FLUENT_CONTROL_DB` set. The operator queue moved to
+  `/var/lib/fluent/queue.db` through a verified backup, and updex's three
+  `testing`-labeled issues are imported as proposed work.
 - **Done when:** a held or unenrolled repository's queued items are not
   claimable while the control-plane database is configured, and the same
   items are claimable when it is not. Verified 2026-08-17: the orphaned local

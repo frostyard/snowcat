@@ -3,7 +3,11 @@
     "fluent": {
       "type": "stdio",
       "command": "/home/linuxbrew/.linuxbrew/bin/npm",
-      "args": ["run", "mcp"]
+      "args": ["run", "--silent", "mcp"],
+      "env": {
+        "FLUENT_QUEUE_DB": "/var/lib/fluent/queue.db",
+        "FLUENT_CONTROL_DB": "/var/lib/fluent/control-plane.db"
+      }
     }
   }
 }
