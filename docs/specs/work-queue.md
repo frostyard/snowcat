@@ -270,6 +270,19 @@ state with a `work.requeued` event. Cancel stores the operator reason in
     open, otherwise `closed`; `none` when no pull request was reported. Issues,
     commits, and reports do not constitute delivery.
 
+36. `QueueStore` MUST accept an optional claim-eligibility hook
+    `(repository) => boolean` applied on top of repository opt-in. With a
+    hook, a claim MUST consider only candidate repositories the hook accepts
+    (asked once per claim, per candidate repository), MUST keep the single-row
+    atomic selection among them, and MUST fail closed — leasing nothing — when
+    the hook throws. Host processes MUST wire the control-plane hook only when
+    `FLUENT_CONTROL_DB` is explicitly configured; that hook MUST accept a
+    repository only while the control-plane store reports its effective state
+    as `enrolled` (which excludes disabled, paused, unresolved, and
+    operator-held repositories), MUST open the store per decision without
+    creating it, and MUST throw when the configured database does not exist.
+    Without the variable, opt-in alone governs.
+
 ## Derived artifacts
 
 | Artifact | Derivation |

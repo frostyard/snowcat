@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 
 import { verifyCompletionArtifacts, type ArtifactVerifierOptions } from "../queue/artifact-verification.ts";
-import { QueueStore, queueDatabasePath, validateWorkerIdentity } from "../queue/store.ts";
+import { QueueStore, queueDatabasePath, validateWorkerIdentity, type QueueStoreOptions } from "../queue/store.ts";
 import { allowedActions, withoutLeaseToken, workStatuses } from "../queue/types.ts";
 
 const actionSchema = z.enum(allowedActions);
@@ -37,8 +37,12 @@ const followUpSchema = z.strictObject({
   delegableActions: z.array(actionSchema),
 });
 
-export function buildQueueMcpServer(path = queueDatabasePath(), verifier: ArtifactVerifierOptions = {}): McpServer {
-  const queue = new QueueStore(path);
+export function buildQueueMcpServer(
+  path = queueDatabasePath(),
+  verifier: ArtifactVerifierOptions = {},
+  storeOptions: QueueStoreOptions = {},
+): McpServer {
+  const queue = new QueueStore(path, undefined, storeOptions);
   const server = new McpServer(
     { name: "fluent-queue", version: "0.1.0" },
     {

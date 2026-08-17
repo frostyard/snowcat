@@ -87,7 +87,7 @@ schema with no upgrade path.
   refresh later) is covered by tests, GitHub having been intermittently
   returning 5xx during the day.
 
-## Phase 4 — Wire Core enrollment as a claim filter (small)
+## Phase 4 — Wire Core enrollment as a claim filter (completed 2026-08-17; Core-side declaration pending)
 
 - Add an injectable claim-eligibility hook to `QueueStore.claim()`. When
   `FLUENT_CONTROL_DB` is configured, the CLI and MCP server wire it to
@@ -97,10 +97,21 @@ schema with no upgrade path.
   a control-plane migration ladder.
 - Land one real repository declaration on `frostyard/core` `main` so
   `repository -- status` reports an enrolled repository; until then the hook
-  falls back to opt-in.
+  falls back to opt-in. Status 2026-08-17: `main` (`bbf196e`) declares only
+  `frostyard/core` itself with `fleet_state: disabled` and the repository has
+  no `policies/agent-governance.json`, so no repository can reach `enrolled`
+  yet. The change is on the Core side (enable a declaration and add the
+  governance surface to that repository); it is an operator decision which
+  repository goes first and is not made from this repository.
 - **Done when:** a held or unenrolled repository's queued items are not
   claimable while the control-plane database is configured, and the same
-  items are claimable when it is not.
+  items are claimable when it is not. Verified 2026-08-17: the orphaned local
+  control-plane database was set aside, a fresh one activated Core `main`
+  (`bbf196e`) and reconciled `frostyard/core` as `disabled`; with
+  `FLUENT_CONTROL_DB` set, a queued `frostyard/core` item was not claimable,
+  and the same item was claimed with the variable unset. Enrolled and
+  operator-held transitions are covered by tests through the shared Core
+  fixtures.
 
 ## Phase 5 — Dogfood on one non-Fluent repository (one calendar week)
 

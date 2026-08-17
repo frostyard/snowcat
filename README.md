@@ -103,6 +103,20 @@ Each open issue with the label becomes one proposed `issue-resolution` item
 whose `sourceRef` is the issue URL; re-running the import creates nothing new,
 and only approved items are claimable.
 
+To gate claims on Core enrollment, point the same processes at the
+control-plane database:
+
+```bash
+export FLUENT_CONTROL_DB=/var/lib/fluent/control-plane.db
+npm run --silent core -- activate <sequence>       # activate frostyard/core main
+npm run --silent repository -- reconcile           # resolve identity, surfaces, enrollment
+npm run --silent repository -- status              # effectiveState must be "enrolled"
+```
+
+With the variable set, `claim_work` only leases items whose repository is
+`enrolled` (not disabled, paused, unresolved, or operator-held); unset it and
+opt-in alone governs. Restart the MCP server after changing it.
+
 When a worker completes an item citing an issue or pull request, Fluent checks
 it against GitHub before accepting: a wrong repository, number, or kind is
 refused and the item stays claimed; a GitHub outage records `unverified`

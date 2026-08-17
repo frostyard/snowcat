@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 
 import { refreshArtifactVerifications } from "./artifact-verification.ts";
+import { queueStoreOptionsFromEnvironment } from "./eligibility.ts";
 import { importLabeledIssues } from "./github-issues.ts";
 import { QueueStore, queueDatabasePath } from "./store.ts";
 import { DEFAULT_DOGFOOD_COOLDOWN_SECONDS, enqueueDogfoodBatch, enqueueTestingGap } from "./seeds.ts";
 import { withoutLeaseToken, workStatuses, type WorkStatus } from "./types.ts";
 
-const queue = new QueueStore(queueDatabasePath());
+const queue = new QueueStore(queueDatabasePath(), undefined, queueStoreOptionsFromEnvironment());
 
 try {
   const [command, ...args] = process.argv.slice(2);

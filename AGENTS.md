@@ -165,7 +165,11 @@ removed. -->
   them) and repeat `seed-dogfood` freely — its no-finding cooldown suppresses
   re-asking. `complete_work` verifies issue and pull-request artifacts against
   GitHub (refuse on mismatch, `unverified` on outage); run `queue --
-  verify-artifacts` to refresh and to derive `delivery`.
+  verify-artifacts` to refresh and to derive `delivery`. When
+  `FLUENT_CONTROL_DB` is set, `claim_work` also requires the repository to be
+  `enrolled` in the control-plane store
+  ([`src/queue/eligibility.ts`](src/queue/eligibility.ts)); the hook is the
+  only coupling between the two databases.
 - Keep the target control-plane store separate from the queue store. It is an
   authority and observation sidecar: target schema and startup live in
   [`src/control/store.ts`](src/control/store.ts); closed vocabulary lives only

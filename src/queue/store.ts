@@ -86,6 +86,18 @@ export function validateWorkerIdentity(worker: string): string {
   return identity;
 }
 
+/**
+ * Decides whether a repository's admitted work may be claimed right now, on
+ * top of the queue's own opt-in. The control-plane store supplies one that
+ * requires `enrolled` (which already excludes operator holds); without a
+ * hook, opt-in alone governs. A hook that throws fails the claim closed.
+ */
+export type ClaimEligibility = (repository: string) => boolean;
+
+export interface QueueStoreOptions {
+  claimEligibility?: ClaimEligibility;
+}
+
 export function queueDatabasePath(): string {
   const configured = process.env.FLUENT_QUEUE_DB;
   if (configured === ":memory:") return configured;
@@ -96,10 +108,14 @@ export class QueueStore {
   private readonly db: DatabaseSync;
   private readonly databasePath: string;
 
+  private readonly claimEligibility: ClaimEligibility | undefined;
+
   constructor(
     path: string,
     private readonly clock: () => Date = () => new Date(),
+    options: QueueStoreOptions = {},
   ) {
+    this.claimEligibility = options.claimEligibility;
     this.databasePath = path === ":memory:" ? path : resolve(path);
     if (path !== ":memory:") mkdirSync(dirname(this.databasePath), { recursive: true });
     // Install the busy handler while SQLite opens the connection. Setting it
@@ -440,6 +456,24 @@ export class QueueStore {
       if (input.kinds && input.kinds.length > 0) {
         clauses.push(`w.kind IN (${input.kinds.map(() => "?").join(", ")})`);
         params.push(...input.kinds);
+      }
+      if (this.claimEligibility) {
+        // Ask the hook once per candidate repository, then keep the atomic
+        // single-row selection: an ineligible repository's items are simply
+        // not in the running, whatever their priority.
+        const candidateRepositories = (
+          this.db
+            .prepare(
+              `SELECT DISTINCT w.repository AS repository FROM work_items w
+               JOIN repositories r ON r.slug = w.repository
+               WHERE ${clauses.join(" AND ")}`,
+            )
+            .all(...params) as Row[]
+        ).map((candidate) => String(candidate.repository));
+        const eligible = candidateRepositories.filter((repository) => this.claimEligibility!(repository) === true);
+        if (eligible.length === 0) return undefined;
+        clauses.push(`w.repository IN (${eligible.map(() => "?").join(", ")})`);
+        params.push(...eligible);
       }
 
       const row = this.db

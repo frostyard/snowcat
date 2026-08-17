@@ -193,6 +193,16 @@ operator step the guard cannot perform.
   reverse proxy; the shared token is a single-operator v1 boundary, not the
   future named-member authorization model.
 - MCP stdout is protocol-only; operational logging goes to stderr.
+- Control-plane coupling: when `FLUENT_CONTROL_DB` is set, `claim_work`
+  additionally requires the item's repository to be `enrolled` in the
+  control-plane store — Core-declared and enabled, GitHub identity and
+  canonical surfaces resolved, and not under an operator hold
+  ([repository enrollment](repository-enrollment.md)). The hook opens the
+  store read-only per claim so a long-lived MCP server sees current facts,
+  never creates the database, and fails the claim closed if it is missing or
+  unreadable. This is the only coupling between the two databases; without
+  the variable, queue opt-in alone governs. Read and mutation commands other
+  than claim are unaffected.
 - A missing heartbeat does not move an item back to the queue. The item keeps
   status `claimed` (and its stale `leaseOwner`/`leaseExpiresAt`), so `list
   queued` and the queued count omit it while `list claimed` and the claimed
