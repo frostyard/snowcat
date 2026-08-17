@@ -402,6 +402,17 @@ of GitHub state, and cannot be reconstructed from a later delivery-API read.
 **Avoid:** GitHub observation; source checkpoint; webhook as authority.
 ([ADR-0057](../adr/0057-require-webhook-ingress-for-github-observation.md))
 
+#### GitHub delivery-audit observation
+
+The durable observation obtained by reading one GitHub App delivery through
+GitHub's authenticated delivery API, including the selected delivery metadata
+and exact response digest. It can causally support an API-sourced normalized
+observation when no direct receipt was observed, but never reconstructs the
+missing webhook receipt or its exact-body digest.
+
+**Avoid:** webhook receipt; redelivery request; source checkpoint.
+([ADR-0057](../adr/0057-require-webhook-ingress-for-github-observation.md))
+
 #### Source checkpoint
 
 A durable adapter observation that completely enumerates one declared source

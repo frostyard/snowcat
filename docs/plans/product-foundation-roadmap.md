@@ -128,7 +128,7 @@ does not itself enroll the repository in the fleet.
 
 ## Phase 4 — Observe GitHub without impersonating workers (large)
 
-- Registry v14 and schema v7 implement the first internal, enrollment-bound
+- Registry v15 and schema v7 implement the first internal, enrollment-bound
   post-authentication transaction for an allowlisted same-repository
   pull-request delivery. It writes a distinct receipt observation,
   pull-request observation, and audit event with exact replay, 30-day receipt
@@ -141,8 +141,10 @@ does not itself enroll the repository in the fleet.
   and terminal complete-audit repair with reopen-time chain verification.
   The fixture-driven App-JWT delivery-list client now follows bounded opaque
   cursor pagination, produces exact page proofs, classifies closed failures,
-  and derives per-repository selected summaries. Delivery-detail acquisition,
-  API-sourced repair observations, scheduling, and leases remain.
+  and derives per-repository selected summaries. It can now fetch one selected
+  delivery and atomically retain distinct API audit and normalized
+  pull-request observations without fabricating a receipt. Evidence-citing gap
+  closure, installation binding, scheduling, and leases remain.
 - The source-independent `conclusive-run-rate:v1` arithmetic evaluator is
   implemented under
   [ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md)

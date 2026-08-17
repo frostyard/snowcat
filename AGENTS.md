@@ -60,6 +60,11 @@ removed. -->
   provider, follow only its validated cursor links, and treat an incomplete
   result as non-authoritative. Keep shared GitHub wire constants only in
   [`src/github/api-contract.ts`](src/github/api-contract.ts).
+- Use `fetchGitHubPullRequestDeliveryDetail` followed by
+  `recordAuditedGitHubPullRequestDelivery` only for a supported selected
+  delivery whose direct receipt is absent. The API repair creates a delivery-
+  audit observation, never a reconstructed webhook receipt, and does not close
+  a source gap by itself.
 - Use `recordGitHubSourceCheckpoint`, `openGitHubSourceGap`, and
   `repairGitHubSourceGap` only for the fixed
   `github.pull-request-deliveries:v1` post-acquisition coverage loop. The first

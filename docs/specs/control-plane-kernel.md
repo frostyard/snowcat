@@ -26,7 +26,7 @@ transaction sequence.
 `ControlPlaneStore.occurrences()` returns occurrences ordered by transaction
 sequence and position. Neither method mutates the database or returns a secret.
 
-### Closed registry version 14
+### Closed registry version 15
 
 | Registry | Name | Version or ID rule | Contract |
 | --- | --- | --- | --- |
@@ -74,7 +74,8 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Record | `repository.enrolled` | Schema 1 | Class `fact`; subject `github-repository`; active-prerequisite precedence |
 | Record | `repository.operator-hold-decision` | Schema 1 | Class `decision`; subject `github-repository`; resolved impose or exact clear |
 | Record | `github.delivery-receipt-observation` | Schema 1 | Class `observation`; subject `github-app-hook`; verified body provenance and bounded disposition |
-| Record | `github.pull-request-observation` | Schema 1 | Class `observation`; subject `github-pull-request`; allowlisted same-repository state and revisions |
+| Record | `github.delivery-audit-observation` | Schema 1 | Class `observation`; subject `github-app-hook`; API delivery identity, response provenance, and absence of a prior direct receipt |
+| Record | `github.pull-request-observation` | Schema 2 | Class `observation`; subject `github-pull-request`; allowlisted same-repository state and revisions with direct-webhook or API-repair acquisition provenance |
 | Record | `github.source-checkpoint-observation` | Schema 1 | Class `observation`; subject `github-repository`; complete bounded audit boundary for one registered scope |
 | Record | `github.source-gap-observation` | Schema 1 | Class `observation`; subject `github-repository`; open interval lower-bounded by the latest checkpoint |
 | Record | `github.source-gap-repair-observation` | Schema 1 | Class `observation`; subject `github-repository`; terminal exact-audit repair that preserves the original gap |
@@ -92,6 +93,7 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Event | `repository.enrollment-established` | Schema 1 | Subject `github-repository`; exact enrollment established |
 | Event | `repository.operator-hold-imposed` / `repository.operator-hold-cleared` | Schema 1 | Subject `github-repository`; attributed local intervention transition |
 | Event | `github.delivery-recorded` | Schema 1 | Subject `github-app-hook`; causally linked receipt disposition |
+| Event | `github.delivery-repair-recorded` | Schema 1 | Subject `github-app-hook`; causally linked API repair disposition |
 | Event | `github.source-checkpoint-recorded` | Schema 1 | Subject `github-repository`; checkpoint accepted |
 | Event | `github.source-gap-opened` | Schema 1 | Subject `github-repository`; lower-bounded gap opened |
 | Event | `github.source-gap-repaired` | Schema 1 | Subject `github-repository`; exact audit repair accepted |
@@ -109,6 +111,7 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Command | `repository.establish-enrollment` | Schema 1 | Outputs controller definition, enrollment fact, then event |
 | Command | `repository.impose-operator-hold` / `repository.clear-operator-hold` | Schema 1 | Each outputs one resolved operator decision, then event |
 | Command | `github.record-pull-request-delivery` | Schema 1 | Outputs receipt observation, pull-request observation, then delivery event |
+| Command | `github.record-pull-request-delivery-repair` | Schema 1 | Outputs delivery-audit observation, pull-request observation, then repair event |
 | Command | `github.record-source-checkpoint` | Schema 1 | Outputs checkpoint observation, then event |
 | Command | `github.open-source-gap` | Schema 1 | Outputs open-gap observation, then event |
 | Command | `github.repair-source-gap` | Schema 1 | Outputs successor checkpoint, terminal repair observation, then event |
@@ -127,7 +130,7 @@ invalid:
 {
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
   "operatorPrincipalId": "0198b0a6-c200-7abc-8def-0123456789ac",
-  "registryVersion": 14,
+  "registryVersion": 15,
   "schemaVersion": 7
 }
 ```
@@ -150,7 +153,7 @@ The integrity observation and event payload have this exact shape:
 {
   "checkedThroughSequence": 1,
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
-  "registryVersion": 14,
+  "registryVersion": 15,
   "result": "ok",
   "schemaVersion": 7
 }
@@ -252,7 +255,8 @@ then atomically emits `github.delivery-receipt-observation` at position `0`,
 `github.pull-request-observation` at position `1`, and
 `github.delivery-recorded` at position `2`. The receipt binds the exact body
 digest; the pull-request observation binds a separately derived digest over the
-allowlisted selected representation and cites the receipt as causation; the
+allowlisted selected representation, records acquisition `direct-webhook`, and
+cites the receipt through its generic acquisition record and causation; the
 event cites the same receipt. All use one server time, correlation ID,
 deployment scope, and organization information class. The idempotency key is
 `github-delivery:<app-id>:<delivery-guid>` and its receipt expires exactly 30
@@ -265,8 +269,8 @@ the prior enrollment, subjects, revisions, sources, causal links, output order,
 result, and retention deadline. The bounded router can connect the pure
 verifier to this command when explicitly mounted with a lifecycle-owned store,
 but the default app does not mount it. This slice does not implement production
-listener/configuration lifecycle, delivery-detail acquisition, scheduling, or
-durable-detail pruning. Typed delivery-audit checkpoint, gap, and repair
+listener/configuration lifecycle, scheduling, gap closure from content repair,
+or durable-detail pruning. Typed delivery-audit checkpoint, gap, and repair
 commands are specified below; no controller invokes them yet.
 
 ### App delivery-list acquisition
@@ -303,14 +307,40 @@ time from `Retry-After` and a zero-remaining `X-RateLimit-Reset`; the future
 controller MUST still compare that with its ordinary retry schedule. No
 incomplete result contains summaries or can establish a checkpoint.
 
-This acquisition does not fetch one delivery's request payload, compare
-delivery GUIDs with durable receipts, retain API-sourced normalized
-observations, create gaps, or schedule itself. Those remain controller and
-typed-command responsibilities.
+`fetchGitHubPullRequestDeliveryDetail(input)` implements the separate bounded
+read of one supported selected delivery. It permits only
+`GET /app/hook/deliveries/<delivery-id>`, the same App-JWT and one-redirect
+rules, 30 seconds, and a 25 MiB response. Exact list/detail metadata MUST match.
+It reuses the same allowlisted pull-request normalizer as webhook ingress,
+requires payload action, repository, and installation identities to match the
+list summary, hashes the exact API response bytes, and returns only a typed
+repair input. Unknown registered-scope actions are reported without making the
+detail request. Raw request payload, response payload, headers, title, body,
+and other free-form content are discarded.
+
+`recordAuditedGitHubPullRequestDelivery(input)` is the corresponding typed
+control-plane command. It requires exact optimistic sequence and prior
+repository enrollment, and rejects a repair when a direct receipt for the App
+and GUID was already observed. It atomically appends
+`github.delivery-audit-observation`, schema-2
+`github.pull-request-observation`, and `github.delivery-repair-recorded` at
+positions `[0,1,2]`. The audit observation is on the App-hook subject; both
+records use source `github-api` / `api.github.com` and the exact
+`github-delivery-audit-sha256` response revision. The pull-request observation
+records acquisition `delivery-api-repair` and cites the audit observation; no
+webhook receipt or body digest is manufactured.
+
+The command is idempotent on App ID plus delivery ID for 30 days. Startup
+re-derives its command and normalized-observation digests; verifies enrollment,
+absence of an earlier direct receipt, source/revision, subject, output order,
+causation, correlation, result, and retention; and fails closed on tampering.
+A later direct webhook may still be retained as its own source occurrence.
+This command records repair evidence but does not by itself close a source gap
+or establish a checkpoint.
 
 ### Pull-request-delivery coverage commands
 
-Registry v14 fixes one coverage scope:
+Registry v15 fixes one coverage scope:
 `github.pull-request-deliveries:v1`. These commands accept bounded results from
 a deterministic delivery-audit controller after network acquisition; they do
 not call GitHub or independently prove caller-supplied pagination digests.
@@ -344,7 +374,8 @@ event. It never edits or deletes the original gap. After repair, ordinary
 checkpoint continuity resumes from the new checkpoint.
 This `complete-delivery-audit` method cannot close
 `unsupported-relevant-delivery` or `normalization-failed`: those causes require
-retained API-sourced normalized repair observations, whose command is not yet
+retained API-sourced normalized repair observations. Those observations can now
+be recorded, but the evidence-citing gap-closure command is not yet
 implemented. Their gaps remain open rather than accepting an audit digest as a
 substitute for missing content.
 
@@ -508,7 +539,7 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
    initialization transaction.
 5. Older, newer, incomplete, unexpected, or differently identified schemas
    MUST fail closed. Unregistered indexes, triggers, and views are unexpected.
-   Schema version 7 and registry version 14 define no upgrade path from earlier
+   Schema version 7 and registry version 15 define no upgrade path from earlier
    pre-production target stores.
 6. Subject, record, event, command, source, revision, record-class, and
    information-class names MUST come from the code-owned versioned registries.

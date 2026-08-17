@@ -83,15 +83,37 @@ export function verifyAndNormalizeGitHubPullRequestWebhook(
   }
   const payload = objectValue(parsed);
   const action = stringValue(payload?.action);
-  if (!action || !githubPullRequestActions.includes(action as GitHubPullRequestAction)) {
+  if (!payload || !action || !githubPullRequestActions.includes(action as GitHubPullRequestAction)) {
     throw new GitHubWebhookFailure("unsupported-action");
   }
 
   try {
-    const installation = requiredObject(payload?.installation);
-    const repository = requiredObject(payload?.repository);
-    const sender = requiredObject(payload?.sender);
-    const pullRequest = requiredObject(payload?.pull_request);
+    const selected = normalizeGitHubPullRequestPayload(payload, action as GitHubPullRequestAction);
+    return {
+      appId: request.appId,
+      deliveryGuid: request.deliveryGuid,
+      bodyDigest: `sha256:${createHash("sha256").update(body).digest("hex")}`,
+      requestBytes: body.byteLength,
+      ...selected,
+    };
+  } catch (error) {
+    if (error instanceof GitHubWebhookFailure) throw error;
+    throw new GitHubWebhookFailure("malformed-payload");
+  }
+}
+
+export function normalizeGitHubPullRequestPayload(
+  payload: Record<string, unknown>,
+  action: GitHubPullRequestAction,
+): Pick<GitHubPullRequestDeliveryInput, "installationId" | "repositoryId" | "action" | "pullRequest"> {
+  try {
+    if (!githubPullRequestActions.includes(action)) {
+      throw new GitHubWebhookFailure("unsupported-action");
+    }
+    const installation = requiredObject(payload.installation);
+    const repository = requiredObject(payload.repository);
+    const sender = requiredObject(payload.sender);
+    const pullRequest = requiredObject(payload.pull_request);
     const base = requiredObject(pullRequest.base);
     const baseRepository = requiredObject(base.repo);
     const head = requiredObject(pullRequest.head);
@@ -115,13 +137,9 @@ export function verifyAndNormalizeGitHubPullRequestWebhook(
       throw new GitHubWebhookFailure("unsupported-pull-request-shape");
     }
     return {
-      appId: request.appId,
-      deliveryGuid: request.deliveryGuid,
-      bodyDigest: `sha256:${createHash("sha256").update(body).digest("hex")}`,
-      requestBytes: body.byteLength,
       installationId: `github.com:installation:${githubId(installation.id)}`,
       repositoryId,
-      action: action as GitHubPullRequestAction,
+      action,
       pullRequest: {
         number: positiveInteger(pullRequest.number),
         actorId: `github.com:user:${githubId(sender.id)}`,

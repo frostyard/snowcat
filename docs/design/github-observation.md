@@ -38,11 +38,13 @@ precedes it. A bounded injectable POST-only router now joins them, but remains
 unmounted by default until hosting lifecycle and coverage recovery are ready.
 The first typed checkpoint/gap/repair persistence loop now exists for
 pull-request delivery audit. A bounded fixture-tested client can completely
-enumerate the App delivery list and derive per-repository selected summaries,
-but no leased controller invokes it and delivery-detail repair is not yet
-implemented. Scheduled reconciliation, the other observation families, and
-retention pruning remain. The source adapter stays unregistered until that
-complete path is executable.
+enumerate the App delivery list, derive per-repository selected summaries, and
+fetch one supported missing delivery. A typed transaction retains that API
+delivery audit and normalized pull-request observation without manufacturing a
+webhook receipt. No leased controller invokes the path, and evidence-citing
+closure for content-repair gaps is not yet implemented. Scheduled
+reconciliation, the other observation families, and retention pruning remain.
+The source adapter stays unregistered until that complete path is executable.
 
 ## Design
 
@@ -118,7 +120,7 @@ observed subject.
 
 ### Durable observation families
 
-Registry version 14 assigns the source-native subject identities and purpose-
+Registry version 15 assigns the source-native subject identities and purpose-
 specific revision kinds below. The implementing records and commands will
 assign exact registered kinds and payload schemas without changing these
 identity joins:
@@ -138,9 +140,11 @@ identity joins:
 
 Every family in this table uses or will use a registered `observation` record
 kind; the design does not introduce another generic record class. Registry
-version 14 additionally registers the direct delivery receipt, pull-request,
-checkpoint, gap, and repair observation records plus their atomic events and
-commands. Other rows remain identity and revision contracts only. An observation
+version 15 additionally registers the direct delivery receipt, API delivery
+audit, pull-request, checkpoint, gap, and repair observation records plus their
+atomic events and commands. Pull-request observation schema 2 names either its
+direct receipt or API audit as the acquisition record. Other rows remain
+identity and revision contracts only. An observation
 records source state and provenance; it does not become a merge, required-check
 satisfaction, artifact verification, or outcome fact merely because the GitHub
 App is trusted.
@@ -173,6 +177,17 @@ body bound, returns closed detail-free status codes, and accepts a
 lifecycle-owned store. The default app deliberately does not mount it: doing so
 before delivery audit and source gaps exist would present partial ingestion as
 a complete observer.
+
+The delivery API path shares that allowlisted pull-request payload normalizer
+but not webhook authentication semantics. A list summary selects one supported
+delivery; the detail response must repeat its delivery, GUID, source time,
+action, installation, repository, redelivery, and status identities exactly.
+The typed repair transaction then records a `github.delivery-audit-observation`
+as causation for a schema-2 pull-request observation whose acquisition is
+`delivery-api-repair`. It checks that no direct receipt was already retained
+and never synthesizes the absent signature, request bytes, body digest, or
+receipt. A direct delivery accepted later remains an independent source
+occurrence.
 
 The target store now implements the post-acquisition coverage loop for the
 single registered `github.pull-request-deliveries:v1` scope. Its first complete
@@ -225,8 +240,13 @@ request, permits only the fixed GitHub origin and endpoint, and bounds a run to
 100 pages, 10,000 deliveries, 1 MiB per page, and 30 seconds per request. Its
 complete result is still only acquired input: it performs no control-plane
 write, and an incomplete result contains no summaries that could accidentally
-be checkpointed. Delivery-detail retrieval, receipt comparison, API repair
-normalization, and the lease owner remain unimplemented.
+be checkpointed. The implemented detail client retrieves only a selected
+supported delivery, requires exact list/detail identity agreement, reuses the
+webhook allowlist, and returns a response-digest-bound repair input. The typed
+repair transaction refuses to replace an already observed direct receipt and
+retains API audit plus normalized observation as separate causally linked
+records. Gap closure from those records and the lease owner remain
+unimplemented.
 
 ADR-0058 fixes healthy repository reconciliation at a 15-minute default and App
 delivery audit at a 5-minute default. Both are completion-relative
@@ -329,9 +349,11 @@ complete coverage.
   a negative observation.
 - Existing `src/repository/github-api.ts` implements a bounded read-only helper
   for repository identity only. The separate `src/github/delivery-api.ts`
-  implements App-JWT, cursor-paginated delivery-list acquisition and safe
-  per-repository selection. Neither is the scheduled controller, delivery-
-  detail repair path, or observation adapter described here.
+  implements App-JWT, cursor-paginated delivery-list acquisition, safe
+  per-repository selection, and bounded selected-delivery retrieval. The target
+  store retains a missing-receipt API audit and normalized pull-request
+  observation. None of these is the scheduled controller or full observation
+  adapter described here.
 - `src/github/webhook.ts`, `src/github/ingress.ts`, and `src/control/store.ts`
   implement the exact-body verifier/normalizer, injectable bounded router, and
   trusted post-authentication pull-request transaction. The router remains

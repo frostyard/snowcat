@@ -60,7 +60,9 @@ import {
   type CoreSourceCheckEligiblePayload,
   type CoreStaleSourceOverrideDecisionPayload,
   type GitHubDeliveryReceiptPayload,
+  type GitHubDeliveryAuditPayload,
   type GitHubDeliveryRecordedPayload,
+  type GitHubDeliveryRepairRecordedPayload,
   type GitHubPullRequestAction,
   type GitHubPullRequestObservationPayload,
   type GitHubSourceCheckpointPayload,
@@ -646,6 +648,34 @@ export class GitHubDeliveryAcceptanceFailure extends Error {
   constructor(readonly code: GitHubDeliveryAcceptanceFailureCode) {
     super(`GitHub delivery acceptance failed: ${code}`);
   }
+}
+
+export interface GitHubPullRequestDeliveryRepairInput {
+  expectedLastTransactionSequence: number;
+  appId: string;
+  deliveryId: string;
+  deliveryGuid: string;
+  deliveredAt: string;
+  redelivery: boolean;
+  statusCode: number;
+  responseDigest: string;
+  installationId: string;
+  repositoryId: string;
+  action: GitHubPullRequestAction;
+  pullRequest: GitHubPullRequestDeliveryInput["pullRequest"];
+}
+
+export interface GitHubPullRequestDeliveryRepairResult {
+  deliveryId: string;
+  deliveryGuid: string;
+  responseDigest: string;
+  observationDigest: string;
+  auditRecordId: string;
+  observationRecordId: string;
+  eventRecordId: string;
+  observedAt: string;
+  transactionPositions: readonly [0, 1, 2];
+  transactionSequence: number;
 }
 
 export interface GitHubSourceCheckpointInput {
@@ -1724,7 +1754,8 @@ export class ControlPlaneStore {
         mergeCommitId: normalized.pullRequest.mergeCommitId,
         sourceUpdatedAt: normalized.pullRequest.sourceUpdatedAt,
         deliveryGuid: normalized.deliveryGuid,
-        receiptRecordId,
+        acquisition: "direct-webhook",
+        acquisitionRecordId: receiptRecordId,
         observationRecordId,
         observationDigest,
         observedAt: receivedAt,
@@ -1811,7 +1842,7 @@ export class ControlPlaneStore {
         recordId: observationRecordId,
         occurrenceType: "record",
         kind: "github.pull-request-observation",
-        schemaVersion: 1,
+        schemaVersion: 2,
         recordClass: "observation",
         subjectKind: "github-pull-request",
         subjectId: pullRequestId,
@@ -1875,6 +1906,262 @@ export class ControlPlaneStore {
         addSeconds(receivedAt, 30 * 24 * 60 * 60),
       );
       this.advanceControlMetadata(receivedAt, sequence);
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  recordAuditedGitHubPullRequestDelivery(
+    input: GitHubPullRequestDeliveryRepairInput,
+  ): GitHubPullRequestDeliveryRepairResult {
+    const normalized = normalizeGitHubPullRequestDeliveryRepairInput(input);
+    const hookSubjectId = `github.com:app:${normalized.appId}:hook`;
+    const pullRequestId = `${normalized.repositoryId}:pull:${normalized.pullRequest.number}`;
+    const sourceRepresentation = {
+      action: normalized.action,
+      installationId: normalized.installationId,
+      repositoryId: normalized.repositoryId,
+      pullRequest: normalized.pullRequest,
+    } as unknown as JsonValue;
+    const observationDigest = sha256(canonicalJson(sourceRepresentation));
+    const idempotencyKey = `github-delivery-repair:${normalized.appId}:${normalized.deliveryId}`;
+    const commandPayloadDigest = sha256(canonicalJson(normalized as unknown as JsonValue));
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.verifyExisting(this.applicationTables());
+      const metadata = this.metadata();
+      const commandScope = `database:${metadata.databaseLineageId}`;
+      const prior = this.commandReceipt(
+        commandScope,
+        "github.record-pull-request-delivery-repair",
+        idempotencyKey,
+      );
+      if (prior) {
+        if (String(prior.payload_digest) !== commandPayloadDigest) {
+          throw new Error("GitHub delivery repair identity was reused");
+        }
+        const result = parseGitHubPullRequestDeliveryRepairResult(parseJson(String(prior.result_json)));
+        this.db.exec("COMMIT");
+        return result;
+      }
+
+      assertExpectedSequence(normalized.expectedLastTransactionSequence);
+      if (metadata.lastTransactionSequence !== normalized.expectedLastTransactionSequence) {
+        throw new Error(
+          `expected control-plane sequence ${normalized.expectedLastTransactionSequence} but current sequence is ${metadata.lastTransactionSequence}`,
+        );
+      }
+      const repository = this.repositoryStatuses().find(
+        (status) => status.repositoryId === normalized.repositoryId,
+      );
+      if (!repository || repository.enrollmentRecordId === null) {
+        throw new Error("GitHub delivery repair requires a previously enrolled repository");
+      }
+      if (this.findDirectGitHubDeliveryReceipt(normalized.appId, normalized.deliveryGuid)) {
+        throw new Error("GitHub delivery repair cannot replace an observed direct receipt");
+      }
+
+      const observedAt = this.now();
+      if (observedAt < metadata.controlTimeWatermark || observedAt < normalized.deliveredAt) {
+        throw new Error("control-plane clock moved backwards while recording GitHub delivery repair");
+      }
+      const transactionId = uuidV7(new Date(observedAt));
+      const auditRecordId = uuidV7(new Date(observedAt));
+      const observationRecordId = uuidV7(new Date(observedAt));
+      const eventRecordId = uuidV7(new Date(observedAt));
+      const correlationId = uuidV7(new Date(observedAt));
+      const auditPayload = {
+        appId: normalized.appId,
+        hookSubjectId,
+        deliveryId: normalized.deliveryId,
+        deliveryGuid: normalized.deliveryGuid,
+        deliveredAt: normalized.deliveredAt,
+        redelivery: normalized.redelivery,
+        statusCode: normalized.statusCode,
+        event: "pull_request",
+        action: normalized.action,
+        installationId: normalized.installationId,
+        repositoryId: normalized.repositoryId,
+        responseDigest: normalized.responseDigest,
+        directReceipt: "not-observed",
+        auditRecordId,
+        observationRecordId,
+        eventRecordId,
+        observedAt,
+      } satisfies GitHubDeliveryAuditPayload;
+      const pullRequestPayload = {
+        repositoryId: normalized.repositoryId,
+        pullRequestId,
+        pullRequestNumber: normalized.pullRequest.number,
+        action: normalized.action,
+        installationId: normalized.installationId,
+        actorId: normalized.pullRequest.actorId,
+        state: normalized.pullRequest.state,
+        draft: normalized.pullRequest.draft,
+        merged: normalized.pullRequest.merged,
+        baseRepositoryId: normalized.pullRequest.baseRepositoryId,
+        baseRef: normalized.pullRequest.baseRef,
+        baseCommitId: normalized.pullRequest.baseCommitId,
+        headRepositoryId: normalized.pullRequest.headRepositoryId,
+        headRef: normalized.pullRequest.headRef,
+        headCommitId: normalized.pullRequest.headCommitId,
+        observedTestMergeCommitId: normalized.pullRequest.observedTestMergeCommitId,
+        mergedAt: normalized.pullRequest.mergedAt,
+        mergeCommitId: normalized.pullRequest.mergeCommitId,
+        sourceUpdatedAt: normalized.pullRequest.sourceUpdatedAt,
+        deliveryGuid: normalized.deliveryGuid,
+        acquisition: "delivery-api-repair",
+        acquisitionRecordId: auditRecordId,
+        observationRecordId,
+        observationDigest,
+        observedAt,
+      } satisfies GitHubPullRequestObservationPayload;
+      const eventPayload = {
+        deliveryId: normalized.deliveryId,
+        deliveryGuid: normalized.deliveryGuid,
+        auditRecordId,
+        observationRecordId,
+        eventRecordId,
+        disposition: "api-pull-request-observation-recorded",
+        recordedAt: observedAt,
+      } satisfies GitHubDeliveryRepairRecordedPayload;
+      if (!recordKindRegistry["github.delivery-audit-observation"].validatePayload(auditPayload)) {
+        throw new Error("GitHub delivery audit is outside its record contract");
+      }
+      if (!recordKindRegistry["github.pull-request-observation"].validatePayload(pullRequestPayload)) {
+        throw new Error("GitHub repaired pull-request observation is outside its record contract");
+      }
+      if (!eventKindRegistry["github.delivery-repair-recorded"].validatePayload(eventPayload)) {
+        throw new Error("GitHub delivery repair event is outside its event contract");
+      }
+
+      const transaction = this.db
+        .prepare(
+          `INSERT INTO control_transactions (
+             transaction_id, command_kind, command_schema_version, principal_kind,
+             principal_id, session_id, idempotency_key, payload_digest,
+             evaluation_time, recorded_at
+           ) VALUES (?, 'github.record-pull-request-delivery-repair', 1, 'fluent-system',
+                     'github-observer', NULL, ?, ?, ?, ?)`,
+        )
+        .run(transactionId, idempotencyKey, commandPayloadDigest, observedAt, observedAt);
+      const sequence = Number(transaction.lastInsertRowid);
+      for (const [subjectKind, subjectId] of [
+        ["github-app-hook", hookSubjectId],
+        ["github-pull-request", pullRequestId],
+      ] as const) {
+        const existing = this.db
+          .prepare("SELECT 1 AS present FROM subjects WHERE subject_kind = ? AND subject_id = ?")
+          .get(subjectKind, subjectId) as Row | undefined;
+        if (!existing) {
+          this.db
+            .prepare(
+              `INSERT INTO subjects (subject_kind, subject_id, created_transaction_sequence)
+               VALUES (?, ?, ?)`,
+            )
+            .run(subjectKind, subjectId, sequence);
+        }
+      }
+      const scope = canonicalJson({ deploymentId: metadata.databaseLineageId });
+      const auditPayloadJson = canonicalJson(auditPayload);
+      const pullRequestPayloadJson = canonicalJson(pullRequestPayload);
+      const eventPayloadJson = canonicalJson(eventPayload);
+      this.insertOccurrence({
+        recordId: auditRecordId,
+        occurrenceType: "record",
+        kind: "github.delivery-audit-observation",
+        schemaVersion: 1,
+        recordClass: "observation",
+        subjectKind: "github-app-hook",
+        subjectId: hookSubjectId,
+        revisionKind: "github-delivery-audit-sha256",
+        revisionValue: normalized.responseDigest,
+        sourceKind: "github-api",
+        sourceId: "api.github.com",
+        sourceRevisionKind: "github-delivery-audit-sha256",
+        sourceRevisionValue: normalized.responseDigest,
+        informationClass: "organization",
+        informationScopeJson: scope,
+        payloadJson: auditPayloadJson,
+        payloadDigest: sha256(auditPayloadJson),
+        correlationId,
+        transactionSequence: sequence,
+        transactionPosition: 0,
+        recordedAt: observedAt,
+      });
+      this.insertOccurrence({
+        recordId: observationRecordId,
+        occurrenceType: "record",
+        kind: "github.pull-request-observation",
+        schemaVersion: 2,
+        recordClass: "observation",
+        subjectKind: "github-pull-request",
+        subjectId: pullRequestId,
+        revisionKind: "github-pull-request-sha256",
+        revisionValue: observationDigest,
+        sourceKind: "github-api",
+        sourceId: "api.github.com",
+        sourceRevisionKind: "github-delivery-audit-sha256",
+        sourceRevisionValue: normalized.responseDigest,
+        informationClass: "organization",
+        informationScopeJson: scope,
+        payloadJson: pullRequestPayloadJson,
+        payloadDigest: sha256(pullRequestPayloadJson),
+        correlationId,
+        causationRecordId: auditRecordId,
+        transactionSequence: sequence,
+        transactionPosition: 1,
+        recordedAt: observedAt,
+      });
+      this.insertOccurrence({
+        recordId: eventRecordId,
+        occurrenceType: "event",
+        kind: "github.delivery-repair-recorded",
+        schemaVersion: 1,
+        subjectKind: "github-app-hook",
+        subjectId: hookSubjectId,
+        revisionKind: "github-delivery-audit-sha256",
+        revisionValue: normalized.responseDigest,
+        sourceKind: "github-api",
+        sourceId: "api.github.com",
+        sourceRevisionKind: "github-delivery-audit-sha256",
+        sourceRevisionValue: normalized.responseDigest,
+        informationClass: "organization",
+        informationScopeJson: scope,
+        payloadJson: eventPayloadJson,
+        payloadDigest: sha256(eventPayloadJson),
+        correlationId,
+        causationRecordId: auditRecordId,
+        transactionSequence: sequence,
+        transactionPosition: 2,
+        recordedAt: observedAt,
+      });
+      const result: GitHubPullRequestDeliveryRepairResult = {
+        deliveryId: normalized.deliveryId,
+        deliveryGuid: normalized.deliveryGuid,
+        responseDigest: normalized.responseDigest,
+        observationDigest,
+        auditRecordId,
+        observationRecordId,
+        eventRecordId,
+        observedAt,
+        transactionPositions: [0, 1, 2],
+        transactionSequence: sequence,
+      };
+      this.insertReceipt(
+        commandScope,
+        "github.record-pull-request-delivery-repair",
+        idempotencyKey,
+        commandPayloadDigest,
+        result,
+        sequence,
+        addSeconds(observedAt, 30 * 24 * 60 * 60),
+      );
+      this.advanceControlMetadata(observedAt, sequence);
       this.db.exec("COMMIT");
       return result;
     } catch (error) {
@@ -4879,6 +5166,33 @@ export class ControlPlaneStore {
       .get(commandScope, commandKind, idempotencyKey) as Row | undefined;
   }
 
+  private findDirectGitHubDeliveryReceipt(
+    appId: string,
+    deliveryGuid: string,
+    beforeTransactionSequence?: number,
+  ): GitHubDeliveryReceiptPayload | undefined {
+    const hookSubjectId = `github.com:app:${appId}:hook`;
+    const rows = this.db
+      .prepare(
+        `SELECT payload_json FROM durable_occurrences
+         WHERE kind = 'github.delivery-receipt-observation'
+           AND subject_kind = 'github-app-hook' AND subject_id = ?
+           AND (? IS NULL OR transaction_sequence < ?)
+         ORDER BY transaction_sequence DESC`,
+      )
+      .all(hookSubjectId, beforeTransactionSequence ?? null, beforeTransactionSequence ?? null) as Row[];
+    for (const row of rows) {
+      const payload = parseJson(String(row.payload_json));
+      if (
+        recordKindRegistry["github.delivery-receipt-observation"].validatePayload(payload) &&
+        payload.deliveryGuid === deliveryGuid
+      ) {
+        return payload;
+      }
+    }
+    return undefined;
+  }
+
   private assertGitHubCoverageWrite(expectedSequence: number, repositoryId: string): void {
     assertExpectedSequence(expectedSequence);
     const metadata = this.metadata();
@@ -5471,6 +5785,7 @@ export class ControlPlaneStore {
       | "repository.impose-operator-hold"
       | "repository.clear-operator-hold"
       | "github.record-pull-request-delivery"
+      | "github.record-pull-request-delivery-repair"
       | "github.record-source-checkpoint"
       | "github.open-source-gap"
       | "github.repair-source-gap",
@@ -5483,6 +5798,7 @@ export class ControlPlaneStore {
       | RepositoryEnrollmentResult
       | RepositoryOperatorHoldResult
       | GitHubPullRequestDeliveryResult
+      | GitHubPullRequestDeliveryRepairResult
       | GitHubSourceCheckpointResult
       | GitHubSourceGapResult
       | GitHubSourceGapRepairResult,
@@ -6554,7 +6870,8 @@ export class ControlPlaneStore {
           observation.action !== receipt.action ||
           observation.installationId !== receipt.installationId ||
           observation.deliveryGuid !== receipt.deliveryGuid ||
-          observation.receiptRecordId !== receipt.receiptRecordId ||
+          observation.acquisition !== "direct-webhook" ||
+          observation.acquisitionRecordId !== receipt.receiptRecordId ||
           observation.observationRecordId !== receipt.observationRecordId ||
           observation.observedAt !== receipt.receivedAt ||
           event.deliveryGuid !== receipt.deliveryGuid ||
@@ -6606,6 +6923,152 @@ export class ControlPlaneStore {
           String(commandRow.payload_digest) !== sha256(canonicalJson(commandInput))
         ) {
           throw new Error(`GitHub pull-request delivery digest mismatch: ${String(row.record_id)}`);
+        }
+      }
+      if (String(row.kind) === "github.delivery-audit-observation") {
+        const audit = payload as GitHubDeliveryAuditPayload;
+        const transaction = this.db
+          .prepare("SELECT * FROM control_transactions WHERE sequence = ?")
+          .get(row.transaction_sequence!) as Row | undefined;
+        const outputs = this.db
+          .prepare(
+            `SELECT occurrence.*, record.record_class
+             FROM durable_occurrences occurrence
+             LEFT JOIN durable_records record ON record.record_id = occurrence.record_id
+             WHERE occurrence.transaction_sequence = ?
+             ORDER BY occurrence.transaction_position`,
+          )
+          .all(row.transaction_sequence!) as Row[];
+        const observationRow = outputs[1];
+        const eventRow = outputs[2];
+        const observation = observationRow ? parseJson(String(observationRow.payload_json)) : undefined;
+        const event = eventRow ? parseJson(String(eventRow.payload_json)) : undefined;
+        const enrollment = this.db
+          .prepare(
+            `SELECT record_id FROM durable_occurrences
+             WHERE kind = 'repository.enrolled' AND subject_kind = 'github-repository'
+               AND subject_id = ? AND transaction_sequence < ?
+             ORDER BY transaction_sequence DESC LIMIT 1`,
+          )
+          .get(audit.repositoryId, row.transaction_sequence!) as Row | undefined;
+        const priorDirectReceipt = this.findDirectGitHubDeliveryReceipt(
+          audit.appId,
+          audit.deliveryGuid,
+          Number(row.transaction_sequence),
+        );
+        const pullRequest = observation && recordKindRegistry["github.pull-request-observation"].validatePayload(observation)
+          ? {
+              actorId: observation.actorId,
+              state: observation.state,
+              draft: observation.draft,
+              merged: observation.merged,
+              baseRepositoryId: observation.baseRepositoryId,
+              baseRef: observation.baseRef,
+              baseCommitId: observation.baseCommitId,
+              headRepositoryId: observation.headRepositoryId,
+              headRef: observation.headRef,
+              headCommitId: observation.headCommitId,
+              observedTestMergeCommitId: observation.observedTestMergeCommitId,
+              mergedAt: observation.mergedAt,
+              mergeCommitId: observation.mergeCommitId,
+              number: observation.pullRequestNumber,
+              sourceUpdatedAt: observation.sourceUpdatedAt,
+            }
+          : undefined;
+        const sourceRepresentation = pullRequest
+          ? {
+              action: audit.action,
+              installationId: audit.installationId,
+              repositoryId: audit.repositoryId,
+              pullRequest,
+            }
+          : undefined;
+        const commandInput = pullRequest
+          ? {
+              expectedLastTransactionSequence: Number(row.transaction_sequence) - 1,
+              appId: audit.appId,
+              deliveryId: audit.deliveryId,
+              deliveryGuid: audit.deliveryGuid,
+              deliveredAt: audit.deliveredAt,
+              redelivery: audit.redelivery,
+              statusCode: audit.statusCode,
+              responseDigest: audit.responseDigest,
+              installationId: audit.installationId,
+              repositoryId: audit.repositoryId,
+              action: audit.action,
+              pullRequest,
+            }
+          : undefined;
+        if (
+          !transaction ||
+          String(transaction.command_kind) !== "github.record-pull-request-delivery-repair" ||
+          String(transaction.principal_kind) !== "fluent-system" ||
+          String(transaction.principal_id) !== "github-observer" ||
+          outputs.length !== 3 ||
+          String(row.record_id) !== audit.auditRecordId ||
+          String(row.subject_kind) !== "github-app-hook" ||
+          String(row.subject_id) !== audit.hookSubjectId ||
+          String(row.revision_kind) !== "github-delivery-audit-sha256" ||
+          String(row.revision_value) !== audit.responseDigest ||
+          String(row.source_kind) !== "github-api" ||
+          String(row.source_id) !== "api.github.com" ||
+          String(row.source_revision_kind) !== "github-delivery-audit-sha256" ||
+          String(row.source_revision_value) !== audit.responseDigest ||
+          row.causation_record_id != null ||
+          String(row.recorded_at) !== audit.observedAt ||
+          new Date(audit.deliveredAt).getTime() > new Date(audit.observedAt).getTime() ||
+          !enrollment ||
+          priorDirectReceipt !== undefined ||
+          !observation ||
+          !recordKindRegistry["github.pull-request-observation"].validatePayload(observation) ||
+          observation.acquisition !== "delivery-api-repair" ||
+          observation.acquisitionRecordId !== audit.auditRecordId ||
+          observation.observationRecordId !== audit.observationRecordId ||
+          observation.repositoryId !== audit.repositoryId ||
+          observation.installationId !== audit.installationId ||
+          observation.deliveryGuid !== audit.deliveryGuid ||
+          observation.action !== audit.action ||
+          observation.observedAt !== audit.observedAt ||
+          String(observationRow!.record_id) !== audit.observationRecordId ||
+          String(observationRow!.record_class) !== "observation" ||
+          String(observationRow!.subject_kind) !== "github-pull-request" ||
+          String(observationRow!.subject_id) !== observation.pullRequestId ||
+          String(observationRow!.revision_kind) !== "github-pull-request-sha256" ||
+          String(observationRow!.revision_value) !== observation.observationDigest ||
+          String(observationRow!.source_kind) !== "github-api" ||
+          String(observationRow!.source_id) !== "api.github.com" ||
+          String(observationRow!.source_revision_kind) !== "github-delivery-audit-sha256" ||
+          String(observationRow!.source_revision_value) !== audit.responseDigest ||
+          String(observationRow!.causation_record_id) !== audit.auditRecordId ||
+          String(observationRow!.correlation_id) !== String(row.correlation_id) ||
+          String(observationRow!.recorded_at) !== audit.observedAt ||
+          !event ||
+          !eventKindRegistry["github.delivery-repair-recorded"].validatePayload(event) ||
+          event.deliveryId !== audit.deliveryId ||
+          event.deliveryGuid !== audit.deliveryGuid ||
+          event.auditRecordId !== audit.auditRecordId ||
+          event.observationRecordId !== audit.observationRecordId ||
+          event.eventRecordId !== audit.eventRecordId ||
+          event.recordedAt !== audit.observedAt ||
+          String(eventRow!.record_id) !== audit.eventRecordId ||
+          eventRow!.record_class != null ||
+          String(eventRow!.subject_kind) !== "github-app-hook" ||
+          String(eventRow!.subject_id) !== audit.hookSubjectId ||
+          String(eventRow!.revision_kind) !== "github-delivery-audit-sha256" ||
+          String(eventRow!.revision_value) !== audit.responseDigest ||
+          String(eventRow!.source_kind) !== "github-api" ||
+          String(eventRow!.source_id) !== "api.github.com" ||
+          String(eventRow!.source_revision_kind) !== "github-delivery-audit-sha256" ||
+          String(eventRow!.source_revision_value) !== audit.responseDigest ||
+          String(eventRow!.causation_record_id) !== audit.auditRecordId ||
+          String(eventRow!.correlation_id) !== String(row.correlation_id) ||
+          String(eventRow!.recorded_at) !== audit.observedAt ||
+          !sourceRepresentation ||
+          observation.observationDigest !== sha256(canonicalJson(sourceRepresentation)) ||
+          !commandInput ||
+          String(transaction.payload_digest) !== sha256(canonicalJson(commandInput))
+        ) {
+          throw new Error(`GitHub delivery repair lineage mismatch: ${String(row.record_id)}`);
         }
       }
       if (
@@ -7392,6 +7855,9 @@ export class ControlPlaneStore {
       if (commandKind === "github.record-pull-request-delivery") {
         parseGitHubPullRequestDeliveryResult(result);
       }
+      if (commandKind === "github.record-pull-request-delivery-repair") {
+        parseGitHubPullRequestDeliveryRepairResult(result);
+      }
       if (commandKind === "github.record-source-checkpoint") parseGitHubSourceCheckpointResult(result);
       if (commandKind === "github.open-source-gap") parseGitHubSourceGapResult(result);
       if (commandKind === "github.repair-source-gap") parseGitHubSourceGapRepairResult(result);
@@ -7424,6 +7890,12 @@ export class ControlPlaneStore {
         const delivery = parseGitHubPullRequestDeliveryResult(result);
         if (String(row.retained_until) !== addSeconds(delivery.receivedAt, 30 * 24 * 60 * 60)) {
           throw new Error(`GitHub delivery receipt retention mismatch: ${String(row.idempotency_key)}`);
+        }
+      }
+      if (commandKind === "github.record-pull-request-delivery-repair") {
+        const repair = parseGitHubPullRequestDeliveryRepairResult(result);
+        if (String(row.retained_until) !== addSeconds(repair.observedAt, 30 * 24 * 60 * 60)) {
+          throw new Error(`GitHub delivery repair receipt retention mismatch: ${String(row.idempotency_key)}`);
         }
       }
       if (commandKind === "github.record-source-checkpoint") {
@@ -7739,6 +8211,38 @@ export class ControlPlaneStore {
           observationPayload.observationDigest !== delivery.observationDigest
         ) {
           throw new Error(`GitHub delivery receipt output mismatch: ${String(row.idempotency_key)}`);
+        }
+      }
+      if (commandKind === "github.record-pull-request-delivery-repair") {
+        const repair = parseGitHubPullRequestDeliveryRepairResult(result);
+        const outputs = this.db
+          .prepare(
+            `SELECT record_id, payload_json FROM durable_occurrences
+             WHERE transaction_sequence = ? ORDER BY transaction_position`,
+          )
+          .all(row.transaction_sequence!) as Row[];
+        const auditPayload = outputs[0] ? parseJson(String(outputs[0].payload_json)) : undefined;
+        const observationPayload = outputs[1] ? parseJson(String(outputs[1].payload_json)) : undefined;
+        if (
+          repair.transactionSequence !== Number(row.transaction_sequence) ||
+          repair.observedAt !== String(transaction.evaluation_time) ||
+          repair.observedAt !== String(transaction.recorded_at) ||
+          outputs.length !== 3 ||
+          String(outputs[0]!.record_id) !== repair.auditRecordId ||
+          String(outputs[1]!.record_id) !== repair.observationRecordId ||
+          String(outputs[2]!.record_id) !== repair.eventRecordId ||
+          !auditPayload ||
+          !recordKindRegistry["github.delivery-audit-observation"].validatePayload(auditPayload) ||
+          String(row.idempotency_key) !==
+            `github-delivery-repair:${auditPayload.appId}:${repair.deliveryId}` ||
+          !observationPayload ||
+          !recordKindRegistry["github.pull-request-observation"].validatePayload(observationPayload) ||
+          auditPayload.deliveryId !== repair.deliveryId ||
+          auditPayload.deliveryGuid !== repair.deliveryGuid ||
+          auditPayload.responseDigest !== repair.responseDigest ||
+          observationPayload.observationDigest !== repair.observationDigest
+        ) {
+          throw new Error(`GitHub delivery repair output mismatch: ${String(row.idempotency_key)}`);
         }
       }
       if (commandKind === "github.record-source-checkpoint") {
@@ -8640,6 +9144,55 @@ function normalizeGitHubPullRequestDeliveryInput(
   return structuredClone(input);
 }
 
+function normalizeGitHubPullRequestDeliveryRepairInput(
+  input: GitHubPullRequestDeliveryRepairInput,
+): GitHubPullRequestDeliveryRepairInput {
+  if (
+    !input ||
+    typeof input !== "object" ||
+    Array.isArray(input) ||
+    Object.keys(input).sort().join(",") !==
+      "action,appId,deliveredAt,deliveryGuid,deliveryId,expectedLastTransactionSequence,installationId,pullRequest,redelivery,repositoryId,responseDigest,statusCode"
+  ) {
+    throw new Error("GitHub pull-request delivery repair must be one exact typed input");
+  }
+  assertExpectedSequence(input.expectedLastTransactionSequence);
+  if (
+    !/^[1-9][0-9]{0,19}$/.test(input.deliveryId) ||
+    typeof input.redelivery !== "boolean" ||
+    !Number.isSafeInteger(input.statusCode) ||
+    input.statusCode < 0 ||
+    input.statusCode > 599
+  ) {
+    throw new Error("GitHub pull-request delivery repair contains invalid audit fields");
+  }
+  assertUtcInstant(input.deliveredAt, "GitHub audited delivery source time");
+  const shared = normalizeGitHubPullRequestDeliveryInput({
+    appId: input.appId,
+    deliveryGuid: input.deliveryGuid,
+    bodyDigest: input.responseDigest,
+    requestBytes: 1,
+    installationId: input.installationId,
+    repositoryId: input.repositoryId,
+    action: input.action,
+    pullRequest: input.pullRequest,
+  });
+  return {
+    expectedLastTransactionSequence: input.expectedLastTransactionSequence,
+    appId: shared.appId,
+    deliveryId: input.deliveryId,
+    deliveryGuid: shared.deliveryGuid,
+    deliveredAt: input.deliveredAt,
+    redelivery: input.redelivery,
+    statusCode: input.statusCode,
+    responseDigest: shared.bodyDigest,
+    installationId: shared.installationId,
+    repositoryId: shared.repositoryId,
+    action: shared.action,
+    pullRequest: shared.pullRequest,
+  };
+}
+
 function isGitHubObservationRefName(value: string): boolean {
   return (
     /^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$/.test(value) &&
@@ -8739,6 +9292,52 @@ function parseGitHubPullRequestDeliveryResult(value: JsonValue): GitHubPullReque
     receivedAt: String(result.receivedAt),
     transactionPositions: [0, 1, 2],
     transactionSequence: Number(result.transactionSequence),
+  };
+}
+
+function parseGitHubPullRequestDeliveryRepairResult(
+  value: JsonValue,
+): GitHubPullRequestDeliveryRepairResult {
+  if (
+    !isExactJsonObject(value, [
+      "deliveryId",
+      "deliveryGuid",
+      "responseDigest",
+      "observationDigest",
+      "auditRecordId",
+      "observationRecordId",
+      "eventRecordId",
+      "observedAt",
+      "transactionPositions",
+      "transactionSequence",
+    ]) ||
+    !/^[1-9][0-9]{0,19}$/.test(String(value.deliveryId)) ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(String(value.deliveryGuid)) ||
+    !/^sha256:[0-9a-f]{64}$/.test(String(value.responseDigest)) ||
+    !/^sha256:[0-9a-f]{64}$/.test(String(value.observationDigest)) ||
+    !isUuidV7(String(value.auditRecordId)) ||
+    !isUuidV7(String(value.observationRecordId)) ||
+    !isUuidV7(String(value.eventRecordId)) ||
+    new Set([value.auditRecordId, value.observationRecordId, value.eventRecordId]).size !== 3 ||
+    !Array.isArray(value.transactionPositions) ||
+    canonicalJson(value.transactionPositions) !== "[0,1,2]" ||
+    !Number.isSafeInteger(value.transactionSequence) ||
+    Number(value.transactionSequence) < 1
+  ) {
+    throw new Error("stored GitHub pull-request delivery repair result is invalid");
+  }
+  assertUtcInstant(String(value.observedAt), "GitHub pull-request delivery repair time");
+  return {
+    deliveryId: String(value.deliveryId),
+    deliveryGuid: String(value.deliveryGuid),
+    responseDigest: String(value.responseDigest),
+    observationDigest: String(value.observationDigest),
+    auditRecordId: String(value.auditRecordId),
+    observationRecordId: String(value.observationRecordId),
+    eventRecordId: String(value.eventRecordId),
+    observedAt: String(value.observedAt),
+    transactionPositions: [0, 1, 2],
+    transactionSequence: Number(value.transactionSequence),
   };
 }
 

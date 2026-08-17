@@ -210,7 +210,8 @@ test("verified GitHub pull-request deliveries are enrollment-bound, replayable, 
   );
   assert.equal(outputs[0]?.sourceRevisionValue, input.bodyDigest);
   const observedPayload = outputs[1]?.payload as Record<string, unknown>;
-  assert.equal(observedPayload.receiptRecordId, result.receiptRecordId);
+  assert.equal(observedPayload.acquisition, "direct-webhook");
+  assert.equal(observedPayload.acquisitionRecordId, result.receiptRecordId);
   assert.equal("title" in observedPayload, false);
   assert.equal("body" in observedPayload, false);
 
@@ -245,6 +246,139 @@ test("verified GitHub pull-request deliveries are enrollment-bound, replayable, 
   );
   raw.close();
   assert.throws(() => new ControlPlaneStore(path), /GitHub pull-request delivery lineage mismatch/);
+});
+
+test("GitHub delivery-API repair records audit provenance without manufacturing a webhook receipt", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-github-delivery-repair-test-"));
+  const path = join(directory, "control.db");
+  let now = new Date("2026-08-17T13:30:00.000Z");
+  const store = new ControlPlaneStore(path, () => now);
+  const candidate = await activationCandidate(enabledDeclaration(), "5".repeat(40), "6".repeat(40));
+  const activation = store.activateCoreSnapshot({ candidate, expectedLastTransactionSequence: 1 });
+  store.recordCoreSourceCheckEligible({
+    checkId: "0198ba55-a5c0-7000-8000-000000000001",
+    candidate,
+    expectedLastTransactionSequence: activation.transactionSequence,
+  });
+  await reconcileRepositories(
+    store,
+    async () => ({
+      kind: "found",
+      repositoryId: "9001",
+      owner: "frostyard",
+      name: "example",
+      archived: false,
+      defaultBranch: "main",
+    }),
+    async () => validSurfaceProbe(),
+  );
+
+  const pullRequest = {
+    number: 43,
+    actorId: "github.com:user:31415",
+    state: "open" as const,
+    draft: false,
+    merged: false,
+    baseRepositoryId: "github.com:9001",
+    baseRef: "main",
+    baseCommitId: `sha1:${"1".repeat(40)}`,
+    headRepositoryId: "github.com:9001",
+    headRef: "feature/api-repair",
+    headCommitId: `sha1:${"2".repeat(40)}`,
+    observedTestMergeCommitId: `sha1:${"3".repeat(40)}`,
+    mergedAt: null,
+    mergeCommitId: null,
+    sourceUpdatedAt: "2026-08-17T13:24:00.000Z",
+  };
+  const directGuid = "32345678-1234-4234-8234-123456789abc";
+  store.recordVerifiedGitHubPullRequestDelivery({
+    appId: "4567",
+    deliveryGuid: directGuid,
+    bodyDigest: `sha256:${"a".repeat(64)}`,
+    requestBytes: 512,
+    installationId: "github.com:installation:7654",
+    repositoryId: "github.com:9001",
+    action: "synchronize",
+    pullRequest,
+  });
+  assert.throws(
+    () =>
+      store.recordAuditedGitHubPullRequestDelivery({
+        expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+        appId: "4567",
+        deliveryId: "7000",
+        deliveryGuid: directGuid,
+        deliveredAt: "2026-08-17T13:25:00.000Z",
+        redelivery: false,
+        statusCode: 200,
+        responseDigest: `sha256:${"b".repeat(64)}`,
+        installationId: "github.com:installation:7654",
+        repositoryId: "github.com:9001",
+        action: "synchronize",
+        pullRequest,
+      }),
+    /cannot replace an observed direct receipt/,
+  );
+
+  const repairInput = {
+    expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+    appId: "4567",
+    deliveryId: "7001",
+    deliveryGuid: "42345678-1234-4234-8234-123456789abc",
+    deliveredAt: "2026-08-17T13:26:00.000Z",
+    redelivery: false,
+    statusCode: 200,
+    responseDigest: `sha256:${"c".repeat(64)}`,
+    installationId: "github.com:installation:7654",
+    repositoryId: "github.com:9001",
+    action: "synchronize" as const,
+    pullRequest,
+  };
+  now = new Date("2026-08-17T13:31:00.000Z");
+  const repaired = store.recordAuditedGitHubPullRequestDelivery(repairInput);
+  assert.deepEqual(repaired.transactionPositions, [0, 1, 2]);
+  const outputs = store.occurrences().slice(-3);
+  assert.deepEqual(outputs.map((occurrence) => occurrence.kind), [
+    "github.delivery-audit-observation",
+    "github.pull-request-observation",
+    "github.delivery-repair-recorded",
+  ]);
+  assert.equal(outputs.some((occurrence) => occurrence.kind === "github.delivery-receipt-observation"), false);
+  assert.equal(outputs[0]?.sourceKind, "github-api");
+  assert.equal(outputs[0]?.sourceRevisionValue, repairInput.responseDigest);
+  const observation = outputs[1]?.payload as Record<string, unknown>;
+  assert.equal(observation.acquisition, "delivery-api-repair");
+  assert.equal(observation.acquisitionRecordId, repaired.auditRecordId);
+
+  assert.deepEqual(store.recordAuditedGitHubPullRequestDelivery(repairInput), repaired);
+  assert.throws(
+    () => store.recordAuditedGitHubPullRequestDelivery({ ...repairInput, statusCode: 500 }),
+    /repair identity was reused/,
+  );
+  now = new Date("2026-08-17T13:32:00.000Z");
+  const lateDirect = store.recordVerifiedGitHubPullRequestDelivery({
+    appId: repairInput.appId,
+    deliveryGuid: repairInput.deliveryGuid,
+    bodyDigest: `sha256:${"d".repeat(64)}`,
+    requestBytes: 512,
+    installationId: repairInput.installationId,
+    repositoryId: repairInput.repositoryId,
+    action: repairInput.action,
+    pullRequest,
+  });
+  assert.equal(lateDirect.transactionSequence, repaired.transactionSequence + 1);
+  store.close();
+
+  const reopened = new ControlPlaneStore(path);
+  assert.equal(reopened.metadata().lastTransactionSequence, lateDirect.transactionSequence);
+  reopened.close();
+
+  const raw = new DatabaseSync(path);
+  raw.prepare("UPDATE durable_occurrences SET causation_record_id = NULL WHERE record_id = ?").run(
+    repaired.observationRecordId,
+  );
+  raw.close();
+  assert.throws(() => new ControlPlaneStore(path), /GitHub delivery repair lineage mismatch/);
 });
 
 test("GitHub pull-request delivery rejects forks and closed-state test merge identities", async () => {

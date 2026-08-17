@@ -3,7 +3,9 @@ import test from "node:test";
 
 import {
   GITHUB_DELIVERY_AUDIT_MAXIMUM_PAGES,
+  GITHUB_DELIVERY_AUDIT_MAXIMUM_PAGE_BYTES,
   auditGitHubAppDeliveries,
+  fetchGitHubPullRequestDeliveryDetail,
   selectGitHubRepositoryPullRequestDeliveries,
   type GitHubDeliveryFetch,
 } from "../src/github/delivery-api.ts";
@@ -158,6 +160,89 @@ test("one same-origin redirect refreshes App authorization without widening the 
   assert.equal(authorizationCount, 2);
 });
 
+test("delivery detail produces an API repair input without retaining free-form response content", async () => {
+  const summary = {
+    deliveryId: "301",
+    deliveryGuid: "00000000-0000-4000-8000-000000000301",
+    deliveredAt: "2026-08-17T15:55:00.000Z",
+    redelivery: false,
+    statusCode: 200,
+    event: "pull_request" as const,
+    action: "synchronize",
+    actionSupported: true,
+    installationId: "github.com:installation:7654",
+    repositoryId: "github.com:9001",
+  };
+  const detail = await fetchGitHubPullRequestDeliveryDetail({
+    appId: "4567",
+    delivery: summary,
+    getAppJwt: () => jwt,
+    now,
+    fetcher: async (input) => {
+      assert.equal(String(input), "https://api.github.com/app/hook/deliveries/301");
+      return Response.json({
+        ...delivery({
+          id: 301,
+          guid: summary.deliveryGuid,
+          action: "synchronize",
+        }),
+        request: { payload: openPullRequestPayload() },
+        response: { payload: "free-form upstream response must not survive" },
+      });
+    },
+  });
+  assert.equal(detail.kind, "complete");
+  if (detail.kind !== "complete") return;
+  assert.deepEqual(detail.repair, {
+    appId: "4567",
+    deliveryId: "301",
+    deliveryGuid: summary.deliveryGuid,
+    deliveredAt: summary.deliveredAt,
+    redelivery: false,
+    statusCode: 200,
+    responseDigest: detail.repair.responseDigest,
+    installationId: "github.com:installation:7654",
+    repositoryId: "github.com:9001",
+    action: "synchronize",
+    pullRequest: {
+      number: 42,
+      actorId: "github.com:user:31415",
+      state: "open",
+      draft: false,
+      merged: false,
+      baseRepositoryId: "github.com:9001",
+      baseRef: "main",
+      baseCommitId: `sha1:${"b".repeat(40)}`,
+      headRepositoryId: "github.com:9001",
+      headRef: "feature/test-gap",
+      headCommitId: `sha1:${"c".repeat(40)}`,
+      observedTestMergeCommitId: `sha1:${"d".repeat(40)}`,
+      mergedAt: null,
+      mergeCommitId: null,
+      sourceUpdatedAt: "2026-08-17T15:54:00.000Z",
+    },
+  });
+  assert.match(detail.repair.responseDigest, /^sha256:[0-9a-f]{64}$/);
+  assert.equal((detail.repair as unknown as { response?: unknown }).response, undefined);
+
+  let unsupportedFetchCount = 0;
+  const unsupported = await fetchGitHubPullRequestDeliveryDetail({
+    appId: "4567",
+    delivery: { ...summary, action: "review_requested", actionSupported: false },
+    getAppJwt: () => jwt,
+    now,
+    fetcher: async () => {
+      unsupportedFetchCount += 1;
+      return Response.json({});
+    },
+  });
+  assert.equal(unsupported.kind, "incomplete");
+  if (unsupported.kind === "incomplete") {
+    assert.equal(unsupported.cause, "unsupported-relevant-delivery");
+  }
+  assert.equal(unsupportedFetchCount, 0);
+});
+
 test("malformed relevant deliveries and unsafe pagination fail closed without partial results", async () => {
   const malformed = await auditGitHubAppDeliveries({
     appId: "4567",
@@ -187,6 +272,18 @@ test("malformed relevant deliveries and unsafe pagination fail closed without pa
   if (unsafeLink.kind === "incomplete") {
     assert.equal(unsafeLink.cause, "pagination-incomplete");
     assert.equal(unsafeLink.diagnostic, "invalid-pagination");
+  }
+
+  const oversized = await auditGitHubAppDeliveries({
+    appId: "4567",
+    getAppJwt: () => jwt,
+    now,
+    fetcher: async () => new Response(new Uint8Array(GITHUB_DELIVERY_AUDIT_MAXIMUM_PAGE_BYTES + 1)),
+  });
+  assert.equal(oversized.kind, "incomplete");
+  if (oversized.kind === "incomplete") {
+    assert.equal(oversized.cause, "request-budget-exhausted");
+    assert.equal(oversized.diagnostic, "response-too-large");
   }
 });
 
@@ -228,5 +325,27 @@ function delivery(overrides: Record<string, unknown>): Record<string, unknown> {
     repository_id: 9001,
     response: { payload: "must not survive normalization" },
     ...overrides,
+  };
+}
+
+function openPullRequestPayload() {
+  return {
+    action: "synchronize",
+    installation: { id: 7654 },
+    repository: { id: 9001, full_name: "frostyard/example" },
+    sender: { id: 31415, login: "source-actor" },
+    pull_request: {
+      number: 42,
+      title: "free-form content is discarded",
+      body: "never retain this",
+      state: "open",
+      draft: false,
+      merged: false,
+      base: { repo: { id: 9001 }, ref: "main", sha: "b".repeat(40) },
+      head: { repo: { id: 9001 }, ref: "feature/test-gap", sha: "c".repeat(40) },
+      merge_commit_sha: "d".repeat(40),
+      merged_at: null,
+      updated_at: "2026-08-17T15:54:00.000Z",
+    },
   };
 }

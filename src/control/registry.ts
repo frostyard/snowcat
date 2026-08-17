@@ -2,7 +2,7 @@ import { isUuidV7, type JsonValue } from "./encoding.ts";
 
 export const CONTROL_PLANE_APPLICATION_ID = 1_179_405_908; // ASCII "FLNT"
 export const CONTROL_PLANE_SCHEMA_VERSION = 7;
-export const CONTROL_PLANE_REGISTRY_VERSION = 14;
+export const CONTROL_PLANE_REGISTRY_VERSION = 15;
 
 export const informationClasses = ["public", "organization", "restricted"] as const;
 export type InformationClass = (typeof informationClasses)[number];
@@ -315,8 +315,15 @@ export const recordKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isGitHubDeliveryReceiptPayload,
   },
-  "github.pull-request-observation": {
+  "github.delivery-audit-observation": {
     schemaVersion: 1,
+    recordClass: "observation",
+    subjectKinds: ["github-app-hook"],
+    minimumInformationClass: "organization",
+    validatePayload: isGitHubDeliveryAuditPayload,
+  },
+  "github.pull-request-observation": {
+    schemaVersion: 2,
     recordClass: "observation",
     subjectKinds: ["github-pull-request"],
     minimumInformationClass: "organization",
@@ -436,6 +443,12 @@ export const eventKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isGitHubDeliveryRecordedPayload,
   },
+  "github.delivery-repair-recorded": {
+    schemaVersion: 1,
+    subjectKinds: ["github-app-hook"],
+    minimumInformationClass: "organization",
+    validatePayload: isGitHubDeliveryRepairRecordedPayload,
+  },
   "github.source-checkpoint-recorded": {
     schemaVersion: 1,
     subjectKinds: ["github-repository"],
@@ -541,6 +554,14 @@ export const commandKindRegistry = {
       "github.delivery-receipt-observation",
       "github.pull-request-observation",
       "github.delivery-recorded",
+    ],
+  },
+  "github.record-pull-request-delivery-repair": {
+    schemaVersion: 1,
+    outputKinds: [
+      "github.delivery-audit-observation",
+      "github.pull-request-observation",
+      "github.delivery-repair-recorded",
     ],
   },
   "github.record-source-checkpoint": {
@@ -985,6 +1006,26 @@ export interface GitHubDeliveryReceiptPayload extends Record<string, JsonValue> 
   receivedAt: string;
 }
 
+export interface GitHubDeliveryAuditPayload extends Record<string, JsonValue> {
+  appId: string;
+  hookSubjectId: string;
+  deliveryId: string;
+  deliveryGuid: string;
+  deliveredAt: string;
+  redelivery: boolean;
+  statusCode: number;
+  event: "pull_request";
+  action: GitHubPullRequestAction;
+  installationId: string;
+  repositoryId: string;
+  responseDigest: string;
+  directReceipt: "not-observed";
+  auditRecordId: string;
+  observationRecordId: string;
+  eventRecordId: string;
+  observedAt: string;
+}
+
 export interface GitHubPullRequestObservationPayload extends Record<string, JsonValue> {
   repositoryId: string;
   pullRequestId: string;
@@ -1006,7 +1047,8 @@ export interface GitHubPullRequestObservationPayload extends Record<string, Json
   mergeCommitId: string | null;
   sourceUpdatedAt: string;
   deliveryGuid: string;
-  receiptRecordId: string;
+  acquisition: "direct-webhook" | "delivery-api-repair";
+  acquisitionRecordId: string;
   observationRecordId: string;
   observationDigest: string;
   observedAt: string;
@@ -1018,6 +1060,16 @@ export interface GitHubDeliveryRecordedPayload extends Record<string, JsonValue>
   observationRecordId: string;
   eventRecordId: string;
   disposition: "pull-request-observation-recorded";
+  recordedAt: string;
+}
+
+export interface GitHubDeliveryRepairRecordedPayload extends Record<string, JsonValue> {
+  deliveryId: string;
+  deliveryGuid: string;
+  auditRecordId: string;
+  observationRecordId: string;
+  eventRecordId: string;
+  disposition: "api-pull-request-observation-recorded";
   recordedAt: string;
 }
 
@@ -1909,6 +1961,50 @@ function isGitHubDeliveryReceiptPayload(value: unknown): value is GitHubDelivery
   );
 }
 
+function isGitHubDeliveryAuditPayload(value: unknown): value is GitHubDeliveryAuditPayload {
+  return (
+    isExactObject(value, [
+      "appId",
+      "hookSubjectId",
+      "deliveryId",
+      "deliveryGuid",
+      "deliveredAt",
+      "redelivery",
+      "statusCode",
+      "event",
+      "action",
+      "installationId",
+      "repositoryId",
+      "responseDigest",
+      "directReceipt",
+      "auditRecordId",
+      "observationRecordId",
+      "eventRecordId",
+      "observedAt",
+    ]) &&
+    isGitHubNumericId(value.appId) &&
+    value.hookSubjectId === `github.com:app:${String(value.appId)}:hook` &&
+    isGitHubNumericId(value.deliveryId) &&
+    isGitHubDeliveryGuid(value.deliveryGuid) &&
+    isUtcInstant(value.deliveredAt) &&
+    typeof value.redelivery === "boolean" &&
+    Number.isSafeInteger(value.statusCode) &&
+    Number(value.statusCode) >= 0 &&
+    Number(value.statusCode) <= 599 &&
+    value.event === "pull_request" &&
+    githubPullRequestActions.includes(value.action as GitHubPullRequestAction) &&
+    isGitHubInstallationId(value.installationId) &&
+    isGitHubRepositoryId(value.repositoryId) &&
+    isSha256(value.responseDigest) &&
+    value.directReceipt === "not-observed" &&
+    isUuid(value.auditRecordId) &&
+    isUuid(value.observationRecordId) &&
+    isUuid(value.eventRecordId) &&
+    new Set([value.auditRecordId, value.observationRecordId, value.eventRecordId]).size === 3 &&
+    isUtcInstant(value.observedAt)
+  );
+}
+
 function isGitHubPullRequestObservationPayload(
   value: unknown,
 ): value is GitHubPullRequestObservationPayload {
@@ -1934,7 +2030,8 @@ function isGitHubPullRequestObservationPayload(
       "mergeCommitId",
       "sourceUpdatedAt",
       "deliveryGuid",
-      "receiptRecordId",
+      "acquisition",
+      "acquisitionRecordId",
       "observationRecordId",
       "observationDigest",
       "observedAt",
@@ -1963,7 +2060,8 @@ function isGitHubPullRequestObservationPayload(
     !(value.mergeCommitId === null || isGitCommitId(value.mergeCommitId)) ||
     !isUtcInstant(value.sourceUpdatedAt) ||
     !isGitHubDeliveryGuid(value.deliveryGuid) ||
-    !isUuid(value.receiptRecordId) ||
+    (value.acquisition !== "direct-webhook" && value.acquisition !== "delivery-api-repair") ||
+    !isUuid(value.acquisitionRecordId) ||
     !isUuid(value.observationRecordId) ||
     !isSha256(value.observationDigest) ||
     !isUtcInstant(value.observedAt)
@@ -2003,6 +2101,30 @@ function isGitHubDeliveryRecordedPayload(value: unknown): value is GitHubDeliver
     isUuid(value.eventRecordId) &&
     new Set([value.receiptRecordId, value.observationRecordId, value.eventRecordId]).size === 3 &&
     value.disposition === "pull-request-observation-recorded" &&
+    isUtcInstant(value.recordedAt)
+  );
+}
+
+function isGitHubDeliveryRepairRecordedPayload(
+  value: unknown,
+): value is GitHubDeliveryRepairRecordedPayload {
+  return (
+    isExactObject(value, [
+      "deliveryId",
+      "deliveryGuid",
+      "auditRecordId",
+      "observationRecordId",
+      "eventRecordId",
+      "disposition",
+      "recordedAt",
+    ]) &&
+    isGitHubNumericId(value.deliveryId) &&
+    isGitHubDeliveryGuid(value.deliveryGuid) &&
+    isUuid(value.auditRecordId) &&
+    isUuid(value.observationRecordId) &&
+    isUuid(value.eventRecordId) &&
+    new Set([value.auditRecordId, value.observationRecordId, value.eventRecordId]).size === 3 &&
+    value.disposition === "api-pull-request-observation-recorded" &&
     isUtcInstant(value.recordedAt)
   );
 }

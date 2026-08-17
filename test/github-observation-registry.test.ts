@@ -12,7 +12,7 @@ import {
 const digest = `sha256:${"a".repeat(64)}`;
 
 test("GitHub observation subjects use exact source-native identities", () => {
-  assert.equal(CONTROL_PLANE_REGISTRY_VERSION, 14);
+  assert.equal(CONTROL_PLANE_REGISTRY_VERSION, 15);
 
   assert.doesNotThrow(() => assertSubject("github-app-hook", "github.com:app:12345:hook"));
   assert.doesNotThrow(() => assertSubject("github-pull-request", "github.com:987:pull:42"));

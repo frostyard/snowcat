@@ -76,7 +76,7 @@ schemas fail rather than being guessed or upgraded by this slice.
 ### Closed registries
 
 [`registry.ts`](../../src/control/registry.ts) is the only owner of the current
-kernel vocabulary. Registry version 14 contains the bootstrap, Core snapshot,
+kernel vocabulary. Registry version 15 contains the bootstrap, Core snapshot,
 source-check, rollback, repository-reconciliation, enrollment, local
 repository-hold, and initial GitHub-observation identity contracts:
 
@@ -103,7 +103,7 @@ repository-hold, and initial GitHub-observation identity contracts:
 | Record kind | `core.stale-source-override-decision` v1 | Resolved operator choice bound to stale evidence, active snapshot, and expiry |
 | Record kind | `core.rollback-decision` v1 | Resolved operator choice bound to exact prior Core authority, target commit, and reason |
 | Record kinds | `repository.*` v1 | Exact authority, identity, surface, enrollment, and operator-hold records |
-| Record kinds | `github.delivery-receipt-observation` / `github.pull-request-observation` v1 | Verified direct-delivery provenance and allowlisted pull-request state, kept distinct |
+| Record kinds | `github.delivery-receipt-observation` v1 / `github.delivery-audit-observation` v1 / `github.pull-request-observation` v2 | Direct receipt or API-audit acquisition provenance kept distinct from allowlisted pull-request state |
 | Record kinds | `github.source-checkpoint-observation` / `github.source-gap-observation` / `github.source-gap-repair-observation` v1 | Point/continuation boundaries, lower-bounded uncertainty, and terminal exact-audit repair |
 | Event kind | `control-plane.initialized` v1 | The past-tense account of successful initialization |
 | Event kind | `control-plane.integrity-checked` v1 | The past-tense account of the accepted integrity observation |
@@ -114,12 +114,14 @@ repository-hold, and initial GitHub-observation identity contracts:
 | Event kind | `core.snapshot-rollback-activated` v1 | The past-tense account linking an operator decision, prior authority, and new snapshot |
 | Event kinds | `repository.*` v1 | Past-tense repository reconciliation, enrollment, and local-hold outcomes |
 | Event kind | `github.delivery-recorded` v1 | Past-tense acceptance linked to the direct-delivery receipt |
+| Event kind | `github.delivery-repair-recorded` v1 | Past-tense API repair linked to the delivery-audit observation |
 | Event kinds | `github.source-checkpoint-recorded` / `github.source-gap-opened` / `github.source-gap-repaired` v1 | Past-tense coverage transitions without rewriting source history |
 | Command kind | `control-plane.initialize` v1 | The fixed bootstrap transaction and its ordered outputs |
 | Command kind | `control-plane.check-integrity` v1 | An optimistic, idempotent system integrity check |
 | Command kind | `core.activate-snapshot` v1 | Atomic retention and activation of one independently revalidated candidate |
 | Command kinds | `repository.*` v1 | Per-repository optimistic authority, reconciliation, enrollment, and operator-hold transactions |
 | Command kind | `github.record-pull-request-delivery` v1 | Enrollment-bound atomic receipt, pull-request observation, and event; caller has already verified the body |
+| Command kind | `github.record-pull-request-delivery-repair` v1 | Enrollment-bound API audit, pull-request observation, and event without a fabricated receipt |
 | Command kinds | `github.record-source-checkpoint` / `github.open-source-gap` / `github.repair-source-gap` v1 | Optimistic post-acquisition coverage loop for the fixed pull-request-delivery audit scope |
 | Command kind | `core.record-candidate-rejection` v1 | Idempotent bounded rejection observation and event |
 | Command kind | `core.record-source-check-eligible` v1 | Idempotent eligible-check observation and event |
@@ -426,6 +428,6 @@ work lineage are later slices in the
   [repository authority reconciliation](../specs/repository-authority-reconciliation.md), and
   [repository surface reconciliation](../specs/repository-surface-reconciliation.md), and
   [local repository holds](../specs/repository-local-holds.md), and
-  [GitHub observation registry](../specs/control-plane-kernel.md#closed-registry-version-14)
+  [GitHub observation registry](../specs/control-plane-kernel.md#closed-registry-version-15)
 - Built in: [control-plane kernel bootstrap — Phases 1–3](../plans/control-plane-kernel-bootstrap.md)
 - Product: [GitHub organization agent fleet](../prd/agent-fleet.md)
