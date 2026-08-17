@@ -15,7 +15,7 @@ no generic record-writing, fact-writing, administrative, or worker interface.
 | Default path | `./data/control-plane.db` | Distinct from the queue-spike default |
 | SQLite application ID | `1179405908` | Decimal encoding of `FLNT` |
 | Schema version | `2` | Stored in both `PRAGMA user_version` and metadata |
-| Registry version | `7` | Stored in metadata and both initialization payloads |
+| Registry version | `8` | Stored in metadata and both initialization payloads |
 | Node runtime | `>=24.0.0` | Required for the stable `node:sqlite` surface and online backup API |
 | Database lineage ID | UUIDv7 | Generated once by the server; never reused or inferred from path |
 | Operator principal ID | UUIDv7 | Generated once and stored separately from database, session, worker, or provider identity |
@@ -26,7 +26,7 @@ transaction sequence.
 `ControlPlaneStore.occurrences()` returns occurrences ordered by transaction
 sequence and position. Neither method mutates the database or returns a secret.
 
-### Closed registry version 7
+### Closed registry version 8
 
 | Registry | Name | Version or ID rule | Contract |
 | --- | --- | --- | --- |
@@ -48,6 +48,7 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Record | `core.candidate-rejection-observation` | Schema 1 | Class `observation`; subject `control-plane-database`; minimum class `organization` |
 | Record | `core.source-check-eligible-observation` | Schema 1 | Class `observation`; subject `control-plane-database`; minimum class `organization` |
 | Record | `core.stale-source-override-decision` | Schema 1 | Class `decision`; subject `control-plane-database`; minimum class `organization` |
+| Record | `core.check-detail-prune-observation` | Schema 1 | Class `observation`; subject `control-plane-database`; minimum class `organization` |
 | Record | `core.rollback-decision` | Schema 1 | Class `decision`; subject `control-plane-database`; minimum class `organization` |
 | Event | `control-plane.initialized` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
 | Event | `control-plane.integrity-checked` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
@@ -55,6 +56,7 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Event | `core.candidate-rejected` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
 | Event | `core.source-check-eligible` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
 | Event | `core.stale-source-override-issued` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
+| Event | `core.check-detail-pruned` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
 | Event | `core.snapshot-rollback-activated` | Schema 1 | Subject `core-snapshot`; minimum class `organization` |
 | Command | `control-plane.initialize` | Schema 1 | Outputs database definition, principal definition, then initialization event |
 | Command | `control-plane.check-integrity` | Schema 1 | Outputs the integrity observation, then integrity-checked event |
@@ -62,6 +64,7 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Command | `core.record-candidate-rejection` | Schema 1 | Outputs rejection observation, then rejection event |
 | Command | `core.record-source-check-eligible` | Schema 1 | Outputs eligible-check observation, then eligible-check event |
 | Command | `core.issue-stale-source-override` | Schema 1 | Outputs resolved operator decision, then causally linked event |
+| Command | `core.prune-check-detail` | Schema 1 | Outputs prune observation, then prune event after atomic bounded deletion and projection rebuild |
 | Command | `core.rollback-snapshot` | Schema 1 | Outputs resolved decision, snapshot definition, active fact, then rollback event |
 | Predicate | `core.snapshot-active` | Contract 1 | Established by automatic activation or operator rollback; latest transaction sequence wins |
 | Projection | `control-plane.subject-lookup` | Contract, transformation, and information-handling version 1 | Stable subjects and creation definitions for internal diagnostics |
@@ -74,7 +77,7 @@ invalid:
 {
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
   "operatorPrincipalId": "0198b0a6-c200-7abc-8def-0123456789ac",
-  "registryVersion": 7,
+  "registryVersion": 8,
   "schemaVersion": 2
 }
 ```
@@ -97,7 +100,7 @@ The integrity observation and event payload have this exact shape:
 {
   "checkedThroughSequence": 1,
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
-  "registryVersion": 7,
+  "registryVersion": 8,
   "result": "ok",
   "schemaVersion": 2
 }
@@ -293,7 +296,7 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
    initialization transaction.
 5. Older, newer, incomplete, unexpected, or differently identified schemas
    MUST fail closed. Unregistered indexes, triggers, and views are unexpected.
-   Schema version 2 and registry version 7 define no upgrade path from earlier
+   Schema version 2 and registry version 8 define no upgrade path from earlier
    pre-production target stores.
 6. Subject, record, event, command, source, revision, record-class, and
    information-class names MUST come from the code-owned versioned registries.
@@ -431,8 +434,9 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
     information class, server time, and check-ID correlation.
 47. Reusing a rejection check ID with equivalent input MUST return the original
     record identities and order; reuse with different diagnostic input MUST
-    fail. Rejection receipts remain retained until a later version defines
-    count/time history retention before polling.
+    fail. The [Core check-detail retention](core-check-detail-retention.md)
+    contract governs deletion of eligible check/rejection receipts and their
+    complete transactions.
 48. Every new automatic activation after the first MUST require the source
     adapter's ancestry binding to equal the source commit of the active snapshot
     under the same writer lock. Missing or stale bindings MUST allocate no
@@ -445,6 +449,10 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
     reason, causation, event, receipt, and transaction linkage. A rollback MUST
     retain every prior snapshot and MUST create a new snapshot identity even
     when target bytes were previously retained.
+51. `core.prune-check-detail` MUST enforce the registered 30-day and 10,000
+    eligible-detail bounds without deleting snapshots, decisions, current
+    readiness anchors, or cited evidence. It MUST retain a typed digest-bearing
+    result and rebuild every projection atomically from the post-prune source.
 
 ## Derived artifacts
 
@@ -472,8 +480,10 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
   [ADR-0041](../adr/0041-enforce-three-information-classes-and-scoped-access.md),
   [ADR-0042](../adr/0042-use-rebuildable-projections-only-as-read-models.md),
   [ADR-0043](../adr/0043-order-records-by-transaction-sequence-not-timestamps.md),
-  and [ADR-0044](../adr/0044-replace-the-queue-spike-database.md)
+  [ADR-0044](../adr/0044-replace-the-queue-spike-database.md), and
+  [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md)
 - Context: [control-plane kernel](../design/control-plane-kernel.md)
 - Core authority contract: [Core snapshot activation](core-snapshot-activation.md)
+- Core diagnostic retention: [Core check-detail retention](core-check-detail-retention.md)
 - Delivery: [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md)
 - Product: [GitHub organization agent fleet](../prd/agent-fleet.md)

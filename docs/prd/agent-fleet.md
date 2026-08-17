@@ -1871,8 +1871,10 @@ rolled-back persistence failures create bounded rejection observations and audit
 standalone verification remains read-only. The accepted
 [Core source readiness contract](../specs/core-source-readiness.md) separates
 elapsed source freshness from the stricter new-admission gate. Its durable
-automatic outcomes, deterministic 24-hour read, and typed override decision
-with its 24-hour cap are implemented. The kernel does not yet implement a target work,
+  automatic outcomes, deterministic 24-hour read, and typed override decision
+  with its 24-hour cap are implemented. Ordinary source-check and rejection
+  detail now has a typed 30-day/10,000-item retention boundary with protected
+  readiness and decision evidence. The kernel does not yet implement a target work,
 general fact, operational-state, controller, or worker mutation path and never
 reads or imports the spike database.
 
@@ -1880,7 +1882,7 @@ reads or imports the spike database.
 
 | Track | What remains before implementation is well specified |
 | --- | --- |
-| Core contract and migration | Remaining organization JSON Schemas and fixtures, canonical-surface migrations, rejection-history retention, polling controls, and enrollment reconciliation |
+| Core contract and migration | Remaining organization JSON Schemas and fixtures, canonical-surface migrations, polling controls, and enrollment reconciliation |
 | Control-plane domain model | Execute the [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md): specify exact durable schemas, predicates, reducers, events, projections, invalidation, idempotency, and state machines in a fresh target database shared by RepositoryController, FleetController, ProcessObserver, scheduling, and decisions |
 | GitHub observation | GitHub App permissions, installation and actor mapping, CI/review/merge and artifact reconciliation, polling versus webhooks, forks, outage behavior, and external decision signals |
 | Workflow contracts | Versioned role briefs, evidence schemas, skills, attempt budgets, and deterministic gates for maintenance, planning, review, implementation, repair, and verification |
@@ -2073,6 +2075,8 @@ reads or imports the spike database.
   [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md),
   with stale-source overrides capped by
   [ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md), and the
+  check-detail retention boundary in
+  [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md), and the
   [Fluent ubiquitous language](../domain/ubiquitous-language.md)
 - Designs: [queue execution boundary](../design/queue-execution-boundary.md),
   [control-plane kernel](../design/control-plane-kernel.md), and
@@ -2081,7 +2085,8 @@ reads or imports the spike database.
   [control-plane kernel](../specs/control-plane-kernel.md), and
   [core snapshot verification](../specs/core-snapshot-verification.md), plus
   [Core snapshot activation](../specs/core-snapshot-activation.md) and
-  [Core source readiness](../specs/core-source-readiness.md)
+  [Core source readiness](../specs/core-source-readiness.md), plus
+  [Core check-detail retention](../specs/core-check-detail-retention.md)
 - Delivery: [queue vertical spike](../plans/queue-vertical-spike.md),
   [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md),
   [core snapshot ingestion](../plans/core-snapshot-ingestion.md), and

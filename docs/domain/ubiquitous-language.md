@@ -592,7 +592,8 @@ not imply that a candidate or failed snapshot exists.
 
 **Avoid:** failed snapshot; activation fact; repository hold; terminal failure.
 ([ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md),
-[ADR-0037](../adr/0037-store-facts-with-a-separate-event-ledger.md))
+[ADR-0037](../adr/0037-store-facts-with-a-separate-event-ledger.md),
+[ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md))
 
 #### Core source continuity
 
@@ -612,6 +613,16 @@ inspection, and snapshot activation.
 
 **Avoid:** sync attempt; health ping; verification result; activation result.
 ([ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md))
+
+#### Core check detail
+
+The bounded diagnostic occurrences and retry receipt for one eligible Core
+source check or candidate rejection. Fluent may prune ordinary detail after 30
+days or beyond the eligible count limit, but a current-readiness anchor or
+evidence cited by a retained decision remains protected.
+
+**Avoid:** Core snapshot history; authority history; permanent audit log;
+current-readiness state. ([ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md))
 
 #### Core source freshness
 

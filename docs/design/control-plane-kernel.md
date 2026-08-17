@@ -3,9 +3,12 @@
 Living document. Rationale:
 [ADR-0037](../adr/0037-store-facts-with-a-separate-event-ledger.md) through
 [ADR-0044](../adr/0044-replace-the-queue-spike-database.md) and
-[ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md).
+[ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md),
+[ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md), and
+[ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md).
 Contracts: [control-plane kernel](../specs/control-plane-kernel.md) and
-[Core source readiness](../specs/core-source-readiness.md).
+[Core source readiness](../specs/core-source-readiness.md), plus
+[Core check-detail retention](../specs/core-check-detail-retention.md).
 
 ## Overview
 
@@ -201,9 +204,11 @@ and matching audit event on the database subject. The source repository and
 available commit revision remain provenance, not a new subject or fact. This
 diagnostic transaction advances audit order and may make projections stale, but
 it neither enters the active predicate family nor moves the checked pointer.
-Exact replay is keyed by the server check identity. Payloads and query limits
-are bounded now; history purge waits for the retention contract required before
-periodic polling.
+Exact replay is keyed by the server check identity. The typed retention command
+deletes only complete unprotected check transactions beyond 30 days or the
+10,000-item eligible limit, retains a digest-bearing audit result, and rebuilds
+all projections atomically. Current-readiness anchors and evidence cited by
+retained decisions remain protected.
 
 An automatic check that matches the active commit appends an eligible-check
 observation and event without creating another snapshot. Rejection observations
@@ -352,9 +357,11 @@ work lineage are later slices in the
   [ADR-0043](../adr/0043-order-records-by-transaction-sequence-not-timestamps.md),
   [ADR-0044](../adr/0044-replace-the-queue-spike-database.md), and
   [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md),
-  and [ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md)
+  [ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md), and
+  [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md)
 - Contracts: [control-plane kernel](../specs/control-plane-kernel.md) and
   [Core snapshot activation](../specs/core-snapshot-activation.md), and
-  [Core source readiness](../specs/core-source-readiness.md)
+  [Core source readiness](../specs/core-source-readiness.md), and
+  [Core check-detail retention](../specs/core-check-detail-retention.md)
 - Built in: [control-plane kernel bootstrap — Phases 1–3](../plans/control-plane-kernel-bootstrap.md)
 - Product: [GitHub organization agent fleet](../prd/agent-fleet.md)

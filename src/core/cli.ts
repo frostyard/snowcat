@@ -163,6 +163,14 @@ try {
     } finally {
       store.close();
     }
+  } else if (command === "prune-check-history" && args.length === 1) {
+    const expectedLastTransactionSequence = parsePositiveInteger(args[0]!);
+    const store = new ControlPlaneStore(controlPlaneDatabasePath());
+    try {
+      console.log(JSON.stringify(store.pruneCoreCheckDetail({ expectedLastTransactionSequence }), null, 2));
+    } finally {
+      store.close();
+    }
   } else if (command === "rollback" && args.length === 3) {
     const expectedLastTransactionSequence = parsePositiveInteger(args[0]!);
     const targetCommitId = args[1]!;
@@ -238,7 +246,8 @@ try {
         "       npm run --silent core -- rollback <expected-control-plane-sequence> <target-commit> <reason>\n" +
         "       npm run --silent core -- rejections [limit]\n" +
         "       npm run --silent core -- readiness\n" +
-        "       npm run --silent core -- override-staleness <expected-control-plane-sequence> <expires-at> <reason>",
+        "       npm run --silent core -- override-staleness <expected-control-plane-sequence> <expires-at> <reason>\n" +
+        "       npm run --silent core -- prune-check-history <expected-control-plane-sequence>",
     );
   }
 } catch (error) {

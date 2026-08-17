@@ -83,6 +83,10 @@ removed. -->
   attributed local-operator decision while base readiness is `source-stale`.
   One override expires within 24 hours and cannot relax another readiness
   failure.
+- Use `npm run --silent core -- prune-check-history
+  <expected-control-plane-sequence>` to enforce the 30-day and 10,000-item Core
+  check-detail bounds. It preserves current-readiness anchors and evidence
+  cited by retained decisions, then atomically rebuilds projections.
 - Keep the target control-plane store separate from the disposable queue-spike
   store. Target schema and startup live in
   [`src/control/store.ts`](src/control/store.ts); closed vocabulary lives only

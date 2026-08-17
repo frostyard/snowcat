@@ -62,6 +62,7 @@ Docs are split by the question they answer:
 - [0045 — Host Fluent under the Frostyard organization](adr/0045-host-fluent-under-frostyard.md)
 - [0046 — Separate Core source freshness from admission readiness](adr/0046-separate-core-source-freshness-from-admission-readiness.md)
 - [0047 — Cap stale-source overrides at 24 hours](adr/0047-cap-stale-source-overrides-at-24-hours.md)
+- [0048 — Retain Core check detail for 30 days](adr/0048-retain-core-check-detail-for-30-days.md)
 
 ### Domain language
 
@@ -80,6 +81,7 @@ Docs are split by the question they answer:
 - [Core snapshot verification](specs/core-snapshot-verification.md)
 - [Core snapshot activation](specs/core-snapshot-activation.md)
 - [Core source readiness](specs/core-source-readiness.md)
+- [Core check-detail retention](specs/core-check-detail-retention.md)
 
 ### Plans
 

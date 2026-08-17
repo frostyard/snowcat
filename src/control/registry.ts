@@ -2,7 +2,7 @@ import { isUuidV7, type JsonValue } from "./encoding.ts";
 
 export const CONTROL_PLANE_APPLICATION_ID = 1_179_405_908; // ASCII "FLNT"
 export const CONTROL_PLANE_SCHEMA_VERSION = 2;
-export const CONTROL_PLANE_REGISTRY_VERSION = 7;
+export const CONTROL_PLANE_REGISTRY_VERSION = 8;
 
 export const informationClasses = ["public", "organization", "restricted"] as const;
 export type InformationClass = (typeof informationClasses)[number];
@@ -132,6 +132,13 @@ export const recordKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isCoreStaleSourceOverrideDecisionPayload,
   },
+  "core.check-detail-prune-observation": {
+    schemaVersion: 1,
+    recordClass: "observation",
+    subjectKinds: ["control-plane-database"],
+    minimumInformationClass: "organization",
+    validatePayload: isCoreCheckDetailPrunePayload,
+  },
   "core.rollback-decision": {
     schemaVersion: 1,
     recordClass: "decision",
@@ -178,6 +185,12 @@ export const eventKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isCoreStaleSourceOverrideDecisionPayload,
   },
+  "core.check-detail-pruned": {
+    schemaVersion: 1,
+    subjectKinds: ["control-plane-database"],
+    minimumInformationClass: "organization",
+    validatePayload: isCoreCheckDetailPrunePayload,
+  },
   "core.snapshot-rollback-activated": {
     schemaVersion: 1,
     subjectKinds: ["core-snapshot"],
@@ -210,6 +223,10 @@ export const commandKindRegistry = {
   "core.issue-stale-source-override": {
     schemaVersion: 1,
     outputKinds: ["core.stale-source-override-decision", "core.stale-source-override-issued"],
+  },
+  "core.prune-check-detail": {
+    schemaVersion: 1,
+    outputKinds: ["core.check-detail-prune-observation", "core.check-detail-pruned"],
   },
   "core.rollback-snapshot": {
     schemaVersion: 1,
@@ -371,6 +388,19 @@ export interface CoreStaleSourceOverrideDecisionPayload extends Record<string, J
   reason: string;
   decidedAt: string;
   expiresAt: string;
+}
+
+export interface CoreCheckDetailPrunePayload extends Record<string, JsonValue> {
+  databaseLineageId: string;
+  cutoffAt: string;
+  evaluatedAt: string;
+  maximumEligibleChecks: 10000;
+  deletedTransactionCount: number;
+  deletedOccurrenceCount: number;
+  deletedFirstSequence: number | null;
+  deletedLastSequence: number | null;
+  deletedDigest: string;
+  remainingDetailedCheckCount: number;
 }
 
 export interface CoreRollbackDecisionPayload extends Record<string, JsonValue> {
@@ -697,6 +727,50 @@ function isCoreStaleSourceOverrideDecisionPayload(
     decidedAt >= staleAt &&
     expiresAt > decidedAt &&
     expiresAt <= decidedAt + 86_400_000
+  );
+}
+
+function isCoreCheckDetailPrunePayload(value: unknown): value is CoreCheckDetailPrunePayload {
+  if (
+    !isExactObject(value, [
+      "databaseLineageId",
+      "cutoffAt",
+      "evaluatedAt",
+      "maximumEligibleChecks",
+      "deletedTransactionCount",
+      "deletedOccurrenceCount",
+      "deletedFirstSequence",
+      "deletedLastSequence",
+      "deletedDigest",
+      "remainingDetailedCheckCount",
+    ]) ||
+    typeof value.databaseLineageId !== "string" ||
+    !isUuidV7(value.databaseLineageId) ||
+    !isUtcInstant(value.cutoffAt) ||
+    !isUtcInstant(value.evaluatedAt) ||
+    value.maximumEligibleChecks !== 10000 ||
+    !isNonNegativeInteger(value.deletedTransactionCount) ||
+    value.deletedOccurrenceCount !== Number(value.deletedTransactionCount) * 2 ||
+    !isSha256(value.deletedDigest) ||
+    !isNonNegativeInteger(value.remainingDetailedCheckCount)
+  ) {
+    return false;
+  }
+  const count = Number(value.deletedTransactionCount);
+  const first = value.deletedFirstSequence;
+  const last = value.deletedLastSequence;
+  if (count === 0) {
+    if (first !== null || last !== null) return false;
+  } else if (
+    !isPositiveInteger(first) ||
+    !isPositiveInteger(last) ||
+    Number(first) > Number(last)
+  ) {
+    return false;
+  }
+  return (
+    new Date(value.evaluatedAt).getTime() - new Date(value.cutoffAt).getTime() ===
+    30 * 86_400_000
   );
 }
 

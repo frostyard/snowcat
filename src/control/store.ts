@@ -4,6 +4,11 @@ import { dirname, resolve } from "node:path";
 import { backup as sqliteBackup, DatabaseSync, type SQLInputValue } from "node:sqlite";
 
 import { canonicalJson, isUuidV7, sha256, uuidV7, type JsonValue } from "./encoding.ts";
+import {
+  CORE_CHECK_DETAIL_MAXIMUM_ELIGIBLE_CHECKS,
+  coreCheckDetailCutoff,
+  selectCoreCheckDetailForPrune,
+} from "./check-detail-retention.ts";
 import { validateCoreCatalog, type CoreTreeEntry } from "../core/validator.ts";
 import type { InspectedCoreCandidate } from "../core/git-source.ts";
 import {
@@ -25,6 +30,7 @@ import {
   type CoreCandidateRejectionCode,
   type CoreCandidateRejectionPayload,
   type CoreCandidateRejectionStage,
+  type CoreCheckDetailPrunePayload,
   type CoreRollbackActivatedPayload,
   type CoreRollbackDecisionPayload,
   type CoreSourceCheckEligiblePayload,
@@ -57,6 +63,7 @@ const SPIKE_TABLES = new Set(["repositories", "work_items", "work_events"]);
 const IDEMPOTENCY_RETAINED_UNTIL = "9999-12-31T23:59:59.999Z";
 
 export type ControlPlaneFaultPoint =
+  | "after-core-check-detail-delete"
   | "after-core-snapshot-files"
   | "after-integrity-observation"
   | "after-projection-shadow-write";
@@ -253,6 +260,26 @@ export interface CoreStaleSourceOverrideResult {
   reason: string;
   decidedAt: string;
   expiresAt: string;
+  transactionPositions: readonly [0, 1];
+  transactionSequence: number;
+}
+
+export interface CoreCheckDetailPruneInput {
+  expectedLastTransactionSequence: number;
+}
+
+export interface CoreCheckDetailPruneResult {
+  observationRecordId: string;
+  eventRecordId: string;
+  cutoffAt: string;
+  evaluatedAt: string;
+  maximumEligibleChecks: 10000;
+  deletedTransactionCount: number;
+  deletedOccurrenceCount: number;
+  deletedFirstSequence: number | null;
+  deletedLastSequence: number | null;
+  deletedDigest: string;
+  remainingDetailedCheckCount: number;
   transactionPositions: readonly [0, 1];
   transactionSequence: number;
 }
@@ -2041,6 +2068,307 @@ export class ControlPlaneStore {
     }
   }
 
+  pruneCoreCheckDetail(input: CoreCheckDetailPruneInput): CoreCheckDetailPruneResult {
+    if (!Number.isSafeInteger(input.expectedLastTransactionSequence) || input.expectedLastTransactionSequence < 1) {
+      throw new Error("expectedLastTransactionSequence must be a positive safe integer");
+    }
+    const idempotencyKey = `core-prune-check-detail:${input.expectedLastTransactionSequence}`;
+    const commandPayloadJson = canonicalJson({
+      expectedLastTransactionSequence: input.expectedLastTransactionSequence,
+    });
+    const commandPayloadDigest = sha256(commandPayloadJson);
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.verifyExisting(this.applicationTables());
+      const metadata = this.metadata();
+      const commandScope = `database:${metadata.databaseLineageId}`;
+      const prior = this.db
+        .prepare(
+          `SELECT payload_digest, result_json
+           FROM idempotency_receipts
+           WHERE command_scope = ? AND command_kind = 'core.prune-check-detail'
+             AND command_schema_version = 1 AND idempotency_key = ?`,
+        )
+        .get(commandScope, idempotencyKey) as Row | undefined;
+      if (prior) {
+        if (String(prior.payload_digest) !== commandPayloadDigest) {
+          throw new Error("Core check-detail prune was already run with a different payload");
+        }
+        const result = parseCoreCheckDetailPruneResult(parseJson(String(prior.result_json)));
+        this.db.exec("COMMIT");
+        return result;
+      }
+
+      const evaluatedAt = this.now();
+      if (evaluatedAt < metadata.controlTimeWatermark) {
+        throw new Error(
+          `control-plane clock moved backwards behind ${metadata.controlTimeWatermark}; refusing a new write transaction`,
+        );
+      }
+      if (metadata.lastTransactionSequence !== input.expectedLastTransactionSequence) {
+        throw new Error(
+          `stale control-plane sequence: expected ${input.expectedLastTransactionSequence}, current ${metadata.lastTransactionSequence}`,
+        );
+      }
+      const cutoffAt = coreCheckDetailCutoff(evaluatedAt);
+      const rows = this.db
+        .prepare(
+          `SELECT transaction_row.sequence, transaction_row.command_kind, transaction_row.recorded_at,
+                  occurrence.record_id, occurrence.kind, occurrence.payload_json,
+                  occurrence.payload_digest, occurrence.correlation_id,
+                  occurrence.transaction_position
+           FROM control_transactions transaction_row
+           JOIN durable_occurrences occurrence
+             ON occurrence.transaction_sequence = transaction_row.sequence
+           WHERE transaction_row.command_kind IN (
+             'core.record-source-check-eligible', 'core.record-candidate-rejection'
+           )
+           ORDER BY transaction_row.sequence DESC, occurrence.transaction_position`,
+        )
+        .all() as Row[];
+      const histories = new Map<
+        number,
+        {
+          sequence: number;
+          commandKind: string;
+          recordedAt: string;
+          checkId: string;
+          automatic: boolean;
+          validated: boolean;
+          substantive: boolean;
+          occurrences: Array<{
+            recordId: string;
+            kind: string;
+            payloadDigest: string;
+            transactionPosition: number;
+          }>;
+        }
+      >();
+      for (const row of rows) {
+        const sequence = Number(row.sequence);
+        let history = histories.get(sequence);
+        if (!history) {
+          const payload = parseJson(String(row.payload_json));
+          const eligible = row.command_kind === "core.record-source-check-eligible";
+          if (eligible) {
+            if (!recordKindRegistry["core.source-check-eligible-observation"].validatePayload(payload)) {
+              throw new Error(`invalid retained eligible Core check at transaction ${sequence}`);
+            }
+            history = {
+              sequence,
+              commandKind: String(row.command_kind),
+              recordedAt: String(row.recorded_at),
+              checkId: payload.checkId,
+              automatic: true,
+              validated: true,
+              substantive: true,
+              occurrences: [],
+            };
+          } else {
+            if (!recordKindRegistry["core.candidate-rejection-observation"].validatePayload(payload)) {
+              throw new Error(`invalid retained Core rejection at transaction ${sequence}`);
+            }
+            history = {
+              sequence,
+              commandKind: String(row.command_kind),
+              recordedAt: String(row.recorded_at),
+              checkId: payload.checkId,
+              automatic: payload.operation === "automatic-source-check",
+              validated: payload.stage === "continuity" || payload.stage === "persistence",
+              substantive: payload.stage !== "source",
+              occurrences: [],
+            };
+          }
+          histories.set(sequence, history);
+        }
+        history.occurrences.push({
+          recordId: String(row.record_id),
+          kind: String(row.kind),
+          payloadDigest: String(row.payload_digest),
+          transactionPosition: Number(row.transaction_position),
+        });
+      }
+      const ordered = [...histories.values()].sort((left, right) => right.sequence - left.sequence);
+      if (ordered.some((history) => history.occurrences.length !== 2)) {
+        throw new Error("Core check-detail transaction does not contain exactly two occurrences");
+      }
+      const protectedCheckIds = new Set<string>();
+      const automatic = ordered.filter((history) => history.automatic);
+      if (automatic[0]) protectedCheckIds.add(automatic[0].checkId);
+      const lastValidated = automatic.find((history) => history.validated);
+      if (lastValidated) protectedCheckIds.add(lastValidated.checkId);
+      const latestSubstantive = automatic.find((history) => history.substantive);
+      if (latestSubstantive) protectedCheckIds.add(latestSubstantive.checkId);
+      const decisionRows = this.db
+        .prepare(
+          `SELECT payload_json FROM durable_occurrences
+           WHERE occurrence_type = 'record' AND kind = 'core.stale-source-override-decision'`,
+        )
+        .all() as Row[];
+      for (const row of decisionRows) {
+        const payload = parseJson(String(row.payload_json));
+        if (!recordKindRegistry["core.stale-source-override-decision"].validatePayload(payload)) {
+          throw new Error("invalid retained Core stale-source override decision");
+        }
+        protectedCheckIds.add(payload.latestCheckId);
+      }
+
+      const toDelete = selectCoreCheckDetailForPrune(ordered, protectedCheckIds, cutoffAt);
+      const deletedMaterial = toDelete.map((history) => ({
+        commandKind: history.commandKind,
+        occurrences: history.occurrences
+          .slice()
+          .sort((left, right) => left.transactionPosition - right.transactionPosition)
+          .map((occurrence) => ({
+            kind: occurrence.kind,
+            payloadDigest: occurrence.payloadDigest,
+            recordId: occurrence.recordId,
+            transactionPosition: occurrence.transactionPosition,
+          })),
+        transactionSequence: history.sequence,
+      })) satisfies JsonValue[];
+      const deletedDigest = sha256(canonicalJson(deletedMaterial));
+      const deletedFirstSequence = toDelete[0]?.sequence ?? null;
+      const deletedLastSequence = toDelete.at(-1)?.sequence ?? null;
+
+      this.db.exec(`
+        DELETE FROM projection_heads;
+        DELETE FROM projection_subject_lookup;
+        DELETE FROM projection_event_cursor;
+        DELETE FROM projection_generations;
+      `);
+      const deleteReceipt = this.db.prepare("DELETE FROM idempotency_receipts WHERE transaction_sequence = ?");
+      const deleteRecords = this.db.prepare(
+        "DELETE FROM durable_records WHERE record_id IN (SELECT record_id FROM durable_occurrences WHERE transaction_sequence = ?)",
+      );
+      const deleteEvents = this.db.prepare(
+        "DELETE FROM event_ledger WHERE record_id IN (SELECT record_id FROM durable_occurrences WHERE transaction_sequence = ?)",
+      );
+      const deleteOccurrences = this.db.prepare("DELETE FROM durable_occurrences WHERE transaction_sequence = ?");
+      const deleteTransaction = this.db.prepare("DELETE FROM control_transactions WHERE sequence = ?");
+      for (const history of toDelete) {
+        deleteReceipt.run(history.sequence);
+        deleteRecords.run(history.sequence);
+        deleteEvents.run(history.sequence);
+        deleteOccurrences.run(history.sequence);
+        deleteTransaction.run(history.sequence);
+      }
+      this.faultInjector?.("after-core-check-detail-delete");
+
+      const observationRecordId = uuidV7(new Date(evaluatedAt));
+      const eventRecordId = uuidV7(new Date(evaluatedAt));
+      const transactionId = uuidV7(new Date(evaluatedAt));
+      const payload = {
+        databaseLineageId: metadata.databaseLineageId,
+        cutoffAt,
+        evaluatedAt,
+        maximumEligibleChecks: CORE_CHECK_DETAIL_MAXIMUM_ELIGIBLE_CHECKS,
+        deletedTransactionCount: toDelete.length,
+        deletedOccurrenceCount: toDelete.length * 2,
+        deletedFirstSequence,
+        deletedLastSequence,
+        deletedDigest,
+        remainingDetailedCheckCount: ordered.length - toDelete.length,
+      } satisfies JsonValue;
+      if (!recordKindRegistry["core.check-detail-prune-observation"].validatePayload(payload)) {
+        throw new Error("Core check-detail prune result is outside the registered contract");
+      }
+      const payloadJson = canonicalJson(payload);
+      const payloadDigest = sha256(payloadJson);
+      const informationScopeJson = canonicalJson({ deploymentId: metadata.databaseLineageId });
+      const transaction = this.db
+        .prepare(
+          `INSERT INTO control_transactions (
+             transaction_id, command_kind, command_schema_version, principal_kind,
+             principal_id, session_id, idempotency_key, payload_digest,
+             evaluation_time, recorded_at
+           ) VALUES (?, 'core.prune-check-detail', 1, 'fluent-system', 'kernel', NULL, ?, ?, ?, ?)`,
+        )
+        .run(transactionId, idempotencyKey, commandPayloadDigest, evaluatedAt, evaluatedAt);
+      const sequence = Number(transaction.lastInsertRowid);
+      const common = {
+        schemaVersion: 1,
+        subjectKind: "control-plane-database" as const,
+        subjectId: metadata.databaseLineageId,
+        revisionKind: "transaction-sequence",
+        revisionValue: String(input.expectedLastTransactionSequence),
+        sourceKind: "fluent-system",
+        sourceId: "kernel",
+        informationClass: "organization" as const,
+        informationScopeJson,
+        payloadJson,
+        payloadDigest,
+        correlationId: observationRecordId,
+        transactionSequence: sequence,
+        recordedAt: evaluatedAt,
+      };
+      this.insertOccurrence({
+        ...common,
+        recordId: observationRecordId,
+        occurrenceType: "record",
+        kind: "core.check-detail-prune-observation",
+        recordClass: "observation",
+        transactionPosition: 0,
+      });
+      this.insertOccurrence({
+        ...common,
+        recordId: eventRecordId,
+        occurrenceType: "event",
+        kind: "core.check-detail-pruned",
+        causationRecordId: observationRecordId,
+        transactionPosition: 1,
+      });
+      const result: CoreCheckDetailPruneResult = {
+        observationRecordId,
+        eventRecordId,
+        cutoffAt,
+        evaluatedAt,
+        maximumEligibleChecks: CORE_CHECK_DETAIL_MAXIMUM_ELIGIBLE_CHECKS,
+        deletedTransactionCount: toDelete.length,
+        deletedOccurrenceCount: toDelete.length * 2,
+        deletedFirstSequence,
+        deletedLastSequence,
+        deletedDigest,
+        remainingDetailedCheckCount: ordered.length - toDelete.length,
+        transactionPositions: [0, 1],
+        transactionSequence: sequence,
+      };
+      this.db
+        .prepare(
+          `INSERT INTO idempotency_receipts (
+             command_scope, command_kind, command_schema_version, idempotency_key,
+             payload_digest, result_json, transaction_sequence, retained_until
+           ) VALUES (?, 'core.prune-check-detail', 1, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          commandScope,
+          idempotencyKey,
+          commandPayloadDigest,
+          canonicalJson(result as unknown as JsonValue),
+          sequence,
+          IDEMPOTENCY_RETAINED_UNTIL,
+        );
+      this.db
+        .prepare(
+          `UPDATE control_plane_metadata
+           SET control_time_watermark = ?, last_transaction_sequence = ?
+           WHERE singleton = 1`,
+        )
+        .run(evaluatedAt, sequence);
+      const generations = (Object.keys(projectionContractRegistry) as ProjectionName[]).map((projectionName) =>
+        this.buildProjectionShadow(projectionName, sequence, evaluatedAt),
+      );
+      this.faultInjector?.("after-projection-shadow-write");
+      this.publishProjectionGenerations(generations, evaluatedAt);
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   recordCoreCandidateRejection(input: CoreCandidateRejectionInput): CoreCandidateRejectionResult {
     const commandInput = {
       checkId: input.checkId,
@@ -3091,6 +3419,19 @@ export class ControlPlaneStore {
         if (outputs[0]!.payload_digest !== outputs[1]!.payload_digest) {
           throw new Error(`Core stale-source override outputs disagree: ${String(row.sequence)}`);
         }
+      } else if (row.command_kind === "core.prune-check-detail") {
+        if (
+          typeof row.idempotency_key !== "string" ||
+          !/^core-prune-check-detail:[1-9][0-9]*$/.test(row.idempotency_key) ||
+          row.principal_kind !== "fluent-system" ||
+          row.principal_id !== "kernel" ||
+          receiptCount !== 1
+        ) {
+          throw new Error(`Core check-detail prune receipt shape is invalid: ${String(row.sequence)}`);
+        }
+        if (outputs[0]!.payload_digest !== outputs[1]!.payload_digest) {
+          throw new Error(`Core check-detail prune outputs disagree: ${String(row.sequence)}`);
+        }
       }
     }
 
@@ -3606,6 +3947,7 @@ export class ControlPlaneStore {
       if (commandKind === "core.record-candidate-rejection") parseCoreCandidateRejectionResult(result);
       if (commandKind === "core.record-source-check-eligible") parseCoreSourceCheckEligibleResult(result);
       if (commandKind === "core.issue-stale-source-override") parseCoreStaleSourceOverrideResult(result);
+      if (commandKind === "core.prune-check-detail") parseCoreCheckDetailPruneResult(result);
       assertUtcInstant(String(row.retained_until), `idempotency receipt ${String(row.idempotency_key)} retention time`);
       if (
         (commandKind === "control-plane.check-integrity" ||
@@ -3613,7 +3955,8 @@ export class ControlPlaneStore {
           commandKind === "core.rollback-snapshot" ||
           commandKind === "core.record-candidate-rejection" ||
           commandKind === "core.record-source-check-eligible" ||
-          commandKind === "core.issue-stale-source-override") &&
+          commandKind === "core.issue-stale-source-override" ||
+          commandKind === "core.prune-check-detail") &&
         String(row.retained_until) !== IDEMPOTENCY_RETAINED_UNTIL
       ) {
         throw new Error(`idempotency receipt retention mismatch: ${String(row.idempotency_key)}`);
@@ -3824,6 +4167,42 @@ export class ControlPlaneStore {
           decisionPayload.expiresAt !== override.expiresAt
         ) {
           throw new Error(`Core stale-source override receipt decision mismatch: ${String(row.idempotency_key)}`);
+        }
+      }
+      if (commandKind === "core.prune-check-detail") {
+        const prune = parseCoreCheckDetailPruneResult(result);
+        if (
+          String(row.idempotency_key) !== `core-prune-check-detail:${prune.transactionSequence - 1}` ||
+          prune.transactionSequence !== Number(row.transaction_sequence) ||
+          prune.evaluatedAt !== String(transaction.evaluation_time) ||
+          prune.evaluatedAt !== String(transaction.recorded_at)
+        ) {
+          throw new Error(`Core check-detail prune receipt result mismatch: ${String(row.idempotency_key)}`);
+        }
+        const outputs = this.db
+          .prepare(
+            `SELECT record_id, payload_json FROM durable_occurrences
+             WHERE transaction_sequence = ? ORDER BY transaction_position`,
+          )
+          .all(row.transaction_sequence!) as Row[];
+        const payload = outputs[0] ? parseJson(String(outputs[0].payload_json)) : undefined;
+        if (
+          outputs.length !== 2 ||
+          String(outputs[0]!.record_id) !== prune.observationRecordId ||
+          String(outputs[1]!.record_id) !== prune.eventRecordId ||
+          !payload ||
+          !recordKindRegistry["core.check-detail-prune-observation"].validatePayload(payload) ||
+          payload.cutoffAt !== prune.cutoffAt ||
+          payload.evaluatedAt !== prune.evaluatedAt ||
+          payload.maximumEligibleChecks !== prune.maximumEligibleChecks ||
+          payload.deletedTransactionCount !== prune.deletedTransactionCount ||
+          payload.deletedOccurrenceCount !== prune.deletedOccurrenceCount ||
+          payload.deletedFirstSequence !== prune.deletedFirstSequence ||
+          payload.deletedLastSequence !== prune.deletedLastSequence ||
+          payload.deletedDigest !== prune.deletedDigest ||
+          payload.remainingDetailedCheckCount !== prune.remainingDetailedCheckCount
+        ) {
+          throw new Error(`Core check-detail prune receipt output mismatch: ${String(row.idempotency_key)}`);
         }
       }
     }
@@ -4569,6 +4948,82 @@ function parseCoreStaleSourceOverrideResult(value: JsonValue): CoreStaleSourceOv
     reason: String(result.reason),
     decidedAt: String(result.decidedAt),
     expiresAt: String(result.expiresAt),
+    transactionPositions: [0, 1],
+    transactionSequence: Number(result.transactionSequence),
+  };
+}
+
+function parseCoreCheckDetailPruneResult(value: JsonValue): CoreCheckDetailPruneResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("invalid Core check-detail prune receipt result");
+  }
+  const result = value as Record<string, JsonValue>;
+  const expected = [
+    "observationRecordId",
+    "eventRecordId",
+    "cutoffAt",
+    "evaluatedAt",
+    "maximumEligibleChecks",
+    "deletedTransactionCount",
+    "deletedOccurrenceCount",
+    "deletedFirstSequence",
+    "deletedLastSequence",
+    "deletedDigest",
+    "remainingDetailedCheckCount",
+    "transactionPositions",
+    "transactionSequence",
+  ].sort();
+  const keys = Object.keys(result).sort();
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
+    throw new Error("invalid Core check-detail prune receipt result fields");
+  }
+  if (
+    !isUuidV7(String(result.observationRecordId)) ||
+    !isUuidV7(String(result.eventRecordId)) ||
+    result.maximumEligibleChecks !== 10000 ||
+    !Number.isSafeInteger(result.deletedTransactionCount) ||
+    Number(result.deletedTransactionCount) < 0 ||
+    result.deletedOccurrenceCount !== Number(result.deletedTransactionCount) * 2 ||
+    !/^sha256:[0-9a-f]{64}$/.test(String(result.deletedDigest)) ||
+    !Number.isSafeInteger(result.remainingDetailedCheckCount) ||
+    Number(result.remainingDetailedCheckCount) < 0 ||
+    !Array.isArray(result.transactionPositions) ||
+    result.transactionPositions.length !== 2 ||
+    result.transactionPositions[0] !== 0 ||
+    result.transactionPositions[1] !== 1 ||
+    !Number.isSafeInteger(result.transactionSequence) ||
+    Number(result.transactionSequence) < 2
+  ) {
+    throw new Error("invalid Core check-detail prune receipt result values");
+  }
+  const deletedCount = Number(result.deletedTransactionCount);
+  if (
+    (deletedCount === 0 && (result.deletedFirstSequence !== null || result.deletedLastSequence !== null)) ||
+    (deletedCount > 0 &&
+      (!Number.isSafeInteger(result.deletedFirstSequence) ||
+        Number(result.deletedFirstSequence) < 1 ||
+        !Number.isSafeInteger(result.deletedLastSequence) ||
+        Number(result.deletedLastSequence) < Number(result.deletedFirstSequence)))
+  ) {
+    throw new Error("invalid Core check-detail prune deleted sequence bounds");
+  }
+  assertUtcInstant(String(result.cutoffAt), "Core check-detail prune cutoff");
+  assertUtcInstant(String(result.evaluatedAt), "Core check-detail prune evaluation time");
+  if (new Date(String(result.evaluatedAt)).getTime() - new Date(String(result.cutoffAt)).getTime() !== 30 * 86_400_000) {
+    throw new Error("invalid Core check-detail prune retention interval");
+  }
+  return {
+    observationRecordId: String(result.observationRecordId),
+    eventRecordId: String(result.eventRecordId),
+    cutoffAt: String(result.cutoffAt),
+    evaluatedAt: String(result.evaluatedAt),
+    maximumEligibleChecks: 10000,
+    deletedTransactionCount: deletedCount,
+    deletedOccurrenceCount: Number(result.deletedOccurrenceCount),
+    deletedFirstSequence: result.deletedFirstSequence === null ? null : Number(result.deletedFirstSequence),
+    deletedLastSequence: result.deletedLastSequence === null ? null : Number(result.deletedLastSequence),
+    deletedDigest: String(result.deletedDigest),
+    remainingDetailedCheckCount: Number(result.remainingDetailedCheckCount),
     transactionPositions: [0, 1],
     transactionSequence: Number(result.transactionSequence),
   };

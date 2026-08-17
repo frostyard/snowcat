@@ -112,6 +112,10 @@ its causally linked event is `core.stale-source-override-issued`.
     a changed payload or stale sequence MUST fail.
 18. This pre-production schema defines no in-place migration; initialize a
     fresh target database when its registered vocabulary changes.
+19. Check detail needed for the latest automatic outcome, last successful
+    validation, latest substantive readiness outcome, or a retained override
+    decision MUST remain protected under
+    [Core check-detail retention](core-check-detail-retention.md).
 
 ## Derived artifacts
 
@@ -126,8 +130,10 @@ its causally linked event is `core.stale-source-override-issued`.
 - Rationale:
   [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md),
   [ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md),
+  [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md),
   [ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md), and
   [ADR-0035](../adr/0035-route-human-authority-through-typed-decisions.md)
 - Context: [Core snapshot ingestion](../design/core-snapshot-ingestion.md)
 - Activation substrate: [Core snapshot activation](core-snapshot-activation.md)
+- Evidence retention: [Core check-detail retention](core-check-detail-retention.md)
 - Delivery: [Core snapshot ingestion plan](../plans/core-snapshot-ingestion.md)

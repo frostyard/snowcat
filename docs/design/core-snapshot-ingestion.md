@@ -6,9 +6,13 @@ Living document. Rationale:
 [ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md), and
 [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md),
 and [ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md).
+Retention rationale:
+[ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md).
 Contracts: [core snapshot verification](../specs/core-snapshot-verification.md)
 [Core snapshot activation](../specs/core-snapshot-activation.md), and
 [Core source readiness](../specs/core-source-readiness.md).
+Retention contract:
+[Core check-detail retention](../specs/core-check-detail-retention.md).
 
 ## Overview
 
@@ -168,9 +172,11 @@ does not become activation precedence.
 
 `core verify` intentionally records nothing. `core activate` attempts rejection
 recording and preserves the original failure if diagnostics cannot be written.
-The current manual-only slice retains accepted rejection history and receipts;
-payload and list size are bounded now, while count/time purge semantics remain
-required before periodic polling.
+The current manual-only slice retains accepted rejection history and receipts
+subject to the implemented 30-day and 10,000-item
+[check-detail retention contract](../specs/core-check-detail-retention.md).
+Snapshots, decisions, current-readiness anchors, and cited evidence remain
+protected; periodic polling is still a later controller operation.
 
 ## Operational notes
 
@@ -190,6 +196,9 @@ required before periodic polling.
   <expected-control-plane-sequence> <expires-at> <reason>` only when base
   readiness is `source-stale`; the canonical UTC expiry must be within 24 hours
   of server issuance.
+- Run `npm run --silent core -- prune-check-history
+  <expected-control-plane-sequence>` to apply check-detail retention and retain
+  an auditable digest of complete deleted transactions.
 - `FLUENT_CORE_URL`, `FLUENT_CORE_REF`, and `FLUENT_CORE_MIRROR` select the
   exact allowed source, branch ref, and host-local mirror path.
 - A valid report proves compatibility with the implemented repository-authority
@@ -198,9 +207,8 @@ required before periodic polling.
 - A failed fetch or validation before the first activation leaves no last-known-
   good state. Atomic activation now preserves an existing current snapshot;
   durable rejected-candidate diagnostics preserve the failure. The readiness
-  gate fails closed without active authority; retention/purge and polling
-  belong to
-  later phases of the
+  gate fails closed without active authority; periodic polling belongs to a
+  later phase of the
   [ingestion plan](../plans/core-snapshot-ingestion.md).
 - The mirror contains organization-governed data and should be backed up and
   permissioned as an `organization` asset. It must never be mounted as an
@@ -234,8 +242,10 @@ The exact record and read contract is
   [ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md), and
   [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md),
   and [ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md)
+  and [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md)
 - Contracts: [core snapshot verification](../specs/core-snapshot-verification.md)
   [Core snapshot activation](../specs/core-snapshot-activation.md), and
   [Core source readiness](../specs/core-source-readiness.md)
+  and [Core check-detail retention](../specs/core-check-detail-retention.md)
 - Built in: [Core snapshot ingestion — Phases 1–2](../plans/core-snapshot-ingestion.md)
 - Product: [GitHub organization agent fleet](../prd/agent-fleet.md)

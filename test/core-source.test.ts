@@ -465,6 +465,131 @@ test("a stale-source override neither transfers to new authority nor masks a lat
   store.close();
 });
 
+test("Core check-detail pruning enforces 30 days while preserving readiness and cited evidence", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-core-retention-test-"));
+  const path = join(directory, "control-plane.db");
+  let now = new Date("2026-06-01T00:00:00.000Z");
+  let injectFailure = false;
+  const store = new ControlPlaneStore(path, () => now, (point) => {
+    if (injectFailure && point === "after-core-check-detail-delete") {
+      throw new Error("injected check-detail prune failure");
+    }
+  });
+  const candidate = await activationCandidate("7".repeat(40), "8".repeat(40));
+  const activation = store.activateCoreSnapshot({ candidate, expectedLastTransactionSequence: 1 });
+  const removableCheckId = uuidV7(now);
+  store.recordCoreCandidateRejection({
+    checkId: removableCheckId,
+    operation: "automatic-source-check",
+    stage: "validation",
+    code: "candidate-invalid",
+    summary: "an older invalid candidate is ordinary diagnostic detail",
+    details: [],
+    sourceUrl: candidate.sourceUrl,
+    sourceRef: candidate.ref,
+    commitId: "9".repeat(40),
+    treeId: "a".repeat(40),
+  });
+  const citedCheckId = uuidV7(now);
+  store.recordCoreSourceCheckEligible({
+    checkId: citedCheckId,
+    candidate,
+    expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+  });
+
+  now = new Date("2026-06-02T01:00:00.000Z");
+  const override = store.issueCoreStaleSourceOverride({
+    expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+    expiresAt: "2026-06-03T01:00:00.000Z",
+    reason: "Preserve service while the configured authority source is unavailable",
+  });
+  now = new Date("2026-06-02T02:00:00.000Z");
+  const latestValidatedCheckId = uuidV7(now);
+  store.recordCoreSourceCheckEligible({
+    checkId: latestValidatedCheckId,
+    candidate,
+    expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+  });
+  now = new Date("2026-07-03T02:00:00.000Z");
+  const latestAutomaticCheckId = uuidV7(now);
+  store.recordCoreCandidateRejection({
+    checkId: latestAutomaticCheckId,
+    operation: "automatic-source-check",
+    stage: "source",
+    code: "source-unavailable",
+    summary: "the configured Core ref is temporarily unavailable",
+    details: [],
+    sourceUrl: candidate.sourceUrl,
+    sourceRef: candidate.ref,
+  });
+
+  const sequenceBeforePrune = store.metadata().lastTransactionSequence;
+  const digestBeforeFailure = store.authoritativeDigest();
+  injectFailure = true;
+  assert.throws(
+    () => store.pruneCoreCheckDetail({ expectedLastTransactionSequence: sequenceBeforePrune }),
+    /injected check-detail prune failure/,
+  );
+  injectFailure = false;
+  assert.equal(store.authoritativeDigest(), digestBeforeFailure);
+  assert.equal(store.metadata().lastTransactionSequence, sequenceBeforePrune);
+  assert.equal(store.coreCandidateRejections().some((row) => row.checkId === removableCheckId), true);
+
+  const prune = store.pruneCoreCheckDetail({ expectedLastTransactionSequence: sequenceBeforePrune });
+  assert.equal(prune.cutoffAt, "2026-06-03T02:00:00.000Z");
+  assert.equal(prune.deletedTransactionCount, 1);
+  assert.equal(prune.deletedOccurrenceCount, 2);
+  assert.equal(prune.deletedFirstSequence, 3);
+  assert.equal(prune.deletedLastSequence, 3);
+  assert.equal(prune.remainingDetailedCheckCount, 3);
+  assert.match(prune.deletedDigest, /^sha256:[0-9a-f]{64}$/);
+  assert.deepEqual(prune.transactionPositions, [0, 1]);
+  assert.equal(store.metadata().lastTransactionSequence, sequenceBeforePrune + 1);
+  assert.deepEqual(
+    store.occurrences().filter((occurrence) => occurrence.transactionSequence === prune.transactionSequence)
+      .map((occurrence) => [occurrence.kind, occurrence.transactionPosition]),
+    [
+      ["core.check-detail-prune-observation", 0],
+      ["core.check-detail-pruned", 1],
+    ],
+  );
+  assert.equal(store.occurrences().some((occurrence) => occurrence.transactionSequence === 3), false);
+  const retainedCheckIds = store.occurrences().flatMap((occurrence) =>
+    occurrence.payload && typeof occurrence.payload === "object" && !Array.isArray(occurrence.payload) &&
+      typeof occurrence.payload.checkId === "string"
+      ? [occurrence.payload.checkId]
+      : [],
+  );
+  assert.equal(retainedCheckIds.includes(citedCheckId), true);
+  assert.equal(retainedCheckIds.includes(latestValidatedCheckId), true);
+  assert.equal(retainedCheckIds.includes(latestAutomaticCheckId), true);
+  assert.equal(store.occurrences().some((occurrence) => occurrence.recordId === override.decisionRecordId), true);
+  assert.deepEqual(store.pruneCoreCheckDetail({ expectedLastTransactionSequence: sequenceBeforePrune }), prune);
+
+  const empty = store.pruneCoreCheckDetail({
+    expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+  });
+  assert.equal(empty.deletedTransactionCount, 0);
+  assert.equal(empty.deletedFirstSequence, null);
+  assert.equal(empty.deletedLastSequence, null);
+  assert.equal(empty.deletedDigest, `sha256:${createHash("sha256").update("[]").digest("hex")}`);
+  store.close();
+
+  const cliOutput = execFileSync(
+    process.execPath,
+    ["--import", "tsx", "src/core/cli.ts", "prune-check-history", String(empty.transactionSequence)],
+    { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, FLUENT_CONTROL_DB: path } },
+  );
+  const cliPrune = JSON.parse(cliOutput) as Record<string, unknown>;
+  assert.equal(cliPrune.deletedTransactionCount, 0);
+  assert.equal(cliPrune.transactionSequence, empty.transactionSequence + 1);
+
+  const reopened = new ControlPlaneStore(path);
+  assert.equal(reopened.metadata().lastTransactionSequence, cliPrune.transactionSequence);
+  assert.equal(reopened.coreAdmissionReadiness().reason, "source-stale");
+  reopened.close();
+});
+
 test("activate records a bounded source rejection while verify remains outside the target store", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fluent-core-cli-rejection-test-"));
   const controlPath = join(directory, "control-plane.db");

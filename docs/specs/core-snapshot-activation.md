@@ -97,7 +97,7 @@ The rejection payload has this exact shape:
 | `activeCommitId` | string or null | Required for continuity failure; exact active source commit used by the ancestry check |
 | `observedAt` | canonical UTC instant | Server evaluation and recorded time |
 
-Schema version `2` and registry version `7` govern three authority tables:
+Schema version `2` and registry version `8` govern three authority tables:
 
 | Table | Retained content |
 | --- | --- |
@@ -153,8 +153,9 @@ previous snapshot/commit, decision, operator, and reason.
     after the activation transaction has fully rolled back.
 13. Rejection diagnostics MUST use the registered stage/code pairing, fixed
     source identity, bounded sanitized strings, organization information class,
-    deployment scope, optional exact source revision, and indefinitely retained
-    idempotency receipt. They MUST NOT copy candidate bytes or create a fact.
+    deployment scope, optional exact source revision, and a receipt governed by
+    [Core check-detail retention](core-check-detail-retention.md). They MUST NOT
+    copy candidate bytes or create a fact.
 14. Rejection recording failure MUST be reported alongside the original error
     and MUST NOT replace or disguise that original failure.
 15. Operator rollback MUST require an existing active snapshot, a different
@@ -172,10 +173,10 @@ previous snapshot/commit, decision, operator, and reason.
     of each original transition.
 18. This version refuses automatic ref rewinds and unrelated history and feeds
     automatic outcomes to the separate
-    [Core source readiness](core-source-readiness.md) contract. It does not yet
-    poll or purge rejection history; those operations require later typed
-    commands and contracts before unattended polling.
-19. A schema version other than `2` or registry version other than `7` MUST fail
+    [Core source readiness](core-source-readiness.md) contract. Typed pruning is
+    implemented under [Core check-detail retention](core-check-detail-retention.md);
+    periodic polling remains a later controller operation.
+19. A schema version other than `2` or registry version other than `8` MUST fail
     closed. This pre-production version defines no in-place upgrade; initialize
     a fresh target database.
 
@@ -195,8 +196,10 @@ previous snapshot/commit, decision, operator, and reason.
   [ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md),
   [ADR-0039](../adr/0039-use-typed-source-native-subject-identities.md), and
   [ADR-0040](../adr/0040-establish-facts-through-registered-predicate-contracts.md),
-  and [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md)
+  [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md),
+  and [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md)
 - Context: [Core snapshot ingestion](../design/core-snapshot-ingestion.md)
 - Source gate: [Core source readiness](core-source-readiness.md)
+- Diagnostic retention: [Core check-detail retention](core-check-detail-retention.md)
 - Substrate: [control-plane kernel](control-plane-kernel.md)
 - Delivery: [Core snapshot ingestion plan](../plans/core-snapshot-ingestion.md)

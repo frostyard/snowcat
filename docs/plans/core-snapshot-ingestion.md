@@ -66,8 +66,12 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
   persistence, or the requirement for active authority.
 - Add configurable periodic polling over the same typed sync operation; do not
   add a model or webhook requirement.
-- Set time/count retention and purge semantics for raw snapshots and candidate
-  rejection history before periodic polling can create unattended volume.
+- Retain raw snapshots and their authority history indefinitely; bound ordinary
+  eligible-check and candidate-rejection detail before periodic polling can
+  create unattended volume.
+- The accepted [check-detail retention contract](../specs/core-check-detail-retention.md)
+  retains ordinary eligible/rejection detail for 30 days and at most 10,000
+  unprotected checks while preserving current-readiness and decision evidence.
 - **Done when:** tests distinguish unchanged retry, fast-forward activation,
   force-push refusal, explicit rollback, source outage under and over the
   freshness boundary, and locally advancing exception expiry.
@@ -95,20 +99,21 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
 
 ## Open questions
 
-- **Retention:** set bounded failed-candidate history and raw snapshot retention
-  before unattended polling begins; current payloads and reads are bounded, but
-  accepted history is not yet purged.
+- None for the implemented manual synchronization and retention slice. Polling
+  cadence and backoff remain part of the next controller slice.
 
 ## References
 
 - Implements: [core snapshot ingestion](../design/core-snapshot-ingestion.md),
   [core snapshot verification](../specs/core-snapshot-verification.md), and
   [Core snapshot activation](../specs/core-snapshot-activation.md), and
-  [Core source readiness](../specs/core-source-readiness.md)
+  [Core source readiness](../specs/core-source-readiness.md), and
+  [Core check-detail retention](../specs/core-check-detail-retention.md)
 - Rationale:
   [ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md) and
   [ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md), and
   [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md),
   and [ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md)
+  and [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md)
 - Parent delivery order: [product foundation roadmap](product-foundation-roadmap.md)
 - Target substrate: [control-plane kernel bootstrap](control-plane-kernel-bootstrap.md)
