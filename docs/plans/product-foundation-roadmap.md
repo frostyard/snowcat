@@ -132,9 +132,11 @@ does not itself enroll the repository in the fleet.
   implemented under
   [ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md)
   and its [exact contract](../specs/conclusive-run-rate-evaluator.md). The
-  `github-check-runs:v1` adapter remains deliberately unregistered until this
-  phase defines and implements population selection, source completeness,
-  reruns, required-check identity, pagination, and fork behavior.
+  `github-required-checks:v1` adapter remains deliberately unregistered until
+  this phase implements the enforced-ruleset population and source-completeness
+  boundary from
+  [ADR-0056](../adr/0056-derive-required-checks-from-enforced-github-rules.md).
+  The earlier `github-check-runs:v1` placeholder will not be registered.
 - Author and implement the GitHub observation and reconciliation design/spec
   required by
   [ADR-0018](../adr/0018-bind-worker-sessions-and-verify-github-artifacts.md).
@@ -293,10 +295,11 @@ does not itself enroll the repository in the fleet.
 - **Numeric targets:** collect Phase 5–9 baselines before setting targets, but
   define the measurement formulas and minimum sample rules earlier so targets
   cannot be selected after seeing favorable data.
-- **GitHub check population:** decide whether the first adapter observes
-  default-branch commits, merged pull-request head revisions, or another exact
-  population, and define required-check identity and conclusion classification
-  before registering `github-check-runs:v1`.
+- **GitHub observation rollout:** configure stable, integration-bound required
+  checks through active rulesets on the initial repositories before opening a
+  measurement window. V1 then observes merged pull-request required-check
+  revisions and treats merge queues, forks, rule drift, and unattributable
+  default-branch updates as `unable` rather than approximating them.
 - **UI timing:** retain CLI/API as the acceptance surface until Phase 5 behavior
   stabilizes; do not use UI work to conceal unsettled decision semantics.
 

@@ -70,6 +70,7 @@ Docs are split by the question they answer:
 - [0053 — Resume only unchanged transient held work](adr/0053-resume-only-unchanged-transient-held-work.md)
 - [0054 — Bind success measures to versioned verification profiles](adr/0054-bind-success-measures-to-versioned-verification-profiles.md)
 - [0055 — Separate evidence population from rate evaluation](adr/0055-separate-evidence-population-from-rate-evaluation.md)
+- [0056 — Derive required checks from enforced GitHub rules](adr/0056-derive-required-checks-from-enforced-github-rules.md)
 
 ### Domain language
 

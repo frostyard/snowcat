@@ -4,7 +4,9 @@ Living document. Rationale:
 [ADR-0031](../adr/0031-separate-delivery-from-outcome-achievement.md) and
 [ADR-0054](../adr/0054-bind-success-measures-to-versioned-verification-profiles.md),
 with evidence-population boundaries from
-[ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md).
+[ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md)
+and enforced-check authority from
+[ADR-0056](../adr/0056-derive-required-checks-from-enforced-github-rules.md).
 Current contract:
 [verification-profile ingestion](../specs/verification-profile-ingestion.md),
 [Goal ingestion](../specs/goal-ingestion.md), and the first executable
@@ -88,9 +90,11 @@ version, and parameters. Resolution fails when the profile is absent, the mode
 differs, parameters fail its embedded schema, the subject kind is unsupported,
 the window is invalid, or any named mechanism version is absent from Fluent's
 closed registry. That registry currently contains
-`conclusive-run-rate:v1` but not its proposed `github-check-runs:v1` source
-adapter, so the merged fixture-only Goal contract validates while the
-representative live Goal still fails closed.
+`conclusive-run-rate:v1` but not the required
+`github-required-checks:v1` source adapter, so the merged fixture-only Goal
+contract validates while the representative live Goal still fails closed. The
+earlier `github-check-runs:v1` placeholder will not be registered because raw
+check runs do not establish the enforced population.
 
 Profiles may be published before they are referenced. Publication alone does
 not claim executable support, create a controller timer, collect observations,
@@ -114,14 +118,52 @@ counts `conclusive` occurrences over the full population, and compares the
 integer ratio to the declared threshold without rounded display arithmetic. An
 open window, incomplete coverage, or empty population returns `unable`.
 
-The evaluator deliberately does not decide which GitHub commits or required
-checks belong in the population, how reruns or duplicate names collapse, or
-which GitHub conclusions are conclusive. Those are versioned
-`github-check-runs` adapter semantics and remain unsupported. GitHub's API lists
-check runs for an exact ref, may cap a ref query at runs associated with the
-1,000 most recent check suites, and can return incomplete fork associations;
-registering the adapter before those boundaries are implemented would make an
-unsupported claim.
+The evaluator deliberately does not decide which GitHub commits or enforced
+required checks belong in the population, how reruns or duplicate names
+collapse, or which GitHub conclusions are conclusive. Those are versioned
+`github-required-checks:v1` adapter semantics and remain unsupported. GitHub's
+API lists check runs for an exact ref, may cap a ref query at runs associated
+with the 1,000 most recent check suites, and can return incomplete fork
+associations; registering the adapter before those boundaries are implemented
+would make an unsupported claim.
+
+### Enforced GitHub required-check population
+
+ADR-0056 resolves the source choice: GitHub's active rulesets, not a duplicated
+Core selector list, own which checks are required. A measurement window starts
+only after Fluent retains a non-empty, integration-bound ruleset baseline for
+the observed default branch. The branch and normalized selector set remain
+fixed through the half-open window. Any observed drift, source gap, or
+unsupported rule shape makes the population incomplete.
+
+The qualifying change population contains pull requests merged during that
+window into the retained default branch. Fluent also reconciles every update to
+that branch; a direct or bypass update that cannot be attributed to exactly one
+qualifying pull request prevents completeness. For each qualifying pull
+request, the controller must already have the required-check revision GitHub
+actually evaluated. GitHub may require the latest head commit or a test merge
+commit, so the final merge commit is not a safe substitute.
+
+One expected occurrence is the pair of one qualifying pull request and one
+enforced selector. Check runs and commit statuses with the same required name
+are evidence inside that occurrence rather than extra denominator rows. A
+terminal failure may be conclusive evidence of CI behavior while separately
+establishing a bypass or enforcement problem; the rate evaluator does not erase
+the raw conclusion or establish policy compliance.
+
+V1 supports only a stable active ruleset on the default branch, selectors bound
+to exact integration IDs, non-fork pull requests, and non-merge-queue changes.
+Classic protection, “any source” selectors, merge queues, forks, rule drift,
+unresolved check revisions, conflicting source records, and incomplete
+pagination return `unable`. This is intentionally narrower than GitHub's full
+feature set.
+
+Collection uses a separate read-only GitHub App with repository metadata, pull
+request, checks, commit-status, contents, and Administration read access. The
+last permission is required for ruleset-change webhooks; it grants visibility,
+not repository mutation. Signed webhook deliveries are idempotent observations
+and polling reconciles them. Neither transport alone can hide a gap that makes
+historical coverage incomplete.
 
 Each completed mechanism evaluation produces `satisfied`, `failed`, or
 `unable`. A capable worker may propose or critique evidence but cannot write the
@@ -140,6 +182,8 @@ count or elapsed time into outcome success.
 - The closed registry now resolves `conclusive-run-rate:v1` to real callable
   code. Goal fixtures prove the surrounding contract, but a live Goal cannot
   activate until its source adapter and every other referenced mechanism land.
+- A required-check window cannot begin on a repository without an active,
+  non-empty, integration-bound GitHub ruleset applying to its default branch.
 - Keep old retained snapshots and profile bytes available for rollback and
   historical evidence explanation.
 
@@ -149,6 +193,7 @@ count or elapsed time into outcome success.
   [ADR-0031](../adr/0031-separate-delivery-from-outcome-achievement.md) and
   [ADR-0054](../adr/0054-bind-success-measures-to-versioned-verification-profiles.md),
   with [ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md)
+  and [ADR-0056](../adr/0056-derive-required-checks-from-enforced-github-rules.md)
 - Contracts:
   [verification-profile ingestion](../specs/verification-profile-ingestion.md),
   [Goal ingestion](../specs/goal-ingestion.md),
@@ -159,4 +204,6 @@ count or elapsed time into outcome success.
 - Product: [agent fleet PRD](../prd/agent-fleet.md)
 - Source constraints:
   [GitHub check-runs API](https://docs.github.com/en/rest/checks/runs) and
-  [GitHub protected-branch required checks](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
+  [GitHub protected-branch required checks](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches),
+  [rules for a branch](https://docs.github.com/en/rest/repos/rules), and
+  [required-check troubleshooting](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks)

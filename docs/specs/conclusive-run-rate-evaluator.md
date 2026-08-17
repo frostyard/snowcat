@@ -56,8 +56,10 @@ integer ratio used for the decision.
    key MUST throw `VerificationMechanismInputError`. Contract-invalid input is
    not an outcome about the measured subject.
 6. The closed registry MUST resolve `conclusive-run-rate:v1` to this callable
-   implementation. It MUST NOT report support for `github-check-runs:v1` until
-   that adapter has its own implemented source contract.
+   implementation. It MUST NOT report support for
+   `github-required-checks:v1` until that adapter has its own implemented
+   durable observation and completeness contract. The superseded
+   `github-check-runs:v1` placeholder MUST remain unsupported.
 7. This evaluator MUST NOT perform network access, parse raw GitHub payloads,
    retain evidence, establish a fact, aggregate a Goal, or mutate lifecycle.
 
@@ -73,6 +75,8 @@ integer ratio used for the decision.
 
 - Rationale:
   [ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md)
+  and
+  [ADR-0056](../adr/0056-derive-required-checks-from-enforced-github-rules.md)
 - Context:
   [success-measure verification](../design/success-measure-verification.md)
 - Delivery:

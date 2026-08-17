@@ -54,7 +54,7 @@ their exact prior shapes.
    in Fluent's closed implementation registry. The registry currently contains
    `conclusive-run-rate:v1` but no source adapter, so Goal-capable snapshots
    with fixtures and zero live Goals are accepted while the representative live
-   Goal is rejected with bounded `github-check-runs:v1` detail.
+   Goal is rejected with bounded `github-required-checks:v1` detail.
 9. Once implementations permit live Goals, later automatic activation MUST
    retain the envelope and Goal schemas and every historically activated Goal
    path, including after rollback. Goal content may change, but transition from

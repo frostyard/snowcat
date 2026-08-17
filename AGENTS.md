@@ -67,8 +67,9 @@ removed. -->
 - Register verification mechanisms only through callable implementations in
   [`src/verification/registry.ts`](src/verification/registry.ts). The current
   registry supports `conclusive-run-rate:v1` but deliberately not
-  `github-check-runs:v1`; source incompleteness must never shrink an evaluator's
-  evidence population.
+  `github-required-checks:v1`; source incompleteness must never shrink an
+  evaluator's evidence population. Call a check required only when an active
+  observed GitHub ruleset enforces it for the exact branch and integration.
 - Use `npm run --silent core -- activate <expected-control-plane-sequence>` for
   automatic Core authority mutation. After the first activation it
   verifies Git ancestry from the active source commit, then independently

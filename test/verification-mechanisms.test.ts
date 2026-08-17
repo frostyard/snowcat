@@ -28,7 +28,7 @@ const occurrences = (conclusive: number, inconclusive: number, missing: number) 
 
 test("the registry exposes only callable implemented verification mechanisms", () => {
   assert.equal(supportsVerificationEvaluator("conclusive-run-rate:v1"), true);
-  assert.equal(supportsVerificationSourceAdapter("github-check-runs:v1"), false);
+  assert.equal(supportsVerificationSourceAdapter("github-required-checks:v1"), false);
   assert.equal(verificationEvaluator("not-implemented:v1"), undefined);
 
   const evaluator = verificationEvaluator("conclusive-run-rate:v1");

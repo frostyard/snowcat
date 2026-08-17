@@ -115,7 +115,7 @@ test("the bundled validator accepts Goal-capable Core and enforces retained life
       error instanceof CoreValidationError &&
       /references unsupported verification mechanisms/.test(error.message) &&
       error.details.length === 1 &&
-      error.details[0] === "source adapter github-check-runs:v1",
+      error.details[0] === "source adapter github-required-checks:v1",
   );
 
   const catalogWithGoal = (status: Parameters<typeof validGoal>[0]) => ({
@@ -1339,7 +1339,7 @@ function validVerificationProfile(): Record<string, unknown> {
     evidence_mode: "observational",
     mechanism: {
       kind: "observational-evaluator",
-      source_adapter: { id: "github-check-runs", version: 1 },
+      source_adapter: { id: "github-required-checks", version: 1 },
       evaluator: { id: "conclusive-run-rate", version: 1 },
     },
     parameter_schema: {

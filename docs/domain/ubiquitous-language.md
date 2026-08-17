@@ -604,6 +604,24 @@ lifecycle change, aggregate outcome fact, or worker recommendation.
 ([ADR-0031](../adr/0031-separate-delivery-from-outcome-achievement.md),
 [ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md))
 
+#### Enforced required check
+
+A source-attributed status-check selector in an active GitHub ruleset applying
+to an exact repository branch. It is enforcement configuration, not an
+optional CI run, a check name mentioned in Core, or one observed result.
+
+**Avoid:** important check; declared CI job; every check run.
+([ADR-0056](../adr/0056-derive-required-checks-from-enforced-github-rules.md))
+
+#### Required-check revision
+
+The exact Git commit revision GitHub evaluated for enforced required checks
+when a pull request merged. It may be a pull-request head or test merge commit
+and must be observed rather than inferred from the final merge commit.
+
+**Avoid:** merge commit by default; latest head; current branch tip.
+([ADR-0056](../adr/0056-derive-required-checks-from-enforced-github-rules.md))
+
 ### Organization governance
 
 #### Core candidate

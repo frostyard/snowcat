@@ -1917,9 +1917,10 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   exact schemas, validates referenced profiles, parameters, lifecycle, and
   conformance fixtures, and prevents unsafe automatic removal or mutation.
   The closed mechanism registry now contains the real callable
-  `conclusive-run-rate:v1` evaluator; its GitHub source adapter, evidence
-  retention, fact establishment, and Goal application remain unimplemented, so
-  a representative live Goal still fails closed.
+  `conclusive-run-rate:v1` evaluator; its
+  `github-required-checks:v1` source adapter, evidence retention, fact
+  establishment, and Goal application remain unimplemented, so a
+  representative live Goal still fails closed.
   The kernel does not yet implement target work, general fact mutation, general
   operational state, fleet coordination, or worker mutation and never reads or
   imports the spike database.
@@ -1991,9 +1992,10 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   verification profiles and closed Fluent mechanism versions ship for
   delivery, which named roles satisfy attestation policies, and what evidence
   retention, expiry, and confounding rules apply to each profile?
-- What exact expected population, required-check identity, rerun reduction,
-  conclusion classification, pagination proof, and fork behavior make
-  `github-check-runs:v1` complete enough to register?
+- What exact durable observation records, polling bounds, webhook receipts,
+  pagination proofs, and retention implement the enforced-ruleset population
+  fixed by ADR-0056? Merge queues, forks, classic protection, and changing rule
+  sets remain explicit post-v1 adapter work.
 - What reviewer capability profile, trigger UX, fingerprint algorithm,
   material-scope lineage reset, and unavailable-CI policy implement bounded
   adversarial review consistently across PRDs, plans, and pull requests?
@@ -2141,6 +2143,8 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   [ADR-0054](../adr/0054-bind-success-measures-to-versioned-verification-profiles.md),
   with evidence populations separated from rate evaluation in
   [ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md),
+  with required checks derived only from enforced GitHub rules in
+  [ADR-0056](../adr/0056-derive-required-checks-from-enforced-github-rules.md),
   and the
   [Fluent ubiquitous language](../domain/ubiquitous-language.md)
 - Designs: [queue execution boundary](../design/queue-execution-boundary.md),
