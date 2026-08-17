@@ -74,8 +74,8 @@ the identity states.
 10. Enrollment MUST NOT create, admit, claim, lease, renew, or complete work.
 11. A newer Core authorization, identity result, default-branch head, or
     surface result MUST make older evidence inapplicable without deleting it.
-12. Schema version `6` has no in-place migration from the pre-production target;
-    initialize a fresh database. Registry version is `13`.
+12. Schema version `7` has no in-place migration from the pre-production target;
+    initialize a fresh database. Registry version is `14`.
 
 ## Derived artifacts
 

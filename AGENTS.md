@@ -55,6 +55,11 @@ removed. -->
   explicitly mounts [`src/github/ingress.ts`](src/github/ingress.ts) with a
   lifecycle-owned control store, App ID, and host-injected secret. Never route
   webhook bytes through the Flue agent surface or log rejected source content.
+- Use `recordGitHubSourceCheckpoint`, `openGitHubSourceGap`, and
+  `repairGitHubSourceGap` only for the fixed
+  `github.pull-request-deliveries:v1` post-acquisition coverage loop. The first
+  checkpoint is a point boundary; never create a gap without the latest
+  checkpoint or bypass an open gap with an ordinary checkpoint.
 - Use `npm run --silent control -- …` for host-local target-kernel diagnostics,
   projections, and backup/restore staging. The implementation in
   [`src/control/cli.ts`](src/control/cli.ts) never activates a restore or exposes

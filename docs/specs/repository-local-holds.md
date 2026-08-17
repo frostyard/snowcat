@@ -60,8 +60,8 @@ derives `operator-held` only after current Core authority is materialized.
 8. Hold and clear decisions and events MUST be append-only, source-attributed,
    exact-declaration-bound, and verified on startup. No worker surface may
    impose or clear them.
-9. Registry version `13` has no in-place migration from the pre-production
-   target; initialize a fresh database. Physical schema remains version `6`.
+9. Registry version `14` has no in-place migration from the pre-production
+   target; initialize a fresh database. Physical schema remains version `7`.
 
 ## Derived artifacts
 

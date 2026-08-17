@@ -44,6 +44,8 @@ import {
   commandKindRegistry,
   eventKindRegistry,
   githubPullRequestActions,
+  githubSourceGapCauses,
+  githubSourceScope,
   informationClassAtLeast,
   projectionContractRegistry,
   recordClasses,
@@ -61,6 +63,10 @@ import {
   type GitHubDeliveryRecordedPayload,
   type GitHubPullRequestAction,
   type GitHubPullRequestObservationPayload,
+  type GitHubSourceCheckpointPayload,
+  type GitHubSourceGapCause,
+  type GitHubSourceGapPayload,
+  type GitHubSourceGapRepairPayload,
   type RepositoryCoreAuthorityPayload,
   type RepositoryAccountableOwner,
   type RepositoryGitHubReconciliationPayload,
@@ -640,6 +646,81 @@ export class GitHubDeliveryAcceptanceFailure extends Error {
   constructor(readonly code: GitHubDeliveryAcceptanceFailureCode) {
     super(`GitHub delivery acceptance failed: ${code}`);
   }
+}
+
+export interface GitHubSourceCheckpointInput {
+  expectedLastTransactionSequence: number;
+  runId: string;
+  repositoryId: string;
+  appId: string;
+  installationId: string;
+  coveredFrom: string;
+  coveredThrough: string;
+  pageCount: number;
+  deliveryCount: number;
+  pageProofDigest: string;
+  selectedResponseDigest: string;
+}
+
+export interface GitHubSourceCheckpointResult {
+  repositoryId: string;
+  runId: string;
+  previousCheckpointRecordId: string | null;
+  coveredFrom: string;
+  coveredThrough: string;
+  checkpointDigest: string;
+  checkpointRecordId: string;
+  eventRecordId: string;
+  recordedAt: string;
+  transactionPositions: readonly [0, 1];
+  transactionSequence: number;
+}
+
+export interface GitHubSourceGapInput {
+  expectedLastTransactionSequence: number;
+  runId: string;
+  repositoryId: string;
+  appId: string;
+  installationId: string;
+  checkpointRecordId: string;
+  cause: GitHubSourceGapCause;
+}
+
+export interface GitHubSourceGapResult {
+  repositoryId: string;
+  runId: string;
+  checkpointRecordId: string;
+  gapId: string;
+  gapRecordId: string;
+  eventRecordId: string;
+  lowerBoundAt: string;
+  cause: GitHubSourceGapCause;
+  gapDigest: string;
+  detectedAt: string;
+  transactionPositions: readonly [0, 1];
+  transactionSequence: number;
+}
+
+export interface GitHubSourceGapRepairInput extends Omit<GitHubSourceCheckpointInput, "coveredFrom"> {
+  gapRecordId: string;
+}
+
+export interface GitHubSourceGapRepairResult {
+  repositoryId: string;
+  runId: string;
+  gapId: string;
+  gapRecordId: string;
+  priorCheckpointRecordId: string;
+  checkpointRecordId: string;
+  repairRecordId: string;
+  eventRecordId: string;
+  lowerBoundAt: string;
+  exclusiveEndAt: string;
+  checkpointDigest: string;
+  repairDigest: string;
+  repairedAt: string;
+  transactionPositions: readonly [0, 1, 2];
+  transactionSequence: number;
 }
 
 export interface ProjectionReadResult<T> {
@@ -1794,6 +1875,328 @@ export class ControlPlaneStore {
         addSeconds(receivedAt, 30 * 24 * 60 * 60),
       );
       this.advanceControlMetadata(receivedAt, sequence);
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  recordGitHubSourceCheckpoint(input: GitHubSourceCheckpointInput): GitHubSourceCheckpointResult {
+    const normalized = normalizeGitHubSourceCheckpointInput(input);
+    const idempotencyKey = `github-checkpoint:${normalized.runId}`;
+    const commandPayloadDigest = sha256(canonicalJson(normalized as unknown as JsonValue));
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.verifyExisting(this.applicationTables());
+      const metadata = this.metadata();
+      const commandScope = `database:${metadata.databaseLineageId}`;
+      const priorReceipt = this.commandReceipt(commandScope, "github.record-source-checkpoint", idempotencyKey);
+      if (priorReceipt) {
+        if (String(priorReceipt.payload_digest) !== commandPayloadDigest) throw new Error("GitHub checkpoint run was reused");
+        const result = parseGitHubSourceCheckpointResult(parseJson(String(priorReceipt.result_json)));
+        this.db.exec("COMMIT");
+        return result;
+      }
+      this.assertGitHubCoverageWrite(normalized.expectedLastTransactionSequence, normalized.repositoryId);
+      if (this.findOpenGitHubSourceGap(normalized.repositoryId)) {
+        throw new Error("GitHub source checkpoint requires repair of the open source gap");
+      }
+      const previous = this.latestGitHubSourceCheckpoint(normalized.repositoryId);
+      if (previous) {
+        if (
+          normalized.coveredFrom !== previous.coveredThrough ||
+          normalized.appId !== previous.appId ||
+          normalized.installationId !== previous.installationId
+        ) {
+          throw new Error("GitHub source checkpoint does not continue the latest boundary");
+        }
+      } else if (normalized.coveredFrom !== normalized.coveredThrough) {
+        throw new Error("the first GitHub source checkpoint must establish a point boundary");
+      }
+      const recordedAt = this.checkedGitHubCoverageTime(metadata, normalized.coveredThrough);
+      const checkpointRecordId = uuidV7(new Date(recordedAt));
+      const eventRecordId = uuidV7(new Date(recordedAt));
+      const checkpointDigest = githubCheckpointDigest(normalized);
+      const payload = {
+        repositoryId: normalized.repositoryId,
+        scope: githubSourceScope,
+        appId: normalized.appId,
+        installationId: normalized.installationId,
+        runId: normalized.runId,
+        previousCheckpointRecordId: previous?.checkpointRecordId ?? null,
+        coveredFrom: normalized.coveredFrom,
+        coveredThrough: normalized.coveredThrough,
+        pageCount: normalized.pageCount,
+        deliveryCount: normalized.deliveryCount,
+        pageProofDigest: normalized.pageProofDigest,
+        selectedResponseDigest: normalized.selectedResponseDigest,
+        checkpointDigest,
+        checkpointRecordId,
+        recordedAt,
+      } satisfies GitHubSourceCheckpointPayload;
+      const sequence = this.insertGitHubCoverageTransaction({
+        commandKind: "github.record-source-checkpoint",
+        idempotencyKey,
+        commandPayloadDigest,
+        evaluationTime: recordedAt,
+      });
+      const payloadJson = canonicalJson(payload);
+      const correlationId = normalized.runId;
+      const scopeJson = canonicalJson({ deploymentId: metadata.databaseLineageId });
+      this.insertGitHubCoverageOccurrence({
+        recordId: checkpointRecordId,
+        occurrenceType: "record",
+        kind: "github.source-checkpoint-observation",
+        recordClass: "observation",
+        repositoryId: normalized.repositoryId,
+        revisionKind: "github-source-checkpoint-sha256",
+        revisionValue: checkpointDigest,
+        payloadJson,
+        correlationId,
+        causationRecordId: previous?.checkpointRecordId,
+        sequence,
+        position: 0,
+        recordedAt,
+        scopeJson,
+      });
+      this.insertGitHubCoverageOccurrence({
+        recordId: eventRecordId,
+        occurrenceType: "event",
+        kind: "github.source-checkpoint-recorded",
+        repositoryId: normalized.repositoryId,
+        revisionKind: "github-source-checkpoint-sha256",
+        revisionValue: checkpointDigest,
+        payloadJson,
+        correlationId,
+        causationRecordId: checkpointRecordId,
+        sequence,
+        position: 1,
+        recordedAt,
+        scopeJson,
+      });
+      const result: GitHubSourceCheckpointResult = {
+        repositoryId: normalized.repositoryId,
+        runId: normalized.runId,
+        previousCheckpointRecordId: previous?.checkpointRecordId ?? null,
+        coveredFrom: normalized.coveredFrom,
+        coveredThrough: normalized.coveredThrough,
+        checkpointDigest,
+        checkpointRecordId,
+        eventRecordId,
+        recordedAt,
+        transactionPositions: [0, 1],
+        transactionSequence: sequence,
+      };
+      this.insertReceipt(commandScope, "github.record-source-checkpoint", idempotencyKey, commandPayloadDigest, result, sequence, addSeconds(recordedAt, 30 * 24 * 60 * 60));
+      this.advanceControlMetadata(recordedAt, sequence);
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  openGitHubSourceGap(input: GitHubSourceGapInput): GitHubSourceGapResult {
+    const normalized = normalizeGitHubSourceGapInput(input);
+    const idempotencyKey = `github-gap:${normalized.runId}`;
+    const commandPayloadDigest = sha256(canonicalJson(normalized as unknown as JsonValue));
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.verifyExisting(this.applicationTables());
+      const metadata = this.metadata();
+      const commandScope = `database:${metadata.databaseLineageId}`;
+      const priorReceipt = this.commandReceipt(commandScope, "github.open-source-gap", idempotencyKey);
+      if (priorReceipt) {
+        if (String(priorReceipt.payload_digest) !== commandPayloadDigest) throw new Error("GitHub gap run was reused");
+        const result = parseGitHubSourceGapResult(parseJson(String(priorReceipt.result_json)));
+        this.db.exec("COMMIT");
+        return result;
+      }
+      this.assertGitHubCoverageWrite(normalized.expectedLastTransactionSequence, normalized.repositoryId);
+      if (this.findOpenGitHubSourceGap(normalized.repositoryId)) throw new Error("GitHub source gap is already open");
+      const checkpoint = this.latestGitHubSourceCheckpoint(normalized.repositoryId);
+      if (
+        !checkpoint ||
+        checkpoint.checkpointRecordId !== normalized.checkpointRecordId ||
+        checkpoint.appId !== normalized.appId ||
+        checkpoint.installationId !== normalized.installationId
+      ) {
+        throw new Error("GitHub source gap requires the latest checkpoint boundary");
+      }
+      const detectedAt = this.checkedGitHubCoverageTime(metadata, checkpoint.coveredThrough);
+      const gapRecordId = uuidV7(new Date(detectedAt));
+      const eventRecordId = uuidV7(new Date(detectedAt));
+      const gapDigest = sha256(canonicalJson({
+        repositoryId: normalized.repositoryId,
+        scope: githubSourceScope,
+        appId: normalized.appId,
+        installationId: normalized.installationId,
+        runId: normalized.runId,
+        checkpointRecordId: normalized.checkpointRecordId,
+        gapId: gapRecordId,
+        lowerBoundAt: checkpoint.coveredThrough,
+        cause: normalized.cause,
+        detectedAt,
+      }));
+      const payload = {
+        repositoryId: normalized.repositoryId,
+        scope: githubSourceScope,
+        appId: normalized.appId,
+        installationId: normalized.installationId,
+        runId: normalized.runId,
+        checkpointRecordId: normalized.checkpointRecordId,
+        gapId: gapRecordId,
+        gapRecordId,
+        lowerBoundAt: checkpoint.coveredThrough,
+        upperBoundAt: null,
+        cause: normalized.cause,
+        gapDigest,
+        detectedAt,
+      } satisfies GitHubSourceGapPayload;
+      const sequence = this.insertGitHubCoverageTransaction({ commandKind: "github.open-source-gap", idempotencyKey, commandPayloadDigest, evaluationTime: detectedAt });
+      const payloadJson = canonicalJson(payload);
+      const scopeJson = canonicalJson({ deploymentId: metadata.databaseLineageId });
+      for (const occurrence of [
+        { recordId: gapRecordId, occurrenceType: "record" as const, kind: "github.source-gap-observation", recordClass: "observation" as const, causationRecordId: normalized.checkpointRecordId },
+        { recordId: eventRecordId, occurrenceType: "event" as const, kind: "github.source-gap-opened", causationRecordId: gapRecordId },
+      ].map((value, position) => ({ ...value, position }))) {
+        this.insertGitHubCoverageOccurrence({
+          ...occurrence,
+          repositoryId: normalized.repositoryId,
+          revisionKind: "github-source-gap-sha256",
+          revisionValue: gapDigest,
+          payloadJson,
+          correlationId: normalized.runId,
+          sequence,
+          recordedAt: detectedAt,
+          scopeJson,
+        });
+      }
+      const result: GitHubSourceGapResult = {
+        repositoryId: normalized.repositoryId,
+        runId: normalized.runId,
+        checkpointRecordId: normalized.checkpointRecordId,
+        gapId: gapRecordId,
+        gapRecordId,
+        eventRecordId,
+        lowerBoundAt: checkpoint.coveredThrough,
+        cause: normalized.cause,
+        gapDigest,
+        detectedAt,
+        transactionPositions: [0, 1],
+        transactionSequence: sequence,
+      };
+      this.insertReceipt(commandScope, "github.open-source-gap", idempotencyKey, commandPayloadDigest, result, sequence, addSeconds(detectedAt, 30 * 24 * 60 * 60));
+      this.advanceControlMetadata(detectedAt, sequence);
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  repairGitHubSourceGap(input: GitHubSourceGapRepairInput): GitHubSourceGapRepairResult {
+    const normalized = normalizeGitHubSourceGapRepairInput(input);
+    const idempotencyKey = `github-gap-repair:${normalized.runId}`;
+    const commandPayloadDigest = sha256(canonicalJson(normalized as unknown as JsonValue));
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.verifyExisting(this.applicationTables());
+      const metadata = this.metadata();
+      const commandScope = `database:${metadata.databaseLineageId}`;
+      const priorReceipt = this.commandReceipt(commandScope, "github.repair-source-gap", idempotencyKey);
+      if (priorReceipt) {
+        if (String(priorReceipt.payload_digest) !== commandPayloadDigest) throw new Error("GitHub repair run was reused");
+        const result = parseGitHubSourceGapRepairResult(parseJson(String(priorReceipt.result_json)));
+        this.db.exec("COMMIT");
+        return result;
+      }
+      this.assertGitHubCoverageWrite(normalized.expectedLastTransactionSequence, normalized.repositoryId);
+      const gap = this.findOpenGitHubSourceGap(normalized.repositoryId);
+      if (
+        !gap ||
+        gap.gapRecordId !== normalized.gapRecordId ||
+        gap.appId !== normalized.appId ||
+        gap.installationId !== normalized.installationId
+      ) {
+        throw new Error("GitHub source-gap repair requires the current open gap");
+      }
+      if (gap.cause === "unsupported-relevant-delivery" || gap.cause === "normalization-failed") {
+        throw new Error("GitHub source-gap cause requires retained normalized repair observations");
+      }
+      if (new Date(normalized.coveredThrough).getTime() <= new Date(gap.lowerBoundAt).getTime()) {
+        throw new Error("GitHub source-gap repair must establish a later exclusive end");
+      }
+      const repairedAt = this.checkedGitHubCoverageTime(metadata, normalized.coveredThrough);
+      const checkpointRecordId = uuidV7(new Date(repairedAt));
+      const repairRecordId = uuidV7(new Date(repairedAt));
+      const eventRecordId = uuidV7(new Date(repairedAt));
+      const checkpointInput = { ...normalized, coveredFrom: gap.lowerBoundAt };
+      const checkpointDigest = githubCheckpointDigest(checkpointInput);
+      const checkpointPayload = {
+        repositoryId: normalized.repositoryId,
+        scope: githubSourceScope,
+        appId: normalized.appId,
+        installationId: normalized.installationId,
+        runId: normalized.runId,
+        previousCheckpointRecordId: gap.checkpointRecordId,
+        coveredFrom: gap.lowerBoundAt,
+        coveredThrough: normalized.coveredThrough,
+        pageCount: normalized.pageCount,
+        deliveryCount: normalized.deliveryCount,
+        pageProofDigest: normalized.pageProofDigest,
+        selectedResponseDigest: normalized.selectedResponseDigest,
+        checkpointDigest,
+        checkpointRecordId,
+        recordedAt: repairedAt,
+      } satisfies GitHubSourceCheckpointPayload;
+      const repairDigest = sha256(canonicalJson({
+        repositoryId: normalized.repositoryId,
+        scope: githubSourceScope,
+        appId: normalized.appId,
+        installationId: normalized.installationId,
+        runId: normalized.runId,
+        gapId: gap.gapId,
+        gapRecordId: gap.gapRecordId,
+        priorCheckpointRecordId: gap.checkpointRecordId,
+        checkpointRecordId,
+        repairRecordId,
+        eventRecordId,
+        lowerBoundAt: gap.lowerBoundAt,
+        exclusiveEndAt: normalized.coveredThrough,
+        repairMethod: "complete-delivery-audit",
+        repairedAt,
+      }));
+      const repairPayload = {
+        repositoryId: normalized.repositoryId,
+        scope: githubSourceScope,
+        appId: normalized.appId,
+        installationId: normalized.installationId,
+        runId: normalized.runId,
+        gapId: gap.gapId,
+        gapRecordId: gap.gapRecordId,
+        priorCheckpointRecordId: gap.checkpointRecordId,
+        checkpointRecordId,
+        repairRecordId,
+        eventRecordId,
+        lowerBoundAt: gap.lowerBoundAt,
+        exclusiveEndAt: normalized.coveredThrough,
+        repairMethod: "complete-delivery-audit",
+        repairDigest,
+        repairedAt,
+      } satisfies GitHubSourceGapRepairPayload;
+      const sequence = this.insertGitHubCoverageTransaction({ commandKind: "github.repair-source-gap", idempotencyKey, commandPayloadDigest, evaluationTime: repairedAt });
+      const scopeJson = canonicalJson({ deploymentId: metadata.databaseLineageId });
+      this.insertGitHubCoverageOccurrence({ recordId: checkpointRecordId, occurrenceType: "record", kind: "github.source-checkpoint-observation", recordClass: "observation", repositoryId: normalized.repositoryId, revisionKind: "github-source-checkpoint-sha256", revisionValue: checkpointDigest, payloadJson: canonicalJson(checkpointPayload), correlationId: normalized.runId, causationRecordId: gap.gapRecordId, sequence, position: 0, recordedAt: repairedAt, scopeJson });
+      this.insertGitHubCoverageOccurrence({ recordId: repairRecordId, occurrenceType: "record", kind: "github.source-gap-repair-observation", recordClass: "observation", repositoryId: normalized.repositoryId, revisionKind: "github-source-gap-sha256", revisionValue: repairDigest, payloadJson: canonicalJson(repairPayload), correlationId: normalized.runId, causationRecordId: checkpointRecordId, sequence, position: 1, recordedAt: repairedAt, scopeJson });
+      this.insertGitHubCoverageOccurrence({ recordId: eventRecordId, occurrenceType: "event", kind: "github.source-gap-repaired", repositoryId: normalized.repositoryId, revisionKind: "github-source-gap-sha256", revisionValue: repairDigest, payloadJson: canonicalJson(repairPayload), correlationId: normalized.runId, causationRecordId: repairRecordId, sequence, position: 2, recordedAt: repairedAt, scopeJson });
+      const result: GitHubSourceGapRepairResult = { repositoryId: normalized.repositoryId, runId: normalized.runId, gapId: gap.gapId, gapRecordId: gap.gapRecordId, priorCheckpointRecordId: gap.checkpointRecordId, checkpointRecordId, repairRecordId, eventRecordId, lowerBoundAt: gap.lowerBoundAt, exclusiveEndAt: normalized.coveredThrough, checkpointDigest, repairDigest, repairedAt, transactionPositions: [0, 1, 2], transactionSequence: sequence };
+      this.insertReceipt(commandScope, "github.repair-source-gap", idempotencyKey, commandPayloadDigest, result, sequence, addSeconds(repairedAt, 30 * 24 * 60 * 60));
+      this.advanceControlMetadata(repairedAt, sequence);
       this.db.exec("COMMIT");
       return result;
     } catch (error) {
@@ -4466,6 +4869,145 @@ export class ControlPlaneStore {
     }
   }
 
+  private commandReceipt(commandScope: string, commandKind: string, idempotencyKey: string): Row | undefined {
+    return this.db
+      .prepare(
+        `SELECT payload_digest, result_json FROM idempotency_receipts
+         WHERE command_scope = ? AND command_kind = ?
+           AND command_schema_version = 1 AND idempotency_key = ?`,
+      )
+      .get(commandScope, commandKind, idempotencyKey) as Row | undefined;
+  }
+
+  private assertGitHubCoverageWrite(expectedSequence: number, repositoryId: string): void {
+    assertExpectedSequence(expectedSequence);
+    const metadata = this.metadata();
+    if (metadata.lastTransactionSequence !== expectedSequence) {
+      throw new Error(
+        `expected control-plane sequence ${expectedSequence} but current sequence is ${metadata.lastTransactionSequence}`,
+      );
+    }
+    const repository = this.repositoryStatuses().find((status) => status.repositoryId === repositoryId);
+    if (!repository || repository.enrollmentRecordId === null) {
+      throw new Error("GitHub source coverage requires a previously enrolled repository");
+    }
+  }
+
+  private checkedGitHubCoverageTime(metadata: ControlPlaneMetadata, sourceBoundary: string): string {
+    const evaluationTime = this.now();
+    if (evaluationTime < metadata.controlTimeWatermark) {
+      throw new Error("control-plane clock moved backwards while recording GitHub source coverage");
+    }
+    if (evaluationTime < sourceBoundary) {
+      throw new Error("GitHub source coverage boundary is later than server evaluation time");
+    }
+    return evaluationTime;
+  }
+
+  private latestGitHubSourceCheckpoint(repositoryId: string): GitHubSourceCheckpointPayload | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT payload_json FROM durable_occurrences
+         WHERE kind = 'github.source-checkpoint-observation'
+           AND subject_kind = 'github-repository' AND subject_id = ?
+         ORDER BY transaction_sequence DESC LIMIT 1`,
+      )
+      .get(repositoryId) as Row | undefined;
+    if (!row) return undefined;
+    const payload = parseJson(String(row.payload_json));
+    if (!recordKindRegistry["github.source-checkpoint-observation"].validatePayload(payload)) {
+      throw new Error("latest GitHub source checkpoint is invalid");
+    }
+    return payload;
+  }
+
+  private findOpenGitHubSourceGap(repositoryId: string): GitHubSourceGapPayload | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT gap.payload_json FROM durable_occurrences gap
+         WHERE gap.kind = 'github.source-gap-observation'
+           AND gap.subject_kind = 'github-repository' AND gap.subject_id = ?
+           AND NOT EXISTS (
+             SELECT 1 FROM durable_occurrences repair
+             WHERE repair.kind = 'github.source-gap-repair-observation'
+               AND json_extract(repair.payload_json, '$.gapRecordId') = gap.record_id
+           )
+         ORDER BY gap.transaction_sequence DESC LIMIT 1`,
+      )
+      .get(repositoryId) as Row | undefined;
+    if (!row) return undefined;
+    const payload = parseJson(String(row.payload_json));
+    if (!recordKindRegistry["github.source-gap-observation"].validatePayload(payload)) {
+      throw new Error("open GitHub source gap is invalid");
+    }
+    return payload;
+  }
+
+  private insertGitHubCoverageTransaction(input: {
+    commandKind: "github.record-source-checkpoint" | "github.open-source-gap" | "github.repair-source-gap";
+    idempotencyKey: string;
+    commandPayloadDigest: string;
+    evaluationTime: string;
+  }): number {
+    const transaction = this.db
+      .prepare(
+        `INSERT INTO control_transactions (
+           transaction_id, command_kind, command_schema_version, principal_kind,
+           principal_id, session_id, idempotency_key, payload_digest,
+           evaluation_time, recorded_at
+         ) VALUES (?, ?, 1, 'fluent-system', 'github-observer', NULL, ?, ?, ?, ?)`,
+      )
+      .run(
+        uuidV7(new Date(input.evaluationTime)),
+        input.commandKind,
+        input.idempotencyKey,
+        input.commandPayloadDigest,
+        input.evaluationTime,
+        input.evaluationTime,
+      );
+    return Number(transaction.lastInsertRowid);
+  }
+
+  private insertGitHubCoverageOccurrence(input: {
+    recordId: string;
+    occurrenceType: "record" | "event";
+    kind: string;
+    recordClass?: RecordClass;
+    repositoryId: string;
+    revisionKind: "github-source-checkpoint-sha256" | "github-source-gap-sha256";
+    revisionValue: string;
+    payloadJson: string;
+    correlationId: string;
+    causationRecordId?: string;
+    sequence: number;
+    position: number;
+    recordedAt: string;
+    scopeJson: string;
+  }): void {
+    this.insertOccurrence({
+      recordId: input.recordId,
+      occurrenceType: input.occurrenceType,
+      kind: input.kind,
+      schemaVersion: 1,
+      recordClass: input.recordClass,
+      subjectKind: "github-repository",
+      subjectId: input.repositoryId,
+      revisionKind: input.revisionKind,
+      revisionValue: input.revisionValue,
+      sourceKind: "fluent-system",
+      sourceId: "github-observer",
+      informationClass: "organization",
+      informationScopeJson: input.scopeJson,
+      payloadJson: input.payloadJson,
+      payloadDigest: sha256(input.payloadJson),
+      correlationId: input.correlationId,
+      causationRecordId: input.causationRecordId,
+      transactionSequence: input.sequence,
+      transactionPosition: input.position,
+      recordedAt: input.recordedAt,
+    });
+  }
+
   private initialize(): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -4928,7 +5470,10 @@ export class ControlPlaneStore {
       | "repository.establish-enrollment"
       | "repository.impose-operator-hold"
       | "repository.clear-operator-hold"
-      | "github.record-pull-request-delivery",
+      | "github.record-pull-request-delivery"
+      | "github.record-source-checkpoint"
+      | "github.open-source-gap"
+      | "github.repair-source-gap",
     idempotencyKey: string,
     payloadDigest: string,
     result:
@@ -4937,7 +5482,10 @@ export class ControlPlaneStore {
       | RepositorySurfaceReconciliationResult
       | RepositoryEnrollmentResult
       | RepositoryOperatorHoldResult
-      | GitHubPullRequestDeliveryResult,
+      | GitHubPullRequestDeliveryResult
+      | GitHubSourceCheckpointResult
+      | GitHubSourceGapResult
+      | GitHubSourceGapRepairResult,
     transactionSequence: number,
     retainedUntil = IDEMPOTENCY_RETAINED_UNTIL,
   ): void {
@@ -5553,6 +6101,29 @@ export class ControlPlaneStore {
           throw new Error(`GitHub pull-request delivery transaction shape is invalid: ${String(row.sequence)}`);
         }
       } else if (
+        row.command_kind === "github.record-source-checkpoint" ||
+        row.command_kind === "github.open-source-gap" ||
+        row.command_kind === "github.repair-source-gap"
+      ) {
+        const prefix = row.command_kind === "github.record-source-checkpoint"
+          ? "github-checkpoint"
+          : row.command_kind === "github.open-source-gap"
+            ? "github-gap"
+            : "github-gap-repair";
+        if (
+          typeof row.idempotency_key !== "string" ||
+          !new RegExp(`^${prefix}:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`).test(
+            row.idempotency_key,
+          ) ||
+          row.principal_kind !== "fluent-system" ||
+          row.principal_id !== "github-observer" ||
+          receiptCount !== 1 ||
+          (row.command_kind !== "github.repair-source-gap" &&
+            !outputs.every((output) => output.payload_digest === outputs[0]!.payload_digest))
+        ) {
+          throw new Error(`GitHub source coverage transaction shape is invalid: ${String(row.sequence)}`);
+        }
+      } else if (
         row.command_kind === "repository.impose-operator-hold" ||
         row.command_kind === "repository.clear-operator-hold"
       ) {
@@ -6038,6 +6609,13 @@ export class ControlPlaneStore {
         }
       }
       if (
+        String(row.kind) === "github.source-checkpoint-observation" ||
+        String(row.kind) === "github.source-gap-observation" ||
+        String(row.kind) === "github.source-gap-repair-observation"
+      ) {
+        this.verifyGitHubCoverageLineage(row, payload);
+      }
+      if (
         String(row.kind) === "repository.canonical-surface-observation" ||
         String(row.kind) === "repository.enrollment-checkpoint-policy-decision" ||
         String(row.kind) === "repository.canonical-surfaces-reconciled" ||
@@ -6223,6 +6801,272 @@ export class ControlPlaneStore {
     const recordCount = Number((this.db.prepare("SELECT COUNT(*) AS count FROM durable_records").get() as Row).count);
     const eventCount = Number((this.db.prepare("SELECT COUNT(*) AS count FROM event_ledger").get() as Row).count);
     if (recordCount + eventCount !== rows.length) throw new Error("durable occurrence subtype coverage mismatch");
+  }
+
+  private verifyGitHubCoverageLineage(row: Row, payload: JsonValue): void {
+    const kind = String(row.kind);
+    const repositoryId = String(row.subject_id);
+    const transaction = this.db
+      .prepare("SELECT command_kind, payload_digest FROM control_transactions WHERE sequence = ?")
+      .get(row.transaction_sequence!) as Row | undefined;
+    const enrollment = this.db
+      .prepare(
+        `SELECT 1 AS present FROM durable_occurrences
+         WHERE kind = 'repository.enrolled' AND subject_id = ? AND transaction_sequence < ?
+         LIMIT 1`,
+      )
+      .get(repositoryId, row.transaction_sequence!) as Row | undefined;
+    if (
+      !transaction ||
+      !enrollment ||
+      String(row.subject_kind) !== "github-repository" ||
+      String(row.source_kind) !== "fluent-system" ||
+      String(row.source_id) !== "github-observer" ||
+      row.source_revision_kind != null ||
+      row.source_revision_value != null ||
+      String(row.correlation_id) !== String((payload as { runId: string }).runId)
+    ) {
+      throw new Error(`GitHub source coverage lineage mismatch: ${String(row.record_id)}`);
+    }
+
+    if (kind === "github.source-checkpoint-observation") {
+      const checkpoint = payload as GitHubSourceCheckpointPayload;
+      const expectedDigest = githubCheckpointDigest({
+        repositoryId: checkpoint.repositoryId,
+        appId: checkpoint.appId,
+        installationId: checkpoint.installationId,
+        coveredFrom: checkpoint.coveredFrom,
+        coveredThrough: checkpoint.coveredThrough,
+        pageCount: checkpoint.pageCount,
+        deliveryCount: checkpoint.deliveryCount,
+        pageProofDigest: checkpoint.pageProofDigest,
+        selectedResponseDigest: checkpoint.selectedResponseDigest,
+      });
+      const previous = checkpoint.previousCheckpointRecordId
+        ? (this.db
+            .prepare("SELECT payload_json FROM durable_occurrences WHERE record_id = ? AND kind = 'github.source-checkpoint-observation'")
+            .get(checkpoint.previousCheckpointRecordId) as Row | undefined)
+        : undefined;
+      const previousPayload = previous ? parseJson(String(previous.payload_json)) : undefined;
+      const outputs = this.db
+        .prepare("SELECT record_id, kind, causation_record_id, payload_json FROM durable_occurrences WHERE transaction_sequence = ? ORDER BY transaction_position")
+        .all(row.transaction_sequence!) as Row[];
+      const repairCommand = transaction.command_kind === "github.repair-source-gap";
+      const commandInput = repairCommand
+        ? {
+            expectedLastTransactionSequence: Number(row.transaction_sequence) - 1,
+            runId: checkpoint.runId,
+            repositoryId: checkpoint.repositoryId,
+            appId: checkpoint.appId,
+            installationId: checkpoint.installationId,
+            coveredThrough: checkpoint.coveredThrough,
+            pageCount: checkpoint.pageCount,
+            deliveryCount: checkpoint.deliveryCount,
+            pageProofDigest: checkpoint.pageProofDigest,
+            selectedResponseDigest: checkpoint.selectedResponseDigest,
+            gapRecordId: String(row.causation_record_id),
+          }
+        : {
+            expectedLastTransactionSequence: Number(row.transaction_sequence) - 1,
+            runId: checkpoint.runId,
+            repositoryId: checkpoint.repositoryId,
+            appId: checkpoint.appId,
+            installationId: checkpoint.installationId,
+            coveredFrom: checkpoint.coveredFrom,
+            coveredThrough: checkpoint.coveredThrough,
+            pageCount: checkpoint.pageCount,
+            deliveryCount: checkpoint.deliveryCount,
+            pageProofDigest: checkpoint.pageProofDigest,
+            selectedResponseDigest: checkpoint.selectedResponseDigest,
+          };
+      if (
+        checkpoint.repositoryId !== repositoryId ||
+        String(row.record_id) !== checkpoint.checkpointRecordId ||
+        String(row.revision_kind) !== "github-source-checkpoint-sha256" ||
+        String(row.revision_value) !== expectedDigest ||
+        checkpoint.checkpointDigest !== expectedDigest ||
+        checkpoint.recordedAt !== String(row.recorded_at) ||
+        (checkpoint.previousCheckpointRecordId === null
+          ? checkpoint.coveredFrom !== checkpoint.coveredThrough
+          : !previousPayload ||
+            !recordKindRegistry["github.source-checkpoint-observation"].validatePayload(previousPayload) ||
+            previousPayload.repositoryId !== checkpoint.repositoryId ||
+            previousPayload.appId !== checkpoint.appId ||
+            previousPayload.installationId !== checkpoint.installationId ||
+            previousPayload.coveredThrough !== checkpoint.coveredFrom) ||
+        (repairCommand
+          ? outputs.length !== 3 || String(row.causation_record_id) === "null"
+          : outputs.length !== 2 ||
+            String(row.causation_record_id ?? "") !== String(checkpoint.previousCheckpointRecordId ?? "") ||
+            String(outputs[1]?.causation_record_id) !== checkpoint.checkpointRecordId ||
+            String(outputs[0]?.payload_json) !== String(outputs[1]?.payload_json)) ||
+        String(outputs[0]?.record_id) !== checkpoint.checkpointRecordId ||
+        String(transaction.payload_digest) !== sha256(canonicalJson(commandInput as unknown as JsonValue))
+      ) {
+        throw new Error(`GitHub source checkpoint lineage mismatch: ${String(row.record_id)}`);
+      }
+      return;
+    }
+
+    if (kind === "github.source-gap-observation") {
+      const gap = payload as GitHubSourceGapPayload;
+      const checkpointRow = this.db
+        .prepare("SELECT payload_json FROM durable_occurrences WHERE record_id = ? AND kind = 'github.source-checkpoint-observation'")
+        .get(gap.checkpointRecordId) as Row | undefined;
+      const checkpoint = checkpointRow ? parseJson(String(checkpointRow.payload_json)) : undefined;
+      const expectedDigest = sha256(canonicalJson({
+        repositoryId: gap.repositoryId,
+        scope: gap.scope,
+        appId: gap.appId,
+        installationId: gap.installationId,
+        runId: gap.runId,
+        checkpointRecordId: gap.checkpointRecordId,
+        gapId: gap.gapId,
+        lowerBoundAt: gap.lowerBoundAt,
+        cause: gap.cause,
+        detectedAt: gap.detectedAt,
+      }));
+      const outputs = this.db
+        .prepare("SELECT record_id, causation_record_id, payload_json FROM durable_occurrences WHERE transaction_sequence = ? ORDER BY transaction_position")
+        .all(row.transaction_sequence!) as Row[];
+      const commandInput = {
+        expectedLastTransactionSequence: Number(row.transaction_sequence) - 1,
+        runId: gap.runId,
+        repositoryId: gap.repositoryId,
+        appId: gap.appId,
+        installationId: gap.installationId,
+        checkpointRecordId: gap.checkpointRecordId,
+        cause: gap.cause,
+      };
+      const earlierOpenGap = this.db
+        .prepare(
+          `SELECT 1 AS present FROM durable_occurrences prior_gap
+           WHERE prior_gap.kind = 'github.source-gap-observation'
+             AND prior_gap.subject_id = ? AND prior_gap.transaction_sequence < ?
+             AND NOT EXISTS (
+               SELECT 1 FROM durable_occurrences repair
+               WHERE repair.kind = 'github.source-gap-repair-observation'
+                 AND json_extract(repair.payload_json, '$.gapRecordId') = prior_gap.record_id
+                 AND repair.transaction_sequence < ?
+             ) LIMIT 1`,
+        )
+        .get(gap.repositoryId, row.transaction_sequence!, row.transaction_sequence!) as Row | undefined;
+      if (
+        transaction.command_kind !== "github.open-source-gap" ||
+        gap.repositoryId !== repositoryId ||
+        gap.gapRecordId !== String(row.record_id) ||
+        gap.gapId !== gap.gapRecordId ||
+        String(row.revision_kind) !== "github-source-gap-sha256" ||
+        String(row.revision_value) !== expectedDigest ||
+        gap.gapDigest !== expectedDigest ||
+        gap.detectedAt !== String(row.recorded_at) ||
+        !checkpoint ||
+        !recordKindRegistry["github.source-checkpoint-observation"].validatePayload(checkpoint) ||
+        checkpoint.repositoryId !== gap.repositoryId ||
+        checkpoint.appId !== gap.appId ||
+        checkpoint.installationId !== gap.installationId ||
+        checkpoint.coveredThrough !== gap.lowerBoundAt ||
+        earlierOpenGap ||
+        String(row.causation_record_id) !== gap.checkpointRecordId ||
+        outputs.length !== 2 ||
+        String(outputs[1]?.causation_record_id) !== gap.gapRecordId ||
+        String(outputs[0]?.payload_json) !== String(outputs[1]?.payload_json) ||
+        String(transaction.payload_digest) !== sha256(canonicalJson(commandInput))
+      ) {
+        throw new Error(`GitHub source gap lineage mismatch: ${String(row.record_id)}`);
+      }
+      return;
+    }
+
+    const repair = payload as GitHubSourceGapRepairPayload;
+    const gapRow = this.db
+      .prepare("SELECT payload_json, transaction_sequence FROM durable_occurrences WHERE record_id = ? AND kind = 'github.source-gap-observation'")
+      .get(repair.gapRecordId) as Row | undefined;
+    const gap = gapRow ? parseJson(String(gapRow.payload_json)) : undefined;
+    const checkpointRow = this.db
+      .prepare("SELECT payload_json, causation_record_id FROM durable_occurrences WHERE record_id = ? AND kind = 'github.source-checkpoint-observation'")
+      .get(repair.checkpointRecordId) as Row | undefined;
+    const checkpoint = checkpointRow ? parseJson(String(checkpointRow.payload_json)) : undefined;
+    const earlierRepair = this.db
+      .prepare(
+        `SELECT 1 AS present FROM durable_occurrences
+         WHERE kind = 'github.source-gap-repair-observation'
+           AND json_extract(payload_json, '$.gapRecordId') = ? AND transaction_sequence < ? LIMIT 1`,
+      )
+      .get(repair.gapRecordId, row.transaction_sequence!) as Row | undefined;
+    const expectedDigest = sha256(canonicalJson({
+      repositoryId: repair.repositoryId,
+      scope: repair.scope,
+      appId: repair.appId,
+      installationId: repair.installationId,
+      runId: repair.runId,
+      gapId: repair.gapId,
+      gapRecordId: repair.gapRecordId,
+      priorCheckpointRecordId: repair.priorCheckpointRecordId,
+      checkpointRecordId: repair.checkpointRecordId,
+      repairRecordId: repair.repairRecordId,
+      eventRecordId: repair.eventRecordId,
+      lowerBoundAt: repair.lowerBoundAt,
+      exclusiveEndAt: repair.exclusiveEndAt,
+      repairMethod: repair.repairMethod,
+      repairedAt: repair.repairedAt,
+    }));
+    const outputs = this.db
+      .prepare("SELECT record_id, causation_record_id, payload_json FROM durable_occurrences WHERE transaction_sequence = ? ORDER BY transaction_position")
+      .all(row.transaction_sequence!) as Row[];
+    const commandInput = checkpoint && recordKindRegistry["github.source-checkpoint-observation"].validatePayload(checkpoint)
+      ? {
+          expectedLastTransactionSequence: Number(row.transaction_sequence) - 1,
+          runId: repair.runId,
+          repositoryId: repair.repositoryId,
+          appId: repair.appId,
+          installationId: repair.installationId,
+          coveredThrough: repair.exclusiveEndAt,
+          pageCount: checkpoint.pageCount,
+          deliveryCount: checkpoint.deliveryCount,
+          pageProofDigest: checkpoint.pageProofDigest,
+          selectedResponseDigest: checkpoint.selectedResponseDigest,
+          gapRecordId: repair.gapRecordId,
+        }
+      : undefined;
+    if (
+      transaction.command_kind !== "github.repair-source-gap" ||
+      repair.repositoryId !== repositoryId ||
+      repair.repairRecordId !== String(row.record_id) ||
+      repair.gapId !== repair.gapRecordId ||
+      String(row.revision_kind) !== "github-source-gap-sha256" ||
+      String(row.revision_value) !== expectedDigest ||
+      repair.repairDigest !== expectedDigest ||
+      repair.repairedAt !== String(row.recorded_at) ||
+      !gap ||
+      !recordKindRegistry["github.source-gap-observation"].validatePayload(gap) ||
+      !checkpoint ||
+      !recordKindRegistry["github.source-checkpoint-observation"].validatePayload(checkpoint) ||
+      earlierRepair ||
+      gap.gapRecordId !== repair.gapRecordId ||
+      gap.repositoryId !== repair.repositoryId ||
+      gap.appId !== repair.appId ||
+      gap.installationId !== repair.installationId ||
+      gap.cause === "unsupported-relevant-delivery" ||
+      gap.cause === "normalization-failed" ||
+      gap.checkpointRecordId !== repair.priorCheckpointRecordId ||
+      gap.lowerBoundAt !== repair.lowerBoundAt ||
+      checkpoint.previousCheckpointRecordId !== repair.priorCheckpointRecordId ||
+      checkpoint.coveredFrom !== repair.lowerBoundAt ||
+      checkpoint.coveredThrough !== repair.exclusiveEndAt ||
+      String(checkpointRow!.causation_record_id) !== repair.gapRecordId ||
+      String(row.causation_record_id) !== repair.checkpointRecordId ||
+      outputs.length !== 3 ||
+      String(outputs[0]?.record_id) !== repair.checkpointRecordId ||
+      String(outputs[1]?.record_id) !== repair.repairRecordId ||
+      String(outputs[2]?.record_id) !== repair.eventRecordId ||
+      String(outputs[2]?.causation_record_id) !== repair.repairRecordId ||
+      String(outputs[1]?.payload_json) !== String(outputs[2]?.payload_json) ||
+      !commandInput ||
+      String(transaction.payload_digest) !== sha256(canonicalJson(commandInput))
+    ) {
+      throw new Error(`GitHub source-gap repair lineage mismatch: ${String(row.record_id)}`);
+    }
   }
 
   private verifyCoreSnapshots(): void {
@@ -6548,6 +7392,9 @@ export class ControlPlaneStore {
       if (commandKind === "github.record-pull-request-delivery") {
         parseGitHubPullRequestDeliveryResult(result);
       }
+      if (commandKind === "github.record-source-checkpoint") parseGitHubSourceCheckpointResult(result);
+      if (commandKind === "github.open-source-gap") parseGitHubSourceGapResult(result);
+      if (commandKind === "github.repair-source-gap") parseGitHubSourceGapRepairResult(result);
       if (
         commandKind === "repository.impose-operator-hold" ||
         commandKind === "repository.clear-operator-hold"
@@ -6577,6 +7424,24 @@ export class ControlPlaneStore {
         const delivery = parseGitHubPullRequestDeliveryResult(result);
         if (String(row.retained_until) !== addSeconds(delivery.receivedAt, 30 * 24 * 60 * 60)) {
           throw new Error(`GitHub delivery receipt retention mismatch: ${String(row.idempotency_key)}`);
+        }
+      }
+      if (commandKind === "github.record-source-checkpoint") {
+        const checkpoint = parseGitHubSourceCheckpointResult(result);
+        if (String(row.retained_until) !== addSeconds(checkpoint.recordedAt, 30 * 24 * 60 * 60)) {
+          throw new Error(`GitHub checkpoint receipt retention mismatch: ${String(row.idempotency_key)}`);
+        }
+      }
+      if (commandKind === "github.open-source-gap") {
+        const gap = parseGitHubSourceGapResult(result);
+        if (String(row.retained_until) !== addSeconds(gap.detectedAt, 30 * 24 * 60 * 60)) {
+          throw new Error(`GitHub gap receipt retention mismatch: ${String(row.idempotency_key)}`);
+        }
+      }
+      if (commandKind === "github.repair-source-gap") {
+        const repair = parseGitHubSourceGapRepairResult(result);
+        if (String(row.retained_until) !== addSeconds(repair.repairedAt, 30 * 24 * 60 * 60)) {
+          throw new Error(`GitHub repair receipt retention mismatch: ${String(row.idempotency_key)}`);
         }
       }
       if (String(row.command_scope) !== `database:${metadata.databaseLineageId}`) {
@@ -6874,6 +7739,86 @@ export class ControlPlaneStore {
           observationPayload.observationDigest !== delivery.observationDigest
         ) {
           throw new Error(`GitHub delivery receipt output mismatch: ${String(row.idempotency_key)}`);
+        }
+      }
+      if (commandKind === "github.record-source-checkpoint") {
+        const checkpoint = parseGitHubSourceCheckpointResult(result);
+        const outputs = this.db
+          .prepare("SELECT record_id, payload_json FROM durable_occurrences WHERE transaction_sequence = ? ORDER BY transaction_position")
+          .all(row.transaction_sequence!) as Row[];
+        const payload = outputs[0] ? parseJson(String(outputs[0].payload_json)) : undefined;
+        if (
+          checkpoint.transactionSequence !== Number(row.transaction_sequence) ||
+          checkpoint.recordedAt !== String(transaction.evaluation_time) ||
+          checkpoint.recordedAt !== String(transaction.recorded_at) ||
+          String(row.idempotency_key) !== `github-checkpoint:${checkpoint.runId}` ||
+          outputs.length !== 2 ||
+          String(outputs[0]!.record_id) !== checkpoint.checkpointRecordId ||
+          String(outputs[1]!.record_id) !== checkpoint.eventRecordId ||
+          !payload ||
+          !recordKindRegistry["github.source-checkpoint-observation"].validatePayload(payload) ||
+          payload.repositoryId !== checkpoint.repositoryId ||
+          payload.previousCheckpointRecordId !== checkpoint.previousCheckpointRecordId ||
+          payload.coveredFrom !== checkpoint.coveredFrom ||
+          payload.coveredThrough !== checkpoint.coveredThrough ||
+          payload.checkpointDigest !== checkpoint.checkpointDigest
+        ) {
+          throw new Error(`GitHub checkpoint receipt output mismatch: ${String(row.idempotency_key)}`);
+        }
+      }
+      if (commandKind === "github.open-source-gap") {
+        const gap = parseGitHubSourceGapResult(result);
+        const outputs = this.db
+          .prepare("SELECT record_id, payload_json FROM durable_occurrences WHERE transaction_sequence = ? ORDER BY transaction_position")
+          .all(row.transaction_sequence!) as Row[];
+        const payload = outputs[0] ? parseJson(String(outputs[0].payload_json)) : undefined;
+        if (
+          gap.transactionSequence !== Number(row.transaction_sequence) ||
+          gap.detectedAt !== String(transaction.evaluation_time) ||
+          gap.detectedAt !== String(transaction.recorded_at) ||
+          String(row.idempotency_key) !== `github-gap:${gap.runId}` ||
+          outputs.length !== 2 ||
+          String(outputs[0]!.record_id) !== gap.gapRecordId ||
+          String(outputs[1]!.record_id) !== gap.eventRecordId ||
+          !payload ||
+          !recordKindRegistry["github.source-gap-observation"].validatePayload(payload) ||
+          payload.repositoryId !== gap.repositoryId ||
+          payload.checkpointRecordId !== gap.checkpointRecordId ||
+          payload.lowerBoundAt !== gap.lowerBoundAt ||
+          payload.cause !== gap.cause ||
+          payload.gapDigest !== gap.gapDigest
+        ) {
+          throw new Error(`GitHub gap receipt output mismatch: ${String(row.idempotency_key)}`);
+        }
+      }
+      if (commandKind === "github.repair-source-gap") {
+        const repair = parseGitHubSourceGapRepairResult(result);
+        const outputs = this.db
+          .prepare("SELECT record_id, payload_json FROM durable_occurrences WHERE transaction_sequence = ? ORDER BY transaction_position")
+          .all(row.transaction_sequence!) as Row[];
+        const checkpointPayload = outputs[0] ? parseJson(String(outputs[0].payload_json)) : undefined;
+        const repairPayload = outputs[1] ? parseJson(String(outputs[1].payload_json)) : undefined;
+        if (
+          repair.transactionSequence !== Number(row.transaction_sequence) ||
+          repair.repairedAt !== String(transaction.evaluation_time) ||
+          repair.repairedAt !== String(transaction.recorded_at) ||
+          String(row.idempotency_key) !== `github-gap-repair:${repair.runId}` ||
+          outputs.length !== 3 ||
+          String(outputs[0]!.record_id) !== repair.checkpointRecordId ||
+          String(outputs[1]!.record_id) !== repair.repairRecordId ||
+          String(outputs[2]!.record_id) !== repair.eventRecordId ||
+          !checkpointPayload ||
+          !recordKindRegistry["github.source-checkpoint-observation"].validatePayload(checkpointPayload) ||
+          !repairPayload ||
+          !recordKindRegistry["github.source-gap-repair-observation"].validatePayload(repairPayload) ||
+          checkpointPayload.previousCheckpointRecordId !== repair.priorCheckpointRecordId ||
+          checkpointPayload.coveredFrom !== repair.lowerBoundAt ||
+          checkpointPayload.coveredThrough !== repair.exclusiveEndAt ||
+          checkpointPayload.checkpointDigest !== repair.checkpointDigest ||
+          repairPayload.gapRecordId !== repair.gapRecordId ||
+          repairPayload.repairDigest !== repair.repairDigest
+        ) {
+          throw new Error(`GitHub repair receipt output mismatch: ${String(row.idempotency_key)}`);
         }
       }
       if (commandKind === "repository.record-github-identity") {
@@ -7495,6 +8440,132 @@ function normalizeRepositoryGitHubInspection(
   };
 }
 
+function normalizeGitHubSourceCheckpointInput(input: GitHubSourceCheckpointInput): GitHubSourceCheckpointInput {
+  if (
+    !input ||
+    typeof input !== "object" ||
+    Array.isArray(input) ||
+    Object.keys(input).sort().join(",") !==
+      "appId,coveredFrom,coveredThrough,deliveryCount,expectedLastTransactionSequence,installationId,pageCount,pageProofDigest,repositoryId,runId,selectedResponseDigest"
+  ) {
+    throw new Error("GitHub source checkpoint must be one exact typed input");
+  }
+  assertExpectedSequence(input.expectedLastTransactionSequence);
+  if (
+    !isUuidV7(input.runId) ||
+    !/^[1-9][0-9]{0,19}$/.test(input.appId) ||
+    !/^github\.com:installation:[1-9][0-9]{0,19}$/.test(input.installationId) ||
+    !/^github\.com:[1-9][0-9]{0,19}$/.test(input.repositoryId) ||
+    !Number.isSafeInteger(input.pageCount) ||
+    input.pageCount < 1 ||
+    input.pageCount > 100 ||
+    !Number.isSafeInteger(input.deliveryCount) ||
+    input.deliveryCount < 0 ||
+    input.deliveryCount > 10_000 ||
+    !/^sha256:[0-9a-f]{64}$/.test(input.pageProofDigest) ||
+    !/^sha256:[0-9a-f]{64}$/.test(input.selectedResponseDigest)
+  ) {
+    throw new Error("GitHub source checkpoint contains invalid identities or bounds");
+  }
+  assertUtcInstant(input.coveredFrom, "GitHub source checkpoint lower boundary");
+  assertUtcInstant(input.coveredThrough, "GitHub source checkpoint upper boundary");
+  if (input.coveredFrom > input.coveredThrough) {
+    throw new Error("GitHub source checkpoint boundaries are reversed");
+  }
+  return structuredClone(input);
+}
+
+function normalizeGitHubSourceGapInput(input: GitHubSourceGapInput): GitHubSourceGapInput {
+  if (
+    !input ||
+    typeof input !== "object" ||
+    Array.isArray(input) ||
+    Object.keys(input).sort().join(",") !==
+      "appId,cause,checkpointRecordId,expectedLastTransactionSequence,installationId,repositoryId,runId"
+  ) {
+    throw new Error("GitHub source gap must be one exact typed input");
+  }
+  assertExpectedSequence(input.expectedLastTransactionSequence);
+  if (
+    !isUuidV7(input.runId) ||
+    !isUuidV7(input.checkpointRecordId) ||
+    !/^[1-9][0-9]{0,19}$/.test(input.appId) ||
+    !/^github\.com:installation:[1-9][0-9]{0,19}$/.test(input.installationId) ||
+    !/^github\.com:[1-9][0-9]{0,19}$/.test(input.repositoryId) ||
+    !githubSourceGapCauses.includes(input.cause)
+  ) {
+    throw new Error("GitHub source gap contains invalid identities or cause");
+  }
+  return structuredClone(input);
+}
+
+function normalizeGitHubSourceGapRepairInput(input: GitHubSourceGapRepairInput): GitHubSourceGapRepairInput {
+  if (
+    !input ||
+    typeof input !== "object" ||
+    Array.isArray(input) ||
+    Object.keys(input).sort().join(",") !==
+      "appId,coveredThrough,deliveryCount,expectedLastTransactionSequence,gapRecordId,installationId,pageCount,pageProofDigest,repositoryId,runId,selectedResponseDigest"
+  ) {
+    throw new Error("GitHub source-gap repair must be one exact typed input");
+  }
+  const normalized = normalizeGitHubSourceCheckpointInput({
+    expectedLastTransactionSequence: input.expectedLastTransactionSequence,
+    runId: input.runId,
+    repositoryId: input.repositoryId,
+    appId: input.appId,
+    installationId: input.installationId,
+    coveredFrom: input.coveredThrough,
+    coveredThrough: input.coveredThrough,
+    pageCount: input.pageCount,
+    deliveryCount: input.deliveryCount,
+    pageProofDigest: input.pageProofDigest,
+    selectedResponseDigest: input.selectedResponseDigest,
+  });
+  if (!isUuidV7(input.gapRecordId)) throw new Error("GitHub source-gap repair requires a UUIDv7 gap record");
+  return {
+    expectedLastTransactionSequence: normalized.expectedLastTransactionSequence,
+    runId: normalized.runId,
+    repositoryId: normalized.repositoryId,
+    appId: normalized.appId,
+    installationId: normalized.installationId,
+    coveredThrough: normalized.coveredThrough,
+    pageCount: normalized.pageCount,
+    deliveryCount: normalized.deliveryCount,
+    pageProofDigest: normalized.pageProofDigest,
+    selectedResponseDigest: normalized.selectedResponseDigest,
+    gapRecordId: input.gapRecordId,
+  };
+}
+
+function githubCheckpointDigest(
+  input: Pick<
+    GitHubSourceCheckpointInput,
+    | "repositoryId"
+    | "appId"
+    | "installationId"
+    | "coveredFrom"
+    | "coveredThrough"
+    | "pageCount"
+    | "deliveryCount"
+    | "pageProofDigest"
+    | "selectedResponseDigest"
+  >,
+): string {
+  return sha256(canonicalJson({
+    repositoryId: input.repositoryId,
+    scope: githubSourceScope,
+    appId: input.appId,
+    installationId: input.installationId,
+    coveredFrom: input.coveredFrom,
+    coveredThrough: input.coveredThrough,
+    pageCount: input.pageCount,
+    deliveryCount: input.deliveryCount,
+    pageProofDigest: input.pageProofDigest,
+    selectedResponseDigest: input.selectedResponseDigest,
+  }));
+}
+
 function normalizeGitHubPullRequestDeliveryInput(
   input: GitHubPullRequestDeliveryInput,
 ): GitHubPullRequestDeliveryInput {
@@ -7668,6 +8739,192 @@ function parseGitHubPullRequestDeliveryResult(value: JsonValue): GitHubPullReque
     receivedAt: String(result.receivedAt),
     transactionPositions: [0, 1, 2],
     transactionSequence: Number(result.transactionSequence),
+  };
+}
+
+function parseGitHubSourceCheckpointResult(value: JsonValue): GitHubSourceCheckpointResult {
+  if (
+    !isExactJsonObject(value, [
+      "repositoryId",
+      "runId",
+      "previousCheckpointRecordId",
+      "coveredFrom",
+      "coveredThrough",
+      "checkpointDigest",
+      "checkpointRecordId",
+      "eventRecordId",
+      "recordedAt",
+      "transactionPositions",
+      "transactionSequence",
+    ]) ||
+    typeof value.repositoryId !== "string" ||
+    !/^github\.com:[1-9][0-9]{0,19}$/.test(value.repositoryId) ||
+    typeof value.runId !== "string" ||
+    !isUuidV7(value.runId) ||
+    !(value.previousCheckpointRecordId === null ||
+      (typeof value.previousCheckpointRecordId === "string" && isUuidV7(value.previousCheckpointRecordId))) ||
+    typeof value.coveredFrom !== "string" ||
+    typeof value.coveredThrough !== "string" ||
+    typeof value.checkpointDigest !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/.test(value.checkpointDigest) ||
+    typeof value.checkpointRecordId !== "string" ||
+    !isUuidV7(value.checkpointRecordId) ||
+    typeof value.eventRecordId !== "string" ||
+    !isUuidV7(value.eventRecordId) ||
+    value.checkpointRecordId === value.eventRecordId ||
+    typeof value.recordedAt !== "string" ||
+    !Array.isArray(value.transactionPositions) ||
+    canonicalJson(value.transactionPositions) !== "[0,1]" ||
+    !Number.isSafeInteger(value.transactionSequence) ||
+    Number(value.transactionSequence) < 1
+  ) {
+    throw new Error("stored GitHub source checkpoint result is invalid");
+  }
+  assertUtcInstant(value.coveredFrom, "GitHub checkpoint result lower boundary");
+  assertUtcInstant(value.coveredThrough, "GitHub checkpoint result upper boundary");
+  assertUtcInstant(value.recordedAt, "GitHub checkpoint result recorded time");
+  if (value.coveredFrom > value.coveredThrough) throw new Error("stored GitHub source checkpoint result is invalid");
+  return {
+    repositoryId: value.repositoryId,
+    runId: value.runId,
+    previousCheckpointRecordId: value.previousCheckpointRecordId,
+    coveredFrom: value.coveredFrom,
+    coveredThrough: value.coveredThrough,
+    checkpointDigest: value.checkpointDigest,
+    checkpointRecordId: value.checkpointRecordId,
+    eventRecordId: value.eventRecordId,
+    recordedAt: value.recordedAt,
+    transactionPositions: [0, 1],
+    transactionSequence: Number(value.transactionSequence),
+  };
+}
+
+function parseGitHubSourceGapResult(value: JsonValue): GitHubSourceGapResult {
+  if (
+    !isExactJsonObject(value, [
+      "repositoryId",
+      "runId",
+      "checkpointRecordId",
+      "gapId",
+      "gapRecordId",
+      "eventRecordId",
+      "lowerBoundAt",
+      "cause",
+      "gapDigest",
+      "detectedAt",
+      "transactionPositions",
+      "transactionSequence",
+    ]) ||
+    typeof value.repositoryId !== "string" ||
+    !/^github\.com:[1-9][0-9]{0,19}$/.test(value.repositoryId) ||
+    typeof value.runId !== "string" ||
+    !isUuidV7(value.runId) ||
+    typeof value.checkpointRecordId !== "string" ||
+    !isUuidV7(value.checkpointRecordId) ||
+    typeof value.gapId !== "string" ||
+    !isUuidV7(value.gapId) ||
+    value.gapRecordId !== value.gapId ||
+    typeof value.eventRecordId !== "string" ||
+    !isUuidV7(value.eventRecordId) ||
+    typeof value.lowerBoundAt !== "string" ||
+    !githubSourceGapCauses.includes(value.cause as GitHubSourceGapCause) ||
+    typeof value.gapDigest !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/.test(value.gapDigest) ||
+    typeof value.detectedAt !== "string" ||
+    !Array.isArray(value.transactionPositions) ||
+    canonicalJson(value.transactionPositions) !== "[0,1]" ||
+    !Number.isSafeInteger(value.transactionSequence) ||
+    Number(value.transactionSequence) < 1
+  ) {
+    throw new Error("stored GitHub source gap result is invalid");
+  }
+  assertUtcInstant(value.lowerBoundAt, "GitHub gap result lower boundary");
+  assertUtcInstant(value.detectedAt, "GitHub gap result detection time");
+  return {
+    repositoryId: value.repositoryId,
+    runId: value.runId,
+    checkpointRecordId: value.checkpointRecordId,
+    gapId: value.gapId,
+    gapRecordId: value.gapId,
+    eventRecordId: value.eventRecordId,
+    lowerBoundAt: value.lowerBoundAt,
+    cause: value.cause as GitHubSourceGapCause,
+    gapDigest: value.gapDigest,
+    detectedAt: value.detectedAt,
+    transactionPositions: [0, 1],
+    transactionSequence: Number(value.transactionSequence),
+  };
+}
+
+function parseGitHubSourceGapRepairResult(value: JsonValue): GitHubSourceGapRepairResult {
+  if (
+    !isExactJsonObject(value, [
+      "repositoryId",
+      "runId",
+      "gapId",
+      "gapRecordId",
+      "priorCheckpointRecordId",
+      "checkpointRecordId",
+      "repairRecordId",
+      "eventRecordId",
+      "lowerBoundAt",
+      "exclusiveEndAt",
+      "checkpointDigest",
+      "repairDigest",
+      "repairedAt",
+      "transactionPositions",
+      "transactionSequence",
+    ]) ||
+    typeof value.repositoryId !== "string" ||
+    !/^github\.com:[1-9][0-9]{0,19}$/.test(value.repositoryId) ||
+    typeof value.runId !== "string" ||
+    !isUuidV7(value.runId) ||
+    typeof value.gapId !== "string" ||
+    !isUuidV7(value.gapId) ||
+    value.gapRecordId !== value.gapId ||
+    typeof value.priorCheckpointRecordId !== "string" ||
+    !isUuidV7(value.priorCheckpointRecordId) ||
+    typeof value.checkpointRecordId !== "string" ||
+    !isUuidV7(value.checkpointRecordId) ||
+    typeof value.repairRecordId !== "string" ||
+    !isUuidV7(value.repairRecordId) ||
+    typeof value.eventRecordId !== "string" ||
+    !isUuidV7(value.eventRecordId) ||
+    new Set([value.checkpointRecordId, value.repairRecordId, value.eventRecordId]).size !== 3 ||
+    typeof value.lowerBoundAt !== "string" ||
+    typeof value.exclusiveEndAt !== "string" ||
+    typeof value.checkpointDigest !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/.test(value.checkpointDigest) ||
+    typeof value.repairDigest !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/.test(value.repairDigest) ||
+    typeof value.repairedAt !== "string" ||
+    !Array.isArray(value.transactionPositions) ||
+    canonicalJson(value.transactionPositions) !== "[0,1,2]" ||
+    !Number.isSafeInteger(value.transactionSequence) ||
+    Number(value.transactionSequence) < 1
+  ) {
+    throw new Error("stored GitHub source-gap repair result is invalid");
+  }
+  assertUtcInstant(value.lowerBoundAt, "GitHub repair result lower boundary");
+  assertUtcInstant(value.exclusiveEndAt, "GitHub repair result exclusive end");
+  assertUtcInstant(value.repairedAt, "GitHub repair result time");
+  if (value.exclusiveEndAt <= value.lowerBoundAt) throw new Error("stored GitHub source-gap repair result is invalid");
+  return {
+    repositoryId: value.repositoryId,
+    runId: value.runId,
+    gapId: value.gapId,
+    gapRecordId: value.gapId,
+    priorCheckpointRecordId: value.priorCheckpointRecordId,
+    checkpointRecordId: value.checkpointRecordId,
+    repairRecordId: value.repairRecordId,
+    eventRecordId: value.eventRecordId,
+    lowerBoundAt: value.lowerBoundAt,
+    exclusiveEndAt: value.exclusiveEndAt,
+    checkpointDigest: value.checkpointDigest,
+    repairDigest: value.repairDigest,
+    repairedAt: value.repairedAt,
+    transactionPositions: [0, 1, 2],
+    transactionSequence: Number(value.transactionSequence),
   };
 }
 

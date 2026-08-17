@@ -296,6 +296,167 @@ test("GitHub pull-request delivery rejects forks and closed-state test merge ide
   store.close();
 });
 
+test("GitHub delivery-audit checkpoints lower-bound gaps and close them only through complete repair", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-github-coverage-test-"));
+  const path = join(directory, "control.db");
+  let now = new Date("2026-08-17T14:00:00.000Z");
+  const store = new ControlPlaneStore(path, () => now);
+  const candidate = await activationCandidate(enabledDeclaration(), "9".repeat(40), "a".repeat(40));
+  const activation = store.activateCoreSnapshot({ candidate, expectedLastTransactionSequence: 1 });
+  store.recordCoreSourceCheckEligible({
+    checkId: "0198ba6b-7c00-7000-8000-000000000001",
+    candidate,
+    expectedLastTransactionSequence: activation.transactionSequence,
+  });
+  await reconcileRepositories(
+    store,
+    async () => ({
+      kind: "found",
+      repositoryId: "9001",
+      owner: "frostyard",
+      name: "example",
+      archived: false,
+      defaultBranch: "main",
+    }),
+    async () => validSurfaceProbe(),
+  );
+  assert.equal(store.repositoryStatuses()[0]?.effectiveState, "enrolled");
+
+  const firstInput = {
+    expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+    runId: "0198ba6b-7c00-7000-8000-000000000010",
+    repositoryId: "github.com:9001",
+    appId: "4567",
+    installationId: "github.com:installation:7654",
+    coveredFrom: "2026-08-17T13:55:00.000Z",
+    coveredThrough: "2026-08-17T13:55:00.000Z",
+    pageCount: 1,
+    deliveryCount: 0,
+    pageProofDigest: `sha256:${"1".repeat(64)}`,
+    selectedResponseDigest: `sha256:${"2".repeat(64)}`,
+  };
+  assert.throws(
+    () =>
+      store.openGitHubSourceGap({
+        expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+        runId: "0198ba6b-7c00-7000-8000-00000000000f",
+        repositoryId: "github.com:9001",
+        appId: "4567",
+        installationId: "github.com:installation:7654",
+        checkpointRecordId: "0198ba6b-7c00-7000-8000-00000000000e",
+        cause: "source-unavailable",
+      }),
+    /requires the latest checkpoint boundary/,
+  );
+  assert.throws(
+    () =>
+      store.recordGitHubSourceCheckpoint({
+        ...firstInput,
+        coveredFrom: "2026-08-17T13:54:00.000Z",
+      }),
+    /first GitHub source checkpoint must establish a point boundary/,
+  );
+  const first = store.recordGitHubSourceCheckpoint(firstInput);
+  assert.equal(first.previousCheckpointRecordId, null);
+  assert.equal(first.coveredFrom, first.coveredThrough);
+  assert.deepEqual(store.recordGitHubSourceCheckpoint(firstInput), first);
+
+  now = new Date("2026-08-17T14:05:00.000Z");
+  const gap = store.openGitHubSourceGap({
+    expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+    runId: "0198ba70-0ff0-7000-8000-000000000011",
+    repositoryId: "github.com:9001",
+    appId: "4567",
+    installationId: "github.com:installation:7654",
+    checkpointRecordId: first.checkpointRecordId,
+    cause: "delivery-audit-incomplete",
+  });
+  assert.equal(gap.lowerBoundAt, first.coveredThrough);
+  assert.equal(gap.gapId, gap.gapRecordId);
+  assert.throws(
+    () =>
+      store.recordGitHubSourceCheckpoint({
+        ...firstInput,
+        expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+        runId: "0198ba70-0ff0-7000-8000-000000000012",
+        coveredFrom: first.coveredThrough,
+        coveredThrough: "2026-08-17T14:04:00.000Z",
+      }),
+    /requires repair of the open source gap/,
+  );
+
+  now = new Date("2026-08-17T14:10:00.000Z");
+  const repair = store.repairGitHubSourceGap({
+    expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+    runId: "0198ba74-a3e0-7000-8000-000000000013",
+    repositoryId: "github.com:9001",
+    appId: "4567",
+    installationId: "github.com:installation:7654",
+    gapRecordId: gap.gapRecordId,
+    coveredThrough: "2026-08-17T14:08:00.000Z",
+    pageCount: 2,
+    deliveryCount: 3,
+    pageProofDigest: `sha256:${"3".repeat(64)}`,
+    selectedResponseDigest: `sha256:${"4".repeat(64)}`,
+  });
+  assert.equal(repair.lowerBoundAt, gap.lowerBoundAt);
+  assert.equal(repair.exclusiveEndAt, "2026-08-17T14:08:00.000Z");
+  assert.deepEqual(repair.transactionPositions, [0, 1, 2]);
+
+  now = new Date("2026-08-17T14:15:00.000Z");
+  const next = store.recordGitHubSourceCheckpoint({
+    ...firstInput,
+    expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+    runId: "0198ba79-37d0-7000-8000-000000000014",
+    coveredFrom: repair.exclusiveEndAt,
+    coveredThrough: "2026-08-17T14:14:00.000Z",
+    deliveryCount: 1,
+    pageProofDigest: `sha256:${"5".repeat(64)}`,
+    selectedResponseDigest: `sha256:${"6".repeat(64)}`,
+  });
+  assert.equal(next.previousCheckpointRecordId, repair.checkpointRecordId);
+
+  now = new Date("2026-08-17T14:20:00.000Z");
+  const unsupportedGap = store.openGitHubSourceGap({
+    expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+    runId: "0198ba7d-cbc0-7000-8000-000000000015",
+    repositoryId: "github.com:9001",
+    appId: "4567",
+    installationId: "github.com:installation:7654",
+    checkpointRecordId: next.checkpointRecordId,
+    cause: "unsupported-relevant-delivery",
+  });
+  assert.throws(
+    () =>
+      store.repairGitHubSourceGap({
+        expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+        runId: "0198ba82-5fb0-7000-8000-000000000016",
+        repositoryId: "github.com:9001",
+        appId: "4567",
+        installationId: "github.com:installation:7654",
+        gapRecordId: unsupportedGap.gapRecordId,
+        coveredThrough: "2026-08-17T14:19:00.000Z",
+        pageCount: 1,
+        deliveryCount: 1,
+        pageProofDigest: `sha256:${"7".repeat(64)}`,
+        selectedResponseDigest: `sha256:${"8".repeat(64)}`,
+      }),
+    /requires retained normalized repair observations/,
+  );
+  store.close();
+
+  const reopened = new ControlPlaneStore(path);
+  assert.equal(reopened.metadata().lastTransactionSequence, unsupportedGap.transactionSequence);
+  reopened.close();
+
+  const raw = new DatabaseSync(path);
+  raw.prepare("UPDATE durable_occurrences SET causation_record_id = NULL WHERE record_id = ?").run(
+    repair.repairRecordId,
+  );
+  raw.close();
+  assert.throws(() => new ControlPlaneStore(path), /GitHub source-gap repair lineage mismatch/);
+});
+
 test("GitHub reconciliation classifies mismatch precedence and preserves declaration authority", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fluent-repository-mismatch-test-"));
   let now = new Date("2026-08-16T19:00:00.000Z");

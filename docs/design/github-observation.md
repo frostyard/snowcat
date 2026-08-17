@@ -36,9 +36,11 @@ typed source command for an already verified, allowlisted, same-repository
 pull-request delivery and the pure exact-body HMAC verifier/normalizer that
 precedes it. A bounded injectable POST-only router now joins them, but remains
 unmounted by default until hosting lifecycle and coverage recovery are ready.
-Delivery audit, reconciliation checkpoints, truthful gap creation and repair,
-the other observation families, and retention pruning remain. The source
-adapter stays unregistered until that complete path is executable.
+The first typed checkpoint/gap/repair persistence loop now exists for
+pull-request delivery audit, but no GitHub delivery-API controller invokes it.
+Delivery acquisition, scheduled reconciliation, the other observation
+families, and retention pruning remain. The source adapter stays unregistered
+until that complete path is executable.
 
 ## Design
 
@@ -114,7 +116,7 @@ observed subject.
 
 ### Durable observation families
 
-Registry version 13 assigns the source-native subject identities and purpose-
+Registry version 14 assigns the source-native subject identities and purpose-
 specific revision kinds below. The implementing records and commands will
 assign exact registered kinds and payload schemas without changing these
 identity joins:
@@ -134,9 +136,9 @@ identity joins:
 
 Every family in this table uses or will use a registered `observation` record
 kind; the design does not introduce another generic record class. Registry
-version 13 additionally registers the direct delivery receipt and pull-request
-observation records plus their atomic delivery event and command. Other rows
-remain identity and revision contracts only. An observation
+version 14 additionally registers the direct delivery receipt, pull-request,
+checkpoint, gap, and repair observation records plus their atomic events and
+commands. Other rows remain identity and revision contracts only. An observation
 records source state and provenance; it does not become a merge, required-check
 satisfaction, artifact verification, or outcome fact merely because the GitHub
 App is trusted.
@@ -156,7 +158,8 @@ It excludes free-form content and rejects fork heads, merge queues, malformed
 merge state, and GUID reuse with changed input. Its three occurrences are
 independently verified on database reopen. It deliberately does not create a
 source gap: a checkpointed coverage boundary must exist before a missing
-interval can be stated truthfully.
+interval can be stated truthfully. The separate coverage commands now own that
+act.
 
 The implemented verifier accepts configured App identity and secret plus the
 exact delivery/event/content-type/signature headers and raw body. It checks the
@@ -168,6 +171,21 @@ body bound, returns closed detail-free status codes, and accepts a
 lifecycle-owned store. The default app deliberately does not mount it: doing so
 before delivery audit and source gaps exist would present partial ingestion as
 a complete observer.
+
+The target store now implements the post-acquisition coverage loop for the
+single registered `github.pull-request-deliveries:v1` scope. Its first complete
+audit records only a point checkpoint. Later complete audits continue exactly
+from the prior boundary. A failed audit can open one gap only from that latest
+boundary; a failure before any checkpoint remains baseline-unavailable. While
+the gap is open, ordinary checkpoints are rejected. A complete repair audit
+atomically appends the successor checkpoint and terminal repair observation,
+leaving the original gap intact. The store bounds each accepted audit to 100
+pages and 10,000 deliveries and verifies the entire chain on reopen. GitHub API
+acquisition, pagination, scheduling, leases, and recovery attempts remain to be
+implemented outside these short transactions.
+The complete-audit method deliberately cannot repair an unsupported or failed-
+normalization delivery; those gaps require future retained API-sourced
+normalized observations and remain open today.
 
 ### Reconciliation cycle
 
@@ -306,7 +324,9 @@ complete coverage.
   implement the exact-body verifier/normalizer, injectable bounded router, and
   trusted post-authentication pull-request transaction. The router remains
   disabled in the default app and must not be treated as proof that delivery
-  audit, source checkpointing, gap repair, or retention enforcement exists.
+  acquisition, scheduled audit, or retention enforcement exists. The target
+  store does implement typed checkpoint, gap, and repair persistence after a
+  deterministic controller has completed acquisition.
 - Follow the
   [required-check ruleset runbook](required-check-ruleset-operations.md) only
   when the adapter is ready for its real-repository acceptance test.

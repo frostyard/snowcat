@@ -1,8 +1,8 @@
 import { isUuidV7, type JsonValue } from "./encoding.ts";
 
 export const CONTROL_PLANE_APPLICATION_ID = 1_179_405_908; // ASCII "FLNT"
-export const CONTROL_PLANE_SCHEMA_VERSION = 6;
-export const CONTROL_PLANE_REGISTRY_VERSION = 13;
+export const CONTROL_PLANE_SCHEMA_VERSION = 7;
+export const CONTROL_PLANE_REGISTRY_VERSION = 14;
 
 export const informationClasses = ["public", "organization", "restricted"] as const;
 export type InformationClass = (typeof informationClasses)[number];
@@ -322,6 +322,27 @@ export const recordKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isGitHubPullRequestObservationPayload,
   },
+  "github.source-checkpoint-observation": {
+    schemaVersion: 1,
+    recordClass: "observation",
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isGitHubSourceCheckpointPayload,
+  },
+  "github.source-gap-observation": {
+    schemaVersion: 1,
+    recordClass: "observation",
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isGitHubSourceGapPayload,
+  },
+  "github.source-gap-repair-observation": {
+    schemaVersion: 1,
+    recordClass: "observation",
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isGitHubSourceGapRepairPayload,
+  },
 } as const;
 
 export const eventKindRegistry = {
@@ -415,6 +436,24 @@ export const eventKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isGitHubDeliveryRecordedPayload,
   },
+  "github.source-checkpoint-recorded": {
+    schemaVersion: 1,
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isGitHubSourceCheckpointPayload,
+  },
+  "github.source-gap-opened": {
+    schemaVersion: 1,
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isGitHubSourceGapPayload,
+  },
+  "github.source-gap-repaired": {
+    schemaVersion: 1,
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isGitHubSourceGapRepairPayload,
+  },
 } as const;
 
 export const commandKindRegistry = {
@@ -502,6 +541,22 @@ export const commandKindRegistry = {
       "github.delivery-receipt-observation",
       "github.pull-request-observation",
       "github.delivery-recorded",
+    ],
+  },
+  "github.record-source-checkpoint": {
+    schemaVersion: 1,
+    outputKinds: ["github.source-checkpoint-observation", "github.source-checkpoint-recorded"],
+  },
+  "github.open-source-gap": {
+    schemaVersion: 1,
+    outputKinds: ["github.source-gap-observation", "github.source-gap-opened"],
+  },
+  "github.repair-source-gap": {
+    schemaVersion: 1,
+    outputKinds: [
+      "github.source-checkpoint-observation",
+      "github.source-gap-repair-observation",
+      "github.source-gap-repaired",
     ],
   },
 } as const;
@@ -900,6 +955,18 @@ export const githubPullRequestActions = [
 ] as const;
 export type GitHubPullRequestAction = (typeof githubPullRequestActions)[number];
 
+export const githubSourceScope = "github.pull-request-deliveries:v1" as const;
+export const githubSourceGapCauses = [
+  "delivery-audit-incomplete",
+  "source-unavailable",
+  "pagination-incomplete",
+  "request-budget-exhausted",
+  "unsupported-relevant-delivery",
+  "normalization-failed",
+  "recovery-horizon-expired",
+] as const;
+export type GitHubSourceGapCause = (typeof githubSourceGapCauses)[number];
+
 export interface GitHubDeliveryReceiptPayload extends Record<string, JsonValue> {
   appId: string;
   hookSubjectId: string;
@@ -952,6 +1019,59 @@ export interface GitHubDeliveryRecordedPayload extends Record<string, JsonValue>
   eventRecordId: string;
   disposition: "pull-request-observation-recorded";
   recordedAt: string;
+}
+
+export interface GitHubSourceCheckpointPayload extends Record<string, JsonValue> {
+  repositoryId: string;
+  scope: typeof githubSourceScope;
+  appId: string;
+  installationId: string;
+  runId: string;
+  previousCheckpointRecordId: string | null;
+  coveredFrom: string;
+  coveredThrough: string;
+  pageCount: number;
+  deliveryCount: number;
+  pageProofDigest: string;
+  selectedResponseDigest: string;
+  checkpointDigest: string;
+  checkpointRecordId: string;
+  recordedAt: string;
+}
+
+export interface GitHubSourceGapPayload extends Record<string, JsonValue> {
+  repositoryId: string;
+  scope: typeof githubSourceScope;
+  appId: string;
+  installationId: string;
+  runId: string;
+  checkpointRecordId: string;
+  gapId: string;
+  gapRecordId: string;
+  lowerBoundAt: string;
+  upperBoundAt: null;
+  cause: GitHubSourceGapCause;
+  gapDigest: string;
+  detectedAt: string;
+}
+
+export interface GitHubSourceGapRepairPayload extends Record<string, JsonValue> {
+  repositoryId: string;
+  scope: typeof githubSourceScope;
+  appId: string;
+  installationId: string;
+  runId: string;
+  gapId: string;
+  gapRecordId: string;
+  priorCheckpointRecordId: string;
+  checkpointRecordId: string;
+  repairRecordId: string;
+  eventRecordId: string;
+  lowerBoundAt: string;
+  exclusiveEndAt: string;
+  repairMethod: "complete-delivery-audit";
+  repairDigest: string;
+  repairedAt: string;
 }
 
 export function assertSubject(kind: string, id: string): asserts kind is SubjectKind {
@@ -1885,6 +2005,125 @@ function isGitHubDeliveryRecordedPayload(value: unknown): value is GitHubDeliver
     value.disposition === "pull-request-observation-recorded" &&
     isUtcInstant(value.recordedAt)
   );
+}
+
+function isGitHubSourceCheckpointPayload(value: unknown): value is GitHubSourceCheckpointPayload {
+  if (
+    !isExactObject(value, [
+      "repositoryId",
+      "scope",
+      "appId",
+      "installationId",
+      "runId",
+      "previousCheckpointRecordId",
+      "coveredFrom",
+      "coveredThrough",
+      "pageCount",
+      "deliveryCount",
+      "pageProofDigest",
+      "selectedResponseDigest",
+      "checkpointDigest",
+      "checkpointRecordId",
+      "recordedAt",
+    ]) ||
+    !isGitHubRepositoryId(value.repositoryId) ||
+    value.scope !== githubSourceScope ||
+    !isGitHubNumericId(value.appId) ||
+    !isGitHubInstallationId(value.installationId) ||
+    !isUuid(value.runId) ||
+    !(value.previousCheckpointRecordId === null || isUuid(value.previousCheckpointRecordId)) ||
+    !isUtcInstant(value.coveredFrom) ||
+    !isUtcInstant(value.coveredThrough) ||
+    !isPositiveInteger(value.pageCount) ||
+    !isNonNegativeInteger(value.deliveryCount) ||
+    !isSha256(value.pageProofDigest) ||
+    !isSha256(value.selectedResponseDigest) ||
+    !isSha256(value.checkpointDigest) ||
+    !isUuid(value.checkpointRecordId) ||
+    !isUtcInstant(value.recordedAt)
+  ) {
+    return false;
+  }
+  return new Date(value.coveredFrom).getTime() <= new Date(value.coveredThrough).getTime();
+}
+
+function isGitHubSourceGapPayload(value: unknown): value is GitHubSourceGapPayload {
+  return (
+    isExactObject(value, [
+      "repositoryId",
+      "scope",
+      "appId",
+      "installationId",
+      "runId",
+      "checkpointRecordId",
+      "gapId",
+      "gapRecordId",
+      "lowerBoundAt",
+      "upperBoundAt",
+      "cause",
+      "gapDigest",
+      "detectedAt",
+    ]) &&
+    isGitHubRepositoryId(value.repositoryId) &&
+    value.scope === githubSourceScope &&
+    isGitHubNumericId(value.appId) &&
+    isGitHubInstallationId(value.installationId) &&
+    isUuid(value.runId) &&
+    isUuid(value.checkpointRecordId) &&
+    isUuid(value.gapId) &&
+    value.gapRecordId === value.gapId &&
+    isUtcInstant(value.lowerBoundAt) &&
+    value.upperBoundAt === null &&
+    githubSourceGapCauses.includes(value.cause as GitHubSourceGapCause) &&
+    isSha256(value.gapDigest) &&
+    isUtcInstant(value.detectedAt) &&
+    new Date(value.detectedAt).getTime() >= new Date(value.lowerBoundAt).getTime()
+  );
+}
+
+function isGitHubSourceGapRepairPayload(value: unknown): value is GitHubSourceGapRepairPayload {
+  if (
+    !isExactObject(value, [
+      "repositoryId",
+      "scope",
+      "appId",
+      "installationId",
+      "runId",
+      "gapId",
+      "gapRecordId",
+      "priorCheckpointRecordId",
+      "checkpointRecordId",
+      "repairRecordId",
+      "eventRecordId",
+      "lowerBoundAt",
+      "exclusiveEndAt",
+      "repairMethod",
+      "repairDigest",
+      "repairedAt",
+    ]) ||
+    !isGitHubRepositoryId(value.repositoryId) ||
+    value.scope !== githubSourceScope ||
+    !isGitHubNumericId(value.appId) ||
+    !isGitHubInstallationId(value.installationId) ||
+    !isUuid(value.runId) ||
+    !isUuid(value.gapId) ||
+    value.gapRecordId !== value.gapId ||
+    !isUuid(value.priorCheckpointRecordId) ||
+    !isUuid(value.checkpointRecordId) ||
+    !isUuid(value.repairRecordId) ||
+    !isUuid(value.eventRecordId) ||
+    new Set([value.checkpointRecordId, value.repairRecordId, value.eventRecordId]).size !== 3 ||
+    !isUtcInstant(value.lowerBoundAt) ||
+    !isUtcInstant(value.exclusiveEndAt) ||
+    value.repairMethod !== "complete-delivery-audit" ||
+    !isSha256(value.repairDigest) ||
+    !isUtcInstant(value.repairedAt)
+  ) {
+    return false;
+  }
+  const lower = new Date(value.lowerBoundAt).getTime();
+  const end = new Date(value.exclusiveEndAt).getTime();
+  return end > lower && new Date(value.repairedAt).getTime() >= end;
 }
 
 function isRepositorySurfaceRequirementResult(value: unknown): value is RepositorySurfaceRequirementResult {

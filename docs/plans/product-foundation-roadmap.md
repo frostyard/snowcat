@@ -128,7 +128,7 @@ does not itself enroll the repository in the fleet.
 
 ## Phase 4 — Observe GitHub without impersonating workers (large)
 
-- Registry v13 and schema v6 implement the first internal, enrollment-bound
+- Registry v14 and schema v7 implement the first internal, enrollment-bound
   post-authentication transaction for an allowlisted same-repository
   pull-request delivery. It writes a distinct receipt observation,
   pull-request observation, and audit event with exact replay, 30-day receipt
@@ -136,7 +136,10 @@ does not itself enroll the repository in the fleet.
   subject creation. A pure exact-body HMAC verifier and allowlisted payload
   normalizer now precede the command, and an injectable POST-only router bounds
   streaming and failure disclosure. The default app does not mount it pending
-  production listener lifecycle and coverage reconciliation.
+  production listener lifecycle. The fixed pull-request-delivery audit scope
+  now also persists point/continuation checkpoints, one lower-bounded open gap,
+  and terminal complete-audit repair with reopen-time chain verification.
+  Delivery-API acquisition, scheduling, and leases remain.
 - The source-independent `conclusive-run-rate:v1` arithmetic evaluator is
   implemented under
   [ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md)
