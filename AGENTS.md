@@ -93,9 +93,10 @@ removed. -->
   its read-only operational state. The healthy interval defaults to 15 minutes;
   configure only through `FLUENT_CORE_POLL_INTERVAL_SECONDS`.
 - Use `npm run --silent repository -- reconcile` to resume one bounded
-  declaration/identity convergence pass and `repository -- status` for its
-  read-only pre-surface states. Identity match is `awaiting-surfaces`, never
-  enrollment; the implementation lives in
+  declaration/identity/surface/enrollment convergence pass and `repository --
+  status` for its read-only effective states. Identity match is only
+  `awaiting-surfaces`; enrollment requires a valid exact-commit surface fact.
+  The implementation lives in
   [`src/repository/controller.ts`](src/repository/controller.ts).
 - Keep the target control-plane store separate from the disposable queue-spike
   store. Target schema and startup live in

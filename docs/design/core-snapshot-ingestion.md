@@ -206,7 +206,7 @@ more than once per 24 hours.
   persist and select that fetched candidate, record the eligible check, and run
   one repository reconciliation pass. Equivalent snapshot retry uses the
   original expected sequence and returns its original result.
-- Run `npm run --silent repository -- status` for the read-only pre-surface
+- Run `npm run --silent repository -- status` for the read-only effective
   repository states, or `repository -- reconcile` to resume one interrupted
   convergence pass without fetching Core again.
 - Run `npm run --silent core -- rollback <expected-control-plane-sequence>
@@ -274,11 +274,13 @@ The exact record and read contract is
   and [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md)
   and [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md)
   and [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md)
+  and [ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md)
 - Contracts: [core snapshot verification](../specs/core-snapshot-verification.md)
   [Core snapshot activation](../specs/core-snapshot-activation.md), and
   [Core source readiness](../specs/core-source-readiness.md)
   and [Core check-detail retention](../specs/core-check-detail-retention.md)
   and [Core source polling](../specs/core-source-polling.md)
   and [repository authority reconciliation](../specs/repository-authority-reconciliation.md)
+  and [repository surface reconciliation](../specs/repository-surface-reconciliation.md)
 - Built in: [Core snapshot ingestion — Phases 1–4](../plans/core-snapshot-ingestion.md)
 - Product: [GitHub organization agent fleet](../prd/agent-fleet.md)

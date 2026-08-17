@@ -65,6 +65,7 @@ Docs are split by the question they answer:
 - [0048 — Retain Core check detail for 30 days](adr/0048-retain-core-check-detail-for-30-days.md)
 - [0049 — Poll Core through one leased controller](adr/0049-poll-core-through-one-leased-controller.md)
 - [0050 — Reconcile repository enrollment as separate facts](adr/0050-reconcile-repository-enrollment-as-separate-facts.md)
+- [0051 — Pin surfaces to the observed default-branch head](adr/0051-pin-surfaces-to-the-observed-default-branch-head.md)
 
 ### Domain language
 
@@ -87,6 +88,7 @@ Docs are split by the question they answer:
 - [Core check-detail retention](specs/core-check-detail-retention.md)
 - [Core source polling](specs/core-source-polling.md)
 - [Repository authority reconciliation](specs/repository-authority-reconciliation.md)
+- [Repository surface reconciliation](specs/repository-surface-reconciliation.md)
 
 ### Plans
 

@@ -91,13 +91,14 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
 - Active-candidate validation now rejects removal of a prior repository ID;
   intentional departure remains an explicit `disabled` declaration, including
   across operator rollback.
-- The current read derives only `awaiting-authority`, `disabled`, `paused`, `awaiting-github`,
-  `github-held`, or `awaiting-surfaces`. It deliberately cannot claim
-  enrollment before the remaining canonical-surface gate.
+- The current read derives `awaiting-authority`, `disabled`, `paused`,
+  `awaiting-github`, `github-held`, `awaiting-surfaces`, `surface-held`,
+  `awaiting-enrollment`, or `enrolled` from separate current facts.
 - Reconcile each slug to its immutable GitHub repository ID and required
-  canonical surfaces; identity is implemented, while exact-commit canonical
-  surface loading and policy validation remain next. Local failures create the
-  smallest repository result and do not invalidate the Core snapshot.
+  canonical surfaces. Identity is implemented; exact-commit default-branch
+  surface loading, policy validation, and separate enrollment establishment are
+  implemented. Local failures create the smallest repository result and do not
+  invalidate the Core snapshot.
 - Enforce declaration retention as `disabled`, local suspension as narrowing
   only, and explicit reconciliation before held work can resume. Declaration
   retention is implemented; local suspension and held-work disposition remain.
@@ -125,7 +126,8 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
   [Core source readiness](../specs/core-source-readiness.md), and
   [Core check-detail retention](../specs/core-check-detail-retention.md), and
   [Core source polling](../specs/core-source-polling.md), and
-  [repository authority reconciliation](../specs/repository-authority-reconciliation.md)
+  [repository authority reconciliation](../specs/repository-authority-reconciliation.md), and
+  [repository surface reconciliation](../specs/repository-surface-reconciliation.md)
 - Rationale:
   [ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md) and
   [ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md), and
@@ -134,5 +136,6 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
   and [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md)
   and [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md)
   and [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md)
+  and [ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md)
 - Parent delivery order: [product foundation roadmap](product-foundation-roadmap.md)
 - Target substrate: [control-plane kernel bootstrap](control-plane-kernel-bootstrap.md)

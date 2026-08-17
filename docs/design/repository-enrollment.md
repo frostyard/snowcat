@@ -2,17 +2,19 @@
 
 Living document. Rationale:
 [ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md) and
-[ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md).
+[ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md),
+and [ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md).
 Contracts:
-[repository authority reconciliation](../specs/repository-authority-reconciliation.md).
+[repository authority reconciliation](../specs/repository-authority-reconciliation.md)
+and [repository surface reconciliation](../specs/repository-surface-reconciliation.md).
 
 ## Overview
 
 Repository reconciliation progressively establishes independent authority and
 external-evidence facts for one immutable GitHub repository identity. The
-current implementation stops after identity reconciliation; canonical-surface
-validation is the next enrollment gate and no current result is named
-`enrolled`.
+current implementation carries declarations through identity reconciliation,
+canonical-surface validation, and separate enrollment establishment without
+creating work.
 
 ```text
 active Core snapshot
@@ -27,7 +29,10 @@ repository.core-authorized ──► GitHub metadata lookup
                     effective repository state projection
                                       │
                                       ▼
-                       canonical surfaces (next slice)
+                       canonical surface validation
+                                      │
+                                      ▼
+                         repository enrollment
 ```
 
 ## Design
@@ -64,6 +69,16 @@ The effective-state read is derived rather than stored as a universal status:
 | `enabled` | anything except `matched` | `github-held` |
 | `enabled` | `matched` | `awaiting-surfaces` |
 
+After a matched identity, the RepositoryReconciler observes the default branch,
+pins its head commit once, and loads each canonical path through bounded GitHub
+Git data requests. The active Core snapshot supplies the exact v1 surface
+contract and governance schema. The store independently revalidates the probe
+and records an enrollment-checkpoint policy decision. Non-valid results derive
+`surface-held`; valid evidence derives `awaiting-enrollment` until the separate
+enrollment command creates the RepositoryController definition,
+`repository.enrolled` fact, and event. That final state is `enrolled` and still
+creates no work.
+
 Core admission readiness gates declaration materialization. Existing facts
 remain readable when readiness later becomes false. GitHub reconciliation can
 only consume an already-materialized fact from the active snapshot and cannot
@@ -77,11 +92,11 @@ broaden the declaration's programs or action ceiling.
 Bearer header; it is never logged or stored. `FLUENT_GITHUB_API_URL` is fixed to
 `https://api.github.com` outside explicit test adapters.
 
-An interrupted pass may leave later repositories visibly `awaiting-authority`.
-Rerunning converges through command receipts. A GitHub `unavailable` result is
-durable and retryable. Matching identity still does not permit discovery,
-admission, claim, or renewal until the canonical-surface and remaining hold
-contracts are implemented.
+An interrupted pass may leave later repositories visibly `awaiting-authority`,
+`awaiting-surfaces`, or `awaiting-enrollment`. Rerunning converges through
+command receipts. GitHub and surface `unavailable` results are durable and
+retryable. Local holds and held-work reconciliation remain subsequent narrowing
+controls.
 
 ## References
 
@@ -89,8 +104,10 @@ contracts are implemented.
   [ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md),
   [ADR-0039](../adr/0039-use-typed-source-native-subject-identities.md),
   [ADR-0040](../adr/0040-establish-facts-through-registered-predicate-contracts.md),
-  and [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md)
+  [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md),
+  and [ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md)
 - Contracts:
   [repository authority reconciliation](../specs/repository-authority-reconciliation.md)
+  and [repository surface reconciliation](../specs/repository-surface-reconciliation.md)
 - Built in:
   [Core snapshot ingestion plan — Phase 4](../plans/core-snapshot-ingestion.md#phase-4-materialize-repository-authority-without-premature-work-large)

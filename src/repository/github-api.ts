@@ -1,0 +1,64 @@
+const GITHUB_API_URL = "https://api.github.com";
+const GITHUB_API_VERSION = "2022-11-28";
+const MAX_RESPONSE_BYTES = 1_048_576;
+
+export type GitHubFetch = typeof fetch;
+
+export type GitHubJsonResponse =
+  | { kind: "response"; status: number; value: unknown }
+  | { kind: "unavailable" };
+
+export async function githubApiJson(
+  path: string,
+  signal: AbortSignal,
+  fetcher: GitHubFetch = fetch,
+): Promise<GitHubJsonResponse> {
+  if (!path.startsWith("/") || path.startsWith("//")) throw new Error("GitHub API path must be root-relative");
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github+json",
+    "User-Agent": "frostyard-fluent",
+    "X-GitHub-Api-Version": GITHUB_API_VERSION,
+  };
+  const token = process.env.FLUENT_GITHUB_TOKEN;
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const request = (url: string) =>
+    fetcher(url, { method: "GET", headers, redirect: "manual", signal });
+  try {
+    let response = await request(`${GITHUB_API_URL}${path}`);
+    if (isRedirect(response.status)) {
+      const redirected = sameOriginUrl(response.headers.get("location"));
+      if (!redirected) return { kind: "unavailable" };
+      response = await request(redirected);
+      if (isRedirect(response.status)) return { kind: "unavailable" };
+    }
+    if (!response.ok) return { kind: "response", status: response.status, value: null };
+    const declaredLength = response.headers.get("content-length");
+    if (declaredLength !== null && Number(declaredLength) > MAX_RESPONSE_BYTES) {
+      return { kind: "unavailable" };
+    }
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > MAX_RESPONSE_BYTES) return { kind: "unavailable" };
+    try {
+      const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+      return { kind: "response", status: response.status, value };
+    } catch {
+      return { kind: "unavailable" };
+    }
+  } catch {
+    return { kind: "unavailable" };
+  }
+}
+
+function isRedirect(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+function sameOriginUrl(location: string | null): string | null {
+  if (!location) return null;
+  try {
+    const url = new URL(location, GITHUB_API_URL);
+    return url.origin === GITHUB_API_URL ? url.href : null;
+  } catch {
+    return null;
+  }
+}

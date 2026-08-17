@@ -26,20 +26,21 @@ transaction sequence.
 `ControlPlaneStore.occurrences()` returns occurrences ordered by transaction
 sequence and position. Neither method mutates the database or returns a secret.
 
-### Closed registry version 9
+### Closed registry version 10
 
 | Registry | Name | Version or ID rule | Contract |
 | --- | --- | --- | --- |
 | Subject | `control-plane-database` | UUIDv7 | Fluent authority; accepts `sha256` and `transaction-sequence` revisions |
 | Subject | `operator-principal` | UUIDv7 | Fluent authority; accepts `sha256` revision |
 | Subject | `core-snapshot` | UUIDv7 | Fluent authority; accepts `core-catalog-sha256` revision |
-| Subject | `github-repository` | `github.com:` plus immutable positive numeric repository ID | GitHub authority; accepts exact Core-declaration and GitHub-metadata SHA-256 revisions |
+| Subject | `github-repository` | `github.com:` plus immutable positive numeric repository ID | GitHub authority; accepts exact Core-declaration, GitHub-metadata, surface, and Git-commit revisions |
 | Revision | `sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact payload digest |
 | Revision | `transaction-sequence` | Positive safe integer encoded as canonical decimal | Exact database state checked through that sequence |
 | Revision | `core-catalog-sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact retained Core catalog |
 | Revision | `git-commit-sha1` | `sha1:` plus 40 lowercase hexadecimal characters | Exact Git source commit |
 | Revision | `core-declaration-sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact active repository declaration bytes |
 | Revision | `github-metadata-sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact bounded selected GitHub metadata result |
+| Revision | `repository-surfaces-sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact bounded canonical-surface probe |
 | Source | `fluent-system` | Only source ID `kernel` | Internal deterministic bootstrap source |
 | Source | `github-repository` | `github.com:` plus immutable positive numeric repository ID | Source revision must be `git-commit-sha1` |
 | Source | `operator-principal` | UUIDv7 matching a stored operator subject | Human authority source; accepts no source revision |
@@ -311,7 +312,7 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
    initialization transaction.
 5. Older, newer, incomplete, unexpected, or differently identified schemas
    MUST fail closed. Unregistered indexes, triggers, and views are unexpected.
-   Schema version 4 and registry version 9 define no upgrade path from earlier
+   Schema version 5 and registry version 10 define no upgrade path from earlier
    pre-production target stores.
 6. Subject, record, event, command, source, revision, record-class, and
    information-class names MUST come from the code-owned versioned registries.
@@ -472,21 +473,23 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
     completion linkage, outcome/disposition vocabulary, and counters. Poll
     state MUST be covered by backup integrity but MUST NOT allocate or establish
     a record, event, fact, decision, or transaction sequence.
-53. Repository authority and GitHub reconciliation MUST use only their two
-    registered commands and predicates. Each command MUST emit its exact three
-    ordered outputs and one indefinitely retained idempotency receipt.
+53. Repository authority, GitHub identity, canonical surfaces, and enrollment
+    MUST use only their registered commands and predicates. Authority and
+    identity emit three outputs, surfaces emit four, and enrollment emits three;
+    each write retains one idempotency receipt indefinitely.
 54. Startup MUST verify repository subject identity, active-snapshot declaration
     bytes and digest, source revisions, authority and reconciliation record IDs,
     causation, payload lineage, transaction result, and receipt output linkage.
 55. The repository status read MUST derive from the active snapshot's latest
-    applicable authority facts. It MUST NOT store or expose `enrolled` before
-    the canonical-surface predicate exists.
+    applicable authority, identity, surface, and enrollment facts. It MUST
+    expose `enrolled` only when the enrollment fact binds all current
+    prerequisites.
 
 ## Derived artifacts
 
 | Artifact | Derivation |
 | --- | --- |
-| SQLite v4 target schema | Created transactionally by `ControlPlaneStore` |
+| SQLite v5 target schema | Created transactionally by `ControlPlaneStore` |
 | Registry validation | Code-owned constants and validators in `src/control/registry.ts` |
 | Initialization definition and event | Fixed outputs of `control-plane.initialize` v1 |
 | Implicit operator identity | Fixed `operator-principal` subject and `principal.definition` initialization output |
@@ -494,7 +497,7 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
 | Core snapshot definition, fact, event, retained files, and receipt | Fixed outputs and source material of `core.activate-snapshot` v1 |
 | Core candidate rejection observation, event, and receipt | Bounded fixed outputs of `core.record-candidate-rejection` v1 |
 | Core poll operational state | Validated singleton owned by `CoreSourceController` |
-| Repository pre-surface status | Active Core authorization plus an identity result bound to that exact fact |
+| Repository effective status | Active Core authorization plus current identity, surface, and enrollment facts |
 | Subject lookup generations | Full deterministic rebuild from subjects and their creation definitions |
 | Event cursor generations | Full deterministic rebuild from event occurrences without payload copies |
 | Backup manifest | Verified metadata and canonical authoritative digest of one online SQLite backup artifact |
@@ -513,11 +516,13 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
   [ADR-0044](../adr/0044-replace-the-queue-spike-database.md),
   [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md), and
   [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md), and
-  [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md)
+  [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md), and
+  [ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md)
 - Context: [control-plane kernel](../design/control-plane-kernel.md)
 - Core authority contract: [Core snapshot activation](core-snapshot-activation.md)
 - Core diagnostic retention: [Core check-detail retention](core-check-detail-retention.md)
 - Core polling: [Core source polling](core-source-polling.md)
 - Repository reconciliation: [repository authority reconciliation](repository-authority-reconciliation.md)
+  and [repository surface reconciliation](repository-surface-reconciliation.md)
 - Delivery: [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md)
 - Product: [GitHub organization agent fleet](../prd/agent-fleet.md)

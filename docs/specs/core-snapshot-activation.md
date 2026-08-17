@@ -100,7 +100,7 @@ The rejection payload has this exact shape:
 | `activeCommitId` | string or null | Required for continuity failure; exact active source commit used by the ancestry check |
 | `observedAt` | canonical UTC instant | Server evaluation and recorded time |
 
-Schema version `4` and registry version `9` govern three Core authority tables:
+Schema version `5` and registry version `10` govern three Core authority tables:
 
 | Table | Retained content |
 | --- | --- |

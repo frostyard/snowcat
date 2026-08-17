@@ -12,8 +12,11 @@ import {
 import {
   assertRepositoryDeclarationRetention,
   validateCoreCatalog,
+  validatedRepositorySurfaceContract,
+  validateRepositoryGovernanceBytes,
   type CoreTreeEntry,
   type RepositoryDeclaration,
+  type RepositorySurfaceContract,
   type ValidatedRepositoryDeclaration,
 } from "../core/validator.ts";
 import type { InspectedCoreCandidate } from "../core/git-source.ts";
@@ -54,11 +57,23 @@ import {
   type RepositoryAccountableOwner,
   type RepositoryGitHubReconciliationPayload,
   type RepositoryGitHubResult,
-  type RepositoryPreSurfaceState,
+  type RepositoryEnrollmentPayload,
+  type RepositoryState,
+  type RepositorySurfaceReconciliationPayload,
+  type RepositorySurfaceRequirementResult,
+  type RepositorySurfaceResult,
+  type RepositorySurfaceSummary,
   type ProjectionName,
   type RecordClass,
   type SubjectKind,
 } from "./registry.ts";
+import {
+  repositoryGitBlobObjectId,
+  repositoryGitTreeObjectId,
+  surfaceTreeDigest,
+  type RepositorySurfaceProbeInput,
+  type RepositorySurfaceTreeEntry,
+} from "../repository/surfaces.ts";
 
 type Row = Record<string, SQLInputValue>;
 
@@ -362,6 +377,14 @@ export interface ActiveCoreRepositoryCatalog {
   repositories: ValidatedRepositoryDeclaration[];
 }
 
+export interface ActiveCoreSurfaceContract {
+  coreSnapshotId: string;
+  coreSourceCommitId: string;
+  contract: RepositorySurfaceContract;
+  contractDigest: string;
+  governanceSchemaDigest: string;
+}
+
 export interface RepositoryCoreAuthorityInput {
   expectedLastTransactionSequence: number;
   coreSnapshotId: string;
@@ -388,6 +411,7 @@ export type RepositoryGitHubInspectionInput =
       owner: string;
       name: string;
       archived: boolean;
+      defaultBranch: string;
     };
 
 export interface RepositoryGitHubReconciliationInput {
@@ -404,14 +428,58 @@ export interface RepositoryGitHubReconciliationResult {
   reconciliationRecordId: string;
   eventRecordId: string;
   result: RepositoryGitHubResult;
-  effectiveState: RepositoryPreSurfaceState;
+  effectiveState: RepositoryState;
   checkedAt: string;
   responseDigest: string;
   transactionPositions: readonly [0, 1, 2];
   transactionSequence: number;
 }
 
-export interface RepositoryPreSurfaceStatus {
+export interface RepositorySurfaceReconciliationInput {
+  expectedLastTransactionSequence: number;
+  githubReconciliationRecordId: string;
+  probe: RepositorySurfaceProbeInput;
+}
+
+export interface RepositorySurfaceReconciliationResult {
+  repositoryId: string;
+  coreSnapshotId: string;
+  coreAuthorizationRecordId: string;
+  githubReconciliationRecordId: string;
+  observationRecordId: string;
+  policyDecisionRecordId: string;
+  reconciliationRecordId: string;
+  eventRecordId: string;
+  result: RepositorySurfaceResult;
+  repositoryCommitId: string | null;
+  checkedAt: string;
+  probeDigest: string;
+  transactionPositions: readonly [0, 1, 2, 3];
+  transactionSequence: number;
+}
+
+export interface RepositoryEnrollmentInput {
+  expectedLastTransactionSequence: number;
+  surfaceReconciliationRecordId: string;
+}
+
+export interface RepositoryEnrollmentResult {
+  repositoryId: string;
+  coreSnapshotId: string;
+  coreAuthorizationRecordId: string;
+  githubReconciliationRecordId: string;
+  surfaceReconciliationRecordId: string;
+  surfacePolicyDecisionRecordId: string;
+  controllerDefinitionRecordId: string;
+  enrollmentRecordId: string;
+  eventRecordId: string;
+  repositoryCommitId: string;
+  enrolledAt: string;
+  transactionPositions: readonly [0, 1, 2];
+  transactionSequence: number;
+}
+
+export interface RepositoryStatus {
   repositoryId: string;
   owner: string;
   name: string;
@@ -424,7 +492,13 @@ export interface RepositoryPreSurfaceStatus {
   surfaceContractVersion: 1;
   githubReconciliationRecordId: string | null;
   githubResult: RepositoryGitHubResult | null;
-  effectiveState: RepositoryPreSurfaceState;
+  githubDefaultBranch: string | null;
+  surfaceReconciliationRecordId: string | null;
+  surfacePolicyDecisionRecordId: string | null;
+  surfaceResult: RepositorySurfaceResult | null;
+  repositoryCommitId: string | null;
+  enrollmentRecordId: string | null;
+  effectiveState: RepositoryState;
 }
 
 export interface ProjectionAccess {
@@ -829,7 +903,27 @@ export class ControlPlaneStore {
     };
   }
 
-  repositoryStatuses(): RepositoryPreSurfaceStatus[] {
+  activeCoreSurfaceContract(version = 1): ActiveCoreSurfaceContract | undefined {
+    const snapshot = this.activeCoreSnapshot();
+    if (!snapshot) return undefined;
+    const candidate = this.retainedCoreCandidate(snapshot.sourceCommitId);
+    if (!candidate || candidate.catalogDigest !== snapshot.catalogDigest) {
+      throw new Error("active Core surface contract is not retained exactly");
+    }
+    const validated = validatedRepositorySurfaceContract(candidate.files, version);
+    const path = `organization/contracts/repository-surfaces/v${version}.json`;
+    const entry = candidate.files.find((file) => file.path === path);
+    if (!entry) throw new Error(`active Core surface contract is missing: ${path}`);
+    return {
+      coreSnapshotId: snapshot.snapshotId,
+      coreSourceCommitId: snapshot.sourceCommitId,
+      contract: validated.contract,
+      contractDigest: `sha256:${createHash("sha256").update(entry.bytes).digest("hex")}`,
+      governanceSchemaDigest: validated.governanceSchemaDigest,
+    };
+  }
+
+  repositoryStatuses(): RepositoryStatus[] {
     const catalog = this.activeCoreRepositoryCatalog();
     if (!catalog) return [];
     const rows = this.db
@@ -882,7 +976,56 @@ export class ControlPlaneStore {
         });
       }
     }
-    const statuses: RepositoryPreSurfaceStatus[] = [];
+    const surfaceRows = this.db
+      .prepare(
+        `SELECT occurrence.record_id, occurrence.payload_json, occurrence.transaction_sequence
+         FROM durable_occurrences occurrence
+         JOIN durable_records record ON record.record_id = occurrence.record_id
+         WHERE occurrence.kind = 'repository.canonical-surfaces-reconciled'
+           AND record.record_class = 'fact'
+         ORDER BY occurrence.transaction_sequence DESC`,
+      )
+      .all() as Row[];
+    const surfaceByIdentity = new Map<
+      string,
+      { recordId: string; payload: RepositorySurfaceReconciliationPayload }
+    >();
+    for (const row of surfaceRows) {
+      const payload = parseJson(String(row.payload_json));
+      if (!recordKindRegistry["repository.canonical-surfaces-reconciled"].validatePayload(payload)) {
+        throw new Error(`invalid repository surface reconciliation: ${String(row.record_id)}`);
+      }
+      if (!surfaceByIdentity.has(payload.githubReconciliationRecordId)) {
+        surfaceByIdentity.set(payload.githubReconciliationRecordId, {
+          recordId: String(row.record_id),
+          payload,
+        });
+      }
+    }
+    const enrollmentRows = this.db
+      .prepare(
+        `SELECT occurrence.record_id, occurrence.payload_json, occurrence.transaction_sequence
+         FROM durable_occurrences occurrence
+         JOIN durable_records record ON record.record_id = occurrence.record_id
+         WHERE occurrence.kind = 'repository.enrolled'
+           AND record.record_class = 'fact'
+         ORDER BY occurrence.transaction_sequence DESC`,
+      )
+      .all() as Row[];
+    const enrollmentBySurface = new Map<string, { recordId: string; payload: RepositoryEnrollmentPayload }>();
+    for (const row of enrollmentRows) {
+      const payload = parseJson(String(row.payload_json));
+      if (!recordKindRegistry["repository.enrolled"].validatePayload(payload)) {
+        throw new Error(`invalid repository enrollment: ${String(row.record_id)}`);
+      }
+      if (!enrollmentBySurface.has(payload.surfaceReconciliationRecordId)) {
+        enrollmentBySurface.set(payload.surfaceReconciliationRecordId, {
+          recordId: String(row.record_id),
+          payload,
+        });
+      }
+    }
+    const statuses: RepositoryStatus[] = [];
     for (const repository of catalog.repositories) {
       const repositoryId = `github.com:${repository.declaration.repository.repository_id}`;
       const authority = authorityByRepository.get(repositoryId);
@@ -900,12 +1043,20 @@ export class ControlPlaneStore {
           surfaceContractVersion: 1,
           githubReconciliationRecordId: null,
           githubResult: null,
+          githubDefaultBranch: null,
+          surfaceReconciliationRecordId: null,
+          surfacePolicyDecisionRecordId: null,
+          surfaceResult: null,
+          repositoryCommitId: null,
+          enrollmentRecordId: null,
           effectiveState: "awaiting-authority",
         });
         continue;
       }
       const github = reconciliationByAuthority.get(authority.recordId);
-      const effectiveState: RepositoryPreSurfaceState =
+      const surface = github ? surfaceByIdentity.get(github.recordId) : undefined;
+      const enrollment = surface ? enrollmentBySurface.get(surface.recordId) : undefined;
+      const effectiveState: RepositoryState =
         authority.payload.fleetState === "disabled"
           ? "disabled"
           : authority.payload.fleetState === "paused"
@@ -913,7 +1064,13 @@ export class ControlPlaneStore {
             : github === undefined
               ? "awaiting-github"
               : github.payload.result === "matched"
-                ? "awaiting-surfaces"
+                ? surface === undefined
+                  ? "awaiting-surfaces"
+                  : surface.payload.result !== "valid"
+                    ? "surface-held"
+                    : enrollment === undefined
+                      ? "awaiting-enrollment"
+                      : "enrolled"
                 : "github-held";
       statuses.push({
         repositoryId,
@@ -930,6 +1087,12 @@ export class ControlPlaneStore {
         surfaceContractVersion: 1,
         githubReconciliationRecordId: github?.recordId ?? null,
         githubResult: github?.payload.result ?? null,
+        githubDefaultBranch: github?.payload.observedDefaultBranch ?? null,
+        surfaceReconciliationRecordId: surface?.recordId ?? null,
+        surfacePolicyDecisionRecordId: surface?.payload.policyDecisionRecordId ?? null,
+        surfaceResult: surface?.payload.result ?? null,
+        repositoryCommitId: surface?.payload.repositoryCommitId ?? null,
+        enrollmentRecordId: enrollment?.recordId ?? null,
         effectiveState,
       });
     }
@@ -1094,33 +1257,12 @@ export class ControlPlaneStore {
     assertExpectedSequence(input.expectedLastTransactionSequence);
     const inspection = normalizeRepositoryGitHubInspection(input.inspection);
     const responseDigest = sha256(canonicalJson(inspection as unknown as JsonValue));
-    const idempotencyKey = `repo-gh:${input.coreAuthorizationRecordId}:${responseDigest.slice("sha256:".length)}`;
-    const commandPayloadJson = canonicalJson({
-      coreAuthorizationRecordId: input.coreAuthorizationRecordId,
-      inspection: inspection as unknown as JsonValue,
-    });
-    const commandPayloadDigest = sha256(commandPayloadJson);
 
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.verifyExisting(this.applicationTables());
       const metadata = this.metadata();
       const commandScope = `database:${metadata.databaseLineageId}`;
-      const prior = this.db
-        .prepare(
-          `SELECT payload_digest, result_json FROM idempotency_receipts
-           WHERE command_scope = ? AND command_kind = 'repository.record-github-identity'
-             AND command_schema_version = 1 AND idempotency_key = ?`,
-        )
-        .get(commandScope, idempotencyKey) as Row | undefined;
-      if (prior) {
-        if (String(prior.payload_digest) !== commandPayloadDigest) {
-          throw new Error("repository GitHub reconciliation idempotency payload changed");
-        }
-        const result = parseRepositoryGitHubReconciliationResult(parseJson(String(prior.result_json)));
-        this.db.exec("COMMIT");
-        return result;
-      }
       const evaluationTime = this.now();
       assertCommandTimeAndSequence(metadata, evaluationTime, input.expectedLastTransactionSequence);
       const authorityRow = this.db
@@ -1140,8 +1282,55 @@ export class ControlPlaneStore {
       if (!active || active.snapshotId !== authorityPayload.coreSnapshotId) {
         throw new Error("repository GitHub reconciliation authority is not from the active Core snapshot");
       }
+      const predecessor = this.db
+        .prepare(
+          `SELECT occurrence.record_id, occurrence.payload_json, occurrence.transaction_sequence
+           FROM durable_occurrences occurrence
+           WHERE occurrence.kind = 'repository.github-identity-reconciled'
+             AND json_extract(occurrence.payload_json, '$.coreAuthorizationRecordId') = ?
+           ORDER BY occurrence.transaction_sequence DESC LIMIT 1`,
+        )
+        .get(input.coreAuthorizationRecordId) as Row | undefined;
+      if (predecessor) {
+        const predecessorPayload = parseJson(String(predecessor.payload_json));
+        if (!recordKindRegistry["repository.github-identity-reconciled"].validatePayload(predecessorPayload)) {
+          throw new Error("repository GitHub reconciliation predecessor is invalid");
+        }
+        if (predecessorPayload.responseDigest === responseDigest) {
+          const result = repositoryGitHubResultFromPayload(
+            predecessorPayload,
+            Number(predecessor.transaction_sequence),
+          );
+          this.db.exec("COMMIT");
+          return result;
+        }
+      }
+      const predecessorRecordId = predecessor ? String(predecessor.record_id) : "initial";
+      const idempotencyKey =
+        `repo-gh:${input.coreAuthorizationRecordId}:${predecessorRecordId}:${responseDigest.slice("sha256:".length)}`;
+      const commandPayloadJson = canonicalJson({
+        coreAuthorizationRecordId: input.coreAuthorizationRecordId,
+        predecessorReconciliationRecordId: predecessor ? predecessorRecordId : null,
+        inspection: inspection as unknown as JsonValue,
+      });
+      const commandPayloadDigest = sha256(commandPayloadJson);
+      const prior = this.db
+        .prepare(
+          `SELECT payload_digest, result_json FROM idempotency_receipts
+           WHERE command_scope = ? AND command_kind = 'repository.record-github-identity'
+             AND command_schema_version = 1 AND idempotency_key = ?`,
+        )
+        .get(commandScope, idempotencyKey) as Row | undefined;
+      if (prior) {
+        if (String(prior.payload_digest) !== commandPayloadDigest) {
+          throw new Error("repository GitHub reconciliation idempotency payload changed");
+        }
+        const result = parseRepositoryGitHubReconciliationResult(parseJson(String(prior.result_json)));
+        this.db.exec("COMMIT");
+        return result;
+      }
       const resultKind = classifyRepositoryGitHubInspection(authorityPayload, inspection);
-      const effectiveState = repositoryPreSurfaceState(authorityPayload.fleetState, resultKind);
+      const effectiveState = repositoryIdentityState(authorityPayload.fleetState, resultKind);
       const transactionId = uuidV7(new Date(evaluationTime));
       const observationRecordId = uuidV7(new Date(evaluationTime));
       const reconciliationRecordId = uuidV7(new Date(evaluationTime));
@@ -1162,6 +1351,7 @@ export class ControlPlaneStore {
         observedName: inspection.kind === "found" ? inspection.name : null,
         observedRepositoryId: inspection.kind === "found" ? inspection.repositoryId : null,
         archived: inspection.kind === "found" ? inspection.archived : null,
+        observedDefaultBranch: inspection.kind === "found" ? inspection.defaultBranch : null,
         result: resultKind,
         effectiveState,
         checkedAt: evaluationTime,
@@ -1225,6 +1415,394 @@ export class ControlPlaneStore {
       };
       this.insertReceipt(commandScope, "repository.record-github-identity", idempotencyKey, commandPayloadDigest, result, sequence);
       this.advanceControlMetadata(evaluationTime, sequence);
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  recordRepositoryCanonicalSurfaces(
+    input: RepositorySurfaceReconciliationInput,
+  ): RepositorySurfaceReconciliationResult {
+    assertExpectedSequence(input.expectedLastTransactionSequence);
+    if (!isUuidV7(input.githubReconciliationRecordId)) {
+      throw new Error("repository surface reconciliation requires a UUIDv7 identity fact");
+    }
+    const probe = normalizeRepositorySurfaceProbe(input.probe);
+    const probeJson = canonicalJson(probe as unknown as JsonValue);
+    const probeDigest = sha256(probeJson);
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.verifyExisting(this.applicationTables());
+      const metadata = this.metadata();
+      const commandScope = `database:${metadata.databaseLineageId}`;
+      const evaluationTime = this.now();
+      assertCommandTimeAndSequence(metadata, evaluationTime, input.expectedLastTransactionSequence);
+      const githubRow = this.db
+        .prepare(
+          `SELECT occurrence.* FROM durable_occurrences occurrence
+           JOIN durable_records record ON record.record_id = occurrence.record_id
+           WHERE occurrence.record_id = ? AND occurrence.kind = 'repository.github-identity-reconciled'
+             AND record.record_class = 'fact'`,
+        )
+        .get(input.githubReconciliationRecordId) as Row | undefined;
+      if (!githubRow) throw new Error("repository surface reconciliation requires a GitHub identity fact");
+      const githubPayload = parseJson(String(githubRow.payload_json));
+      if (!recordKindRegistry["repository.github-identity-reconciled"].validatePayload(githubPayload)) {
+        throw new Error("repository GitHub identity fact is invalid");
+      }
+      if (githubPayload.result !== "matched" || githubPayload.observedDefaultBranch === null) {
+        throw new Error("repository surface reconciliation requires a matched GitHub identity");
+      }
+      const latestIdentity = this.db
+        .prepare(
+          `SELECT occurrence.record_id FROM durable_occurrences occurrence
+           JOIN durable_records record ON record.record_id = occurrence.record_id
+           WHERE occurrence.kind = 'repository.github-identity-reconciled'
+             AND record.record_class = 'fact'
+             AND json_extract(occurrence.payload_json, '$.coreAuthorizationRecordId') = ?
+           ORDER BY occurrence.transaction_sequence DESC LIMIT 1`,
+        )
+        .get(githubPayload.coreAuthorizationRecordId) as Row | undefined;
+      if (!latestIdentity || String(latestIdentity.record_id) !== input.githubReconciliationRecordId) {
+        throw new Error("repository surface reconciliation identity fact is not current");
+      }
+      const active = this.activeCoreSnapshot();
+      if (!active || active.snapshotId !== githubPayload.coreSnapshotId) {
+        throw new Error("repository surface reconciliation authority is not from the active Core snapshot");
+      }
+      const authorityRow = this.db
+        .prepare(
+          `SELECT occurrence.payload_json FROM durable_occurrences occurrence
+           JOIN durable_records record ON record.record_id = occurrence.record_id
+           WHERE occurrence.record_id = ? AND occurrence.kind = 'repository.core-authorized'
+             AND record.record_class = 'fact'`,
+        )
+        .get(githubPayload.coreAuthorizationRecordId) as Row | undefined;
+      if (!authorityRow) throw new Error("repository surface reconciliation Core authority is missing");
+      const authorityPayload = parseJson(String(authorityRow.payload_json));
+      if (!recordKindRegistry["repository.core-authorized"].validatePayload(authorityPayload)) {
+        throw new Error("repository surface reconciliation Core authority is invalid");
+      }
+      const activeContract = this.activeCoreSurfaceContract(authorityPayload.surfaceContractVersion);
+      if (!activeContract || activeContract.coreSnapshotId !== authorityPayload.coreSnapshotId) {
+        throw new Error("repository surface reconciliation contract is not from the active Core snapshot");
+      }
+      const predecessor = this.db
+        .prepare(
+          `SELECT occurrence.record_id, occurrence.payload_json, occurrence.transaction_sequence
+           FROM durable_occurrences occurrence
+           WHERE occurrence.kind = 'repository.canonical-surfaces-reconciled'
+             AND json_extract(occurrence.payload_json, '$.githubReconciliationRecordId') = ?
+           ORDER BY occurrence.transaction_sequence DESC LIMIT 1`,
+        )
+        .get(input.githubReconciliationRecordId) as Row | undefined;
+      if (predecessor) {
+        const predecessorPayload = parseJson(String(predecessor.payload_json));
+        if (!recordKindRegistry["repository.canonical-surfaces-reconciled"].validatePayload(predecessorPayload)) {
+          throw new Error("repository surface reconciliation predecessor is invalid");
+        }
+        if (predecessorPayload.probeDigest === probeDigest) {
+          const result = repositorySurfaceResultFromPayload(
+            predecessorPayload,
+            Number(predecessor.transaction_sequence),
+          );
+          this.db.exec("COMMIT");
+          return result;
+        }
+      }
+      const predecessorRecordId = predecessor ? String(predecessor.record_id) : "initial";
+      const idempotencyKey =
+        `repo-surfaces:${input.githubReconciliationRecordId}:${predecessorRecordId}:${probeDigest.slice("sha256:".length)}`;
+      const commandPayloadJson = canonicalJson({
+        githubReconciliationRecordId: input.githubReconciliationRecordId,
+        predecessorReconciliationRecordId: predecessor ? predecessorRecordId : null,
+        probeDigest,
+      });
+      const commandPayloadDigest = sha256(commandPayloadJson);
+      const prior = this.db
+        .prepare(
+          `SELECT payload_digest, result_json FROM idempotency_receipts
+           WHERE command_scope = ? AND command_kind = 'repository.record-canonical-surfaces'
+             AND command_schema_version = 1 AND idempotency_key = ?`,
+        )
+        .get(commandScope, idempotencyKey) as Row | undefined;
+      if (prior) {
+        if (String(prior.payload_digest) !== commandPayloadDigest) {
+          throw new Error("repository surface reconciliation idempotency payload changed");
+        }
+        const result = parseRepositorySurfaceReconciliationResult(parseJson(String(prior.result_json)));
+        this.db.exec("COMMIT");
+        return result;
+      }
+      const evaluation = evaluateRepositorySurfaceProbe(
+        probe,
+        githubPayload.observedDefaultBranch,
+        activeContract.contract,
+      );
+      const transactionId = uuidV7(new Date(evaluationTime));
+      const observationRecordId = uuidV7(new Date(evaluationTime));
+      const policyDecisionRecordId = uuidV7(new Date(evaluationTime));
+      const reconciliationRecordId = uuidV7(new Date(evaluationTime));
+      const eventRecordId = uuidV7(new Date(evaluationTime));
+      const correlationId = uuidV7(new Date(evaluationTime));
+      const payload = {
+        repositoryId: authorityPayload.repositoryId,
+        coreSnapshotId: authorityPayload.coreSnapshotId,
+        coreAuthorizationRecordId: githubPayload.coreAuthorizationRecordId,
+        githubReconciliationRecordId: input.githubReconciliationRecordId,
+        observationRecordId,
+        policyDecisionRecordId,
+        reconciliationRecordId,
+        eventRecordId,
+        defaultBranch: evaluation.defaultBranch,
+        repositoryCommitId: evaluation.repositoryCommitId,
+        repositoryTreeId: evaluation.repositoryTreeId,
+        surfaceContractVersion: 1,
+        governanceSchemaVersion: 1,
+        surfaceContractDigest: activeContract.contractDigest,
+        governanceSchemaDigest: activeContract.governanceSchemaDigest,
+        surfaces: evaluation.surfaces,
+        governancePolicy: evaluation.governancePolicy,
+        checkpoint: "repository-enrollment",
+        decision: evaluation.result === "valid" ? "permit" : "deny",
+        requirementResults: repositorySurfaceRequirementResults(activeContract.contract, evaluation),
+        exceptionRecordIds: [],
+        result: evaluation.result,
+        failedSurfaceId: evaluation.failedSurfaceId,
+        checkedAt: evaluationTime,
+        probeDigest,
+      } satisfies RepositorySurfaceReconciliationPayload;
+      if (!recordKindRegistry["repository.canonical-surfaces-reconciled"].validatePayload(payload)) {
+        throw new Error("repository surface result is outside the reconciliation record contract");
+      }
+      const payloadJson = canonicalJson(payload);
+      const payloadDigest = sha256(payloadJson);
+      const transaction = this.db
+        .prepare(
+          `INSERT INTO control_transactions (
+             transaction_id, command_kind, command_schema_version, principal_kind,
+             principal_id, session_id, idempotency_key, payload_digest,
+             evaluation_time, recorded_at
+           ) VALUES (?, 'repository.record-canonical-surfaces', 1, 'fluent-system', 'kernel', NULL, ?, ?, ?, ?)`,
+        )
+        .run(transactionId, idempotencyKey, commandPayloadDigest, evaluationTime, evaluationTime);
+      const sequence = Number(transaction.lastInsertRowid);
+      const scope = canonicalJson({ deploymentId: metadata.databaseLineageId });
+      const sourceRevisionKind = evaluation.repositoryCommitId === null ? "github-metadata-sha256" : "git-commit-sha1";
+      const sourceRevisionValue =
+        evaluation.repositoryCommitId === null ? probeDigest : `sha1:${evaluation.repositoryCommitId}`;
+      for (const occurrence of [
+        { recordId: observationRecordId, occurrenceType: "record" as const, kind: "repository.canonical-surface-observation", recordClass: "observation" as const },
+        { recordId: policyDecisionRecordId, occurrenceType: "record" as const, kind: "repository.enrollment-checkpoint-policy-decision", recordClass: "decision" as const },
+        { recordId: reconciliationRecordId, occurrenceType: "record" as const, kind: "repository.canonical-surfaces-reconciled", recordClass: "fact" as const },
+        { recordId: eventRecordId, occurrenceType: "event" as const, kind: "repository.canonical-surfaces-reconciliation-recorded" },
+      ].map((value, transactionPosition) => ({ ...value, transactionPosition }))) {
+        this.insertOccurrence({
+          ...occurrence,
+          schemaVersion: 1,
+          subjectKind: "github-repository",
+          subjectId: authorityPayload.repositoryId,
+          revisionKind: "repository-surfaces-sha256",
+          revisionValue: probeDigest,
+          sourceKind: "github-api",
+          sourceId: "api.github.com",
+          sourceRevisionKind,
+          sourceRevisionValue,
+          informationClass: "organization",
+          informationScopeJson: scope,
+          payloadJson,
+          payloadDigest,
+          correlationId,
+          causationRecordId: input.githubReconciliationRecordId,
+          transactionSequence: sequence,
+          recordedAt: evaluationTime,
+        });
+      }
+      const result: RepositorySurfaceReconciliationResult = {
+        repositoryId: authorityPayload.repositoryId,
+        coreSnapshotId: authorityPayload.coreSnapshotId,
+        coreAuthorizationRecordId: githubPayload.coreAuthorizationRecordId,
+        githubReconciliationRecordId: input.githubReconciliationRecordId,
+        observationRecordId,
+        policyDecisionRecordId,
+        reconciliationRecordId,
+        eventRecordId,
+        result: evaluation.result,
+        repositoryCommitId: evaluation.repositoryCommitId,
+        checkedAt: evaluationTime,
+        probeDigest,
+        transactionPositions: [0, 1, 2, 3],
+        transactionSequence: sequence,
+      };
+      this.insertReceipt(commandScope, "repository.record-canonical-surfaces", idempotencyKey, commandPayloadDigest, result, sequence);
+      this.advanceControlMetadata(evaluationTime, sequence);
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  establishRepositoryEnrollment(input: RepositoryEnrollmentInput): RepositoryEnrollmentResult {
+    assertExpectedSequence(input.expectedLastTransactionSequence);
+    if (!isUuidV7(input.surfaceReconciliationRecordId)) {
+      throw new Error("repository enrollment requires a UUIDv7 surface fact");
+    }
+    const idempotencyKey = `repo-enroll:${input.surfaceReconciliationRecordId}`;
+    const commandPayloadJson = canonicalJson({
+      surfaceReconciliationRecordId: input.surfaceReconciliationRecordId,
+    });
+    const commandPayloadDigest = sha256(commandPayloadJson);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.verifyExisting(this.applicationTables());
+      const metadata = this.metadata();
+      const commandScope = `database:${metadata.databaseLineageId}`;
+      const prior = this.db
+        .prepare(
+          `SELECT payload_digest, result_json FROM idempotency_receipts
+           WHERE command_scope = ? AND command_kind = 'repository.establish-enrollment'
+             AND command_schema_version = 1 AND idempotency_key = ?`,
+        )
+        .get(commandScope, idempotencyKey) as Row | undefined;
+      if (prior) {
+        if (String(prior.payload_digest) !== commandPayloadDigest) {
+          throw new Error("repository enrollment idempotency payload changed");
+        }
+        const result = parseRepositoryEnrollmentResult(parseJson(String(prior.result_json)));
+        this.db.exec("COMMIT");
+        return result;
+      }
+      const evaluationTime = this.now();
+      assertCommandTimeAndSequence(metadata, evaluationTime, input.expectedLastTransactionSequence);
+      if (!this.coreAdmissionReadiness(evaluationTime).ready) {
+        throw new Error("repository enrollment requires Core admission readiness");
+      }
+      const surfaceRow = this.db
+        .prepare(
+          `SELECT occurrence.* FROM durable_occurrences occurrence
+           JOIN durable_records record ON record.record_id = occurrence.record_id
+           WHERE occurrence.record_id = ? AND occurrence.kind = 'repository.canonical-surfaces-reconciled'
+             AND record.record_class = 'fact'`,
+        )
+        .get(input.surfaceReconciliationRecordId) as Row | undefined;
+      if (!surfaceRow) throw new Error("repository enrollment requires a canonical-surface fact");
+      const surfacePayload = parseJson(String(surfaceRow.payload_json));
+      if (!recordKindRegistry["repository.canonical-surfaces-reconciled"].validatePayload(surfacePayload)) {
+        throw new Error("repository enrollment surface fact is invalid");
+      }
+      if (surfacePayload.result !== "valid" || surfacePayload.repositoryCommitId === null) {
+        throw new Error("repository enrollment requires valid canonical surfaces");
+      }
+      const statuses = this.repositoryStatuses();
+      const current = statuses.find((status) => status.repositoryId === surfacePayload.repositoryId);
+      if (
+        !current ||
+        current.coreSnapshotId !== surfacePayload.coreSnapshotId ||
+        current.coreAuthorizationRecordId !== surfacePayload.coreAuthorizationRecordId ||
+        current.githubReconciliationRecordId !== surfacePayload.githubReconciliationRecordId ||
+        current.surfaceReconciliationRecordId !== input.surfaceReconciliationRecordId ||
+        current.fleetState !== "enabled" ||
+        current.githubResult !== "matched" ||
+        current.surfaceResult !== "valid"
+      ) {
+        throw new Error("repository enrollment prerequisites are not current");
+      }
+      const authorityRow = this.db
+        .prepare(
+          `SELECT occurrence.payload_json FROM durable_occurrences occurrence
+           WHERE occurrence.record_id = ? AND occurrence.kind = 'repository.core-authorized'`,
+        )
+        .get(surfacePayload.coreAuthorizationRecordId) as Row | undefined;
+      const authorityPayload = authorityRow ? parseJson(String(authorityRow.payload_json)) : null;
+      if (!recordKindRegistry["repository.core-authorized"].validatePayload(authorityPayload)) {
+        throw new Error("repository enrollment Core authority is invalid");
+      }
+      const enrolledAt = evaluationTime;
+      const transactionId = uuidV7(new Date(enrolledAt));
+      const controllerDefinitionRecordId = uuidV7(new Date(enrolledAt));
+      const enrollmentRecordId = uuidV7(new Date(enrolledAt));
+      const eventRecordId = uuidV7(new Date(enrolledAt));
+      const payload = {
+        repositoryId: surfacePayload.repositoryId,
+        coreSnapshotId: surfacePayload.coreSnapshotId,
+        coreAuthorizationRecordId: surfacePayload.coreAuthorizationRecordId,
+        githubReconciliationRecordId: surfacePayload.githubReconciliationRecordId,
+        surfaceReconciliationRecordId: input.surfaceReconciliationRecordId,
+        surfacePolicyDecisionRecordId: surfacePayload.policyDecisionRecordId,
+        controllerDefinitionRecordId,
+        enrollmentRecordId,
+        eventRecordId,
+        repositoryCommitId: surfacePayload.repositoryCommitId,
+        surfaceContractVersion: surfacePayload.surfaceContractVersion,
+        maintenancePrograms: authorityPayload.maintenancePrograms,
+        actionCeiling: authorityPayload.actionCeiling,
+        enrolledAt,
+      } satisfies RepositoryEnrollmentPayload;
+      if (!recordKindRegistry["repository.enrolled"].validatePayload(payload)) {
+        throw new Error("repository enrollment is outside the registered contract");
+      }
+      const payloadJson = canonicalJson(payload);
+      const payloadDigest = sha256(payloadJson);
+      const transaction = this.db
+        .prepare(
+          `INSERT INTO control_transactions (
+             transaction_id, command_kind, command_schema_version, principal_kind,
+             principal_id, session_id, idempotency_key, payload_digest,
+             evaluation_time, recorded_at
+           ) VALUES (?, 'repository.establish-enrollment', 1, 'fluent-system', 'kernel', NULL, ?, ?, ?, ?)`,
+        )
+        .run(transactionId, idempotencyKey, commandPayloadDigest, enrolledAt, enrolledAt);
+      const sequence = Number(transaction.lastInsertRowid);
+      const scope = canonicalJson({ deploymentId: metadata.databaseLineageId });
+      for (const occurrence of [
+        { recordId: controllerDefinitionRecordId, occurrenceType: "record" as const, kind: "repository.controller-definition", recordClass: "definition" as const },
+        { recordId: enrollmentRecordId, occurrenceType: "record" as const, kind: "repository.enrolled", recordClass: "fact" as const },
+        { recordId: eventRecordId, occurrenceType: "event" as const, kind: "repository.enrollment-established" },
+      ].map((value, transactionPosition) => ({ ...value, transactionPosition }))) {
+        this.insertOccurrence({
+          ...occurrence,
+          schemaVersion: 1,
+          subjectKind: "github-repository",
+          subjectId: surfacePayload.repositoryId,
+          revisionKind: "git-commit-sha1",
+          revisionValue: `sha1:${surfacePayload.repositoryCommitId}`,
+          sourceKind: "github-repository",
+          sourceId: surfacePayload.repositoryId,
+          sourceRevisionKind: "git-commit-sha1",
+          sourceRevisionValue: `sha1:${surfacePayload.repositoryCommitId}`,
+          informationClass: "organization",
+          informationScopeJson: scope,
+          payloadJson,
+          payloadDigest,
+          correlationId: enrollmentRecordId,
+          causationRecordId: input.surfaceReconciliationRecordId,
+          transactionSequence: sequence,
+          recordedAt: enrolledAt,
+        });
+      }
+      const result: RepositoryEnrollmentResult = {
+        repositoryId: surfacePayload.repositoryId,
+        coreSnapshotId: surfacePayload.coreSnapshotId,
+        coreAuthorizationRecordId: surfacePayload.coreAuthorizationRecordId,
+        githubReconciliationRecordId: surfacePayload.githubReconciliationRecordId,
+        surfaceReconciliationRecordId: input.surfaceReconciliationRecordId,
+        surfacePolicyDecisionRecordId: surfacePayload.policyDecisionRecordId,
+        controllerDefinitionRecordId,
+        enrollmentRecordId,
+        eventRecordId,
+        repositoryCommitId: surfacePayload.repositoryCommitId,
+        enrolledAt,
+        transactionPositions: [0, 1, 2],
+        transactionSequence: sequence,
+      };
+      this.insertReceipt(commandScope, "repository.establish-enrollment", idempotencyKey, commandPayloadDigest, result, sequence);
+      this.advanceControlMetadata(enrolledAt, sequence);
       this.db.exec("COMMIT");
       return result;
     } catch (error) {
@@ -3707,10 +4285,18 @@ export class ControlPlaneStore {
 
   private insertReceipt(
     commandScope: string,
-    commandKind: "repository.materialize-core-authority" | "repository.record-github-identity",
+    commandKind:
+      | "repository.materialize-core-authority"
+      | "repository.record-github-identity"
+      | "repository.record-canonical-surfaces"
+      | "repository.establish-enrollment",
     idempotencyKey: string,
     payloadDigest: string,
-    result: RepositoryCoreAuthorityResult | RepositoryGitHubReconciliationResult,
+    result:
+      | RepositoryCoreAuthorityResult
+      | RepositoryGitHubReconciliationResult
+      | RepositorySurfaceReconciliationResult
+      | RepositoryEnrollmentResult,
     transactionSequence: number,
   ): void {
     this.db
@@ -4273,13 +4859,35 @@ export class ControlPlaneStore {
       } else if (row.command_kind === "repository.record-github-identity") {
         if (
           typeof row.idempotency_key !== "string" ||
-          !/^repo-gh:[0-9a-f-]{36}:[0-9a-f]{64}$/.test(row.idempotency_key) ||
+          !/^repo-gh:[0-9a-f-]{36}:(?:initial|[0-9a-f-]{36}):[0-9a-f]{64}$/.test(row.idempotency_key) ||
           row.principal_kind !== "fluent-system" ||
           row.principal_id !== "kernel" ||
           receiptCount !== 1 ||
           !outputs.every((output) => output.payload_digest === outputs[0]!.payload_digest)
         ) {
           throw new Error(`repository GitHub reconciliation transaction shape is invalid: ${String(row.sequence)}`);
+        }
+      } else if (row.command_kind === "repository.record-canonical-surfaces") {
+        if (
+          typeof row.idempotency_key !== "string" ||
+          !/^repo-surfaces:[0-9a-f-]{36}:(?:initial|[0-9a-f-]{36}):[0-9a-f]{64}$/.test(row.idempotency_key) ||
+          row.principal_kind !== "fluent-system" ||
+          row.principal_id !== "kernel" ||
+          receiptCount !== 1 ||
+          !outputs.every((output) => output.payload_digest === outputs[0]!.payload_digest)
+        ) {
+          throw new Error(`repository surface reconciliation transaction shape is invalid: ${String(row.sequence)}`);
+        }
+      } else if (row.command_kind === "repository.establish-enrollment") {
+        if (
+          typeof row.idempotency_key !== "string" ||
+          !/^repo-enroll:[0-9a-f-]{36}$/.test(row.idempotency_key) ||
+          row.principal_kind !== "fluent-system" ||
+          row.principal_id !== "kernel" ||
+          receiptCount !== 1 ||
+          !outputs.every((output) => output.payload_digest === outputs[0]!.payload_digest)
+        ) {
+          throw new Error(`repository enrollment transaction shape is invalid: ${String(row.sequence)}`);
         }
       }
     }
@@ -4622,6 +5230,106 @@ export class ControlPlaneStore {
           throw new Error(`repository GitHub reconciliation lineage mismatch: ${String(row.record_id)}`);
         }
       }
+      if (
+        String(row.kind) === "repository.canonical-surface-observation" ||
+        String(row.kind) === "repository.enrollment-checkpoint-policy-decision" ||
+        String(row.kind) === "repository.canonical-surfaces-reconciled" ||
+        String(row.kind) === "repository.canonical-surfaces-reconciliation-recorded"
+      ) {
+        const surface = payload as RepositorySurfaceReconciliationPayload;
+        const identity = this.db
+          .prepare(
+            `SELECT payload_json FROM durable_occurrences
+             WHERE record_id = ? AND kind = 'repository.github-identity-reconciled'`,
+          )
+          .get(surface.githubReconciliationRecordId) as Row | undefined;
+        const identityPayload = identity ? parseJson(String(identity.payload_json)) : undefined;
+        const expectedRecordId =
+          String(row.kind) === "repository.canonical-surface-observation"
+            ? surface.observationRecordId
+            : String(row.kind) === "repository.enrollment-checkpoint-policy-decision"
+              ? surface.policyDecisionRecordId
+              : String(row.kind) === "repository.canonical-surfaces-reconciled"
+                ? surface.reconciliationRecordId
+                : surface.eventRecordId;
+        const expectedSourceRevisionKind =
+          surface.repositoryCommitId === null ? "github-metadata-sha256" : "git-commit-sha1";
+        const expectedSourceRevisionValue =
+          surface.repositoryCommitId === null ? surface.probeDigest : `sha1:${surface.repositoryCommitId}`;
+        if (
+          !identityPayload ||
+          !recordKindRegistry["repository.github-identity-reconciled"].validatePayload(identityPayload) ||
+          identityPayload.result !== "matched" ||
+          String(row.subject_kind) !== "github-repository" ||
+          String(row.subject_id) !== surface.repositoryId ||
+          String(row.record_id) !== expectedRecordId ||
+          String(row.revision_kind) !== "repository-surfaces-sha256" ||
+          String(row.revision_value) !== surface.probeDigest ||
+          String(row.source_kind) !== "github-api" ||
+          String(row.source_id) !== "api.github.com" ||
+          String(row.source_revision_kind) !== expectedSourceRevisionKind ||
+          String(row.source_revision_value) !== expectedSourceRevisionValue ||
+          String(row.causation_record_id) !== surface.githubReconciliationRecordId ||
+          String(row.recorded_at) !== surface.checkedAt ||
+          identityPayload.repositoryId !== surface.repositoryId ||
+          identityPayload.coreSnapshotId !== surface.coreSnapshotId ||
+          identityPayload.coreAuthorizationRecordId !== surface.coreAuthorizationRecordId ||
+          (surface.defaultBranch !== null && identityPayload.observedDefaultBranch !== surface.defaultBranch)
+        ) {
+          throw new Error(`repository surface reconciliation lineage mismatch: ${String(row.record_id)}`);
+        }
+        if (surface.result === "valid") {
+          try {
+            validateRepositoryGovernanceBytes(Buffer.from(canonicalJson(surface.governancePolicy!), "utf8"));
+          } catch {
+            throw new Error(`repository surface governance lineage mismatch: ${String(row.record_id)}`);
+          }
+        }
+      }
+      if (
+        String(row.kind) === "repository.controller-definition" ||
+        String(row.kind) === "repository.enrolled" ||
+        String(row.kind) === "repository.enrollment-established"
+      ) {
+        const enrollment = payload as RepositoryEnrollmentPayload;
+        const surface = this.db
+          .prepare(
+            `SELECT payload_json FROM durable_occurrences
+             WHERE record_id = ? AND kind = 'repository.canonical-surfaces-reconciled'`,
+          )
+          .get(enrollment.surfaceReconciliationRecordId) as Row | undefined;
+        const surfacePayload = surface ? parseJson(String(surface.payload_json)) : undefined;
+        const expectedRecordId =
+          String(row.kind) === "repository.controller-definition"
+            ? enrollment.controllerDefinitionRecordId
+            : String(row.kind) === "repository.enrolled"
+              ? enrollment.enrollmentRecordId
+              : enrollment.eventRecordId;
+        if (
+          !surfacePayload ||
+          !recordKindRegistry["repository.canonical-surfaces-reconciled"].validatePayload(surfacePayload) ||
+          surfacePayload.result !== "valid" ||
+          String(row.subject_kind) !== "github-repository" ||
+          String(row.subject_id) !== enrollment.repositoryId ||
+          String(row.record_id) !== expectedRecordId ||
+          String(row.revision_kind) !== "git-commit-sha1" ||
+          String(row.revision_value) !== `sha1:${enrollment.repositoryCommitId}` ||
+          String(row.source_kind) !== "github-repository" ||
+          String(row.source_id) !== enrollment.repositoryId ||
+          String(row.source_revision_kind) !== "git-commit-sha1" ||
+          String(row.source_revision_value) !== `sha1:${enrollment.repositoryCommitId}` ||
+          String(row.causation_record_id) !== enrollment.surfaceReconciliationRecordId ||
+          String(row.recorded_at) !== enrollment.enrolledAt ||
+          surfacePayload.repositoryId !== enrollment.repositoryId ||
+          surfacePayload.coreSnapshotId !== enrollment.coreSnapshotId ||
+          surfacePayload.coreAuthorizationRecordId !== enrollment.coreAuthorizationRecordId ||
+          surfacePayload.githubReconciliationRecordId !== enrollment.githubReconciliationRecordId ||
+          surfacePayload.policyDecisionRecordId !== enrollment.surfacePolicyDecisionRecordId ||
+          surfacePayload.repositoryCommitId !== enrollment.repositoryCommitId
+        ) {
+          throw new Error(`repository enrollment lineage mismatch: ${String(row.record_id)}`);
+        }
+      }
       if (row.revision_kind === "sha256" && String(row.revision_value) !== String(row.payload_digest)) {
         throw new Error(`database occurrence revision does not match its payload: ${String(row.record_id)}`);
       }
@@ -4897,6 +5605,8 @@ export class ControlPlaneStore {
       if (commandKind === "core.prune-check-detail") parseCoreCheckDetailPruneResult(result);
       if (commandKind === "repository.materialize-core-authority") parseRepositoryCoreAuthorityResult(result);
       if (commandKind === "repository.record-github-identity") parseRepositoryGitHubReconciliationResult(result);
+      if (commandKind === "repository.record-canonical-surfaces") parseRepositorySurfaceReconciliationResult(result);
+      if (commandKind === "repository.establish-enrollment") parseRepositoryEnrollmentResult(result);
       assertUtcInstant(String(row.retained_until), `idempotency receipt ${String(row.idempotency_key)} retention time`);
       if (
         (commandKind === "control-plane.check-integrity" ||
@@ -4907,7 +5617,9 @@ export class ControlPlaneStore {
           commandKind === "core.issue-stale-source-override" ||
           commandKind === "core.prune-check-detail" ||
           commandKind === "repository.materialize-core-authority" ||
-          commandKind === "repository.record-github-identity") &&
+          commandKind === "repository.record-github-identity" ||
+          commandKind === "repository.record-canonical-surfaces" ||
+          commandKind === "repository.establish-enrollment") &&
         String(row.retained_until) !== IDEMPOTENCY_RETAINED_UNTIL
       ) {
         throw new Error(`idempotency receipt retention mismatch: ${String(row.idempotency_key)}`);
@@ -5180,24 +5892,129 @@ export class ControlPlaneStore {
       }
       if (commandKind === "repository.record-github-identity") {
         const reconciliation = parseRepositoryGitHubReconciliationResult(result);
+        const predecessor = this.db
+          .prepare(
+            `SELECT record_id FROM durable_occurrences
+             WHERE kind = 'repository.github-identity-reconciled'
+               AND json_extract(payload_json, '$.coreAuthorizationRecordId') = ?
+               AND transaction_sequence < ?
+             ORDER BY transaction_sequence DESC LIMIT 1`,
+          )
+          .get(reconciliation.coreAuthorizationRecordId, reconciliation.transactionSequence) as Row | undefined;
+        const predecessorRecordId = predecessor ? String(predecessor.record_id) : "initial";
         const outputs = this.db
           .prepare(
             `SELECT record_id FROM durable_occurrences
              WHERE transaction_sequence = ? ORDER BY transaction_position`,
           )
           .all(row.transaction_sequence!) as Row[];
+        const factRow = this.db
+          .prepare("SELECT payload_json FROM durable_occurrences WHERE record_id = ?")
+          .get(reconciliation.reconciliationRecordId) as Row | undefined;
+        const factPayload = factRow ? parseJson(String(factRow.payload_json)) : undefined;
         if (
           reconciliation.transactionSequence !== Number(row.transaction_sequence) ||
           reconciliation.checkedAt !== String(transaction.evaluation_time) ||
           reconciliation.checkedAt !== String(transaction.recorded_at) ||
           String(row.idempotency_key) !==
-            `repo-gh:${reconciliation.coreAuthorizationRecordId}:${reconciliation.responseDigest.slice("sha256:".length)}` ||
+            `repo-gh:${reconciliation.coreAuthorizationRecordId}:${predecessorRecordId}:${reconciliation.responseDigest.slice("sha256:".length)}` ||
           outputs.length !== 3 ||
           String(outputs[0]!.record_id) !== reconciliation.observationRecordId ||
           String(outputs[1]!.record_id) !== reconciliation.reconciliationRecordId ||
-          String(outputs[2]!.record_id) !== reconciliation.eventRecordId
+          String(outputs[2]!.record_id) !== reconciliation.eventRecordId ||
+          !factPayload ||
+          !recordKindRegistry["repository.github-identity-reconciled"].validatePayload(factPayload) ||
+          factPayload.repositoryId !== reconciliation.repositoryId ||
+          factPayload.coreSnapshotId !== reconciliation.coreSnapshotId ||
+          factPayload.coreAuthorizationRecordId !== reconciliation.coreAuthorizationRecordId ||
+          factPayload.result !== reconciliation.result ||
+          factPayload.effectiveState !== reconciliation.effectiveState ||
+          factPayload.checkedAt !== reconciliation.checkedAt ||
+          factPayload.responseDigest !== reconciliation.responseDigest
         ) {
           throw new Error(`repository GitHub reconciliation receipt output mismatch: ${String(row.idempotency_key)}`);
+        }
+      }
+      if (commandKind === "repository.record-canonical-surfaces") {
+        const reconciliation = parseRepositorySurfaceReconciliationResult(result);
+        const predecessor = this.db
+          .prepare(
+            `SELECT record_id FROM durable_occurrences
+             WHERE kind = 'repository.canonical-surfaces-reconciled'
+               AND json_extract(payload_json, '$.githubReconciliationRecordId') = ?
+               AND transaction_sequence < ?
+             ORDER BY transaction_sequence DESC LIMIT 1`,
+          )
+          .get(reconciliation.githubReconciliationRecordId, reconciliation.transactionSequence) as Row | undefined;
+        const predecessorRecordId = predecessor ? String(predecessor.record_id) : "initial";
+        const outputs = this.db
+          .prepare(
+            `SELECT record_id FROM durable_occurrences
+             WHERE transaction_sequence = ? ORDER BY transaction_position`,
+          )
+          .all(row.transaction_sequence!) as Row[];
+        const factRow = this.db
+          .prepare("SELECT payload_json FROM durable_occurrences WHERE record_id = ?")
+          .get(reconciliation.reconciliationRecordId) as Row | undefined;
+        const factPayload = factRow ? parseJson(String(factRow.payload_json)) : undefined;
+        if (
+          reconciliation.transactionSequence !== Number(row.transaction_sequence) ||
+          reconciliation.checkedAt !== String(transaction.evaluation_time) ||
+          reconciliation.checkedAt !== String(transaction.recorded_at) ||
+          String(row.idempotency_key) !==
+            `repo-surfaces:${reconciliation.githubReconciliationRecordId}:${predecessorRecordId}:${reconciliation.probeDigest.slice("sha256:".length)}` ||
+          outputs.length !== 4 ||
+          String(outputs[0]!.record_id) !== reconciliation.observationRecordId ||
+          String(outputs[1]!.record_id) !== reconciliation.policyDecisionRecordId ||
+          String(outputs[2]!.record_id) !== reconciliation.reconciliationRecordId ||
+          String(outputs[3]!.record_id) !== reconciliation.eventRecordId ||
+          !factPayload ||
+          !recordKindRegistry["repository.canonical-surfaces-reconciled"].validatePayload(factPayload) ||
+          factPayload.repositoryId !== reconciliation.repositoryId ||
+          factPayload.coreSnapshotId !== reconciliation.coreSnapshotId ||
+          factPayload.coreAuthorizationRecordId !== reconciliation.coreAuthorizationRecordId ||
+          factPayload.githubReconciliationRecordId !== reconciliation.githubReconciliationRecordId ||
+          factPayload.result !== reconciliation.result ||
+          factPayload.repositoryCommitId !== reconciliation.repositoryCommitId ||
+          factPayload.checkedAt !== reconciliation.checkedAt ||
+          factPayload.probeDigest !== reconciliation.probeDigest
+        ) {
+          throw new Error(`repository surface reconciliation receipt output mismatch: ${String(row.idempotency_key)}`);
+        }
+      }
+      if (commandKind === "repository.establish-enrollment") {
+        const enrollment = parseRepositoryEnrollmentResult(result);
+        const outputs = this.db
+          .prepare(
+            `SELECT record_id FROM durable_occurrences
+             WHERE transaction_sequence = ? ORDER BY transaction_position`,
+          )
+          .all(row.transaction_sequence!) as Row[];
+        const factRow = this.db
+          .prepare("SELECT payload_json FROM durable_occurrences WHERE record_id = ?")
+          .get(enrollment.enrollmentRecordId) as Row | undefined;
+        const factPayload = factRow ? parseJson(String(factRow.payload_json)) : undefined;
+        if (
+          enrollment.transactionSequence !== Number(row.transaction_sequence) ||
+          enrollment.enrolledAt !== String(transaction.evaluation_time) ||
+          enrollment.enrolledAt !== String(transaction.recorded_at) ||
+          String(row.idempotency_key) !== `repo-enroll:${enrollment.surfaceReconciliationRecordId}` ||
+          outputs.length !== 3 ||
+          String(outputs[0]!.record_id) !== enrollment.controllerDefinitionRecordId ||
+          String(outputs[1]!.record_id) !== enrollment.enrollmentRecordId ||
+          String(outputs[2]!.record_id) !== enrollment.eventRecordId ||
+          !factPayload ||
+          !recordKindRegistry["repository.enrolled"].validatePayload(factPayload) ||
+          factPayload.repositoryId !== enrollment.repositoryId ||
+          factPayload.coreSnapshotId !== enrollment.coreSnapshotId ||
+          factPayload.coreAuthorizationRecordId !== enrollment.coreAuthorizationRecordId ||
+          factPayload.githubReconciliationRecordId !== enrollment.githubReconciliationRecordId ||
+          factPayload.surfaceReconciliationRecordId !== enrollment.surfaceReconciliationRecordId ||
+          factPayload.surfacePolicyDecisionRecordId !== enrollment.surfacePolicyDecisionRecordId ||
+          factPayload.repositoryCommitId !== enrollment.repositoryCommitId ||
+          factPayload.enrolledAt !== enrollment.enrolledAt
+        ) {
+          throw new Error(`repository enrollment receipt output mismatch: ${String(row.idempotency_key)}`);
         }
       }
     }
@@ -5356,6 +6173,270 @@ function assertCommandTimeAndSequence(
   }
 }
 
+type NormalizedRepositorySurfaceProbe =
+  | { kind: "unavailable" }
+  | {
+      kind: "resolved";
+      defaultBranch: string;
+      repositoryCommitId: string;
+      repositoryTreeId: string;
+      surfaces: Array<
+        | { surfaceId: string; path: string; kind: "missing" }
+        | {
+            surfaceId: string;
+            path: string;
+            kind: "found";
+            mode: string;
+            objectType: "blob" | "tree" | "commit";
+            objectId: string;
+            bytesBase64: string | null;
+            treeEntries: RepositorySurfaceTreeEntry[] | null;
+          }
+      >;
+    };
+
+interface EvaluatedRepositorySurfaceProbe {
+  defaultBranch: string | null;
+  repositoryCommitId: string | null;
+  repositoryTreeId: string | null;
+  surfaces: RepositorySurfaceSummary[];
+  governancePolicy: JsonValue | null;
+  result: RepositorySurfaceResult;
+  failedSurfaceId: RepositorySurfaceSummary["surfaceId"] | null;
+}
+
+function repositorySurfaceRequirementResults(
+  contract: RepositorySurfaceContract,
+  evaluation: EvaluatedRepositorySurfaceProbe,
+): RepositorySurfaceRequirementResult[] {
+  const failedIndex = evaluation.failedSurfaceId === null
+    ? -1
+    : contract.surfaces.findIndex((surface) => surface.id === evaluation.failedSurfaceId);
+  return contract.surfaces.map((surface, index) => {
+    const summary = evaluation.surfaces.find((candidate) => candidate.surfaceId === surface.id);
+    const result: RepositorySurfaceRequirementResult["result"] =
+      evaluation.result === "valid"
+        ? "pass"
+        : failedIndex < 0
+          ? "unknown"
+          : index < failedIndex
+            ? "pass"
+            : index === failedIndex
+              ? "fail"
+              : "unknown";
+    return {
+      requirementId: `canonical-surface:${surface.id}`,
+      surfaceId: surface.id,
+      result,
+      evidenceDigest: result === "pass" || (result === "fail" && evaluation.result === "invalid")
+        ? summary?.contentDigest ?? null
+        : null,
+    };
+  });
+}
+
+function normalizeRepositorySurfaceProbe(input: RepositorySurfaceProbeInput): NormalizedRepositorySurfaceProbe {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("repository surface probe must be one typed object");
+  }
+  if (input.kind === "unavailable") {
+    if (Object.keys(input).length !== 1) throw new Error("repository surface unavailable probe has extra fields");
+    return { kind: "unavailable" };
+  }
+  if (
+    input.kind !== "resolved" ||
+    Object.keys(input).sort().join(",") !==
+      "defaultBranch,kind,repositoryCommitId,repositoryTreeId,surfaces" ||
+    !isRepositoryBranchName(input.defaultBranch) ||
+    !/^[0-9a-f]{40}$/.test(input.repositoryCommitId) ||
+    !/^[0-9a-f]{40}$/.test(input.repositoryTreeId) ||
+    !Array.isArray(input.surfaces) ||
+    input.surfaces.length > 4
+  ) {
+    throw new Error("repository surface resolved probe is invalid");
+  }
+  const identities = new Set<string>();
+  const surfaces = input.surfaces.map((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error("repository surface probe entry is invalid");
+    }
+    if (
+      typeof entry.surfaceId !== "string" ||
+      typeof entry.path !== "string" ||
+      entry.path.length < 1 ||
+      entry.path.length > 512 ||
+      identities.has(entry.surfaceId)
+    ) {
+      throw new Error("repository surface probe entry identity is invalid");
+    }
+    identities.add(entry.surfaceId);
+    if (entry.kind === "missing") {
+      if (Object.keys(entry).sort().join(",") !== "kind,path,surfaceId") {
+        throw new Error("repository surface missing probe has extra fields");
+      }
+      return { surfaceId: entry.surfaceId, path: entry.path, kind: "missing" as const };
+    }
+    if (
+      entry.kind !== "found" ||
+      Object.keys(entry).sort().join(",") !==
+        "bytes,kind,mode,objectId,objectType,path,surfaceId,treeEntries" ||
+      !["100644", "100755", "120000", "040000", "160000"].includes(entry.mode) ||
+      (entry.objectType !== "blob" && entry.objectType !== "tree" && entry.objectType !== "commit") ||
+      !/^[0-9a-f]{40}$/.test(entry.objectId) ||
+      !(entry.bytes === null || entry.bytes instanceof Uint8Array) ||
+      (entry.bytes instanceof Uint8Array && entry.bytes.byteLength > 1_048_576) ||
+      !(entry.treeEntries === null || Array.isArray(entry.treeEntries))
+    ) {
+      throw new Error("repository surface found probe is invalid");
+    }
+    const treeEntries = entry.treeEntries === null ? null : normalizeRepositorySurfaceTreeEntries(entry.treeEntries);
+    return {
+      surfaceId: entry.surfaceId,
+      path: entry.path,
+      kind: "found" as const,
+      mode: entry.mode,
+      objectType: entry.objectType,
+      objectId: entry.objectId,
+      bytesBase64: entry.bytes === null ? null : Buffer.from(entry.bytes).toString("base64"),
+      treeEntries,
+    };
+  });
+  return {
+    kind: "resolved",
+    defaultBranch: input.defaultBranch,
+    repositoryCommitId: input.repositoryCommitId,
+    repositoryTreeId: input.repositoryTreeId,
+    surfaces,
+  };
+}
+
+function normalizeRepositorySurfaceTreeEntries(
+  input: readonly RepositorySurfaceTreeEntry[],
+): RepositorySurfaceTreeEntry[] {
+  if (input.length > 2_000) throw new Error("repository surface tree listing exceeds the entry bound");
+  const paths = new Set<string>();
+  return input
+    .map((entry) => {
+      if (
+        !entry ||
+        typeof entry !== "object" ||
+        Array.isArray(entry) ||
+        Object.keys(entry).sort().join(",") !== "mode,objectId,path,size,type" ||
+        typeof entry.path !== "string" ||
+        !/^[^/\u0000]{1,255}$/.test(entry.path) ||
+        paths.has(entry.path) ||
+        !["100644", "100755", "120000", "040000", "160000"].includes(entry.mode) ||
+        (entry.type !== "blob" && entry.type !== "tree" && entry.type !== "commit") ||
+        !/^[0-9a-f]{40}$/.test(entry.objectId) ||
+        !(entry.size === null || (Number.isSafeInteger(entry.size) && entry.size >= 0))
+      ) {
+        throw new Error("repository surface tree entry is invalid");
+      }
+      paths.add(entry.path);
+      return { ...entry };
+    })
+    .sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function evaluateRepositorySurfaceProbe(
+  probe: NormalizedRepositorySurfaceProbe,
+  expectedDefaultBranch: string,
+  contract: RepositorySurfaceContract,
+): EvaluatedRepositorySurfaceProbe {
+  if (probe.kind === "unavailable") {
+    return {
+      defaultBranch: null,
+      repositoryCommitId: null,
+      repositoryTreeId: null,
+      surfaces: [],
+      governancePolicy: null,
+      result: "unavailable",
+      failedSurfaceId: null,
+    };
+  }
+  if (probe.defaultBranch !== expectedDefaultBranch) {
+    throw new Error("repository surface probe default branch differs from the matched identity fact");
+  }
+  const summaries: RepositorySurfaceSummary[] = [];
+  let governancePolicy: JsonValue | null = null;
+  for (const expected of contract.surfaces) {
+    const entry = probe.surfaces.find((candidate) => candidate.surfaceId === expected.id);
+    if (!entry || entry.path !== expected.path || entry.kind === "missing") {
+      return surfaceFailure(probe, summaries, "missing", expected.id);
+    }
+    const file = expected.artifact_type === "file";
+    if (
+      (file && (entry.objectType !== "blob" || (entry.mode !== "100644" && entry.mode !== "100755") || entry.bytesBase64 === null || entry.treeEntries !== null)) ||
+      (!file && (entry.objectType !== "tree" || entry.mode !== "040000" || entry.bytesBase64 !== null || entry.treeEntries === null))
+    ) {
+      return surfaceFailure(probe, summaries, "wrong-type", expected.id);
+    }
+    if (file) {
+      const bytes = Buffer.from(entry.bytesBase64!, "base64");
+      if (repositoryGitBlobObjectId(bytes) !== entry.objectId) {
+        throw new Error(`repository surface blob identity mismatch: ${expected.id}`);
+      }
+      const summary = {
+        surfaceId: expected.id,
+        path: expected.path,
+        artifactType: "file" as const,
+        objectId: entry.objectId,
+        contentDigest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+        size: bytes.byteLength,
+      } satisfies RepositorySurfaceSummary;
+      summaries.push(summary);
+      if (expected.id === "agent-governance") {
+        try {
+          governancePolicy = validateRepositoryGovernanceBytes(bytes);
+        } catch {
+          return surfaceFailure(probe, summaries, "invalid", expected.id);
+        }
+      }
+      continue;
+    }
+    if (repositoryGitTreeObjectId(entry.treeEntries!) !== entry.objectId) {
+      throw new Error(`repository surface tree identity mismatch: ${expected.id}`);
+    }
+    summaries.push({
+      surfaceId: expected.id,
+      path: expected.path,
+      artifactType: "directory",
+      objectId: entry.objectId,
+      contentDigest: surfaceTreeDigest(entry.treeEntries!),
+      size: entry.treeEntries!.length,
+    });
+  }
+  if (probe.surfaces.length !== contract.surfaces.length || governancePolicy === null) {
+    throw new Error("repository surface probe contains unknown or incomplete entries");
+  }
+  return {
+    defaultBranch: probe.defaultBranch,
+    repositoryCommitId: probe.repositoryCommitId,
+    repositoryTreeId: probe.repositoryTreeId,
+    surfaces: summaries,
+    governancePolicy,
+    result: "valid",
+    failedSurfaceId: null,
+  };
+}
+
+function surfaceFailure(
+  probe: Extract<NormalizedRepositorySurfaceProbe, { kind: "resolved" }>,
+  surfaces: RepositorySurfaceSummary[],
+  result: "missing" | "wrong-type" | "invalid",
+  failedSurfaceId: RepositorySurfaceSummary["surfaceId"],
+): EvaluatedRepositorySurfaceProbe {
+  return {
+    defaultBranch: probe.defaultBranch,
+    repositoryCommitId: probe.repositoryCommitId,
+    repositoryTreeId: probe.repositoryTreeId,
+    surfaces,
+    governancePolicy: null,
+    result,
+    failedSurfaceId,
+  };
+}
+
 function normalizeRepositoryGitHubInspection(
   input: RepositoryGitHubInspectionInput,
 ): RepositoryGitHubInspectionInput {
@@ -5368,14 +6449,15 @@ function normalizeRepositoryGitHubInspection(
   }
   if (
     input.kind !== "found" ||
-    Object.keys(input).sort().join(",") !== "archived,kind,name,owner,repositoryId" ||
+    Object.keys(input).sort().join(",") !== "archived,defaultBranch,kind,name,owner,repositoryId" ||
     typeof input.repositoryId !== "string" ||
     !/^[1-9][0-9]{0,19}$/.test(input.repositoryId) ||
     typeof input.owner !== "string" ||
     !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(input.owner) ||
     typeof input.name !== "string" ||
     !/^[A-Za-z0-9._-]{1,100}$/.test(input.name) ||
-    typeof input.archived !== "boolean"
+    typeof input.archived !== "boolean" ||
+    !isRepositoryBranchName(input.defaultBranch)
   ) {
     throw new Error("repository GitHub found result is invalid");
   }
@@ -5385,7 +6467,21 @@ function normalizeRepositoryGitHubInspection(
     owner: input.owner,
     name: input.name,
     archived: input.archived,
+    defaultBranch: input.defaultBranch,
   };
+}
+
+function isRepositoryBranchName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$/.test(value) &&
+    !value.includes("..") &&
+    !value.includes("//") &&
+    !value.includes("@{") &&
+    !value.endsWith(".") &&
+    !value.endsWith("/") &&
+    !value.endsWith(".lock")
+  );
 }
 
 function classifyRepositoryGitHubInspection(
@@ -5404,10 +6500,10 @@ function classifyRepositoryGitHubInspection(
   return "matched";
 }
 
-function repositoryPreSurfaceState(
+function repositoryIdentityState(
   fleetState: RepositoryCoreAuthorityPayload["fleetState"],
   result: RepositoryGitHubResult,
-): RepositoryPreSurfaceState {
+): RepositoryState {
   if (fleetState === "disabled") return "disabled";
   if (fleetState === "paused") return "paused";
   return result === "matched" ? "awaiting-surfaces" : "github-held";
@@ -5501,6 +6597,147 @@ function parseRepositoryGitHubReconciliationResult(value: JsonValue): Repository
   }
   assertUtcInstant(value.checkedAt, "repository GitHub reconciliation time");
   return value as unknown as RepositoryGitHubReconciliationResult;
+}
+
+function repositoryGitHubResultFromPayload(
+  payload: RepositoryGitHubReconciliationPayload,
+  transactionSequence: number,
+): RepositoryGitHubReconciliationResult {
+  return {
+    repositoryId: payload.repositoryId,
+    coreSnapshotId: payload.coreSnapshotId,
+    coreAuthorizationRecordId: payload.coreAuthorizationRecordId,
+    observationRecordId: payload.observationRecordId,
+    reconciliationRecordId: payload.reconciliationRecordId,
+    eventRecordId: payload.eventRecordId,
+    result: payload.result,
+    effectiveState: payload.effectiveState,
+    checkedAt: payload.checkedAt,
+    responseDigest: payload.responseDigest,
+    transactionPositions: [0, 1, 2],
+    transactionSequence,
+  };
+}
+
+function parseRepositorySurfaceReconciliationResult(value: JsonValue): RepositorySurfaceReconciliationResult {
+  if (
+    !isExactJsonObject(value, [
+      "repositoryId",
+      "coreSnapshotId",
+      "coreAuthorizationRecordId",
+      "githubReconciliationRecordId",
+      "observationRecordId",
+      "policyDecisionRecordId",
+      "reconciliationRecordId",
+      "eventRecordId",
+      "result",
+      "repositoryCommitId",
+      "checkedAt",
+      "probeDigest",
+      "transactionPositions",
+      "transactionSequence",
+    ]) ||
+    typeof value.repositoryId !== "string" ||
+    !/^github\.com:[1-9][0-9]{0,19}$/.test(value.repositoryId) ||
+    typeof value.coreSnapshotId !== "string" ||
+    !isUuidV7(value.coreSnapshotId) ||
+    typeof value.coreAuthorizationRecordId !== "string" ||
+    !isUuidV7(value.coreAuthorizationRecordId) ||
+    typeof value.githubReconciliationRecordId !== "string" ||
+    !isUuidV7(value.githubReconciliationRecordId) ||
+    typeof value.observationRecordId !== "string" ||
+    !isUuidV7(value.observationRecordId) ||
+    typeof value.policyDecisionRecordId !== "string" ||
+    !isUuidV7(value.policyDecisionRecordId) ||
+    typeof value.reconciliationRecordId !== "string" ||
+    !isUuidV7(value.reconciliationRecordId) ||
+    typeof value.eventRecordId !== "string" ||
+    !isUuidV7(value.eventRecordId) ||
+    !(value.repositoryCommitId === null || (typeof value.repositoryCommitId === "string" && /^[0-9a-f]{40}$/.test(value.repositoryCommitId))) ||
+    !(value.result === "valid" || value.result === "unavailable" || value.result === "missing" || value.result === "wrong-type" || value.result === "invalid" || value.result === "digest-incompatible") ||
+    typeof value.checkedAt !== "string" ||
+    typeof value.probeDigest !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/.test(value.probeDigest) ||
+    !Array.isArray(value.transactionPositions) ||
+    canonicalJson(value.transactionPositions) !== "[0,1,2,3]" ||
+    !Number.isSafeInteger(value.transactionSequence) ||
+    Number(value.transactionSequence) < 1
+  ) {
+    throw new Error("invalid repository surface reconciliation receipt result");
+  }
+  assertUtcInstant(value.checkedAt, "repository surface reconciliation time");
+  return value as unknown as RepositorySurfaceReconciliationResult;
+}
+
+function repositorySurfaceResultFromPayload(
+  payload: RepositorySurfaceReconciliationPayload,
+  transactionSequence: number,
+): RepositorySurfaceReconciliationResult {
+  return {
+    repositoryId: payload.repositoryId,
+    coreSnapshotId: payload.coreSnapshotId,
+    coreAuthorizationRecordId: payload.coreAuthorizationRecordId,
+    githubReconciliationRecordId: payload.githubReconciliationRecordId,
+    observationRecordId: payload.observationRecordId,
+    policyDecisionRecordId: payload.policyDecisionRecordId,
+    reconciliationRecordId: payload.reconciliationRecordId,
+    eventRecordId: payload.eventRecordId,
+    result: payload.result,
+    repositoryCommitId: payload.repositoryCommitId,
+    checkedAt: payload.checkedAt,
+    probeDigest: payload.probeDigest,
+    transactionPositions: [0, 1, 2, 3],
+    transactionSequence,
+  };
+}
+
+function parseRepositoryEnrollmentResult(value: JsonValue): RepositoryEnrollmentResult {
+  if (
+    !isExactJsonObject(value, [
+      "repositoryId",
+      "coreSnapshotId",
+      "coreAuthorizationRecordId",
+      "githubReconciliationRecordId",
+      "surfaceReconciliationRecordId",
+      "surfacePolicyDecisionRecordId",
+      "controllerDefinitionRecordId",
+      "enrollmentRecordId",
+      "eventRecordId",
+      "repositoryCommitId",
+      "enrolledAt",
+      "transactionPositions",
+      "transactionSequence",
+    ]) ||
+    typeof value.repositoryId !== "string" ||
+    !/^github\.com:[1-9][0-9]{0,19}$/.test(value.repositoryId) ||
+    typeof value.coreSnapshotId !== "string" ||
+    !isUuidV7(value.coreSnapshotId) ||
+    typeof value.coreAuthorizationRecordId !== "string" ||
+    !isUuidV7(value.coreAuthorizationRecordId) ||
+    typeof value.githubReconciliationRecordId !== "string" ||
+    !isUuidV7(value.githubReconciliationRecordId) ||
+    typeof value.surfaceReconciliationRecordId !== "string" ||
+    !isUuidV7(value.surfaceReconciliationRecordId) ||
+    typeof value.surfacePolicyDecisionRecordId !== "string" ||
+    !isUuidV7(value.surfacePolicyDecisionRecordId) ||
+    typeof value.controllerDefinitionRecordId !== "string" ||
+    !isUuidV7(value.controllerDefinitionRecordId) ||
+    typeof value.enrollmentRecordId !== "string" ||
+    !isUuidV7(value.enrollmentRecordId) ||
+    typeof value.eventRecordId !== "string" ||
+    !isUuidV7(value.eventRecordId) ||
+    typeof value.repositoryCommitId !== "string" ||
+    !/^[0-9a-f]{40}$/.test(value.repositoryCommitId) ||
+    typeof value.enrolledAt !== "string" ||
+    !Array.isArray(value.transactionPositions) ||
+    canonicalJson(value.transactionPositions) !== "[0,1,2]" ||
+    !Number.isSafeInteger(value.transactionSequence) ||
+    Number(value.transactionSequence) < 1
+  ) {
+    throw new Error("invalid repository enrollment receipt result");
+  }
+  assertUtcInstant(value.enrolledAt, "repository enrollment time");
+  return value as unknown as RepositoryEnrollmentResult;
 }
 
 function assertCorePollInterval(value: number): void {

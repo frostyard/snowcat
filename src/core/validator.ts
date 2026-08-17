@@ -64,6 +64,20 @@ export interface ValidatedRepositoryDeclaration {
   declaration: RepositoryDeclaration;
 }
 
+export interface RepositorySurfaceDefinition {
+  id: "agent-instructions" | "agent-governance" | "agent-skills" | "documentation-index";
+  path: string;
+  artifact_type: "file" | "directory";
+  media_type?: "text/markdown" | "application/json";
+  schema_path?: string;
+}
+
+export interface RepositorySurfaceContract {
+  schema_version: 1;
+  contract: { id: "repository-surfaces"; version: 1 };
+  surfaces: RepositorySurfaceDefinition[];
+}
+
 export interface ValidatedCoreCatalog {
   catalogDigest: string;
   fileCount: number;
@@ -184,6 +198,41 @@ export function assertRepositoryDeclarationRetention(
       removed.map((repository) => `removed ${repository}`),
     );
   }
+}
+
+export function validatedRepositorySurfaceContract(
+  inputEntries: readonly CoreTreeEntry[],
+  version: number,
+): { contract: RepositorySurfaceContract; governanceSchemaDigest: string } {
+  if (version !== 1) throw new CoreValidationError(`unsupported repository surface contract version: ${version}`);
+  const byPath = new Map(inputEntries.map((entry) => [entry.path, entry]));
+  const entry = byPath.get(SURFACE_CONTRACT_PATH);
+  if (!entry) throw new CoreValidationError(`${SURFACE_CONTRACT_PATH}: required authority file is missing`);
+  const schemas = loadBundledSchemas(byPath);
+  const validators = createValidators(schemas.parsed);
+  const contract = validateOne(entry, validators.surfaces) as RepositorySurfaceContract;
+  assertSurfaceInvariants(contract, entry.path, new Set(byPath.keys()));
+  return {
+    contract: structuredClone(contract),
+    governanceSchemaDigest: schemas.digests.governance,
+  };
+}
+
+export function validateRepositoryGovernanceBytes(bytes: Uint8Array): JsonValue {
+  const schema = readStrictJson(
+    readFileSync(BUNDLED_SCHEMA_URLS.governance),
+    "bundled:repository-agent-governance.schema.json",
+  );
+  const validator = new Ajv2020({ allErrors: true, strict: true }).compile(schema as object);
+  const entry: CoreTreeEntry = {
+    path: "policies/agent-governance.json",
+    mode: "100644",
+    objectId: "0".repeat(40),
+    bytes,
+  };
+  const governance = validateOne(entry, validator);
+  assertGovernanceInvariants(governance, entry.path);
+  return governance as JsonValue;
 }
 
 function loadBundledSchemas(entries: Map<string, CoreTreeEntry>): {

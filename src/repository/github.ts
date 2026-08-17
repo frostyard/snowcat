@@ -1,59 +1,28 @@
 import type { RepositoryGitHubInspectionInput } from "../control/store.ts";
+import { githubApiJson, type GitHubFetch } from "./github-api.ts";
 
-const GITHUB_API_URL = "https://api.github.com";
-const GITHUB_API_VERSION = "2022-11-28";
 const GITHUB_TIMEOUT_MS = 30_000;
-const MAX_RESPONSE_BYTES = 1_048_576;
 
 export interface GitHubRepositoryLocator {
   owner: string;
   name: string;
 }
 
-export type GitHubFetch = typeof fetch;
-
 export async function inspectGitHubRepository(
   locator: GitHubRepositoryLocator,
   fetcher: GitHubFetch = fetch,
 ): Promise<RepositoryGitHubInspectionInput> {
   assertLocator(locator);
-  const headers: Record<string, string> = {
-    Accept: "application/vnd.github+json",
-    "User-Agent": "frostyard-fluent",
-    "X-GitHub-Api-Version": GITHUB_API_VERSION,
-  };
-  const token = process.env.FLUENT_GITHUB_TOKEN;
-  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await githubApiJson(
+    `/repos/${encodeURIComponent(locator.owner)}/${encodeURIComponent(locator.name)}`,
+    AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+    fetcher,
+  );
+  if (response.kind === "unavailable") return { kind: "unavailable" };
+  if (response.status === 404) return { kind: "missing" };
+  if (response.status !== 200) return { kind: "unavailable" };
   try {
-    const signal = AbortSignal.timeout(GITHUB_TIMEOUT_MS);
-    const request = (url: string) =>
-      fetcher(url, {
-        method: "GET",
-        headers,
-        redirect: "manual",
-        signal,
-      });
-    let response = await request(
-      `${GITHUB_API_URL}/repos/${encodeURIComponent(locator.owner)}/${encodeURIComponent(locator.name)}`,
-    );
-    if (isRedirect(response.status)) {
-      const redirected = sameOriginGitHubApiUrl(response.headers.get("location"));
-      if (!redirected) return { kind: "unavailable" };
-      response = await request(redirected);
-      if (isRedirect(response.status)) return { kind: "unavailable" };
-    }
-    if (response.status === 404) return { kind: "missing" };
-    if (!response.ok) return { kind: "unavailable" };
-    const declaredLength = response.headers.get("content-length");
-    if (declaredLength !== null && Number(declaredLength) > MAX_RESPONSE_BYTES) return { kind: "unavailable" };
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength > MAX_RESPONSE_BYTES) return { kind: "unavailable" };
-    let value: unknown;
-    try {
-      value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-    } catch {
-      return { kind: "unavailable" };
-    }
+    const value = response.value;
     if (!value || typeof value !== "object" || Array.isArray(value)) return { kind: "unavailable" };
     const repository = value as Record<string, unknown>;
     const owner = repository.owner;
@@ -62,6 +31,7 @@ export async function inspectGitHubRepository(
     const name = repository.name;
     const login = (owner as Record<string, unknown>).login;
     const archived = repository.archived;
+    const defaultBranch = repository.default_branch;
     if (
       !Number.isSafeInteger(id) ||
       Number(id) < 1 ||
@@ -69,7 +39,9 @@ export async function inspectGitHubRepository(
       !/^[A-Za-z0-9._-]{1,100}$/.test(name) ||
       typeof login !== "string" ||
       !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(login) ||
-      typeof archived !== "boolean"
+      typeof archived !== "boolean" ||
+      typeof defaultBranch !== "string" ||
+      !isGitHubRefName(defaultBranch)
     ) {
       return { kind: "unavailable" };
     }
@@ -79,24 +51,23 @@ export async function inspectGitHubRepository(
       owner: login,
       name,
       archived,
+      defaultBranch,
     };
   } catch {
     return { kind: "unavailable" };
   }
 }
 
-function isRedirect(status: number): boolean {
-  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
-}
-
-function sameOriginGitHubApiUrl(location: string | null): string | null {
-  if (!location) return null;
-  try {
-    const url = new URL(location, GITHUB_API_URL);
-    return url.origin === GITHUB_API_URL ? url.href : null;
-  } catch {
-    return null;
-  }
+function isGitHubRefName(value: string): boolean {
+  return (
+    /^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$/.test(value) &&
+    !value.includes("..") &&
+    !value.includes("//") &&
+    !value.includes("@{") &&
+    !value.endsWith(".") &&
+    !value.endsWith("/") &&
+    !value.endsWith(".lock")
+  );
 }
 
 function assertLocator(locator: GitHubRepositoryLocator): void {

@@ -812,6 +812,17 @@ copies and vendor-specific files do not become competing authority.
 **Avoid:** convention inferred from duplicates; any familiar vendor path.
 ([ADR-0016](../adr/0016-read-only-canonical-repository-surfaces.md))
 
+#### Canonical-surface validation
+
+The exact-commit evaluation that loads only the paths selected by the active
+Core surface contract, verifies their Git object types and content, and records
+an enrollment-checkpoint decision. A valid result is an enrollment prerequisite,
+not enrollment itself.
+
+**Avoid:** repository checkout validation; file presence as enrollment; latest
+branch files. ([ADR-0016](../adr/0016-read-only-canonical-repository-surfaces.md),
+[ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md))
+
 #### Repository identity
 
 The immutable GitHub repository ID used for authority, lineage, and

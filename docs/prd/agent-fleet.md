@@ -414,7 +414,11 @@ targets are required before this PRD can become Approved.
     with its bundled schema and retain the commit, surface-contract and schema
     versions, content hash, parsed policy, and resulting policy decision. A
     missing, wrong-type, invalid, unknown-version, or digest-incompatible
-    required surface MUST place only that repository on hold.
+    required surface MUST place only that repository on hold. For automated
+    enrollment, Fluent MUST resolve the observed GitHub default branch once and
+    pin its head commit before loading any canonical path. A surface result and
+    repository enrollment MUST remain separate durable transitions; valid
+    surfaces alone MUST NOT create work.
 82. Existing repositories MUST migrate to the canonical schema rather than
     receive permanent Fluent adapters. Snosi and lab are the closest schema
     precursors; updex MUST move and adapt its policy. Pilothouse's structural
@@ -1888,8 +1892,9 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   exact definitions, and `repository.core-authorized` facts. Enabled declarations
   receive bounded GitHub identity reconciliation as a separate fact; missing,
   changed, mismatched, archived, and unavailable results remain scoped to that
-  repository. The read model stops honestly at `awaiting-surfaces`, so no
-  RepositoryController or enrollment exists before canonical surface validation.
+  repository. Matched identities now receive exact-commit canonical-surface
+  decisions and a separate enrollment transaction that creates the
+  RepositoryController definition without work.
   The kernel does not yet implement target work, general fact mutation, general
   operational state, fleet coordination, or worker mutation and never reads or
   imports the spike database.
@@ -1898,7 +1903,7 @@ elapsed source freshness from the stricter new-admission gate. Its durable
 
 | Track | What remains before implementation is well specified |
 | --- | --- |
-| Core contract and migration | Remaining organization JSON Schemas and fixtures, canonical-surface migrations, exact-commit repository surface validation, local holds, and final enrollment establishment |
+| Core contract and migration | Remaining organization JSON Schemas and fixtures, canonical-surface migrations, local holds, and held-work reconciliation |
 | Control-plane domain model | Execute the [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md): specify exact durable schemas, predicates, reducers, events, projections, invalidation, idempotency, and state machines in a fresh target database shared by RepositoryController, FleetController, ProcessObserver, scheduling, and decisions |
 | GitHub observation | GitHub App permissions, installation and actor mapping, CI/review/merge and artifact reconciliation, polling versus webhooks, forks, outage behavior, and external decision signals |
 | Workflow contracts | Versioned role briefs, evidence schemas, skills, attempt budgets, and deterministic gates for maintenance, planning, review, implementation, repair, and verification |
@@ -2096,7 +2101,9 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   polling defined by
   [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md), with
   repository reconciliation split across exact authority facts by
-  [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md), and the
+  [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md),
+  with exact-commit surface selection and enrollment separation in
+  [ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md), and the
   [Fluent ubiquitous language](../domain/ubiquitous-language.md)
 - Designs: [queue execution boundary](../design/queue-execution-boundary.md),
   [control-plane kernel](../design/control-plane-kernel.md), and
@@ -2110,6 +2117,7 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   [Core check-detail retention](../specs/core-check-detail-retention.md) and
   [Core source polling](../specs/core-source-polling.md), plus
   [repository authority reconciliation](../specs/repository-authority-reconciliation.md)
+  and [repository surface reconciliation](../specs/repository-surface-reconciliation.md)
 - Delivery: [queue vertical spike](../plans/queue-vertical-spike.md),
   [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md),
   [core snapshot ingestion](../plans/core-snapshot-ingestion.md), and

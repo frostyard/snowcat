@@ -69,8 +69,8 @@ observed locator and ID or null, archive flag or null, one closed result,
    design document. `matched` MUST derive `awaiting-surfaces`, never `enrolled`.
 10. No command in this contract may create work, admission, a claim, a lease, a
     worker session, a local hold, or canonical-surface authority.
-11. Schema version `4` has no in-place migration from the pre-production target;
-    initialize a fresh database. Registry version is `9`.
+11. This prior gate now participates in schema version `5` and registry version
+    `10`; there is no in-place migration from the pre-production target.
 
 ## Derived artifacts
 
@@ -88,4 +88,5 @@ observed locator and ID or null, archive flag or null, one closed result,
 - Context: [repository enrollment](../design/repository-enrollment.md)
 - Source authority: [Core snapshot activation](core-snapshot-activation.md)
 - Admission gate: [Core source readiness](core-source-readiness.md)
+- Next gate: [repository surface reconciliation](repository-surface-reconciliation.md)
 - Delivery: [Core snapshot ingestion plan](../plans/core-snapshot-ingestion.md)

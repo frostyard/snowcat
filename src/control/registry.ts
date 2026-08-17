@@ -1,8 +1,8 @@
 import { isUuidV7, type JsonValue } from "./encoding.ts";
 
 export const CONTROL_PLANE_APPLICATION_ID = 1_179_405_908; // ASCII "FLNT"
-export const CONTROL_PLANE_SCHEMA_VERSION = 4;
-export const CONTROL_PLANE_REGISTRY_VERSION = 9;
+export const CONTROL_PLANE_SCHEMA_VERSION = 5;
+export const CONTROL_PLANE_REGISTRY_VERSION = 10;
 
 export const informationClasses = ["public", "organization", "restricted"] as const;
 export type InformationClass = (typeof informationClasses)[number];
@@ -46,7 +46,12 @@ export const subjectKindRegistry = {
   "github-repository": {
     authoritySystem: "github",
     idScheme: "github-qualified-numeric-id",
-    revisionKinds: ["core-declaration-sha256", "github-metadata-sha256"],
+    revisionKinds: [
+      "core-declaration-sha256",
+      "github-metadata-sha256",
+      "git-commit-sha1",
+      "repository-surfaces-sha256",
+    ],
     validateId: (value: string) => /^github\.com:[1-9][0-9]{0,19}$/.test(value),
   },
 } as const satisfies Record<string, SubjectKindContract>;
@@ -70,6 +75,9 @@ export const revisionKindRegistry = {
   "github-metadata-sha256": {
     validate: (value: string) => /^sha256:[0-9a-f]{64}$/.test(value),
   },
+  "repository-surfaces-sha256": {
+    validate: (value: string) => /^sha256:[0-9a-f]{64}$/.test(value),
+  },
 } as const;
 
 export const sourceKindRegistry = {
@@ -83,7 +91,7 @@ export const sourceKindRegistry = {
   },
   "github-api": {
     validateId: (value: string) => value === "api.github.com",
-    revisionKinds: ["github-metadata-sha256"],
+    revisionKinds: ["github-metadata-sha256", "git-commit-sha1"],
   },
   "operator-principal": {
     validateId: isUuidV7,
@@ -190,6 +198,41 @@ export const recordKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isRepositoryGitHubReconciliationPayload,
   },
+  "repository.canonical-surface-observation": {
+    schemaVersion: 1,
+    recordClass: "observation",
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isRepositorySurfaceReconciliationPayload,
+  },
+  "repository.enrollment-checkpoint-policy-decision": {
+    schemaVersion: 1,
+    recordClass: "decision",
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isRepositorySurfaceReconciliationPayload,
+  },
+  "repository.canonical-surfaces-reconciled": {
+    schemaVersion: 1,
+    recordClass: "fact",
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isRepositorySurfaceReconciliationPayload,
+  },
+  "repository.controller-definition": {
+    schemaVersion: 1,
+    recordClass: "definition",
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isRepositoryEnrollmentPayload,
+  },
+  "repository.enrolled": {
+    schemaVersion: 1,
+    recordClass: "fact",
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isRepositoryEnrollmentPayload,
+  },
 } as const;
 
 export const eventKindRegistry = {
@@ -253,6 +296,18 @@ export const eventKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isRepositoryGitHubReconciliationPayload,
   },
+  "repository.canonical-surfaces-reconciliation-recorded": {
+    schemaVersion: 1,
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isRepositorySurfaceReconciliationPayload,
+  },
+  "repository.enrollment-established": {
+    schemaVersion: 1,
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isRepositoryEnrollmentPayload,
+  },
 } as const;
 
 export const commandKindRegistry = {
@@ -309,6 +364,23 @@ export const commandKindRegistry = {
       "repository.github-identity-reconciliation-recorded",
     ],
   },
+  "repository.record-canonical-surfaces": {
+    schemaVersion: 1,
+    outputKinds: [
+      "repository.canonical-surface-observation",
+      "repository.enrollment-checkpoint-policy-decision",
+      "repository.canonical-surfaces-reconciled",
+      "repository.canonical-surfaces-reconciliation-recorded",
+    ],
+  },
+  "repository.establish-enrollment": {
+    schemaVersion: 1,
+    outputKinds: [
+      "repository.controller-definition",
+      "repository.enrolled",
+      "repository.enrollment-established",
+    ],
+  },
 } as const;
 
 export const predicateContractRegistry = {
@@ -335,6 +407,22 @@ export const predicateContractRegistry = {
     establishedBy: ["repository.record-github-identity"],
     precedence: "bound-core-authorization",
     consumers: ["repository-reconciliation", "repository-eligibility"],
+  },
+  "repository.canonical-surfaces-reconciled": {
+    contractVersion: 1,
+    recordClass: "fact",
+    subjectKinds: ["github-repository"],
+    establishedBy: ["repository.record-canonical-surfaces"],
+    precedence: "bound-github-identity",
+    consumers: ["repository-enrollment", "repository-eligibility"],
+  },
+  "repository.enrolled": {
+    contractVersion: 1,
+    recordClass: "fact",
+    subjectKinds: ["github-repository"],
+    establishedBy: ["repository.establish-enrollment"],
+    precedence: "active-prerequisite-facts",
+    consumers: ["repository-eligibility", "repository-controller"],
   },
 } as const;
 
@@ -530,13 +618,16 @@ export type RepositoryGitHubResult =
   | "identity-mismatch"
   | "archived"
   | "unavailable";
-export type RepositoryPreSurfaceState =
+export type RepositoryState =
   | "awaiting-authority"
   | "disabled"
   | "paused"
   | "awaiting-github"
   | "github-held"
-  | "awaiting-surfaces";
+  | "awaiting-surfaces"
+  | "surface-held"
+  | "awaiting-enrollment"
+  | "enrolled";
 
 export type RepositoryAccountableOwner =
   | ({ kind: "github-user"; login: string } & Record<string, JsonValue>)
@@ -576,10 +667,80 @@ export interface RepositoryGitHubReconciliationPayload extends Record<string, Js
   observedName: string | null;
   observedRepositoryId: string | null;
   archived: boolean | null;
+  observedDefaultBranch: string | null;
   result: RepositoryGitHubResult;
-  effectiveState: RepositoryPreSurfaceState;
+  effectiveState: RepositoryState;
   checkedAt: string;
   responseDigest: string;
+}
+
+export type RepositorySurfaceResult =
+  | "valid"
+  | "unavailable"
+  | "missing"
+  | "wrong-type"
+  | "invalid"
+  | "digest-incompatible";
+
+export interface RepositorySurfaceSummary extends Record<string, JsonValue> {
+  surfaceId: "agent-instructions" | "agent-governance" | "agent-skills" | "documentation-index";
+  path: string;
+  artifactType: "file" | "directory";
+  objectId: string;
+  contentDigest: string;
+  size: number;
+}
+
+export interface RepositorySurfaceRequirementResult extends Record<string, JsonValue> {
+  requirementId: string;
+  surfaceId: RepositorySurfaceSummary["surfaceId"];
+  result: "pass" | "fail" | "unknown";
+  evidenceDigest: string | null;
+}
+
+export interface RepositorySurfaceReconciliationPayload extends Record<string, JsonValue> {
+  repositoryId: string;
+  coreSnapshotId: string;
+  coreAuthorizationRecordId: string;
+  githubReconciliationRecordId: string;
+  observationRecordId: string;
+  policyDecisionRecordId: string;
+  reconciliationRecordId: string;
+  eventRecordId: string;
+  defaultBranch: string | null;
+  repositoryCommitId: string | null;
+  repositoryTreeId: string | null;
+  surfaceContractVersion: 1;
+  governanceSchemaVersion: 1;
+  surfaceContractDigest: string;
+  governanceSchemaDigest: string;
+  surfaces: RepositorySurfaceSummary[];
+  governancePolicy: JsonValue | null;
+  checkpoint: "repository-enrollment";
+  decision: "permit" | "deny";
+  requirementResults: RepositorySurfaceRequirementResult[];
+  exceptionRecordIds: [];
+  result: RepositorySurfaceResult;
+  failedSurfaceId: RepositorySurfaceSummary["surfaceId"] | null;
+  checkedAt: string;
+  probeDigest: string;
+}
+
+export interface RepositoryEnrollmentPayload extends Record<string, JsonValue> {
+  repositoryId: string;
+  coreSnapshotId: string;
+  coreAuthorizationRecordId: string;
+  githubReconciliationRecordId: string;
+  surfaceReconciliationRecordId: string;
+  surfacePolicyDecisionRecordId: string;
+  controllerDefinitionRecordId: string;
+  enrollmentRecordId: string;
+  eventRecordId: string;
+  repositoryCommitId: string;
+  surfaceContractVersion: 1;
+  maintenancePrograms: RepositoryMaintenanceProgram[];
+  actionCeiling: RepositoryAction[];
+  enrolledAt: string;
 }
 
 export function assertSubject(kind: string, id: string): asserts kind is SubjectKind {
@@ -1075,6 +1236,7 @@ function isRepositoryGitHubReconciliationPayload(
       "observedName",
       "observedRepositoryId",
       "archived",
+      "observedDefaultBranch",
       "result",
       "effectiveState",
       "checkedAt",
@@ -1112,7 +1274,8 @@ function isRepositoryGitHubReconciliationPayload(
     value.observedOwner === null &&
     value.observedName === null &&
     value.observedRepositoryId === null &&
-    value.archived === null;
+    value.archived === null &&
+    value.observedDefaultBranch === null;
   if (value.result === "missing" || value.result === "unavailable") {
     if (!noObservation) return false;
   } else {
@@ -1123,7 +1286,8 @@ function isRepositoryGitHubReconciliationPayload(
       !/^[A-Za-z0-9._-]{1,100}$/.test(value.observedName) ||
       typeof value.observedRepositoryId !== "string" ||
       !/^[1-9][0-9]{0,19}$/.test(value.observedRepositoryId) ||
-      typeof value.archived !== "boolean"
+      typeof value.archived !== "boolean" ||
+      !isRepositoryBranchName(value.observedDefaultBranch)
     ) {
       return false;
     }
@@ -1140,7 +1304,7 @@ function isRepositoryGitHubReconciliationPayload(
           : "matched";
     if (value.result !== expectedResult) return false;
   }
-  const expectedState: RepositoryPreSurfaceState =
+  const expectedState: RepositoryState =
     value.fleetState === "disabled"
       ? "disabled"
       : value.fleetState === "paused"
@@ -1149,6 +1313,252 @@ function isRepositoryGitHubReconciliationPayload(
           ? "awaiting-surfaces"
           : "github-held";
   return value.effectiveState === expectedState;
+}
+
+function isRepositorySurfaceReconciliationPayload(
+  value: unknown,
+): value is RepositorySurfaceReconciliationPayload {
+  const expectedSurfaceIds = [
+    "agent-instructions",
+    "agent-governance",
+    "agent-skills",
+    "documentation-index",
+  ] as const;
+  const expectedRequirementIds = expectedSurfaceIds.map((surfaceId) => `canonical-surface:${surfaceId}`);
+  if (
+    !isExactObject(value, [
+      "repositoryId",
+      "coreSnapshotId",
+      "coreAuthorizationRecordId",
+      "githubReconciliationRecordId",
+      "observationRecordId",
+      "policyDecisionRecordId",
+      "reconciliationRecordId",
+      "eventRecordId",
+      "defaultBranch",
+      "repositoryCommitId",
+      "repositoryTreeId",
+      "surfaceContractVersion",
+      "governanceSchemaVersion",
+      "surfaceContractDigest",
+      "governanceSchemaDigest",
+      "surfaces",
+      "governancePolicy",
+      "checkpoint",
+      "decision",
+      "requirementResults",
+      "exceptionRecordIds",
+      "result",
+      "failedSurfaceId",
+      "checkedAt",
+      "probeDigest",
+    ]) ||
+    typeof value.repositoryId !== "string" ||
+    !/^github\.com:[1-9][0-9]{0,19}$/.test(value.repositoryId) ||
+    !isUuid(value.coreSnapshotId) ||
+    !isUuid(value.coreAuthorizationRecordId) ||
+    !isUuid(value.githubReconciliationRecordId) ||
+    !isUuid(value.observationRecordId) ||
+    !isUuid(value.policyDecisionRecordId) ||
+    !isUuid(value.reconciliationRecordId) ||
+    !isUuid(value.eventRecordId) ||
+    value.surfaceContractVersion !== 1 ||
+    value.governanceSchemaVersion !== 1 ||
+    !isSha256(value.surfaceContractDigest) ||
+    !isSha256(value.governanceSchemaDigest) ||
+    !isSha256(value.probeDigest) ||
+    !isUtcInstant(value.checkedAt) ||
+    !(["valid", "unavailable", "missing", "wrong-type", "invalid", "digest-incompatible"] as const).includes(
+      value.result as RepositorySurfaceResult,
+    ) ||
+    !Array.isArray(value.surfaces) ||
+    value.surfaces.length > 4 ||
+    !value.surfaces.every(isRepositorySurfaceSummary) ||
+    value.checkpoint !== "repository-enrollment" ||
+    (value.decision !== "permit" && value.decision !== "deny") ||
+    !Array.isArray(value.requirementResults) ||
+    value.requirementResults.length !== 4 ||
+    !value.requirementResults.every(isRepositorySurfaceRequirementResult) ||
+    !Array.isArray(value.exceptionRecordIds) ||
+    value.exceptionRecordIds.length !== 0
+  ) {
+    return false;
+  }
+  if (
+    value.requirementResults.some(
+      (requirement, index) => requirement.requirementId !== expectedRequirementIds[index],
+    )
+  ) {
+    return false;
+  }
+  if (value.result === "unavailable" || value.result === "digest-incompatible") {
+    return (
+      value.defaultBranch === null &&
+      value.repositoryCommitId === null &&
+      value.repositoryTreeId === null &&
+      value.surfaces.length === 0 &&
+      value.governancePolicy === null &&
+      value.failedSurfaceId === null &&
+      value.decision === "deny" &&
+      value.requirementResults.every(
+        (requirement) => requirement.result === "unknown" && requirement.evidenceDigest === null,
+      )
+    );
+  }
+  if (
+    !isRepositoryBranchName(value.defaultBranch) ||
+    typeof value.repositoryCommitId !== "string" ||
+    !/^[0-9a-f]{40}$/.test(value.repositoryCommitId) ||
+    typeof value.repositoryTreeId !== "string" ||
+    !/^[0-9a-f]{40}$/.test(value.repositoryTreeId)
+  ) {
+    return false;
+  }
+  const surfaces = value.surfaces as RepositorySurfaceSummary[];
+  const ids = surfaces.map((surface) => surface.surfaceId);
+  if (new Set(ids).size !== ids.length) return false;
+  if (ids.some((surfaceId, index) => surfaceId !== expectedSurfaceIds[index])) return false;
+  if (value.result === "valid") {
+    return (
+      value.surfaces.length === 4 &&
+      value.governancePolicy !== null &&
+      typeof value.governancePolicy === "object" &&
+      !Array.isArray(value.governancePolicy) &&
+      value.failedSurfaceId === null &&
+      value.decision === "permit" &&
+      value.requirementResults.every(
+        (requirement, index) =>
+          requirement.result === "pass" &&
+          requirement.evidenceDigest === surfaces[index]?.contentDigest,
+      )
+    );
+  }
+  const failedIndex = expectedSurfaceIds.indexOf(
+    value.failedSurfaceId as (typeof expectedSurfaceIds)[number],
+  );
+  if (failedIndex < 0 || value.surfaces.length !== failedIndex + (value.result === "invalid" ? 1 : 0)) {
+    return false;
+  }
+  return (
+    value.governancePolicy === null &&
+    value.decision === "deny" &&
+    value.requirementResults.every((requirement, index) => {
+      if (index < failedIndex) {
+        return (
+          requirement.result === "pass" &&
+          requirement.evidenceDigest === surfaces[index]?.contentDigest
+        );
+      }
+      if (index === failedIndex) {
+        return (
+          requirement.result === "fail" &&
+          requirement.evidenceDigest ===
+            (value.result === "invalid" ? surfaces[index]?.contentDigest : null)
+        );
+      }
+      return requirement.result === "unknown" && requirement.evidenceDigest === null;
+    })
+  );
+}
+
+function isRepositorySurfaceRequirementResult(value: unknown): value is RepositorySurfaceRequirementResult {
+  if (
+    !isExactObject(value, ["requirementId", "surfaceId", "result", "evidenceDigest"]) ||
+    typeof value.surfaceId !== "string" ||
+    !(value.result === "pass" || value.result === "fail" || value.result === "unknown") ||
+    !(value.evidenceDigest === null || isSha256(value.evidenceDigest))
+  ) {
+    return false;
+  }
+  return (
+    ["agent-instructions", "agent-governance", "agent-skills", "documentation-index"].includes(
+      value.surfaceId,
+    ) && value.requirementId === `canonical-surface:${value.surfaceId}`
+  );
+}
+
+function isRepositorySurfaceSummary(value: unknown): value is RepositorySurfaceSummary {
+  if (
+    !isExactObject(value, ["surfaceId", "path", "artifactType", "objectId", "contentDigest", "size"]) ||
+    typeof value.surfaceId !== "string" ||
+    typeof value.path !== "string" ||
+    (value.artifactType !== "file" && value.artifactType !== "directory") ||
+    typeof value.objectId !== "string" ||
+    !/^[0-9a-f]{40}$/.test(value.objectId) ||
+    !isSha256(value.contentDigest) ||
+    !Number.isSafeInteger(value.size) ||
+    Number(value.size) < 0
+  ) {
+    return false;
+  }
+  const expected = {
+    "agent-instructions": ["AGENTS.md", "file"],
+    "agent-governance": ["policies/agent-governance.json", "file"],
+    "agent-skills": [".agents/skills", "directory"],
+    "documentation-index": ["docs/README.md", "file"],
+  } as const;
+  const contract = expected[value.surfaceId as keyof typeof expected];
+  return Boolean(contract && value.path === contract[0] && value.artifactType === contract[1]);
+}
+
+function isRepositoryEnrollmentPayload(value: unknown): value is RepositoryEnrollmentPayload {
+  return (
+    isExactObject(value, [
+      "repositoryId",
+      "coreSnapshotId",
+      "coreAuthorizationRecordId",
+      "githubReconciliationRecordId",
+      "surfaceReconciliationRecordId",
+      "surfacePolicyDecisionRecordId",
+      "controllerDefinitionRecordId",
+      "enrollmentRecordId",
+      "eventRecordId",
+      "repositoryCommitId",
+      "surfaceContractVersion",
+      "maintenancePrograms",
+      "actionCeiling",
+      "enrolledAt",
+    ]) &&
+    typeof value.repositoryId === "string" &&
+    /^github\.com:[1-9][0-9]{0,19}$/.test(value.repositoryId) &&
+    isUuid(value.coreSnapshotId) &&
+    isUuid(value.coreAuthorizationRecordId) &&
+    isUuid(value.githubReconciliationRecordId) &&
+    isUuid(value.surfaceReconciliationRecordId) &&
+    isUuid(value.surfacePolicyDecisionRecordId) &&
+    isUuid(value.controllerDefinitionRecordId) &&
+    isUuid(value.enrollmentRecordId) &&
+    isUuid(value.eventRecordId) &&
+    typeof value.repositoryCommitId === "string" &&
+    /^[0-9a-f]{40}$/.test(value.repositoryCommitId) &&
+    value.surfaceContractVersion === 1 &&
+    isClosedUniqueArray(value.maintenancePrograms, ["quality", "ci", "security", "architecture"], 4) &&
+    value.maintenancePrograms.length > 0 &&
+    isClosedUniqueArray(
+      value.actionCeiling,
+      ["read", "write", "run-tests", "open-issue", "open-pr", "create-followup"],
+      6,
+    ) &&
+    value.actionCeiling.length > 0 &&
+    isUtcInstant(value.enrolledAt)
+  );
+}
+
+function isRepositoryBranchName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$/.test(value) &&
+    !value.includes("..") &&
+    !value.includes("//") &&
+    !value.includes("@{") &&
+    !value.endsWith(".") &&
+    !value.endsWith("/") &&
+    !value.endsWith(".lock")
+  );
+}
+
+function isUuid(value: unknown): value is string {
+  return typeof value === "string" && isUuidV7(value);
 }
 
 function isRepositoryOwners(value: unknown): value is RepositoryAccountableOwner[] {

@@ -10,12 +10,19 @@ import type { InspectedCoreCandidate } from "../src/core/git-source.ts";
 import {
   CoreValidationError,
   assertRepositoryDeclarationRetention,
+  validatedRepositorySurfaceContract,
   validateCoreCatalog,
   type CoreTreeEntry,
   type RepositoryDeclaration,
 } from "../src/core/validator.ts";
 import { reconcileRepositories } from "../src/repository/controller.ts";
 import { inspectGitHubRepository } from "../src/repository/github.ts";
+import {
+  inspectRepositorySurfaces,
+  repositoryGitBlobObjectId,
+  repositoryGitTreeObjectId,
+  type RepositorySurfaceTreeEntry,
+} from "../src/repository/surfaces.ts";
 import { synchronizeCoreSource } from "../src/core/synchronize.ts";
 
 test("active Core authority materializes separately from GitHub identity and enrollment", async () => {
@@ -54,6 +61,12 @@ test("active Core authority materializes separately from GitHub identity and enr
       surfaceContractVersion: 1,
       githubReconciliationRecordId: null,
       githubResult: null,
+      githubDefaultBranch: null,
+      surfaceReconciliationRecordId: null,
+      surfacePolicyDecisionRecordId: null,
+      surfaceResult: null,
+      repositoryCommitId: null,
+      enrollmentRecordId: null,
       effectiveState: "awaiting-github",
     },
   ]);
@@ -68,6 +81,7 @@ test("active Core authority materializes separately from GitHub identity and enr
       owner: "Frostyard",
       name: "Example",
       archived: false,
+      defaultBranch: "main",
     },
   });
   assert.equal(reconciled.result, "matched");
@@ -84,6 +98,7 @@ test("active Core authority materializes separately from GitHub identity and enr
       owner: "Frostyard",
       name: "Example",
       archived: false,
+      defaultBranch: "main",
     },
   });
   assert.deepEqual(replay, reconciled);
@@ -127,15 +142,15 @@ test("GitHub reconciliation classifies mismatch precedence and preserves declara
     [{ kind: "missing" as const }, "missing"],
     [{ kind: "unavailable" as const }, "unavailable"],
     [
-      { kind: "found" as const, repositoryId: "9002", owner: "other", name: "renamed", archived: true },
+      { kind: "found" as const, repositoryId: "9002", owner: "other", name: "renamed", archived: true, defaultBranch: "main" },
       "identity-mismatch",
     ],
     [
-      { kind: "found" as const, repositoryId: "9001", owner: "frostyard", name: "renamed", archived: true },
+      { kind: "found" as const, repositoryId: "9001", owner: "frostyard", name: "renamed", archived: true, defaultBranch: "main" },
       "locator-mismatch",
     ],
     [
-      { kind: "found" as const, repositoryId: "9001", owner: "frostyard", name: "example", archived: true },
+      { kind: "found" as const, repositoryId: "9001", owner: "frostyard", name: "example", archived: true, defaultBranch: "main" },
       "archived",
     ],
   ] as const;
@@ -223,17 +238,44 @@ test("enabled repository reconciliation converges across store handles without d
       owner: "frostyard",
       name: "example",
       archived: false,
+      defaultBranch: "main",
     };
   };
-  const firstPass = await reconcileRepositories(secondStore, inspect);
+  const inspectSurfaces = async () => validSurfaceProbe();
+  const firstPass = await reconcileRepositories(secondStore, inspect, inspectSurfaces);
   assert.equal(firstPass.materialized.length, 0);
   assert.equal(firstPass.github.length, 1);
-  assert.equal(firstPass.statuses[0]?.effectiveState, "awaiting-surfaces");
-  const secondPass = await reconcileRepositories(firstStore, inspect);
+  assert.equal(firstPass.surfaces.length, 1);
+  assert.equal(firstPass.enrollments.length, 1);
+  assert.equal(firstPass.statuses[0]?.effectiveState, "enrolled");
+  const initialSurfaceDecision = firstStore
+    .occurrences()
+    .find((occurrence) => occurrence.kind === "repository.enrollment-checkpoint-policy-decision");
+  assert.ok(initialSurfaceDecision);
+  const initialDecisionPayload = initialSurfaceDecision.payload as {
+    checkpoint: string;
+    decision: string;
+    exceptionRecordIds: unknown[];
+    requirementResults: Array<{ result: string; evidenceDigest: string | null }>;
+  };
+  assert.equal(initialDecisionPayload.checkpoint, "repository-enrollment");
+  assert.equal(initialDecisionPayload.decision, "permit");
+  assert.deepEqual(initialDecisionPayload.exceptionRecordIds, []);
+  assert.deepEqual(
+    initialDecisionPayload.requirementResults.map((requirement) => requirement.result),
+    ["pass", "pass", "pass", "pass"],
+  );
+  assert.equal(
+    initialDecisionPayload.requirementResults.every((requirement) => requirement.evidenceDigest !== null),
+    true,
+  );
+  const secondPass = await reconcileRepositories(firstStore, inspect, inspectSurfaces);
   assert.equal(secondPass.materialized.length, 0);
-  assert.equal(secondPass.github.length, 0);
-  assert.equal(calls, 1);
-  assert.equal(firstStore.metadata().lastTransactionSequence, 5);
+  assert.equal(secondPass.github.length, 1);
+  assert.equal(secondPass.surfaces.length, 1);
+  assert.equal(secondPass.enrollments.length, 1);
+  assert.equal(calls, 2);
+  assert.equal(firstStore.metadata().lastTransactionSequence, 7);
   assert.equal(
     firstStore.occurrences().filter((occurrence) => occurrence.kind === "repository.core-authorized").length,
     1,
@@ -242,8 +284,86 @@ test("enabled repository reconciliation converges across store handles without d
     firstStore.occurrences().filter((occurrence) => occurrence.kind === "repository.github-identity-reconciled").length,
     1,
   );
+  assert.equal(
+    firstStore.occurrences().filter((occurrence) => occurrence.kind === "repository.canonical-surfaces-reconciled").length,
+    1,
+  );
+  assert.equal(
+    firstStore.occurrences().filter((occurrence) => occurrence.kind === "repository.enrolled").length,
+    1,
+  );
+  const outage = await reconcileRepositories(firstStore, async () => ({ kind: "unavailable" }), inspectSurfaces);
+  assert.equal(outage.statuses[0]?.effectiveState, "github-held");
+  const recovery = await reconcileRepositories(firstStore, inspect, inspectSurfaces);
+  assert.equal(recovery.statuses[0]?.effectiveState, "enrolled");
+  assert.equal(firstStore.metadata().lastTransactionSequence, 11);
+  assert.equal(
+    firstStore.occurrences().filter((occurrence) => occurrence.kind === "repository.github-identity-reconciled").length,
+    3,
+  );
+  assert.equal(
+    firstStore.occurrences().filter((occurrence) => occurrence.kind === "repository.canonical-surfaces-reconciled").length,
+    2,
+  );
+  assert.equal(
+    firstStore.occurrences().filter((occurrence) => occurrence.kind === "repository.enrolled").length,
+    2,
+  );
+  const surfaceOutage = await reconcileRepositories(
+    firstStore,
+    inspect,
+    async () => ({ kind: "unavailable" }),
+  );
+  assert.equal(surfaceOutage.statuses[0]?.effectiveState, "surface-held");
+  assert.equal(surfaceOutage.statuses[0]?.surfaceResult, "unavailable");
+  const outageDecision = firstStore
+    .occurrences()
+    .filter((occurrence) => occurrence.kind === "repository.enrollment-checkpoint-policy-decision")
+    .at(-1)?.payload as { decision: string; requirementResults: Array<{ result: string }> };
+  assert.equal(outageDecision.decision, "deny");
+  assert.deepEqual(outageDecision.requirementResults.map((requirement) => requirement.result), [
+    "unknown",
+    "unknown",
+    "unknown",
+    "unknown",
+  ]);
+  const missingSurface = await reconcileRepositories(firstStore, inspect, async () => missingSurfaceProbe());
+  assert.equal(missingSurface.statuses[0]?.surfaceResult, "missing");
+  const wrongTypeSurface = await reconcileRepositories(firstStore, inspect, async () => wrongTypeSurfaceProbe());
+  assert.equal(wrongTypeSurface.statuses[0]?.surfaceResult, "wrong-type");
+  const invalidSurface = await reconcileRepositories(firstStore, inspect, async () => invalidGovernanceSurfaceProbe());
+  assert.equal(invalidSurface.statuses[0]?.surfaceResult, "invalid");
+  const invalidDecision = firstStore
+    .occurrences()
+    .filter((occurrence) => occurrence.kind === "repository.enrollment-checkpoint-policy-decision")
+    .at(-1)?.payload as {
+      decision: string;
+      requirementResults: Array<{ result: string; evidenceDigest: string | null }>;
+    };
+  assert.equal(invalidDecision.decision, "deny");
+  assert.deepEqual(invalidDecision.requirementResults.map((requirement) => requirement.result), [
+    "pass",
+    "fail",
+    "unknown",
+    "unknown",
+  ]);
+  assert.notEqual(invalidDecision.requirementResults[1]?.evidenceDigest, null);
+  const surfaceRecovery = await reconcileRepositories(firstStore, inspect, inspectSurfaces);
+  assert.equal(surfaceRecovery.statuses[0]?.effectiveState, "enrolled");
+  assert.equal(firstStore.metadata().lastTransactionSequence, 17);
+  assert.equal(
+    firstStore.occurrences().filter((occurrence) => occurrence.kind === "repository.canonical-surfaces-reconciled").length,
+    7,
+  );
+  assert.equal(
+    firstStore.occurrences().filter((occurrence) => occurrence.kind === "repository.enrolled").length,
+    3,
+  );
   secondStore.close();
   firstStore.close();
+  const reopened = new ControlPlaneStore(path);
+  assert.equal(reopened.repositoryStatuses()[0]?.effectiveState, "enrolled");
+  reopened.close();
 });
 
 test("repository declaration removal fails validation while disabled retention remains valid", async () => {
@@ -309,6 +429,7 @@ test("the GitHub adapter retains only selected metadata and bounds failures", as
           name: "Example",
           owner: { login: "Frostyard", ignored: "not-retained" },
           archived: false,
+          default_branch: "main",
           secret_noise: "not-retained",
         }),
         { status: 200, headers: { "content-type": "application/json" } },
@@ -321,6 +442,7 @@ test("the GitHub adapter retains only selected metadata and bounds failures", as
     owner: "Frostyard",
     name: "Example",
     archived: false,
+    defaultBranch: "main",
   });
   assert.deepEqual(
     await inspectGitHubRepository(
@@ -369,6 +491,7 @@ test("the GitHub adapter retains only selected metadata and bounds failures", as
             name: "moved",
             owner: { login: "frostyard" },
             archived: false,
+            default_branch: "main",
           }),
           { status: 200 },
         );
@@ -380,12 +503,93 @@ test("the GitHub adapter retains only selected metadata and bounds failures", as
       owner: "frostyard",
       name: "moved",
       archived: false,
+      defaultBranch: "main",
     },
   );
   assert.deepEqual(sameOriginRequests, [
     "https://api.github.com/repos/frostyard/moved",
     "https://api.github.com/repositories/9001",
   ]);
+});
+
+test("the surface adapter pins one commit and loads only canonical Git objects", async () => {
+  const coreEntries = await validCoreEntries(enabledDeclaration(), true);
+  const contract = validatedRepositorySurfaceContract(coreEntries, 1).contract;
+  const requested: string[] = [];
+  const bytes = {
+    "1": Buffer.from("# Agent instructions\n"),
+    "2": json(validGovernance()),
+    "4": Buffer.from("# Documentation\n"),
+  } as const;
+  const blobIds = Object.fromEntries(
+    Object.entries(bytes).map(([id, content]) => [id, repositoryGitBlobObjectId(content)]),
+  ) as Record<keyof typeof bytes, string>;
+  const skillsEntries: RepositorySurfaceTreeEntry[] = [];
+  const skillsTreeId = repositoryGitTreeObjectId(skillsEntries);
+  const policiesEntries: RepositorySurfaceTreeEntry[] = [
+    { path: "agent-governance.json", mode: "100644", type: "blob", objectId: blobIds["2"], size: bytes["2"].byteLength },
+  ];
+  const policiesTreeId = repositoryGitTreeObjectId(policiesEntries);
+  const agentsEntries: RepositorySurfaceTreeEntry[] = [
+    { path: "skills", mode: "040000", type: "tree", objectId: skillsTreeId, size: null },
+  ];
+  const agentsTreeId = repositoryGitTreeObjectId(agentsEntries);
+  const docsEntries: RepositorySurfaceTreeEntry[] = [
+    { path: "README.md", mode: "100644", type: "blob", objectId: blobIds["4"], size: bytes["4"].byteLength },
+  ];
+  const docsTreeId = repositoryGitTreeObjectId(docsEntries);
+  const rootEntries: RepositorySurfaceTreeEntry[] = [
+    { path: "AGENTS.md", mode: "100644", type: "blob", objectId: blobIds["1"], size: bytes["1"].byteLength },
+    { path: "policies", mode: "040000", type: "tree", objectId: policiesTreeId, size: null },
+    { path: ".agents", mode: "040000", type: "tree", objectId: agentsTreeId, size: null },
+    { path: "docs", mode: "040000", type: "tree", objectId: docsTreeId, size: null },
+  ];
+  const rootTreeId = repositoryGitTreeObjectId(rootEntries);
+  const response = await inspectRepositorySurfaces(
+    { owner: "frostyard", name: "example", defaultBranch: "main", contract },
+    async (input) => {
+      const url = String(input);
+      requested.push(url);
+      const path = new URL(url).pathname;
+      if (path.endsWith("/commits/main")) {
+        return Response.json({ sha: "d".repeat(40), commit: { tree: { sha: rootTreeId } } });
+      }
+      const treeId = path.match(/\/git\/trees\/([0-9a-f]{40})$/)?.[1];
+      if (treeId) {
+        const trees: Record<string, unknown[]> = {
+          [rootTreeId]: rootEntries.map(githubTreeEntry),
+          [policiesTreeId]: policiesEntries.map(githubTreeEntry),
+          [agentsTreeId]: agentsEntries.map(githubTreeEntry),
+          [skillsTreeId]: [],
+          [docsTreeId]: docsEntries.map(githubTreeEntry),
+        };
+        return Response.json({ sha: treeId, truncated: false, tree: trees[treeId] });
+      }
+      const requestedBlobId = path.match(/\/git\/blobs\/([0-9a-f]{40})$/)?.[1];
+      const blobId = (Object.keys(blobIds) as Array<keyof typeof bytes>).find((id) => blobIds[id] === requestedBlobId);
+      if (blobId) {
+        return Response.json({
+          sha: blobIds[blobId],
+          encoding: "base64",
+          size: bytes[blobId].byteLength,
+          content: bytes[blobId].toString("base64"),
+        });
+      }
+      return new Response(null, { status: 404 });
+    },
+  );
+  assert.equal(response.kind, "resolved");
+  if (response.kind !== "resolved") return;
+  assert.equal(response.repositoryCommitId, "d".repeat(40));
+  assert.equal(response.repositoryTreeId, rootTreeId);
+  assert.deepEqual(response.surfaces.map((surface) => [surface.surfaceId, surface.kind]), [
+    ["agent-instructions", "found"],
+    ["agent-governance", "found"],
+    ["agent-skills", "found"],
+    ["documentation-index", "found"],
+  ]);
+  assert.equal(requested.every((url) => url.startsWith("https://api.github.com/repos/frostyard/example/")), true);
+  assert.equal(requested.filter((url) => url.includes("/commits/")).length, 1);
 });
 
 function enabledDeclaration(): RepositoryDeclaration {
@@ -440,7 +644,36 @@ async function validCoreEntries(
       { id: "documentation-index", path: "docs/README.md", artifact_type: "file", media_type: "text/markdown" },
     ],
   };
-  const governance = {
+  const governance = validGovernance();
+  const entries = [
+    entryFor("organization/README.md", Buffer.from("# Organization authority\n")),
+    entryFor("organization/contracts/repository-surfaces/v1.json", json(surfaces)),
+    entryFor("organization/fixtures/v1/valid/repository.json", json(fixtureRepository)),
+    entryFor("organization/fixtures/v1/valid/repository-surfaces.json", json(surfaces)),
+    entryFor("organization/fixtures/v1/valid/repository-agent-governance.json", json(governance)),
+    entryFor("organization/fixtures/v1/invalid/repository-unknown-program.json", Buffer.from('{"schema_version":2}')),
+  ];
+  if (includeLiveRepository) {
+    entries.push(
+      entryFor(
+        `organization/repositories/${declaration.repository.owner}/${declaration.repository.name}.json`,
+        json(declaration),
+      ),
+    );
+  }
+  for (const name of [
+    "repository.schema.json",
+    "repository-surfaces.schema.json",
+    "repository-agent-governance.schema.json",
+  ]) {
+    const bundled = await readFile(new URL(`../src/core/schemas/v1/${name}`, import.meta.url));
+    entries.push(entryFor(`organization/schemas/v1/${name}`, bundled));
+  }
+  return entries;
+}
+
+function validGovernance() {
+  return {
     schema_version: 1,
     default_decision: "deny",
     actions: {},
@@ -477,31 +710,112 @@ async function validCoreEntries(
       uncertainty_rule: "higher-plausible",
     },
   };
-  const entries = [
-    entryFor("organization/README.md", Buffer.from("# Organization authority\n")),
-    entryFor("organization/contracts/repository-surfaces/v1.json", json(surfaces)),
-    entryFor("organization/fixtures/v1/valid/repository.json", json(fixtureRepository)),
-    entryFor("organization/fixtures/v1/valid/repository-surfaces.json", json(surfaces)),
-    entryFor("organization/fixtures/v1/valid/repository-agent-governance.json", json(governance)),
-    entryFor("organization/fixtures/v1/invalid/repository-unknown-program.json", Buffer.from('{"schema_version":2}')),
-  ];
-  if (includeLiveRepository) {
-    entries.push(
-      entryFor(
-        `organization/repositories/${declaration.repository.owner}/${declaration.repository.name}.json`,
-        json(declaration),
-      ),
-    );
-  }
-  for (const name of [
-    "repository.schema.json",
-    "repository-surfaces.schema.json",
-    "repository-agent-governance.schema.json",
-  ]) {
-    const bundled = await readFile(new URL(`../src/core/schemas/v1/${name}`, import.meta.url));
-    entries.push(entryFor(`organization/schemas/v1/${name}`, bundled));
-  }
-  return entries;
+}
+
+function validSurfaceProbe() {
+  const instructions = Buffer.from("# Agent instructions\n");
+  const governance = json(validGovernance());
+  const documentation = Buffer.from("# Documentation\n");
+  const skillsEntries: RepositorySurfaceTreeEntry[] = [];
+  return {
+    kind: "resolved" as const,
+    defaultBranch: "main",
+    repositoryCommitId: "d".repeat(40),
+    repositoryTreeId: "e".repeat(40),
+    surfaces: [
+      {
+        surfaceId: "agent-instructions",
+        path: "AGENTS.md",
+        kind: "found" as const,
+        mode: "100644",
+        objectType: "blob" as const,
+        objectId: repositoryGitBlobObjectId(instructions),
+        bytes: instructions,
+        treeEntries: null,
+      },
+      {
+        surfaceId: "agent-governance",
+        path: "policies/agent-governance.json",
+        kind: "found" as const,
+        mode: "100644",
+        objectType: "blob" as const,
+        objectId: repositoryGitBlobObjectId(governance),
+        bytes: governance,
+        treeEntries: null,
+      },
+      {
+        surfaceId: "agent-skills",
+        path: ".agents/skills",
+        kind: "found" as const,
+        mode: "040000",
+        objectType: "tree" as const,
+        objectId: repositoryGitTreeObjectId(skillsEntries),
+        bytes: null,
+        treeEntries: skillsEntries,
+      },
+      {
+        surfaceId: "documentation-index",
+        path: "docs/README.md",
+        kind: "found" as const,
+        mode: "100644",
+        objectType: "blob" as const,
+        objectId: repositoryGitBlobObjectId(documentation),
+        bytes: documentation,
+        treeEntries: null,
+      },
+    ],
+  };
+}
+
+function missingSurfaceProbe() {
+  const probe = validSurfaceProbe();
+  return {
+    ...probe,
+    surfaces: probe.surfaces.map((surface) =>
+      surface.surfaceId === "documentation-index"
+        ? { surfaceId: "documentation-index", path: "docs/README.md", kind: "missing" as const }
+        : surface,
+    ),
+  };
+}
+
+function wrongTypeSurfaceProbe() {
+  const probe = validSurfaceProbe();
+  return {
+    ...probe,
+    surfaces: probe.surfaces.map((surface) =>
+      surface.surfaceId === "agent-instructions"
+        ? {
+            ...surface,
+            mode: "120000",
+            objectType: "blob" as const,
+          }
+        : surface,
+    ),
+  };
+}
+
+function invalidGovernanceSurfaceProbe() {
+  const probe = validSurfaceProbe();
+  const invalid = Buffer.from('{"schema_version":1}');
+  return {
+    ...probe,
+    surfaces: probe.surfaces.map((surface) =>
+      surface.surfaceId === "agent-governance"
+        ? { ...surface, objectId: repositoryGitBlobObjectId(invalid), bytes: invalid }
+        : surface,
+    ),
+  };
+}
+
+function githubTreeEntry(entry: RepositorySurfaceTreeEntry) {
+  return {
+    path: entry.path,
+    mode: entry.mode,
+    type: entry.type,
+    sha: entry.objectId,
+    ...(entry.size === null ? {} : { size: entry.size }),
+  };
 }
 
 function entryFor(path: string, bytes: Uint8Array): CoreTreeEntry {
