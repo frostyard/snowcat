@@ -58,7 +58,20 @@ try {
     const reason = required(args.slice(1).join(" "), "cancellation reason");
     print(withoutLeaseToken(queue.cancel(id, "operator:cli", reason)));
   } else if (command === "list") {
-    print(queue.list({ status: parseStatus(args[0]) }).map(withoutLeaseToken));
+    const status = args[0] !== undefined && !args[0].startsWith("--") ? args[0] : undefined;
+    const flags = parseFlags(status === undefined ? args : args.slice(1), ["repository", "kind", "limit"]);
+    const limit = flags.limit === undefined ? undefined : parseNonNegativeInteger(flags.limit, "limit");
+    if (limit !== undefined && (limit < 1 || limit > 100)) throw new Error("limit must be between 1 and 100");
+    print(
+      queue
+        .list({ status: parseStatus(status), repository: flags.repository, kind: flags.kind, limit })
+        .map(withoutLeaseToken),
+    );
+  } else if (command === "show") {
+    const id = required(args[0], "work item id");
+    const item = queue.get(id);
+    if (!item) throw new Error(`work item not found: ${id}`);
+    print({ item: withoutLeaseToken(item), events: queue.events(id) });
   } else if (command === "verify-artifacts") {
     const flags = parseFlags(args, ["repository", "limit"]);
     const limit = flags.limit === undefined ? undefined : parseNonNegativeInteger(flags.limit, "limit");
@@ -83,7 +96,8 @@ try {
     console.error("       npm run queue -- defer <work-item-id> <reason>");
     console.error("       npm run queue -- requeue <work-item-id> <reason>");
     console.error("       npm run queue -- cancel <work-item-id> <reason>");
-    console.error("       npm run queue -- list [proposed|queued|claimed|completed|blocked|cancelled]");
+    console.error("       npm run queue -- list [proposed|queued|claimed|completed|blocked|cancelled] [--repository <owner/repo>] [--kind <kind>] [--limit <1-100>]");
+    console.error("       npm run queue -- show <work-item-id>");
     console.error("       npm run queue -- verify-artifacts [--repository <owner/repo>] [--limit <1-100>]");
     console.error("       npm run queue -- metadata");
     console.error("       npm run queue -- backup <new-file-path>");

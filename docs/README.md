@@ -88,6 +88,7 @@ Docs are split by the question they answer:
 - [Success-measure verification](design/success-measure-verification.md)
 - [Operating enforced required checks](design/required-check-ruleset-operations.md)
 - [GitHub observation and reconciliation](design/github-observation.md)
+- [Operating the work queue](design/queue-operations.md)
 
 ### Specs
 

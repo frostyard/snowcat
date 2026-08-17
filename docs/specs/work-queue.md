@@ -198,7 +198,10 @@ state with a `work.requeued` event. Cancel stores the operator reason in
     MUST create at most one active root per kind, and any validation or insert
     failure MUST roll back the whole batch. Repository opt-in MUST be checked
     under the same write lock as root insertion.
-27. `metadata` MUST report the resolved database path, `database_id`,
+27. `list [status] [--repository <owner/repo>] [--kind <kind>] [--limit
+    <1-100>]` MUST filter on any combination and `show <id>` MUST print one
+    item with its complete event history; neither MAY reveal a lease token.
+    `metadata` MUST report the resolved database path, `database_id`,
     schema version, creation time, item and event counts, and the last event
     sequence, without exposing any lease token.
 28. `backup <path>` MUST refuse `:memory:`, the live database path, and any
@@ -305,6 +308,7 @@ state with a `work.requeued` event. Cancel stores the operator reason in
   [ADR-0006](../adr/0006-enforce-admission-in-the-database.md)
 - Product: [maintenance fleet PRD](../prd/agent-fleet.md)
 - Context: [queue execution boundary](../design/queue-execution-boundary.md)
+  and the [operations runbook](../design/queue-operations.md)
 - Delivery: [queue vertical spike](../plans/queue-vertical-spike.md)
 - Promotion decision and plan:
   [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md) and

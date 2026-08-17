@@ -149,7 +149,10 @@ item per invocation by default.
 
 ## Operating the queue
 
-Under [ADR-0059](docs/adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md)
+The full operator runbook — enrolling a repository, filling the queue,
+admitting work, running workers, watching delivery, backups — is
+[docs/design/queue-operations.md](docs/design/queue-operations.md). In brief,
+under [ADR-0059](docs/adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md)
 the queue is the v1 work engine and its database is durable state; the
 [recovery plan](docs/plans/recover.md) is the current delivery order. Run it on
 one operator host:

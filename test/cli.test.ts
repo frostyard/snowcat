@@ -300,3 +300,52 @@ test("operator CLI verify-artifacts validates its flags and reports an empty pas
   assert.equal(empty.status, 0, empty.stderr);
   assert.deepEqual(JSON.parse(empty.stdout), { checked: 0, updated: [], unavailable: [], rejected: [] });
 });
+
+test("operator CLI list filters by repository and kind, and show prints an item with its events but no lease token", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-show-test-"));
+  const path = join(directory, "queue.db");
+  const queue = new QueueStore(path);
+  for (const repository of ["frostyard/updex", "frostyard/lodge"]) queue.setRepositoryEnabled(repository, true);
+  const seedOne = (repository: string, kind: string) =>
+    queue.enqueueSeed({
+      repository,
+      kind,
+      objective: `${kind} for ${repository}`,
+      instructions: "Read only.",
+      acceptanceCriteria: ["One gap."],
+      allowedActions: ["read"],
+      delegableActions: [],
+      createdBy: "operator:test",
+    });
+  const target = seedOne("frostyard/updex", "quality-gap-discovery");
+  seedOne("frostyard/updex", "ci-gap-discovery");
+  seedOne("frostyard/lodge", "quality-gap-discovery");
+  const claimed = queue.claim({ worker: "claude:show-test", repository: "frostyard/updex", kinds: ["quality-gap-discovery"] })!;
+  queue.close();
+  const env = stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path });
+  const run = (...args: string[]) =>
+    spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], { cwd: process.cwd(), encoding: "utf8", env });
+
+  const byRepository = run("list", "--repository", "frostyard/updex");
+  assert.equal(byRepository.status, 0, byRepository.stderr);
+  assert.equal((JSON.parse(byRepository.stdout) as unknown[]).length, 2);
+  const byKind = run("list", "queued", "--kind", "quality-gap-discovery", "--limit", "10");
+  assert.equal(byKind.status, 0, byKind.stderr);
+  const kinds = JSON.parse(byKind.stdout) as Array<{ repository: string }>;
+  assert.deepEqual(kinds.map((item) => item.repository), ["frostyard/lodge"]);
+  const badLimit = run("list", "--limit", "0");
+  assert.notEqual(badLimit.status, 0);
+  assert.match(badLimit.stderr, /limit must be between 1 and 100/);
+
+  const shown = run("show", target.id);
+  assert.equal(shown.status, 0, shown.stderr);
+  const detail = JSON.parse(shown.stdout) as { item: Record<string, unknown>; events: Array<{ type: string }> };
+  assert.equal(detail.item.id, target.id);
+  assert.equal(detail.item.leaseOwner, "claude:show-test");
+  assert.equal(detail.item.leaseToken, undefined);
+  assert.deepEqual(detail.events.map((event) => event.type), ["work.queued", "work.claimed"]);
+  assert.equal(shown.stdout.includes(claimed.leaseToken!), false);
+  const missing = run("show", "00000000-0000-4000-8000-000000000000");
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /not found/);
+});

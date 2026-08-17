@@ -350,7 +350,7 @@ export class QueueStore {
     return row ? withDelivery(decodeWorkItem(row)) : undefined;
   }
 
-  list(options: { status?: WorkStatus; repository?: string; limit?: number } = {}): WorkItem[] {
+  list(options: { status?: WorkStatus; repository?: string; kind?: string; limit?: number } = {}): WorkItem[] {
     const clauses: string[] = [];
     const params: SQLInputValue[] = [];
     if (options.status === "proposed") {
@@ -365,6 +365,10 @@ export class QueueStore {
       validateRepository(options.repository);
       clauses.push("repository = ?");
       params.push(options.repository);
+    }
+    if (options.kind) {
+      clauses.push("kind = ?");
+      params.push(options.kind);
     }
     const limit = Math.max(1, Math.min(options.limit ?? 50, 100));
     const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";

@@ -10,7 +10,8 @@ per-repository coordinator named by
 and promotion to the v1 work engine by
 [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md).
 Contracts: [work queue](../specs/work-queue.md). Delivery:
-[recovery plan](../plans/recover.md).
+[recovery plan](../plans/recover.md). Runbook:
+[operating the work queue](queue-operations.md).
 
 ## Overview
 

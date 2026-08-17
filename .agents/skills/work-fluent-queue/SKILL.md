@@ -13,7 +13,7 @@ its sandbox; Fluent only owns queue authorization and bookkeeping.
 1. Choose a non-secret worker identity that remains stable for this invocation,
    such as `<client>:<repository>:<session>`.
 2. Call `claim_work` once, restricting `repository` to the current repository
-   when known.
+   when known and `kinds` to the kinds the operator named, if any.
 3. Stop cleanly when no item is available. Do not poll or loop unless the
    operator explicitly requested continuous work.
    `proposed` items are awaiting admission and are not available work.

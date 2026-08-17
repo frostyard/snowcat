@@ -115,8 +115,13 @@ schema with no upgrade path.
 
 ## Phase 5 — Dogfood on one non-Fluent repository (one calendar week)
 
-- Choose the smallest Frostyard repository, opt in, import labeled issues,
-  approve three to five, and run Codex or Claude workers with `open-pr`.
+- Repository chosen 2026-08-17: `frostyard/updex`. Enrollment changes are
+  open as [core#83](https://github.com/frostyard/core/pull/83) (declaration)
+  and [updex#297](https://github.com/frostyard/updex/pull/297) (governance
+  surface). Operate it by the
+  [queue operations runbook](../design/queue-operations.md): opt in, import
+  labeled issues, approve three to five, and run Codex or Claude workers with
+  `open-pr`.
 - Record accepted pull requests per attempt, tokens per accepted outcome, and
   blocked counts to fill the TBD targets in the
   [agent fleet PRD](../prd/agent-fleet.md).

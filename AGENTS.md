@@ -155,8 +155,9 @@ removed. -->
 - The queue store in [`src/queue/store.ts`](src/queue/store.ts) and the MCP
   contract are the v1 work engine
   ([ADR-0059](docs/adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md));
-  the [recovery plan](docs/plans/recover.md) is the current delivery order.
-  Change the queue schema only by appending an idempotent rung to its
+  the [recovery plan](docs/plans/recover.md) is the current delivery order
+  and [docs/design/queue-operations.md](docs/design/queue-operations.md) the
+  operator runbook. Change the queue schema only by appending an idempotent rung to its
   migration ladder and bumping `SCHEMA_VERSION`; never edit or reorder a rung.
   Use `npm run --silent queue -- metadata | backup <new-path> | verify-backup
   <path>` for host operations; no queue command overwrites a live database.
