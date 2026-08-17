@@ -94,6 +94,13 @@ import {
   type RepositorySurfaceTreeEntry,
 } from "../repository/surfaces.ts";
 import { repositoryAuthorityContextDigest } from "../repository/authority-context.ts";
+import {
+  GITHUB_DELIVERY_AUDIT_DEFAULT_INTERVAL_SECONDS,
+  GITHUB_DELIVERY_AUDIT_LEASE_SECONDS,
+  addGitHubAuditSeconds,
+  assertGitHubDeliveryAuditInterval,
+  githubDeliveryAuditRetrySeconds,
+} from "../github/audit-policy.ts";
 
 type Row = Record<string, SQLInputValue>;
 
@@ -103,6 +110,7 @@ const TARGET_TABLES = [
   "core_poll_state",
   "core_snapshot_files",
   "core_snapshots",
+  "github_delivery_audit_state",
   "control_plane_metadata",
   "control_transactions",
   "durable_occurrences",
@@ -317,6 +325,54 @@ export interface CorePollCompletionInput {
   sourceOutcome: CoreSourceCheckOutcome | null;
   checkDisposition: CorePollCheckDisposition;
   pruneRan: boolean;
+}
+
+export type GitHubDeliveryAuditIncompleteOutcome =
+  | "source-unavailable"
+  | "pagination-incomplete"
+  | "request-budget-exhausted"
+  | "unsupported-relevant-delivery"
+  | "normalization-failed";
+export type GitHubDeliveryAuditOperationalOutcome = "complete" | GitHubDeliveryAuditIncompleteOutcome;
+export type GitHubDeliveryAuditRunStatus = "completed" | "controller-error";
+
+export interface GitHubDeliveryAuditState {
+  scheduleVersion: 1;
+  appId: string | null;
+  healthyIntervalSeconds: number;
+  nextAuditAt: string;
+  incompleteStreak: number;
+  inFlightRunId: string | null;
+  inFlightStartedAt: string | null;
+  inFlightExpiresAt: string | null;
+  lastRunId: string | null;
+  lastStartedAt: string | null;
+  lastCompletedAt: string | null;
+  lastRunStatus: GitHubDeliveryAuditRunStatus | null;
+  lastOutcome: GitHubDeliveryAuditOperationalOutcome | null;
+  lastRetryAt: string | null;
+  lastCompleteBoundaryAt: string | null;
+  completedRunCount: number;
+}
+
+export type GitHubDeliveryAuditClaimResult =
+  | {
+      status: "claimed";
+      runId: string;
+      startedAt: string;
+      expiresAt: string;
+      controlPlaneSequence: number;
+      state: GitHubDeliveryAuditState;
+    }
+  | { status: "not-due"; nextAuditAt: string; state: GitHubDeliveryAuditState }
+  | { status: "in-flight"; runId: string; expiresAt: string; state: GitHubDeliveryAuditState };
+
+export interface GitHubDeliveryAuditCompletionInput {
+  runId: string;
+  runStatus: GitHubDeliveryAuditRunStatus;
+  outcome: GitHubDeliveryAuditOperationalOutcome | null;
+  sourceBoundaryAt: string | null;
+  retryAt: string | null;
 }
 
 export type CoreAdmissionReadinessReason =
@@ -1033,6 +1089,154 @@ export class ControlPlaneStore {
           input.checkDisposition === "suppressed" ? 1 : 0,
         );
       const completed = this.corePollState();
+      this.db.exec("COMMIT");
+      return completed;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  githubDeliveryAuditState(): GitHubDeliveryAuditState {
+    const row = this.db.prepare("SELECT * FROM github_delivery_audit_state WHERE singleton = 1").get() as Row | undefined;
+    if (!row) throw new Error("GitHub delivery-audit state is missing");
+    return decodeGitHubDeliveryAuditState(row);
+  }
+
+  claimGitHubDeliveryAudit(appId: string, healthyIntervalSeconds: number): GitHubDeliveryAuditClaimResult {
+    if (!/^[1-9][0-9]{0,19}$/.test(appId)) throw new Error("GitHub delivery-audit App ID is invalid");
+    assertGitHubDeliveryAuditInterval(healthyIntervalSeconds);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.verifyExisting(this.applicationTables());
+      const now = this.now();
+      const metadata = this.metadata();
+      const state = this.githubDeliveryAuditState();
+      if (state.appId !== null && state.appId !== appId) {
+        throw new Error(`GitHub delivery-audit schedule is already bound to App ${state.appId}`);
+      }
+      if (now < metadata.controlTimeWatermark || (state.lastCompletedAt !== null && now < state.lastCompletedAt)) {
+        throw new Error("control-plane clock moved backwards behind durable GitHub delivery-audit state");
+      }
+      if (
+        state.inFlightRunId !== null &&
+        state.inFlightExpiresAt !== null &&
+        now < state.inFlightExpiresAt
+      ) {
+        this.db.exec("COMMIT");
+        return {
+          status: "in-flight",
+          runId: state.inFlightRunId,
+          expiresAt: state.inFlightExpiresAt,
+          state,
+        };
+      }
+      if (now < state.nextAuditAt) {
+        this.db.exec("COMMIT");
+        return { status: "not-due", nextAuditAt: state.nextAuditAt, state };
+      }
+
+      const runId = uuidV7(new Date(now));
+      const expiresAt = addGitHubAuditSeconds(now, GITHUB_DELIVERY_AUDIT_LEASE_SECONDS);
+      this.db.prepare(
+        `UPDATE github_delivery_audit_state
+         SET app_id = ?, healthy_interval_seconds = ?, in_flight_run_id = ?,
+             in_flight_started_at = ?, in_flight_expires_at = ?
+         WHERE singleton = 1`,
+      ).run(appId, healthyIntervalSeconds, runId, now, expiresAt);
+      const claimedState = this.githubDeliveryAuditState();
+      this.db.exec("COMMIT");
+      return {
+        status: "claimed",
+        runId,
+        startedAt: now,
+        expiresAt,
+        controlPlaneSequence: metadata.lastTransactionSequence,
+        state: claimedState,
+      };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  completeGitHubDeliveryAudit(input: GitHubDeliveryAuditCompletionInput): GitHubDeliveryAuditState {
+    if (!isUuidV7(input.runId)) throw new Error("GitHub delivery-audit run ID must be UUIDv7");
+    if (input.runStatus !== "completed" && input.runStatus !== "controller-error") {
+      throw new Error("unknown GitHub delivery-audit run status");
+    }
+    const outcomes: readonly GitHubDeliveryAuditOperationalOutcome[] = [
+      "complete",
+      "source-unavailable",
+      "pagination-incomplete",
+      "request-budget-exhausted",
+      "unsupported-relevant-delivery",
+      "normalization-failed",
+    ];
+    if (input.outcome !== null && !outcomes.includes(input.outcome)) {
+      throw new Error("unknown GitHub delivery-audit outcome");
+    }
+    if ((input.runStatus === "completed") !== (input.outcome !== null)) {
+      throw new Error("GitHub delivery-audit completion status and outcome disagree");
+    }
+    if ((input.outcome === "complete") !== (input.sourceBoundaryAt !== null)) {
+      throw new Error("only a complete GitHub delivery audit establishes a source boundary");
+    }
+    if (input.outcome === "complete" && input.retryAt !== null) {
+      throw new Error("a complete GitHub delivery audit cannot request retry");
+    }
+    if (input.sourceBoundaryAt !== null) assertUtcInstant(input.sourceBoundaryAt, "GitHub delivery-audit source boundary");
+    if (input.retryAt !== null) assertUtcInstant(input.retryAt, "GitHub delivery-audit retry time");
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.verifyExisting(this.applicationTables());
+      const completedAt = this.now();
+      const metadata = this.metadata();
+      const state = this.githubDeliveryAuditState();
+      if (state.inFlightRunId !== input.runId || state.inFlightStartedAt === null) {
+        throw new Error("GitHub delivery-audit completion does not own the active lease");
+      }
+      if (
+        completedAt < metadata.controlTimeWatermark ||
+        completedAt < state.inFlightStartedAt ||
+        (input.sourceBoundaryAt !== null && completedAt < input.sourceBoundaryAt) ||
+        (
+          input.sourceBoundaryAt !== null &&
+          state.lastCompleteBoundaryAt !== null &&
+          input.sourceBoundaryAt < state.lastCompleteBoundaryAt
+        )
+      ) {
+        throw new Error("control-plane clock moved backwards during the GitHub delivery-audit run");
+      }
+      const incompleteStreak = input.outcome === "complete" ? 0 : state.incompleteStreak + 1;
+      const ordinaryNext = input.outcome === "complete"
+        ? addGitHubAuditSeconds(completedAt, state.healthyIntervalSeconds)
+        : addGitHubAuditSeconds(completedAt, githubDeliveryAuditRetrySeconds(incompleteStreak));
+      const nextAuditAt = input.retryAt !== null && input.retryAt > ordinaryNext
+        ? input.retryAt
+        : ordinaryNext;
+      this.db.prepare(
+        `UPDATE github_delivery_audit_state
+         SET next_audit_at = ?, incomplete_streak = ?,
+             in_flight_run_id = NULL, in_flight_started_at = NULL, in_flight_expires_at = NULL,
+             last_run_id = ?, last_started_at = ?, last_completed_at = ?,
+             last_run_status = ?, last_outcome = ?, last_retry_at = ?,
+             last_complete_boundary_at = COALESCE(?, last_complete_boundary_at),
+             completed_run_count = completed_run_count + 1
+         WHERE singleton = 1`,
+      ).run(
+        nextAuditAt,
+        incompleteStreak,
+        input.runId,
+        state.inFlightStartedAt,
+        completedAt,
+        input.runStatus,
+        input.outcome,
+        input.retryAt,
+        input.sourceBoundaryAt,
+      );
+      const completed = this.githubDeliveryAuditState();
       this.db.exec("COMMIT");
       return completed;
     } catch (error) {
@@ -3546,6 +3750,7 @@ export class ControlPlaneStore {
       ),
       coreActiveSnapshot: this.queryJsonRows("SELECT * FROM core_active_snapshot ORDER BY singleton"),
       corePollState: this.queryJsonRows("SELECT * FROM core_poll_state ORDER BY singleton"),
+      githubDeliveryAuditState: this.queryJsonRows("SELECT * FROM github_delivery_audit_state ORDER BY singleton"),
       transactionAllocation: this.sqliteTransactionAllocation(),
     } satisfies JsonValue;
     return sha256(canonicalJson(content));
@@ -5643,6 +5848,17 @@ export class ControlPlaneStore {
           evaluationTime,
           addSeconds(evaluationTime, CORE_POLL_PRUNE_INTERVAL_SECONDS),
         );
+      this.db.prepare(
+        `INSERT INTO github_delivery_audit_state (
+           singleton, schedule_version, app_id, healthy_interval_seconds,
+           next_audit_at, incomplete_streak,
+           in_flight_run_id, in_flight_started_at, in_flight_expires_at,
+           last_run_id, last_started_at, last_completed_at, last_run_status,
+           last_outcome, last_retry_at, last_complete_boundary_at,
+           completed_run_count
+         ) VALUES (1, 1, NULL, ?, ?, 0, NULL, NULL, NULL, NULL, NULL, NULL,
+                   NULL, NULL, NULL, NULL, 0)`,
+      ).run(GITHUB_DELIVERY_AUDIT_DEFAULT_INTERVAL_SECONDS, evaluationTime);
 
       const transaction = this.db
         .prepare(
@@ -5916,6 +6132,43 @@ export class ControlPlaneStore {
            completed_run_count = 0) OR
           (last_run_id IS NOT NULL AND last_started_at IS NOT NULL AND last_completed_at IS NOT NULL AND
            last_run_status IS NOT NULL AND last_check_disposition IS NOT NULL AND completed_run_count > 0)
+        )
+      );
+
+      CREATE TABLE github_delivery_audit_state (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        schedule_version INTEGER NOT NULL CHECK (schedule_version = 1),
+        app_id TEXT,
+        healthy_interval_seconds INTEGER NOT NULL CHECK (healthy_interval_seconds BETWEEN 60 AND 900),
+        next_audit_at TEXT NOT NULL,
+        incomplete_streak INTEGER NOT NULL CHECK (incomplete_streak >= 0),
+        in_flight_run_id TEXT,
+        in_flight_started_at TEXT,
+        in_flight_expires_at TEXT,
+        last_run_id TEXT,
+        last_started_at TEXT,
+        last_completed_at TEXT,
+        last_run_status TEXT CHECK (last_run_status IN ('completed', 'controller-error')),
+        last_outcome TEXT CHECK (
+          last_outcome IN (
+            'complete', 'source-unavailable', 'pagination-incomplete',
+            'request-budget-exhausted', 'unsupported-relevant-delivery', 'normalization-failed'
+          )
+        ),
+        last_retry_at TEXT,
+        last_complete_boundary_at TEXT,
+        completed_run_count INTEGER NOT NULL CHECK (completed_run_count >= 0),
+        CHECK (app_id IS NULL OR (length(app_id) BETWEEN 1 AND 20 AND app_id NOT GLOB '*[^0-9]*' AND app_id NOT LIKE '0%')),
+        CHECK (
+          (in_flight_run_id IS NULL AND in_flight_started_at IS NULL AND in_flight_expires_at IS NULL) OR
+          (in_flight_run_id IS NOT NULL AND in_flight_started_at IS NOT NULL AND in_flight_expires_at IS NOT NULL)
+        ),
+        CHECK (
+          (last_run_id IS NULL AND last_started_at IS NULL AND last_completed_at IS NULL AND
+           last_run_status IS NULL AND last_outcome IS NULL AND last_retry_at IS NULL AND
+           last_complete_boundary_at IS NULL AND completed_run_count = 0) OR
+          (last_run_id IS NOT NULL AND last_started_at IS NOT NULL AND last_completed_at IS NOT NULL AND
+           last_run_status IS NOT NULL AND completed_run_count > 0)
         )
       );
 
@@ -6463,6 +6716,7 @@ export class ControlPlaneStore {
     assertUtcInstant(metadata.createdAt, "database creation time");
     assertUtcInstant(metadata.controlTimeWatermark, "control-time watermark");
     this.corePollState();
+    this.githubDeliveryAuditState();
 
     const transactionRow = this.db.prepare("SELECT COALESCE(MAX(sequence), 0) AS maximum FROM control_transactions").get() as Row;
     const maximum = Number(transactionRow.maximum);
@@ -10436,6 +10690,124 @@ function decodeCorePollState(row: Row): CorePollState {
     lastCheckDisposition: lastCheckDisposition as CorePollCheckDisposition | null,
     completedRunCount,
     suppressedCheckCount,
+  };
+}
+
+function decodeGitHubDeliveryAuditState(row: Row): GitHubDeliveryAuditState {
+  if (Number(row.schedule_version) !== 1) throw new Error("unknown GitHub delivery-audit schedule version");
+  const appId = row.app_id === null ? null : String(row.app_id);
+  if (appId !== null && !/^[1-9][0-9]{0,19}$/.test(appId)) {
+    throw new Error("GitHub delivery-audit state has invalid App identity");
+  }
+  const healthyIntervalSeconds = Number(row.healthy_interval_seconds);
+  assertGitHubDeliveryAuditInterval(healthyIntervalSeconds);
+  const incompleteStreak = Number(row.incomplete_streak);
+  const completedRunCount = Number(row.completed_run_count);
+  if (!Number.isSafeInteger(incompleteStreak) || incompleteStreak < 0) {
+    throw new Error("invalid GitHub delivery-audit incomplete streak");
+  }
+  if (!Number.isSafeInteger(completedRunCount) || completedRunCount < 0) {
+    throw new Error("invalid GitHub delivery-audit completion count");
+  }
+  const nextAuditAt = String(row.next_audit_at);
+  assertUtcInstant(nextAuditAt, "GitHub next delivery-audit time");
+
+  const inFlightRunId = row.in_flight_run_id === null ? null : String(row.in_flight_run_id);
+  const inFlightStartedAt = row.in_flight_started_at === null ? null : String(row.in_flight_started_at);
+  const inFlightExpiresAt = row.in_flight_expires_at === null ? null : String(row.in_flight_expires_at);
+  const inFlightValues = [inFlightRunId, inFlightStartedAt, inFlightExpiresAt];
+  if (inFlightValues.some((value) => value === null) !== inFlightValues.every((value) => value === null)) {
+    throw new Error("GitHub delivery-audit lease fields must be null or present together");
+  }
+  if (inFlightRunId !== null && inFlightStartedAt !== null && inFlightExpiresAt !== null) {
+    if (!isUuidV7(inFlightRunId)) throw new Error("GitHub delivery-audit lease run ID is not UUIDv7");
+    assertUtcInstant(inFlightStartedAt, "GitHub delivery-audit lease start");
+    assertUtcInstant(inFlightExpiresAt, "GitHub delivery-audit lease expiry");
+    if (addGitHubAuditSeconds(inFlightStartedAt, GITHUB_DELIVERY_AUDIT_LEASE_SECONDS) !== inFlightExpiresAt) {
+      throw new Error("GitHub delivery-audit lease duration is not ten minutes");
+    }
+  }
+
+  const lastRunId = row.last_run_id === null ? null : String(row.last_run_id);
+  const lastStartedAt = row.last_started_at === null ? null : String(row.last_started_at);
+  const lastCompletedAt = row.last_completed_at === null ? null : String(row.last_completed_at);
+  const lastRunStatus = row.last_run_status === null ? null : String(row.last_run_status);
+  const lastOutcome = row.last_outcome === null ? null : String(row.last_outcome);
+  const lastRetryAt = row.last_retry_at === null ? null : String(row.last_retry_at);
+  const lastCompleteBoundaryAt = row.last_complete_boundary_at === null
+    ? null
+    : String(row.last_complete_boundary_at);
+  const outcomes: readonly GitHubDeliveryAuditOperationalOutcome[] = [
+    "complete",
+    "source-unavailable",
+    "pagination-incomplete",
+    "request-budget-exhausted",
+    "unsupported-relevant-delivery",
+    "normalization-failed",
+  ];
+  if (completedRunCount === 0) {
+    if (
+      lastRunId !== null || lastStartedAt !== null || lastCompletedAt !== null ||
+      lastRunStatus !== null || lastOutcome !== null || lastRetryAt !== null ||
+      lastCompleteBoundaryAt !== null || incompleteStreak !== 0
+    ) throw new Error("GitHub delivery-audit state has last-run fields before a completion");
+  } else {
+    if (
+      appId === null || lastRunId === null || lastStartedAt === null ||
+      lastCompletedAt === null || lastRunStatus === null
+    ) throw new Error("GitHub delivery-audit state is missing completed-run fields");
+    if (!isUuidV7(lastRunId)) throw new Error("GitHub last delivery-audit run ID is not UUIDv7");
+    assertUtcInstant(lastStartedAt, "GitHub last delivery-audit start");
+    assertUtcInstant(lastCompletedAt, "GitHub last delivery-audit completion");
+    if (lastCompletedAt < lastStartedAt || nextAuditAt < lastCompletedAt) {
+      throw new Error("GitHub delivery-audit operational times are invalid");
+    }
+    if (lastRunStatus !== "completed" && lastRunStatus !== "controller-error") {
+      throw new Error("unknown GitHub delivery-audit completion status");
+    }
+    if (lastOutcome !== null && !outcomes.includes(lastOutcome as GitHubDeliveryAuditOperationalOutcome)) {
+      throw new Error("unknown GitHub delivery-audit completion outcome");
+    }
+    if ((lastRunStatus === "completed") !== (lastOutcome !== null)) {
+      throw new Error("GitHub delivery-audit completion status and outcome are inconsistent");
+    }
+    if ((lastOutcome === "complete") !== (incompleteStreak === 0)) {
+      throw new Error("GitHub delivery-audit incomplete streak is inconsistent");
+    }
+    if (lastRetryAt !== null) {
+      assertUtcInstant(lastRetryAt, "GitHub last delivery-audit retry time");
+      if (lastOutcome === "complete" || lastRunStatus === "controller-error") {
+        throw new Error("GitHub delivery-audit retry instruction is inconsistent");
+      }
+    }
+    if (lastCompleteBoundaryAt !== null) {
+      assertUtcInstant(lastCompleteBoundaryAt, "GitHub last complete delivery-audit boundary");
+      if (lastCompleteBoundaryAt > lastCompletedAt) {
+        throw new Error("GitHub complete delivery-audit boundary follows completion");
+      }
+    }
+    if (lastOutcome === "complete" && lastCompleteBoundaryAt === null) {
+      throw new Error("complete GitHub delivery audit lacks its source boundary");
+    }
+  }
+
+  return {
+    scheduleVersion: 1,
+    appId,
+    healthyIntervalSeconds,
+    nextAuditAt,
+    incompleteStreak,
+    inFlightRunId,
+    inFlightStartedAt,
+    inFlightExpiresAt,
+    lastRunId,
+    lastStartedAt,
+    lastCompletedAt,
+    lastRunStatus: lastRunStatus as GitHubDeliveryAuditRunStatus | null,
+    lastOutcome: lastOutcome as GitHubDeliveryAuditOperationalOutcome | null,
+    lastRetryAt,
+    lastCompleteBoundaryAt,
+    completedRunCount,
   };
 }
 

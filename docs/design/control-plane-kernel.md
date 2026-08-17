@@ -36,8 +36,10 @@ The GitHub-source slice now accepts verified webhook deliveries, bounded App
 delivery-list/detail acquisitions, receipt-free API repair observations, and
 checkpoint/gap/repair transactions. Content gaps close only when exact affected
 delivery identities match retained API audits and a complete audit restores
-interval continuity. Production listener lifecycle and scheduled acquisition
-remain outside the implemented slice.
+interval continuity. A single App-wide operational schedule now leases and runs
+the bounded acquisition without holding the SQLite writer; applying its result
+to repository checkpoints and gaps remains a separate controller step.
+Production listener lifecycle remains outside the implemented slice.
 
 ```text
 empty target file
@@ -68,7 +70,7 @@ spike. The path helper rejects equal resolved paths, while store startup also
 recognizes the spike tables and refuses to initialize over them.
 
 The target file identifies itself with SQLite application ID `1179405908`
-(`FLNT`), `PRAGMA user_version = 7`, a server-generated UUIDv7 database-lineage
+(`FLNT`), `PRAGMA user_version = 8`, a server-generated UUIDv7 database-lineage
 ID, a separately generated UUIDv7 operator-principal ID, schema version,
 registry version, control-time watermark, and last committed transaction
 sequence. Opening a current database validates those values and performs no

@@ -131,6 +131,10 @@ removed. -->
   `awaiting-surfaces`; enrollment requires a valid exact-commit surface fact.
   The implementation lives in
   [`src/repository/controller.ts`](src/repository/controller.ts).
+- Keep App delivery-audit scheduling in the single leased operational state
+  owned by [`src/github/delivery-controller.ts`](src/github/delivery-controller.ts).
+  Its completion records acquisition outcome and retry timing only; repository
+  coverage still requires the separate typed checkpoint/gap commands.
 - Keep GitHub content-gap closure evidence-bound. Gap schema v3 distinguishes
   `interval-coverage` from `delivery-content` independently of failure cause.
   A content gap names sorted affected delivery GUIDs;

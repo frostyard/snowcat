@@ -1942,9 +1942,13 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   delivery-detail acquisition and typed API audit/pull-request repair
   persistence are implemented without manufacturing a webhook receipt.
   Content-gap closure now requires exact affected delivery GUIDs, matching
-  retained API repair audits, and a complete interval audit. Scheduling and
-  leases, automatic gap creation, remaining observation families, and retention
-  pruning remain. Bounded App-JWT repository-installation acquisition, exact
+  retained API repair audits, and a complete interval audit. The App-wide
+  delivery acquisition now has one durable completion-relative schedule,
+  recoverable lease, bounded retry, and rate-limit precedence, without treating
+  operational completion as repository coverage. Automatic per-repository
+  application and gap creation, process lifecycle, remaining observation
+  families, and retention pruning remain. Bounded App-JWT
+  repository-installation acquisition, exact
   read-only profile checks, and typed durable installation reconciliation are
   implemented without changing enrollment.
   The kernel does not yet implement target work, general fact mutation, general
@@ -1957,7 +1961,7 @@ elapsed source freshness from the stricter new-admission gate. Its durable
 | --- | --- |
 | Core contract and migration | Remaining organization JSON Schemas, fixtures, and canonical-surface migrations; verification-profile and Goal import are implemented, while all remaining record kinds, Goal application, source adapters, evidence retention, and fact establishment remain |
 | Control-plane domain model | Execute the [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md): specify exact durable schemas, predicates, reducers, events, projections, invalidation, idempotency, and state machines in a fresh target database shared by RepositoryController, FleetController, ProcessObserver, scheduling, and decisions |
-| GitHub observation | Complete the accepted webhook-plus-polling boundary on the registered v18 vocabulary and ADR-0058 operating bounds; exact-body HMAC verification, allowlisted same-repository normalization, an unmounted bounded router, durable acceptance, typed pull-request-delivery checkpoint/gap/repair persistence with explicit interval-versus-content failure kind, bounded App delivery-list/detail and repository-installation acquisition, exact read-only App profile checks, typed installation reconciliation, receipt-free API repair persistence, and exact evidence-citing content-gap closure are implemented, while production listener lifecycle, automatic gap creation, scheduled leases, remaining records and commands, actor mapping, CI/review/merge and artifact predicates, forks, and external decision signals remain |
+| GitHub observation | Complete the accepted webhook-plus-polling boundary on the registered v18 vocabulary and ADR-0058 operating bounds; exact-body HMAC verification, allowlisted same-repository normalization, an unmounted bounded router, durable acceptance, typed pull-request-delivery checkpoint/gap/repair persistence with explicit interval-versus-content failure kind, bounded App delivery-list/detail and repository-installation acquisition, exact read-only App profile checks, typed installation reconciliation, receipt-free API repair persistence, exact evidence-citing content-gap closure, and the leased App-wide operational audit schedule are implemented, while production listener lifecycle and credentials, automatic per-repository application/gap creation, repository schedules, remaining records and commands, actor mapping, CI/review/merge and artifact predicates, forks, and external decision signals remain |
 | Workflow contracts | Versioned role briefs, evidence schemas, skills, attempt budgets, and deterministic gates for maintenance, planning, review, implementation, repair, and verification |
 | Restricted security | Exact forbidden-content detectors, retention, embargo, reviewer roles, declassification profiles, and private disclosure contracts for high and critical findings |
 | Scheduling and routing details | Capability and grant schemas, information-scope and restricted-compartment schemas, WIP defaults, priority mapping, fair-queue credits, cooldowns, capacity reservations, and capacity-gap UX |

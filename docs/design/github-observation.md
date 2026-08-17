@@ -41,9 +41,12 @@ pull-request delivery audit. A bounded fixture-tested client can completely
 enumerate the App delivery list, derive per-repository selected summaries, and
 fetch one supported missing delivery. A typed transaction retains that API
 delivery audit and normalized pull-request observation without manufacturing a
-webhook receipt. No leased controller invokes the path, and evidence-citing
-closure for content-repair gaps is not yet implemented. Scheduled
-reconciliation, the other observation families, and retention pruning remain.
+webhook receipt. Evidence-citing closure for content-repair gaps is implemented.
+A single App-wide leased controller now schedules and invokes the bounded list
+acquisition, retaining only operational outcome and retry state; it does not yet
+apply selections to repository repair/checkpoint commands. Per-repository
+scheduled reconciliation, the other observation families, and retention
+pruning remain.
 The source adapter stays unregistered until that complete path is executable.
 
 ## Design
@@ -216,9 +219,11 @@ atomically appends the successor checkpoint and terminal repair observation,
 leaving the original gap intact. The store bounds each accepted audit to 100
 pages and 10,000 deliveries and verifies the entire chain on reopen. Bounded
 GitHub API list/detail acquisition and receipt-free normalized API repair are
-also implemented; scheduling, leases, and automatic recovery attempts remain
-outside these short transactions. A delivery-content repair requires exact
-post-gap API-audit citations as well as a complete interval audit.
+also implemented. The App-wide acquisition now runs behind one durable
+completion-relative schedule and recoverable ten-minute lease, still outside
+these short transactions. Automatic per-repository application and recovery
+attempts remain. A delivery-content repair requires exact post-gap API-audit
+citations as well as a complete interval audit.
 
 ### Reconciliation cycle
 
@@ -261,8 +266,13 @@ supported delivery, requires exact list/detail identity agreement, reuses the
 webhook allowlist, and returns a response-digest-bound repair input. The typed
 repair transaction refuses to replace an already observed direct receipt and
 retains API audit plus normalized observation as separate causally linked
-records. Gap closure from those records and the lease owner remain
-unimplemented.
+records. Gap closure from those records is implemented. The
+`runGitHubDeliveryAuditOnce` operational controller owns one configured App,
+claims a fixed ten-minute lease, performs network acquisition with no SQLite
+writer held, and records only the bounded acquisition outcome, source boundary,
+retry instruction, and schedule counters. Those fields are not a repository
+source checkpoint. Applying a complete selection or incomplete acquisition to
+the typed per-repository coverage commands remains unimplemented.
 
 ADR-0058 fixes healthy repository reconciliation at a 15-minute default and App
 delivery audit at a 5-minute default. Both are completion-relative
@@ -374,15 +384,17 @@ complete coverage.
   implements App-JWT, cursor-paginated delivery-list acquisition, safe
   per-repository selection, and bounded selected-delivery retrieval. The target
   store retains a missing-receipt API audit and normalized pull-request
-  observation. None of these is the scheduled controller or full observation
-  adapter described here.
+  observation. `src/github/delivery-controller.ts` now supplies the leased
+  App-wide operational schedule around list acquisition, but does not yet apply
+  a selection to the full observation adapter.
 - `src/github/webhook.ts`, `src/github/ingress.ts`, and `src/control/store.ts`
   implement the exact-body verifier/normalizer, injectable bounded router, and
   trusted post-authentication pull-request transaction. The router remains
   disabled in the default app and must not be treated as proof that delivery
-  detail repair, scheduled audit, or retention enforcement exists. The target
-  store does implement typed checkpoint, gap, and repair persistence after a
-  deterministic controller has completed acquisition.
+  detail repair orchestration or retention enforcement exists. The target store
+  does implement typed checkpoint, gap, and repair persistence after a
+  deterministic controller has completed acquisition; the operational audit
+  schedule does not invoke those commands yet.
 - Follow the
   [required-check ruleset runbook](required-check-ruleset-operations.md) only
   when the adapter is ready for its real-repository acceptance test.

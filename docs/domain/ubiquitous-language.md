@@ -1001,6 +1001,17 @@ decide admission readiness.
 **Avoid:** Core agent; snapshot authority; RepositoryController; polling worker.
 ([ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md))
 
+#### GitHub reconciliation controller
+
+The deterministic coordinator for the observer App's leased delivery audit and
+independently leased repository source reads. Its schedule and acquisition
+outcomes are operational state; only separate typed observations, checkpoints,
+and gaps establish durable source evidence or coverage.
+
+**Avoid:** GitHub agent; webhook ingress; source checkpoint; delivery worker.
+([ADR-0057](../adr/0057-require-webhook-ingress-for-github-observation.md),
+[ADR-0058](../adr/0058-bound-github-observation-recovery-and-retention.md))
+
 #### RepositoryController
 
 The single durable deterministic coordinator for one enrolled repository,

@@ -136,7 +136,7 @@ invalid:
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
   "operatorPrincipalId": "0198b0a6-c200-7abc-8def-0123456789ac",
   "registryVersion": 18,
-  "schemaVersion": 7
+  "schemaVersion": 8
 }
 ```
 
@@ -160,7 +160,7 @@ The integrity observation and event payload have this exact shape:
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
   "registryVersion": 18,
   "result": "ok",
-  "schemaVersion": 7
+  "schemaVersion": 8
 }
 ```
 
@@ -274,9 +274,11 @@ the prior enrollment, subjects, revisions, sources, causal links, output order,
 result, and retention deadline. The bounded router can connect the pure
 verifier to this command when explicitly mounted with a lifecycle-owned store,
 but the default app does not mount it. This slice does not implement production
-listener/configuration lifecycle, scheduling, automatic gap creation,
-or durable-detail pruning. Typed delivery-audit checkpoint, gap, and repair
-commands are specified below; no controller invokes them yet.
+listener/configuration lifecycle, automatic repository application/gap
+creation, or durable-detail pruning. The App-wide operational acquisition
+schedule is implemented separately; typed delivery-audit checkpoint, gap, and
+repair commands are specified below, but that controller does not invoke them
+yet.
 
 ### App delivery-list acquisition
 
@@ -378,9 +380,39 @@ revision; `unavailable` uses `fluent-system/github-observer` with no invented
 GitHub revision. Replay is bound to the complete inspection for 30 days.
 Startup re-derives command and inspection digests and verifies enrollment,
 source distinction, output order, causation, result, and retention. No outcome
-changes enrollment; only `active` is eligible input to the future delivery-
-audit controller. `githubInstallationReconciliation(repositoryId, appId)` is a
+changes enrollment; only `active` is eligible input to the delivery-audit
+controller's future per-repository application step.
+`githubInstallationReconciliation(repositoryId, appId)` is a
 read-only lookup of the latest validated outcome for that exact pair.
+
+### App delivery-audit operational controller
+
+Schema v8 adds the singleton `github_delivery_audit_state` for the App-wide
+half of the GitHub reconciliation controller. The first claim binds one
+positive numeric App ID for the database lineage. A different App cannot reuse
+the schedule. Healthy cadence defaults to 300 seconds and accepts only 60–900
+seconds. `claimGitHubDeliveryAudit(appId, interval)` claims one UUIDv7 run for a
+fixed 600 seconds, reports an unexpired owner without overlap, and recovers an
+expired lease. Claiming and completion are short SQLite transactions; the
+bounded GitHub list request runs between them with no SQLite writer held.
+
+`completeGitHubDeliveryAudit(input)` distinguishes operational run status from
+source acquisition outcome. `completed` requires exactly one outcome:
+`complete`, `source-unavailable`, `pagination-incomplete`,
+`request-budget-exhausted`, `unsupported-relevant-delivery`, or
+`normalization-failed`. `controller-error` carries no invented source outcome.
+Only `complete` advances the retained App acquisition boundary. Any other
+completion retries after 1, then 5, then 15 minutes; a later exact GitHub
+`Retry-After` or rate-limit reset wins. A complete result resets the streak and
+schedules from completion. Startup validates App identity, canonical times,
+lease duration, outcome/status linkage, boundary linkage, and monotonic
+counters.
+
+`runGitHubDeliveryAuditOnce` joins the claim, the bounded App delivery-list
+client, and completion bookkeeping. Its operational boundary is not a
+repository source checkpoint and cannot establish or close coverage. Automatic
+selection, missing-receipt repair, checkpoint/gap submission, production App
+credential loading, and process lifecycle remain later controller work.
 
 ### Pull-request-delivery coverage commands
 
@@ -547,6 +579,7 @@ source identity.
 | `core_snapshot_files` | Exact snapshot contents | Path, mode, Git object, size, content digest, optional canonical parsed live declaration, and raw bytes |
 | `core_active_snapshot` | Checked current-authority pointer | Singleton reference to the latest snapshot activation fact and transaction |
 | `core_poll_state` | CoreSourceController operational state | Singleton schedule v1; bounded healthy interval; due/prune times; outage streak; one expiring lease; last completion and monotonic counters |
+| `github_delivery_audit_state` | App-wide GitHub delivery-audit operational state | Singleton schedule v1; one bound App; 1–15 minute healthy cadence; fixed ten-minute lease; bounded incomplete retry; last complete acquisition boundary and completion counters |
 | `projection_generations` | Immutable read-model build metadata | Registered versions, source/output digests, source watermark, evaluation/build time, row count, and invariant result |
 | `projection_heads` | Active-generation pointers | One head per registered projection; atomically references one validated generation |
 | `projection_subject_lookup` | Subject lookup rows | Generation-scoped stable subject and first durable creation-record identity plus information class/scope |

@@ -128,7 +128,7 @@ does not itself enroll the repository in the fleet.
 
 ## Phase 4 — Observe GitHub without impersonating workers (large)
 
-- Registry v18 and schema v7 implement the first internal, enrollment-bound
+- Registry v18 and schema v8 implement the first internal, enrollment-bound
   post-authentication transaction for an allowlisted same-repository
   pull-request delivery. It writes a distinct receipt observation,
   pull-request observation, and audit event with exact replay, 30-day receipt
@@ -150,7 +150,11 @@ does not itself enroll the repository in the fleet.
   suspension, absence, mismatch, and unavailability without changing
   enrollment, and its typed command durably distinguishes source-backed access
   outcomes from Fluent-observed unavailability. Automatic gap creation,
-  scheduling, and leases remain.
+  per-repository application, and production credentials remain. The App-wide
+  delivery audit now has one durable completion-relative schedule, fixed
+  ten-minute recoverable lease, bounded 1/5/15-minute incomplete retry, and
+  explicit rate-limit precedence; this operational state does not itself claim
+  repository coverage.
 - The source-independent `conclusive-run-rate:v1` arithmetic evaluator is
   implemented under
   [ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md)
