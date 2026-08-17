@@ -221,6 +221,37 @@ A lease that expires (worker died) is not moved anywhere: the item stays
 records `lease.expired`. Nothing is lost, and nothing is retried behind your
 back.
 
+## Deployment (v1, decided 2026-08-17)
+
+Fluent v1 runs on **one operator host** and stays there deliberately:
+
+- The checkout, `/var/lib/fluent/{queue,control-plane}.db`, and every worker
+  client live on the same machine. MCP is stdio only; a worker started in an
+  Incus or other container *on that host* still works because the client
+  and `npm run mcp` share the machine.
+- The only credentials in the system are the operator's: the shell that
+  starts a client, `FLUENT_GITHUB_TOKEN`, and `FLUENT_APP_TOKEN` for the
+  operator surface. Fluent issues no worker credentials and trusts the
+  self-declared worker identity only as provenance, never as authorization
+  ([queue execution boundary](queue-execution-boundary.md)).
+- Anything with a listener — the operator surface, the Flue app — binds to
+  loopback and is reached over SSH or a private mesh (Tailscale or
+  equivalent), never exposed directly.
+- Feeder, `verify-artifacts`, and `backup` run from timers on the host
+  (units to follow; until then, run them by hand as above).
+
+**What is knowingly deferred, and what un-defers it.** Workers off the
+operator host need a network MCP transport (Streamable HTTP over TLS),
+operator-issued per-worker grants (scope, kinds, expiry, revocation), and
+leases bound to those grants — the server-bound worker sessions and grants of
+[ADR-0018](../adr/0018-bind-worker-sessions-and-verify-github-artifacts.md)
+and [ADR-0032](../adr/0032-route-work-with-operator-issued-grants.md). None
+of that is built, and nothing built so far assumes it. The trigger for
+building it is the first worker that must run on another machine; when that
+happens it gets its own ADR and slice, and the operator surface's shared
+token becomes per-operator auth at the same time. Until then, do not expose
+`npm run mcp` or the surface off-host.
+
 ## Keep the database safe
 
 ```bash

@@ -161,24 +161,30 @@ by hand:
   `show`. Add `queue -- events [--since <sequence>] [--repository …]` and/or
   `queue -- watch` that streams new events, so lease renewals, completions,
   proposals, and verifications are one command.
-- **Deployment story** (held for design discussion): systemd timers for
-  `seed-dogfood`, `verify-artifacts`, and `backup`; where the checkout, the
-  databases, and worker clients live; how upgrades restart MCP servers.
+- **Deployment story**: decided 2026-08-17 and recorded in the runbook's
+  [Deployment (v1)](../design/queue-operations.md#deployment-v1-decided-2026-08-17)
+  section — one operator host, stdio MCP, loopback listeners reached over
+  SSH or a private mesh, operator-only credentials; remote workers,
+  network MCP, and per-worker grants are knowingly deferred until the first
+  off-host worker is needed, at which point they get their own ADR. Timers
+  for `seed-dogfood`, `verify-artifacts`, and `backup` remain to be written.
 - **Operator surface**: decided in
   [ADR-0060](../adr/0060-bring-the-operator-surface-forward-as-a-read-first-inbox.md)
   and designed in [operator surface](../design/operator-surface.md) — a
   read-first inbox, repository board, and item page over the same store
   methods, with the CLI's operator mutations carrying stale-intent
   preconditions; local-first behind `FLUENT_APP_TOKEN`; server-rendered per
-  the `frostyard-design` skill, which must be synchronized from
-  `frostyard/core` into `.agents/skills` before UI code lands.
+  the `frostyard-design` skill, synchronized from `frostyard/core` by
+  [core#85](https://github.com/frostyard/core/pull/85) →
+  [fluent#4](https://github.com/frostyard/fluent/pull/4).
   [frostyard/fluent#1](https://github.com/frostyard/fluent/issues/1) and
   [#2](https://github.com/frostyard/fluent/issues/2) are its prerequisites.
 - **Enrolling Fluent itself** so its own maintenance items are claimable
   under `FLUENT_CONTROL_DB`: open as
   [core#84](https://github.com/frostyard/core/pull/84) (declaration) and
   [fluent#3](https://github.com/frostyard/fluent/pull/3) (governance
-  surface).
+  surface), both merged 2026-08-17; `frostyard/fluent` reconciled as
+  `enrolled` at Core `8f274e2`.
 
 
 ## Later / ideas
