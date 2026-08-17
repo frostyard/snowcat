@@ -148,3 +148,22 @@ export interface WorkEvent {
   payload: Record<string, unknown>;
   occurredAt: string;
 }
+
+/**
+ * One ledger event joined with the observable identity of the item it
+ * belongs to. Read across items by `QueueStore.eventsSince`; never carries a
+ * lease token, and event payloads never do either.
+ */
+export interface ObservedWorkEvent extends WorkEvent {
+  repository: string;
+  kind: string;
+  sourceRef?: string;
+  /** The item's current logical status at read time, not at event time. */
+  status: WorkStatus;
+}
+
+export interface EventsSinceOptions {
+  repository?: string;
+  /** 1–500 events per page; defaults to 100. */
+  limit?: number;
+}

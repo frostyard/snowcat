@@ -7,6 +7,10 @@ import { QueueStore, queueDatabasePath } from "./store.ts";
 import { DEFAULT_DOGFOOD_COOLDOWN_SECONDS, enqueueDogfoodBatch, enqueueTestingGap } from "./seeds.ts";
 import { withoutLeaseToken, workStatuses, type WorkStatus } from "./types.ts";
 
+const DEFAULT_WATCH_INTERVAL_SECONDS = 10;
+const MIN_WATCH_INTERVAL_SECONDS = 2;
+const WATCH_PAGE_SIZE = 500;
+
 const queue = new QueueStore(queueDatabasePath(), undefined, queueStoreOptionsFromEnvironment());
 
 try {
@@ -72,6 +76,18 @@ try {
     const item = queue.get(id);
     if (!item) throw new Error(`work item not found: ${id}`);
     print({ item: withoutLeaseToken(item), events: queue.events(id) });
+  } else if (command === "events") {
+    const flags = parseFlags(args, ["since", "repository", "limit"]);
+    const since = flags.since === undefined ? 0 : parseNonNegativeInteger(flags.since, "since");
+    const limit = flags.limit === undefined ? undefined : parseNonNegativeInteger(flags.limit, "limit");
+    if (limit !== undefined && (limit < 1 || limit > 500)) throw new Error("limit must be between 1 and 500");
+    print(queue.eventsSince(since, { repository: flags.repository, limit }));
+  } else if (command === "watch") {
+    const flags = parseFlags(args, ["since", "repository", "interval"]);
+    const interval = flags.interval === undefined ? DEFAULT_WATCH_INTERVAL_SECONDS : parseNonNegativeInteger(flags.interval, "interval");
+    if (interval < MIN_WATCH_INTERVAL_SECONDS) throw new Error(`interval must be at least ${MIN_WATCH_INTERVAL_SECONDS} seconds`);
+    const since = flags.since === undefined ? queue.metadata().lastEventSequence : parseNonNegativeInteger(flags.since, "since");
+    await watchEvents(since, flags.repository, interval);
   } else if (command === "verify-artifacts") {
     const flags = parseFlags(args, ["repository", "limit"]);
     const limit = flags.limit === undefined ? undefined : parseNonNegativeInteger(flags.limit, "limit");
@@ -98,6 +114,8 @@ try {
     console.error("       npm run queue -- cancel <work-item-id> <reason>");
     console.error("       npm run queue -- list [proposed|queued|claimed|completed|blocked|cancelled] [--repository <owner/repo>] [--kind <kind>] [--limit <1-100>]");
     console.error("       npm run queue -- show <work-item-id>");
+    console.error("       npm run queue -- events [--since <sequence>] [--repository <owner/repo>] [--limit <1-500>]");
+    console.error("       npm run queue -- watch [--since <sequence>] [--repository <owner/repo>] [--interval <seconds>]");
     console.error("       npm run queue -- verify-artifacts [--repository <owner/repo>] [--limit <1-100>]");
     console.error("       npm run queue -- metadata");
     console.error("       npm run queue -- backup <new-file-path>");
@@ -109,6 +127,51 @@ try {
   process.exitCode = 1;
 } finally {
   queue.close();
+}
+
+/**
+ * Read-only tail of the event ledger: prints one JSON line per event after
+ * `since`, polls every `intervalSeconds`, and returns cleanly on SIGINT or
+ * SIGTERM so the store is closed. It is an operator convenience, not a worker
+ * surface; nothing it prints carries a lease token.
+ */
+async function watchEvents(since: number, repository: string | undefined, intervalSeconds: number): Promise<void> {
+  let cursor = since;
+  let stopped = false;
+  let wake: (() => void) | undefined;
+  const stop = () => {
+    stopped = true;
+    wake?.();
+  };
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  try {
+    while (!stopped) {
+      let page: ReturnType<typeof queue.eventsSince>;
+      do {
+        page = queue.eventsSince(cursor, { repository, limit: WATCH_PAGE_SIZE });
+        for (const event of page) {
+          process.stdout.write(`${JSON.stringify(event)}\n`);
+          cursor = event.sequence;
+        }
+      } while (page.length === WATCH_PAGE_SIZE && !stopped);
+      if (stopped) break;
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          wake = undefined;
+          resolve();
+        }, intervalSeconds * 1000);
+        wake = () => {
+          clearTimeout(timer);
+          wake = undefined;
+          resolve();
+        };
+      });
+    }
+  } finally {
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+  }
 }
 
 function parseStatus(value: string | undefined): WorkStatus | undefined {

@@ -73,6 +73,9 @@ npm run queue -- defer <work-item-id> <reason>
 npm run queue -- requeue <work-item-id> <reason>
 npm run queue -- cancel <work-item-id> <reason>
 npm run queue -- list [proposed|queued|claimed|completed|blocked|cancelled]
+npm run queue -- show <work-item-id>
+npm run queue -- events [--since <sequence>] [--repository <owner/repo>] [--limit <1-500>]
+npm run queue -- watch [--since <sequence>] [--repository <owner/repo>] [--interval <seconds>]
 ```
 
 `seed-testing-gap` creates exactly one read-only discovery item that may create
@@ -94,6 +97,12 @@ definition or history. The item becomes logical `proposed`, is no longer
 claimable, records `work.deferred` with the operator reason, and may later pass
 through the normal `approve` or `reject` review path. It is not exposed through
 MCP.
+
+`events` and `watch` read the global event ledger across items. `events`
+prints one page of events after a sequence, oldest first; `watch` polls the
+same read and prints one JSON line per new event until interrupted. Both are
+local read-only operator surfaces backed by `QueueStore.eventsSince` and are
+not exposed through MCP.
 
 `requeue` and `cancel` are operator-only exits for `blocked` work. Requeue
 clears the block result and returns the admitted item to claimable `queued`
@@ -204,7 +213,21 @@ state with a `work.requeued` event. Cancel stores the operator reason in
     `metadata` MUST report the resolved database path, `database_id`,
     schema version, creation time, item and event counts, and the last event
     sequence, without exposing any lease token.
-28. `backup <path>` MUST refuse `:memory:`, the live database path, and any
+28. `QueueStore.eventsSince(sequence, { repository?, limit? })` MUST return
+    events whose global `work_events.sequence` is strictly greater than
+    `sequence`, oldest first, each joined with its item's `repository`, `kind`,
+    `sourceRef`, and current logical status, MUST accept only a non-negative
+    safe-integer `sequence` and a `limit` of 1–500 (default 100), and MUST
+    NOT return a lease token in any field. `events [--since <sequence>]
+    [--repository <owner/repo>] [--limit <1-500>]` MUST print one such page
+    as JSON, and `watch [--since <sequence>] [--repository <owner/repo>]
+    [--interval <seconds>]` MUST poll the same read — starting at the ledger
+    tail unless `--since` is given, every 10 seconds by default and never
+    more often than every 2 — printing one JSON line per new event in
+    sequence order until interrupted, and MUST close the store on `SIGINT` or
+    `SIGTERM`. Both are read-only observation surfaces and MUST NOT be exposed
+    through MCP.
+29. `backup <path>` MUST refuse `:memory:`, the live database path, and any
     existing path; MUST reserve the new file with mode `0600` before writing;
     MUST copy a consistent snapshot with `VACUUM INTO` on the live connection;
     and MUST then re-open the copy read-only, pass `PRAGMA quick_check`,
@@ -215,13 +238,13 @@ state with a `work.requeued` event. Cancel stores the operator reason in
     file, and creation time. The manifest MUST NOT contain lease tokens; the
     backup file does, and MUST be stored with the same access controls as the
     live database.
-29. `verify-backup <path>` MUST re-derive the manifest from the file alone
+30. `verify-backup <path>` MUST re-derive the manifest from the file alone
     and MUST fail for a missing file, a failed `quick_check`, a schema version
     other than the supported one, or a missing `database_id`. Verification
     MUST precede restore: opening a backup with `QueueStore` switches it to
     WAL mode and changes its digest. Restore is an operator file operation into
     a new path; no queue command overwrites a live database.
-30. An imported root MUST be created as `proposed` (`admitted = 0`) with a
+31. An imported root MUST be created as `proposed` (`admitted = 0`) with a
     `sourceRef`, in one transaction with every other root of the same import,
     on an opted-in repository. A candidate whose `sourceRef` already exists for
     the repository — in any status, including `completed` and `cancelled` —
@@ -230,7 +253,7 @@ state with a `work.requeued` event. Cancel stores the operator reason in
     `work.proposed` with the `sourceRef`, and MUST NOT create anything when the
     source listing is missing, unavailable, non-200, or contains a malformed
     entry.
-31. `import-issues <owner/repo> --label <label> [--priority <n>]` MUST list
+32. `import-issues <owner/repo> --label <label> [--priority <n>]` MUST list
     only open issues carrying exactly that label through the GitHub REST API,
     following page-size pagination up to a bounded page count and reporting
     truncation, MUST drop pull requests from the listing, and MUST accept an
@@ -239,12 +262,12 @@ state with a `work.requeued` event. Cancel stores the operator reason in
     `issue-resolution` whose `allowedActions` include `open-pr`, whose
     instructions quote the issue body as untrusted GitHub-authored context
     (bounded to 16,000 characters), and whose priority is operator-supplied.
-32. The dogfood feeder MUST accept a no-finding cooldown (default 24 hours,
+33. The dogfood feeder MUST accept a no-finding cooldown (default 24 hours,
     `--cooldown-hours 0` disables it). A kind whose most recent root in the
     repository is `completed` within the window and proposed no child MUST be
     skipped and reported as cooled; a kind whose latest root proposed a child
     or is older than the window is offered again once its lineage is inactive.
-33. `complete_work` MUST verify every `issue` and `pull-request` artifact
+34. `complete_work` MUST verify every `issue` and `pull-request` artifact
     against the GitHub API before the completion transaction, using the item's
     repository. When GitHub answers that the artifact does not exist, resolves
     to another location or number, targets or belongs to another repository,
@@ -262,7 +285,7 @@ state with a `work.requeued` event. Cancel stores the operator reason in
     be accepted as `unverified` naming the missing token. The MCP artifact
     schema MUST reject a worker-supplied `verification` as an unknown key
     rather than strip it.
-34. `verify-artifacts [--repository <owner/repo>] [--limit <1-100>]` MUST
+35. `verify-artifacts [--repository <owner/repo>] [--limit <1-100>]` MUST
     re-check completed items' issue and pull-request artifacts that are
     `unverified` or verified but still `open`, MUST record each changed
     observation through `recordArtifactVerification` with an
@@ -271,13 +294,13 @@ state with a `work.requeued` event. Cancel stores the operator reason in
     `rejected:` reason rather than delete it, and MUST leave the previous
     verification in place when GitHub is unavailable. Merged and closed
     artifacts are terminal and are not re-checked.
-35. `delivery` MUST be derived on read from a completed item's pull-request
+36. `delivery` MUST be derived on read from a completed item's pull-request
     artifacts, never stored separately: `merged` if any is merged, otherwise
     `unverified` if any lacks a verified state, otherwise `open` if any is
     open, otherwise `closed`; `none` when no pull request was reported. Issues,
     commits, and reports do not constitute delivery.
 
-36. `QueueStore` MUST accept an optional claim-eligibility hook
+37. `QueueStore` MUST accept an optional claim-eligibility hook
     `(repository) => boolean` applied on top of repository opt-in. With a
     hook, a claim MUST consider only candidate repositories the hook accepts
     (asked once per claim, per candidate repository), MUST keep the single-row
@@ -295,9 +318,9 @@ state with a `work.requeued` event. Cancel stores the operator reason in
 | Artifact | Derivation |
 | --- | --- |
 | SQLite schema | Created and upgraded by `QueueStore`'s migration ladder from this work-item model; admission triggers and `user_version` per rules 20–21 |
-| Backup manifest | Derived by `backup` and re-derived by `verify-backup` per rules 28–29 |
-| Issue import | `import-issues` maps labeled open GitHub issues to proposed `issue-resolution` roots per rules 30–31 |
-| Artifact verification | Completion-time and `verify-artifacts` observations per rules 33–35; `delivery` derived per rule 35 |
+| Backup manifest | Derived by `backup` and re-derived by `verify-backup` per rules 29–30 |
+| Issue import | `import-issues` maps labeled open GitHub issues to proposed `issue-resolution` roots per rules 31–32 |
+| Artifact verification | Completion-time and `verify-artifacts` observations per rules 34–36; `delivery` derived per rule 36 |
 | MCP worker behavior | Portable `work-fluent-queue` skill constrained by this contract |
 | Testing-gap seed | Deterministic CLI instance of this contract |
 

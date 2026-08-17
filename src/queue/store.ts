@@ -11,7 +11,9 @@ import {
   type ArtifactVerification,
   type ClaimInput,
   type CompletionInput,
+  type EventsSinceOptions,
   type FollowUpInput,
+  type ObservedWorkEvent,
   type ProposedRootInput,
   type SeedWorkInput,
   type WorkArtifact,
@@ -29,6 +31,8 @@ const MAX_FOLLOW_UPS = 10;
 const MAX_LINEAGE_DEPTH = 4;
 const BUSY_TIMEOUT_MS = 5000;
 const MAX_SOURCE_REF_LENGTH = 512;
+const DEFAULT_EVENTS_PAGE = 100;
+const MAX_EVENTS_PAGE = 500;
 
 /**
  * Schema version recorded in SQLite `PRAGMA user_version`. It equals the length
@@ -736,15 +740,49 @@ export class QueueStore {
 
   events(id: string): WorkEvent[] {
     return (this.db.prepare("SELECT * FROM work_events WHERE work_item_id = ? ORDER BY sequence").all(id) as Row[]).map(
-      (row) => ({
-        sequence: Number(row.sequence),
-        workItemId: String(row.work_item_id),
-        type: String(row.event_type),
-        actor: String(row.actor),
-        payload: parseJson<Record<string, unknown>>(row.payload_json, {}),
-        occurredAt: String(row.occurred_at),
-      }),
+      decodeWorkEvent,
     );
+  }
+
+  /**
+   * Ledger events across items, strictly after `sequence` and oldest first,
+   * each joined with its item's observable identity and current status.
+   * `sequence` is the global `work_events.sequence`, so a reader that keeps the
+   * last value it saw can tail the ledger without missing or repeating events.
+   * The join carries no lease field, and payloads never contain one.
+   */
+  eventsSince(sequence: number, options: EventsSinceOptions = {}): ObservedWorkEvent[] {
+    if (!Number.isSafeInteger(sequence) || sequence < 0) throw new Error("sequence must be a non-negative integer");
+    if (options.repository !== undefined) validateRepository(options.repository);
+    const limit = options.limit ?? DEFAULT_EVENTS_PAGE;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_EVENTS_PAGE) {
+      throw new Error(`limit must be between 1 and ${MAX_EVENTS_PAGE}`);
+    }
+    const clauses = ["e.sequence > ?"];
+    const params: SQLInputValue[] = [sequence];
+    if (options.repository !== undefined) {
+      clauses.push("w.repository = ?");
+      params.push(options.repository);
+    }
+    params.push(limit);
+    const rows = this.db
+      .prepare(
+        `SELECT e.sequence, e.work_item_id, e.event_type, e.actor, e.payload_json, e.occurred_at,
+                w.repository, w.kind, w.source_ref, w.status, w.admitted
+         FROM work_events e
+         JOIN work_items w ON w.id = e.work_item_id
+         WHERE ${clauses.join(" AND ")}
+         ORDER BY e.sequence
+         LIMIT ?`,
+      )
+      .all(...params) as Row[];
+    return rows.map((row) => ({
+      ...decodeWorkEvent(row),
+      repository: String(row.repository),
+      kind: String(row.kind),
+      sourceRef: row.source_ref == null ? undefined : String(row.source_ref),
+      status: decodeStatus(row),
+    }));
   }
 
   private migrate(): void {
@@ -904,6 +942,21 @@ export class QueueStore {
   }
 }
 
+function decodeWorkEvent(row: Row): WorkEvent {
+  return {
+    sequence: Number(row.sequence),
+    workItemId: String(row.work_item_id),
+    type: String(row.event_type),
+    actor: String(row.actor),
+    payload: parseJson<Record<string, unknown>>(row.payload_json, {}),
+    occurredAt: String(row.occurred_at),
+  };
+}
+
+function decodeStatus(row: Row): WorkStatus {
+  return row.status === "queued" && Number(row.admitted) === 0 ? "proposed" : (String(row.status) as WorkStatus);
+}
+
 function decodeWorkItem(row: Row): WorkItem {
   return {
     id: String(row.id),
@@ -917,7 +970,7 @@ function decodeWorkItem(row: Row): WorkItem {
     allowedActions: parseJson<AllowedAction[]>(row.allowed_actions_json, []),
     delegableActions: parseJson<AllowedAction[]>(row.delegable_actions_json, []),
     priority: Number(row.priority),
-    status: row.status === "queued" && Number(row.admitted) === 0 ? "proposed" : (String(row.status) as WorkStatus),
+    status: decodeStatus(row),
     createdBy: String(row.created_by),
     sourceRef: row.source_ref == null ? undefined : String(row.source_ref),
     createdAt: String(row.created_at),

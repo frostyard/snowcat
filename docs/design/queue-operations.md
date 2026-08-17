@@ -184,17 +184,41 @@ already-open process refuses its next write once the schema moves.
 
 ## Watch the work
 
+Every claim, lease renewal, completion, proposal, block, release, operator
+decision, and artifact verification is an event in one global ledger. Tail it
+instead of polling `show` in a shell loop:
+
+```bash
+npm run --silent queue -- watch                                 # one JSON line per new event, until Ctrl-C
+npm run --silent queue -- watch --repository frostyard/updex --interval 5
+npm run --silent queue -- events                                # oldest 100 events, as JSON
+npm run --silent queue -- events --since 1240 --limit 500       # everything after sequence 1240
+npm run --silent queue -- events --repository frostyard/updex
+```
+
+`watch [--since <sequence>] [--repository <owner/repo>] [--interval <seconds>]`
+starts at the current ledger tail (or `--since`) and polls every 10 seconds by
+default (minimum 2). `events [--since <sequence>] [--repository <owner/repo>]
+[--limit <1-500>]` prints one page, oldest first. Each event carries its
+`sequence`, `workItemId`, `type`, `actor`, `payload`, and `occurredAt`, joined
+with the item's `repository`, `kind`, `sourceRef`, and *current* `status`.
+Keep the last `sequence` you saw and pass it back as `--since` to resume
+without gaps or repeats. Both are read-only observation surfaces; neither is an
+MCP tool.
+
+For state rather than history:
+
 ```bash
 npm run --silent queue -- list claimed                          # what is leased right now
 npm run --silent queue -- list blocked                          # needs you
 npm run --silent queue -- list completed --repository frostyard/updex --limit 100
 npm run --silent queue -- list --kind issue-resolution          # any status, one kind
-npm run --silent queue -- show <id>                             # result, artifacts, verification, events
+npm run --silent queue -- show <id>                             # one item: result, artifacts, verification, events
 ```
 
 Filters: `list [status] [--repository <owner/repo>] [--kind <kind>]
 [--limit <1-100>]`. Statuses: `proposed`, `queued`, `claimed`, `completed`,
-`blocked`, `cancelled`. Lease tokens never appear in any listing.
+`blocked`, `cancelled`. Lease tokens never appear in any listing or event.
 
 Every completed item shows `delivery`: `none` (no pull request reported),
 `unverified` (GitHub could not be asked at completion time), `open`, `closed`,

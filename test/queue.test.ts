@@ -1030,6 +1030,104 @@ test("worker identities cannot use reserved principal namespaces", async () => {
   assert.equal(seed.createdBy, "operator:test");
 });
 
+test("eventsSince reads the ledger across items in global order with joined item fields and no lease token", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-queue-events-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/updex", true);
+  queue.setRepositoryEnabled("frostyard/lodge", true);
+
+  queue.enqueueSeed({
+    repository: "frostyard/updex",
+    kind: "test-implementation",
+    objective: "Add the missing retry test.",
+    instructions: "Add the test and open a pull request.",
+    acceptanceCriteria: ["The pull request is open."],
+    allowedActions: ["read", "write", "run-tests", "open-pr"],
+    delegableActions: [],
+    createdBy: "operator:test",
+  });
+  const { created: [lodge] } = queue.enqueueProposedRoots("frostyard/lodge", [
+    {
+      kind: "issue-resolution",
+      objective: "Resolve lodge#7.",
+      instructions: "Read the issue.",
+      acceptanceCriteria: ["A pull request closes lodge#7."],
+      allowedActions: ["read", "write", "open-pr"],
+      delegableActions: [],
+      createdBy: "operator:import-issues",
+      sourceRef: "https://github.com/frostyard/lodge/issues/7",
+    },
+  ]);
+  const claimed = queue.claim({ worker: "claude:updex:events", repository: "frostyard/updex" })!;
+  queue.heartbeat(claimed.id, claimed.leaseToken!, "claude:updex:events", 120);
+  queue.approve(lodge!.id, "operator:test");
+  const pullRequest = "https://github.com/frostyard/updex/pull/9";
+  queue.complete({
+    id: claimed.id,
+    leaseToken: claimed.leaseToken!,
+    worker: "claude:updex:events",
+    result: { summary: "Done.", evidence: ["npm test passed."], artifacts: [{ kind: "pull-request", url: pullRequest }] },
+    followUps: [],
+  });
+  queue.recordArtifactVerification(
+    claimed.id,
+    pullRequest,
+    { status: "verified", verifiedAt: "2026-08-17T00:00:00.000Z", number: 9, state: "open", headSha: "abc" },
+    "operator:verify",
+  );
+
+  assert.throws(() => queue.eventsSince(-1), /non-negative/);
+  assert.throws(() => queue.eventsSince(0, { limit: 0 }), /between 1 and 500/);
+  assert.throws(() => queue.eventsSince(0, { limit: 501 }), /between 1 and 500/);
+
+  const all = queue.eventsSince(0);
+  assert.deepEqual(
+    all.map((event) => [event.type, event.repository]),
+    [
+      ["work.queued", "frostyard/updex"],
+      ["work.proposed", "frostyard/lodge"],
+      ["work.claimed", "frostyard/updex"],
+      ["lease.renewed", "frostyard/updex"],
+      ["work.approved", "frostyard/lodge"],
+      ["work.completed", "frostyard/updex"],
+      ["artifact.verified", "frostyard/updex"],
+    ],
+  );
+  for (let index = 1; index < all.length; index += 1) {
+    assert.ok(all[index]!.sequence > all[index - 1]!.sequence, "events are in ascending global sequence order");
+  }
+  const claimEvent = all.find((event) => event.type === "work.claimed")!;
+  assert.equal(claimEvent.workItemId, claimed.id);
+  assert.equal(claimEvent.kind, "test-implementation");
+  assert.equal(claimEvent.sourceRef, undefined);
+  assert.equal(claimEvent.status, "completed", "status is the item's current status, not the status at event time");
+  assert.equal(claimEvent.actor, "claude:updex:events");
+  assert.equal(typeof claimEvent.payload.leaseExpiresAt, "string");
+  const proposedEvent = all.find((event) => event.type === "work.proposed")!;
+  assert.equal(proposedEvent.kind, "issue-resolution");
+  assert.equal(proposedEvent.sourceRef, "https://github.com/frostyard/lodge/issues/7");
+  assert.equal(proposedEvent.status, "queued");
+  const serialized = JSON.stringify(all);
+  assert.equal(serialized.includes(claimed.leaseToken!), false, "no event carries the lease token");
+  assert.equal(/leaseToken/.test(serialized), false);
+
+  const later = queue.eventsSince(claimEvent.sequence);
+  assert.deepEqual(
+    later.map((event) => event.type),
+    ["lease.renewed", "work.approved", "work.completed", "artifact.verified"],
+  );
+  assert.deepEqual(queue.eventsSince(all.at(-1)!.sequence), []);
+  assert.deepEqual(
+    queue.eventsSince(0, { repository: "frostyard/lodge" }).map((event) => event.type),
+    ["work.proposed", "work.approved"],
+  );
+  assert.deepEqual(
+    queue.eventsSince(0, { limit: 2 }).map((event) => event.type),
+    ["work.queued", "work.proposed"],
+  );
+});
+
 type Row = Record<string, unknown>;
 
 function seedTestingGap(queue: QueueStore, repository: string) {

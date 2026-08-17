@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -348,4 +348,108 @@ test("operator CLI list filters by repository and kind, and show prints an item 
   const missing = run("show", "00000000-0000-4000-8000-000000000000");
   assert.notEqual(missing.status, 0);
   assert.match(missing.stderr, /not found/);
+});
+
+test("operator CLI events pages the ledger since a sequence and watch tails new events until interrupted", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-events-test-"));
+  const path = join(directory, "queue.db");
+  const queue = new QueueStore(path);
+  queue.setRepositoryEnabled("frostyard/updex", true);
+  queue.setRepositoryEnabled("frostyard/lodge", true);
+  const seed = (repository: string) =>
+    queue.enqueueSeed({
+      repository,
+      kind: "testing-gap-discovery",
+      objective: "Identify one testing gap.",
+      instructions: "Read and report only.",
+      acceptanceCriteria: ["One gap has concrete evidence."],
+      allowedActions: ["read"],
+      delegableActions: [],
+      createdBy: "operator:test",
+    });
+  const first = seed("frostyard/updex");
+  seed("frostyard/lodge");
+  const claimed = queue.claim({ worker: "claude:updex:events-cli", repository: "frostyard/updex" })!;
+  const env = stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path });
+  const run = (...args: string[]) =>
+    spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env,
+    });
+
+  const all = run("events");
+  assert.equal(all.status, 0, all.stderr);
+  const events = JSON.parse(all.stdout) as Array<{ sequence: number; type: string; repository: string; workItemId: string; status: string }>;
+  assert.deepEqual(
+    events.map((event) => [event.type, event.repository]),
+    [
+      ["work.queued", "frostyard/updex"],
+      ["work.queued", "frostyard/lodge"],
+      ["work.claimed", "frostyard/updex"],
+    ],
+  );
+  assert.equal(events[0]?.workItemId, first.id);
+  assert.equal(events[2]?.status, "claimed");
+  assert.equal(all.stdout.includes(claimed.leaseToken!), false);
+
+  const since = run("events", "--since", String(events[0]!.sequence));
+  assert.equal(since.status, 0, since.stderr);
+  assert.deepEqual(
+    (JSON.parse(since.stdout) as Array<{ type: string }>).map((event) => event.type),
+    ["work.queued", "work.claimed"],
+  );
+  const filtered = run("events", "--repository", "frostyard/lodge", "--limit", "1");
+  assert.equal(filtered.status, 0, filtered.stderr);
+  assert.deepEqual(
+    (JSON.parse(filtered.stdout) as Array<{ repository: string }>).map((event) => event.repository),
+    ["frostyard/lodge"],
+  );
+  const badLimit = run("events", "--limit", "501");
+  assert.notEqual(badLimit.status, 0);
+  assert.match(badLimit.stderr, /limit must be between 1 and 500/);
+  const badSince = run("events", "--since", "-1");
+  assert.notEqual(badSince.status, 0);
+  assert.match(badSince.stderr, /since must not be negative/);
+  const badInterval = run("watch", "--interval", "1");
+  assert.notEqual(badInterval.status, 0);
+  assert.match(badInterval.stderr, /interval must be at least 2 seconds/);
+
+  // watch tails the ledger after a sequence (default: the tail at startup) as one JSON line per event.
+  // Passing --since explicitly keeps the test independent of process start-up time.
+  const tail = queue.metadata().lastEventSequence;
+  const watcher = spawn(process.execPath, ["--import", "tsx", "src/queue/cli.ts", "watch", "--interval", "2", "--since", String(tail)], {
+    cwd: process.cwd(),
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  watcher.stdout.setEncoding("utf8");
+  watcher.stderr.setEncoding("utf8");
+  watcher.stdout.on("data", (chunk: string) => {
+    stdout += chunk;
+  });
+  watcher.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    watcher.once("exit", (code, signal) => resolve({ code, signal }));
+  });
+  const lodge = queue.claim({ worker: "claude:lodge:events-cli", repository: "frostyard/lodge" })!;
+  const deadline = Date.now() + 15_000;
+  while (!stdout.includes(lodge.id) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  watcher.kill("SIGTERM");
+  const outcome = await exited;
+  queue.close();
+
+  assert.equal(outcome.code, 0, `watch exited with ${outcome.code}/${outcome.signal}: ${stderr}`);
+  const lines = stdout.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as { type: string; workItemId: string; status: string });
+  assert.deepEqual(
+    lines.map((line) => [line.type, line.workItemId, line.status]),
+    [["work.claimed", lodge.id, "claimed"]],
+  );
+  assert.equal(stdout.includes(lodge.leaseToken!), false);
 });
