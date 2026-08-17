@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
 import {
@@ -54,6 +55,13 @@ test("installation inspection distinguishes absence, suspension, and permission 
     fetcher: async () => new Response(null, { status: 404 }),
   });
   assert.equal(missing.kind, "not-installed");
+  if (missing.kind === "not-installed") {
+    const emptyBodyDigest = createHash("sha256").update(new Uint8Array()).digest("hex");
+    assert.equal(
+      missing.responseDigest,
+      `sha256:${createHash("sha256").update(`404:${emptyBodyDigest}`).digest("hex")}`,
+    );
+  }
 
   const suspended = await inspectGitHubRepositoryInstallation({
     ...base,

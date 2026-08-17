@@ -415,10 +415,11 @@ missing webhook receipt or its exact-body digest.
 
 #### GitHub observer installation binding
 
-An authenticated GitHub source observation that the configured read-only
-observer App has one identified installation with current access to an
-immutable repository and the required permission/event profile. It is mutable
-source access, not Core authorization, repository enrollment, or a credential.
+A reconciled GitHub source relationship stating whether the configured
+read-only observer App has one identified installation with current access to
+an immutable repository and the required permission/event profile. Its source
+observation and reconciliation outcome are durable, but it remains mutable
+source access—not Core authorization, repository enrollment, or a credential.
 
 **Avoid:** enrolled App; repository authorization; installation token.
 ([ADR-0039](../adr/0039-use-typed-source-native-subject-identities.md),

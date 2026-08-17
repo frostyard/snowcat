@@ -63,6 +63,7 @@ import {
   type GitHubDeliveryAuditPayload,
   type GitHubDeliveryRecordedPayload,
   type GitHubDeliveryRepairRecordedPayload,
+  type GitHubInstallationReconciliationPayload,
   type GitHubPullRequestAction,
   type GitHubPullRequestObservationPayload,
   type GitHubSourceCheckpointPayload,
@@ -678,6 +679,51 @@ export interface GitHubPullRequestDeliveryRepairResult {
   transactionSequence: number;
 }
 
+export type GitHubInstallationInspection =
+  | {
+      kind: "observed";
+      appId: string;
+      repositoryId: string;
+      installationId: string;
+      access: "active" | "suspended" | "permission-mismatch";
+      targetType: "Organization" | "User";
+      repositorySelection: "all" | "selected";
+      responseDigest: string;
+      observedAt: string;
+    }
+  | {
+      kind: "not-installed";
+      appId: string;
+      repositoryId: string;
+      responseDigest: string;
+      observedAt: string;
+    }
+  | {
+      kind: "unavailable";
+      appId: string;
+      repositoryId: string;
+      observedAt: string;
+    };
+
+export interface GitHubInstallationReconciliationInput {
+  expectedLastTransactionSequence: number;
+  inspection: GitHubInstallationInspection;
+}
+
+export interface GitHubInstallationReconciliationResult {
+  repositoryId: string;
+  appId: string;
+  installationId: string | null;
+  access: GitHubInstallationReconciliationPayload["access"];
+  observationRecordId: string;
+  reconciliationRecordId: string;
+  eventRecordId: string;
+  sourceObservedAt: string;
+  recordedAt: string;
+  transactionPositions: readonly [0, 1, 2];
+  transactionSequence: number;
+}
+
 export interface GitHubSourceCheckpointInput {
   expectedLastTransactionSequence: number;
   runId: string;
@@ -1152,6 +1198,28 @@ export class ControlPlaneStore {
       if (payload.choice === "impose") resolved.set(payload.repositoryId, payload);
     }
     return resolved;
+  }
+
+  githubInstallationReconciliation(
+    repositoryId: string,
+    appId: string,
+  ): GitHubInstallationReconciliationPayload | undefined {
+    if (!/^github\.com:[1-9][0-9]{0,19}$/.test(repositoryId) || !/^[1-9][0-9]{0,19}$/.test(appId)) {
+      throw new Error("GitHub installation reconciliation lookup identity is invalid");
+    }
+    const row = this.db.prepare(
+      `SELECT payload_json FROM durable_occurrences
+       WHERE kind = 'github.installation-repository-reconciled'
+         AND subject_kind = 'github-repository' AND subject_id = ?
+         AND json_extract(payload_json, '$.appId') = ?
+       ORDER BY transaction_sequence DESC LIMIT 1`,
+    ).get(repositoryId, appId) as Row | undefined;
+    if (!row) return undefined;
+    const payload = parseJson(String(row.payload_json));
+    if (!recordKindRegistry["github.installation-repository-reconciled"].validatePayload(payload)) {
+      throw new Error("latest GitHub installation reconciliation is invalid");
+    }
+    return payload;
   }
 
   repositoryStatuses(): RepositoryStatus[] {
@@ -1662,6 +1730,134 @@ export class ControlPlaneStore {
       };
       this.insertReceipt(commandScope, "repository.record-github-identity", idempotencyKey, commandPayloadDigest, result, sequence);
       this.advanceControlMetadata(evaluationTime, sequence);
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  recordGitHubInstallationReconciliation(
+    input: GitHubInstallationReconciliationInput,
+  ): GitHubInstallationReconciliationResult {
+    assertExpectedSequence(input.expectedLastTransactionSequence);
+    const inspection = normalizeGitHubInstallationInspection(input.inspection);
+    const commandMaterial = {
+      expectedLastTransactionSequence: input.expectedLastTransactionSequence,
+      inspection,
+    } as unknown as JsonValue;
+    const commandPayloadDigest = sha256(canonicalJson(commandMaterial));
+    const inspectionDigest = sha256(canonicalJson(inspection as unknown as JsonValue));
+    const idempotencyKey =
+      `github-installation:${inspection.appId}:${inspection.repositoryId.slice("github.com:".length)}:${inspectionDigest.slice("sha256:".length)}`;
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.verifyExisting(this.applicationTables());
+      const metadata = this.metadata();
+      const commandScope = `database:${metadata.databaseLineageId}`;
+      const prior = this.commandReceipt(commandScope, "github.record-installation-reconciliation", idempotencyKey);
+      if (prior) {
+        if (String(prior.payload_digest) !== commandPayloadDigest) {
+          throw new Error("GitHub installation reconciliation identity was reused");
+        }
+        const result = parseGitHubInstallationReconciliationResult(parseJson(String(prior.result_json)));
+        this.db.exec("COMMIT");
+        return result;
+      }
+      this.assertGitHubCoverageWrite(input.expectedLastTransactionSequence, inspection.repositoryId);
+      const enrollment = this.db.prepare(
+        `SELECT record_id FROM durable_occurrences
+         WHERE kind = 'repository.enrolled' AND subject_id = ?
+         ORDER BY transaction_sequence DESC LIMIT 1`,
+      ).get(inspection.repositoryId) as Row | undefined;
+      if (!enrollment) throw new Error("GitHub installation reconciliation requires enrollment evidence");
+      const recordedAt = this.now();
+      if (recordedAt < metadata.controlTimeWatermark || recordedAt < inspection.observedAt) {
+        throw new Error("GitHub installation reconciliation time is invalid");
+      }
+      const observationRecordId = uuidV7(new Date(recordedAt));
+      const reconciliationRecordId = uuidV7(new Date(recordedAt));
+      const eventRecordId = uuidV7(new Date(recordedAt));
+      const payload = {
+        repositoryId: inspection.repositoryId,
+        appId: inspection.appId,
+        installationId: inspection.kind === "observed" ? inspection.installationId : null,
+        access: inspection.kind === "observed" ? inspection.access : inspection.kind,
+        targetType: inspection.kind === "observed" ? inspection.targetType : null,
+        repositorySelection: inspection.kind === "observed" ? inspection.repositorySelection : null,
+        responseDigest: inspection.kind === "unavailable" ? null : inspection.responseDigest,
+        sourceObservedAt: inspection.observedAt,
+        observationRecordId,
+        reconciliationRecordId,
+        eventRecordId,
+        recordedAt,
+      } satisfies GitHubInstallationReconciliationPayload;
+      if (!recordKindRegistry["github.installation-repository-reconciled"].validatePayload(payload)) {
+        throw new Error("GitHub installation reconciliation is outside its record contract");
+      }
+      const payloadJson = canonicalJson(payload);
+      const transaction = this.db.prepare(
+        `INSERT INTO control_transactions (
+           transaction_id, command_kind, command_schema_version, principal_kind,
+           principal_id, session_id, idempotency_key, payload_digest,
+           evaluation_time, recorded_at
+         ) VALUES (?, 'github.record-installation-reconciliation', 1, 'fluent-system',
+                   'github-observer', NULL, ?, ?, ?, ?)`,
+      ).run(
+        uuidV7(new Date(recordedAt)),
+        idempotencyKey,
+        commandPayloadDigest,
+        recordedAt,
+        recordedAt,
+      );
+      const sequence = Number(transaction.lastInsertRowid);
+      const sourceKind = inspection.kind === "unavailable" ? "fluent-system" : "github-api";
+      const sourceId = inspection.kind === "unavailable" ? "github-observer" : "api.github.com";
+      const sourceRevisionKind = inspection.kind === "unavailable" ? undefined : "github-installation-response-sha256";
+      const sourceRevisionValue = inspection.kind === "unavailable" ? undefined : inspection.responseDigest;
+      const scopeJson = canonicalJson({ deploymentId: metadata.databaseLineageId });
+      for (const occurrence of [
+        { recordId: observationRecordId, occurrenceType: "record" as const, kind: "github.installation-repository-observation", recordClass: "observation" as const, causationRecordId: String(enrollment.record_id) },
+        { recordId: reconciliationRecordId, occurrenceType: "record" as const, kind: "github.installation-repository-reconciled", recordClass: "fact" as const, causationRecordId: observationRecordId },
+        { recordId: eventRecordId, occurrenceType: "event" as const, kind: "github.installation-repository-reconciliation-recorded", causationRecordId: reconciliationRecordId },
+      ].map((value, transactionPosition) => ({ ...value, transactionPosition }))) {
+        this.insertOccurrence({
+          ...occurrence,
+          schemaVersion: 1,
+          subjectKind: "github-repository",
+          subjectId: inspection.repositoryId,
+          revisionKind: "github-installation-reconciliation-sha256",
+          revisionValue: inspectionDigest,
+          sourceKind,
+          sourceId,
+          sourceRevisionKind,
+          sourceRevisionValue,
+          informationClass: "organization",
+          informationScopeJson: scopeJson,
+          payloadJson,
+          payloadDigest: sha256(payloadJson),
+          correlationId: reconciliationRecordId,
+          transactionSequence: sequence,
+          recordedAt,
+        });
+      }
+      const result: GitHubInstallationReconciliationResult = {
+        repositoryId: inspection.repositoryId,
+        appId: inspection.appId,
+        installationId: payload.installationId,
+        access: payload.access,
+        observationRecordId,
+        reconciliationRecordId,
+        eventRecordId,
+        sourceObservedAt: inspection.observedAt,
+        recordedAt,
+        transactionPositions: [0, 1, 2],
+        transactionSequence: sequence,
+      };
+      this.insertReceipt(commandScope, "github.record-installation-reconciliation", idempotencyKey, commandPayloadDigest, result, sequence, addSeconds(recordedAt, 30 * 24 * 60 * 60));
+      this.advanceControlMetadata(recordedAt, sequence);
       this.db.exec("COMMIT");
       return result;
     } catch (error) {
@@ -5852,6 +6048,7 @@ export class ControlPlaneStore {
       | "repository.clear-operator-hold"
       | "github.record-pull-request-delivery"
       | "github.record-pull-request-delivery-repair"
+      | "github.record-installation-reconciliation"
       | "github.record-source-checkpoint"
       | "github.open-source-gap"
       | "github.repair-source-gap",
@@ -5865,6 +6062,7 @@ export class ControlPlaneStore {
       | RepositoryOperatorHoldResult
       | GitHubPullRequestDeliveryResult
       | GitHubPullRequestDeliveryRepairResult
+      | GitHubInstallationReconciliationResult
       | GitHubSourceCheckpointResult
       | GitHubSourceGapResult
       | GitHubSourceGapRepairResult,
@@ -6483,6 +6681,13 @@ export class ControlPlaneStore {
         ) {
           throw new Error(`GitHub pull-request delivery transaction shape is invalid: ${String(row.sequence)}`);
         }
+      } else if (row.command_kind === "github.record-installation-reconciliation") {
+        if (
+          typeof row.idempotency_key !== "string" ||
+          !/^github-installation:[1-9][0-9]{0,19}:[1-9][0-9]{0,19}:[0-9a-f]{64}$/.test(row.idempotency_key) ||
+          row.principal_kind !== "fluent-system" || row.principal_id !== "github-observer" ||
+          receiptCount !== 1 || !outputs.every((output) => output.payload_digest === outputs[0]!.payload_digest)
+        ) throw new Error(`GitHub installation reconciliation transaction shape is invalid: ${String(row.sequence)}`);
       } else if (
         row.command_kind === "github.record-source-checkpoint" ||
         row.command_kind === "github.open-source-gap" ||
@@ -6863,6 +7068,60 @@ export class ControlPlaneStore {
         ) {
           throw new Error(`repository GitHub reconciliation lineage mismatch: ${String(row.record_id)}`);
         }
+      }
+      if (
+        String(row.kind) === "github.installation-repository-observation" ||
+        String(row.kind) === "github.installation-repository-reconciled" ||
+        String(row.kind) === "github.installation-repository-reconciliation-recorded"
+      ) {
+        const installation = payload as GitHubInstallationReconciliationPayload;
+        const outputs = this.db.prepare(
+          "SELECT * FROM durable_occurrences WHERE transaction_sequence = ? ORDER BY transaction_position",
+        ).all(row.transaction_sequence!) as Row[];
+        const transaction = this.db.prepare(
+          "SELECT * FROM control_transactions WHERE sequence = ?",
+        ).get(row.transaction_sequence!) as Row | undefined;
+        const inspection: GitHubInstallationInspection = installation.access === "unavailable"
+          ? { kind: "unavailable", appId: installation.appId, repositoryId: installation.repositoryId, observedAt: installation.sourceObservedAt }
+          : installation.access === "not-installed"
+            ? { kind: "not-installed", appId: installation.appId, repositoryId: installation.repositoryId, responseDigest: installation.responseDigest!, observedAt: installation.sourceObservedAt }
+            : { kind: "observed", appId: installation.appId, repositoryId: installation.repositoryId, installationId: installation.installationId!, access: installation.access, targetType: installation.targetType!, repositorySelection: installation.repositorySelection!, responseDigest: installation.responseDigest!, observedAt: installation.sourceObservedAt };
+        const inspectionDigest = sha256(canonicalJson(inspection as unknown as JsonValue));
+        const expectedRecordId = String(row.kind) === "github.installation-repository-observation"
+          ? installation.observationRecordId
+          : String(row.kind) === "github.installation-repository-reconciled"
+            ? installation.reconciliationRecordId
+            : installation.eventRecordId;
+        const position = Number(row.transaction_position);
+        const expectedCausation = position === 0
+          ? this.db.prepare(
+              `SELECT record_id FROM durable_occurrences WHERE kind = 'repository.enrolled'
+               AND subject_id = ? AND transaction_sequence < ? ORDER BY transaction_sequence DESC LIMIT 1`,
+            ).get(installation.repositoryId, row.transaction_sequence!) as Row | undefined
+          : undefined;
+        const expectedCause = position === 0
+          ? String(expectedCausation?.record_id ?? "")
+          : position === 1 ? installation.observationRecordId : installation.reconciliationRecordId;
+        const sourceObserved = installation.access !== "unavailable";
+        const commandInput = {
+          expectedLastTransactionSequence: Number(row.transaction_sequence) - 1,
+          inspection,
+        };
+        if (
+          !transaction || transaction.command_kind !== "github.record-installation-reconciliation" ||
+          String(row.subject_kind) !== "github-repository" || String(row.subject_id) !== installation.repositoryId ||
+          String(row.record_id) !== expectedRecordId || String(row.revision_kind) !== "github-installation-reconciliation-sha256" ||
+          String(row.revision_value) !== inspectionDigest || String(row.correlation_id) !== installation.reconciliationRecordId ||
+          String(row.causation_record_id) !== expectedCause || String(row.recorded_at) !== installation.recordedAt ||
+          outputs.length !== 3 || !outputs.every((output) => String(output.payload_json) === String(row.payload_json)) ||
+          (sourceObserved
+            ? String(row.source_kind) !== "github-api" || String(row.source_id) !== "api.github.com" ||
+              String(row.source_revision_kind) !== "github-installation-response-sha256" ||
+              String(row.source_revision_value) !== installation.responseDigest
+            : String(row.source_kind) !== "fluent-system" || String(row.source_id) !== "github-observer" ||
+              row.source_revision_kind != null || row.source_revision_value != null) ||
+          String(transaction.payload_digest) !== sha256(canonicalJson(commandInput as unknown as JsonValue))
+        ) throw new Error(`GitHub installation reconciliation lineage mismatch: ${String(row.record_id)}`);
       }
       if (String(row.kind) === "github.delivery-receipt-observation") {
         const receipt = payload as GitHubDeliveryReceiptPayload;
@@ -7951,6 +8210,9 @@ export class ControlPlaneStore {
       if (commandKind === "github.record-pull-request-delivery-repair") {
         parseGitHubPullRequestDeliveryRepairResult(result);
       }
+      if (commandKind === "github.record-installation-reconciliation") {
+        parseGitHubInstallationReconciliationResult(result);
+      }
       if (commandKind === "github.record-source-checkpoint") parseGitHubSourceCheckpointResult(result);
       if (commandKind === "github.open-source-gap") parseGitHubSourceGapResult(result);
       if (commandKind === "github.repair-source-gap") parseGitHubSourceGapRepairResult(result);
@@ -7989,6 +8251,12 @@ export class ControlPlaneStore {
         const repair = parseGitHubPullRequestDeliveryRepairResult(result);
         if (String(row.retained_until) !== addSeconds(repair.observedAt, 30 * 24 * 60 * 60)) {
           throw new Error(`GitHub delivery repair receipt retention mismatch: ${String(row.idempotency_key)}`);
+        }
+      }
+      if (commandKind === "github.record-installation-reconciliation") {
+        const installation = parseGitHubInstallationReconciliationResult(result);
+        if (String(row.retained_until) !== addSeconds(installation.recordedAt, 30 * 24 * 60 * 60)) {
+          throw new Error(`GitHub installation receipt retention mismatch: ${String(row.idempotency_key)}`);
         }
       }
       if (commandKind === "github.record-source-checkpoint") {
@@ -8337,6 +8605,25 @@ export class ControlPlaneStore {
         ) {
           throw new Error(`GitHub delivery repair output mismatch: ${String(row.idempotency_key)}`);
         }
+      }
+      if (commandKind === "github.record-installation-reconciliation") {
+        const installation = parseGitHubInstallationReconciliationResult(result);
+        const outputs = this.db
+          .prepare("SELECT record_id, payload_json FROM durable_occurrences WHERE transaction_sequence = ? ORDER BY transaction_position")
+          .all(row.transaction_sequence!) as Row[];
+        const payload = outputs[0] ? parseJson(String(outputs[0].payload_json)) : undefined;
+        if (
+          installation.transactionSequence !== Number(row.transaction_sequence) ||
+          installation.recordedAt !== String(transaction.evaluation_time) ||
+          installation.recordedAt !== String(transaction.recorded_at) ||
+          outputs.length !== 3 ||
+          String(outputs[0]!.record_id) !== installation.observationRecordId ||
+          String(outputs[1]!.record_id) !== installation.reconciliationRecordId ||
+          String(outputs[2]!.record_id) !== installation.eventRecordId ||
+          !payload || !recordKindRegistry["github.installation-repository-reconciled"].validatePayload(payload) ||
+          payload.repositoryId !== installation.repositoryId || payload.appId !== installation.appId ||
+          payload.installationId !== installation.installationId || payload.access !== installation.access
+        ) throw new Error(`GitHub installation receipt output mismatch: ${String(row.idempotency_key)}`);
       }
       if (commandKind === "github.record-source-checkpoint") {
         const checkpoint = parseGitHubSourceCheckpointResult(result);
@@ -9103,6 +9390,42 @@ function normalizeGitHubSourceGapInput(input: GitHubSourceGapInput): GitHubSourc
   return structuredClone(input);
 }
 
+function normalizeGitHubInstallationInspection(
+  input: GitHubInstallationInspection,
+): GitHubInstallationInspection {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("GitHub installation inspection must be one typed result");
+  }
+  const commonValid = /^[1-9][0-9]{0,19}$/.test(input.appId) &&
+    /^github\.com:[1-9][0-9]{0,19}$/.test(input.repositoryId);
+  assertUtcInstant(input.observedAt, "GitHub installation source observation time");
+  if (input.kind === "unavailable") {
+    if (!commonValid || Object.keys(input).sort().join(",") !== "appId,kind,observedAt,repositoryId") {
+      throw new Error("GitHub unavailable installation inspection is invalid");
+    }
+  } else if (input.kind === "not-installed") {
+    if (
+      !commonValid ||
+      Object.keys(input).sort().join(",") !== "appId,kind,observedAt,repositoryId,responseDigest" ||
+      !/^sha256:[0-9a-f]{64}$/.test(input.responseDigest)
+    ) throw new Error("GitHub absent installation inspection is invalid");
+  } else if (input.kind === "observed") {
+    if (
+      !commonValid ||
+      Object.keys(input).sort().join(",") !==
+        "access,appId,installationId,kind,observedAt,repositoryId,repositorySelection,responseDigest,targetType" ||
+      !/^github\.com:installation:[1-9][0-9]{0,19}$/.test(input.installationId) ||
+      !(input.access === "active" || input.access === "suspended" || input.access === "permission-mismatch") ||
+      !(input.targetType === "Organization" || input.targetType === "User") ||
+      !(input.repositorySelection === "all" || input.repositorySelection === "selected") ||
+      !/^sha256:[0-9a-f]{64}$/.test(input.responseDigest)
+    ) throw new Error("GitHub observed installation inspection is invalid");
+  } else {
+    throw new Error("GitHub installation inspection kind is invalid");
+  }
+  return structuredClone(input);
+}
+
 function normalizeGitHubSourceGapRepairInput(input: GitHubSourceGapRepairInput): GitHubSourceGapRepairInput {
   if (
     !input ||
@@ -9597,6 +9920,48 @@ function parseGitHubSourceGapResult(value: JsonValue): GitHubSourceGapResult {
     gapDigest: value.gapDigest,
     detectedAt: value.detectedAt,
     transactionPositions: [0, 1],
+    transactionSequence: Number(value.transactionSequence),
+  };
+}
+
+function parseGitHubInstallationReconciliationResult(
+  value: JsonValue,
+): GitHubInstallationReconciliationResult {
+  if (
+    !isExactJsonObject(value, [
+      "repositoryId", "appId", "installationId", "access", "observationRecordId",
+      "reconciliationRecordId", "eventRecordId", "sourceObservedAt", "recordedAt",
+      "transactionPositions", "transactionSequence",
+    ]) ||
+    typeof value.repositoryId !== "string" || !/^github\.com:[1-9][0-9]{0,19}$/.test(value.repositoryId) ||
+    typeof value.appId !== "string" || !/^[1-9][0-9]{0,19}$/.test(value.appId) ||
+    !(value.installationId === null ||
+      (typeof value.installationId === "string" && /^github\.com:installation:[1-9][0-9]{0,19}$/.test(value.installationId))) ||
+    !(value.access === "active" || value.access === "suspended" || value.access === "permission-mismatch" ||
+      value.access === "not-installed" || value.access === "unavailable") ||
+    typeof value.observationRecordId !== "string" || !isUuidV7(value.observationRecordId) ||
+    typeof value.reconciliationRecordId !== "string" || !isUuidV7(value.reconciliationRecordId) ||
+    typeof value.eventRecordId !== "string" || !isUuidV7(value.eventRecordId) ||
+    new Set([value.observationRecordId, value.reconciliationRecordId, value.eventRecordId]).size !== 3 ||
+    typeof value.sourceObservedAt !== "string" || typeof value.recordedAt !== "string" ||
+    !Array.isArray(value.transactionPositions) || canonicalJson(value.transactionPositions) !== "[0,1,2]" ||
+    !Number.isSafeInteger(value.transactionSequence) || Number(value.transactionSequence) < 1 ||
+    ((value.access === "not-installed" || value.access === "unavailable") !== (value.installationId === null))
+  ) throw new Error("stored GitHub installation reconciliation result is invalid");
+  assertUtcInstant(value.sourceObservedAt, "GitHub installation result source observation time");
+  assertUtcInstant(value.recordedAt, "GitHub installation result recorded time");
+  if (value.recordedAt < value.sourceObservedAt) throw new Error("stored GitHub installation reconciliation result is invalid");
+  return {
+    repositoryId: value.repositoryId,
+    appId: value.appId,
+    installationId: value.installationId,
+    access: value.access,
+    observationRecordId: value.observationRecordId,
+    reconciliationRecordId: value.reconciliationRecordId,
+    eventRecordId: value.eventRecordId,
+    sourceObservedAt: value.sourceObservedAt,
+    recordedAt: value.recordedAt,
+    transactionPositions: [0, 1, 2],
     transactionSequence: Number(value.transactionSequence),
   };
 }

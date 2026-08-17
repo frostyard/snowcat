@@ -15,7 +15,7 @@ no generic record-writing, fact-writing, administrative, or worker interface.
 | Default path | `./data/control-plane.db` | Distinct from the queue-spike default |
 | SQLite application ID | `1179405908` | Decimal encoding of `FLNT` |
 | Schema version | `7` | Stored in both `PRAGMA user_version` and metadata |
-| Registry version | `17` | Stored in metadata and both initialization payloads |
+| Registry version | `18` | Stored in metadata and both initialization payloads |
 | Node runtime | `>=24.0.0` | Required for the stable `node:sqlite` surface and online backup API |
 | Database lineage ID | UUIDv7 | Generated once by the server; never reused or inferred from path |
 | Operator principal ID | UUIDv7 | Generated once and stored separately from database, session, worker, or provider identity |
@@ -26,14 +26,14 @@ transaction sequence.
 `ControlPlaneStore.occurrences()` returns occurrences ordered by transaction
 sequence and position. Neither method mutates the database or returns a secret.
 
-### Closed registry version 17
+### Closed registry version 18
 
 | Registry | Name | Version or ID rule | Contract |
 | --- | --- | --- | --- |
 | Subject | `control-plane-database` | UUIDv7 | Fluent authority; accepts `sha256` and `transaction-sequence` revisions |
 | Subject | `operator-principal` | UUIDv7 | Fluent authority; accepts `sha256` revision |
 | Subject | `core-snapshot` | UUIDv7 | Fluent authority; accepts `core-catalog-sha256` revision |
-| Subject | `github-repository` | `github.com:<repository-id>` | GitHub authority; accepts exact Core-declaration, metadata, surface, Git-commit, rules, branch-transition, checkpoint, and source-gap revisions |
+| Subject | `github-repository` | `github.com:<repository-id>` | GitHub authority; accepts exact Core-declaration, metadata, surface, Git-commit, rules, branch-transition, checkpoint, source-gap, and installation-reconciliation revisions |
 | Subject | `github-app-hook` | `github.com:app:<app-id>:hook` | GitHub authority; one App webhook bound to direct-delivery and delivery-audit revisions |
 | Subject | `github-pull-request` | `github.com:<repository-id>:pull:<number>` | GitHub authority; immutable repository identity plus positive pull-request number |
 | Subject | `github-check-run` | `github.com:<repository-id>:check-run:<check-run-id>` | GitHub authority; immutable repository identity plus positive check-run ID |
@@ -48,10 +48,11 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Revisions | `github-webhook-body-sha256`, `github-delivery-audit-sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact direct-delivery bytes or canonical selected delivery-API response; the acquisition paths are not interchangeable |
 | Revisions | `github-rules-sha256`, `github-pull-request-sha256`, `github-branch-transition-sha256`, `github-check-run-sha256`, `github-commit-status-sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact canonical allowlisted source representation for the named GitHub subject or repository transition |
 | Revisions | `github-source-checkpoint-sha256`, `github-source-gap-sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact canonical checkpoint or gap observation contract input |
+| Revisions | `github-installation-response-sha256`, `github-installation-reconciliation-sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact bounded GitHub response or canonical installation reconciliation input; unavailable acquisition has no source revision |
 | Source | `fluent-system` | Source ID `kernel` or `github-observer` | Internal deterministic bootstrap or GitHub reconciliation source; accepts no caller-selected source revision |
 | Source | `github-repository` | `github.com:` plus immutable positive numeric repository ID | Source revision must be `git-commit-sha1` |
 | Source | `operator-principal` | UUIDv7 matching a stored operator subject | Human authority source; accepts no source revision |
-| Source | `github-api` | Only source ID `api.github.com` | Bounded selected GitHub API acquisition; accepts only registered API-obtainable metadata, delivery-audit, rules, pull-request, transition, check-run, and commit-status revisions—not controller checkpoint or gap digests |
+| Source | `github-api` | Only source ID `api.github.com` | Bounded selected GitHub API acquisition; accepts only registered API-obtainable metadata, delivery-audit, installation-response, rules, pull-request, transition, check-run, and commit-status revisions—not controller checkpoint, gap, or unavailable-result digests |
 | Source | `github-app-webhook` | Exact `github-app-hook` subject ID | Direct authenticated delivery acquisition; accepts only `github-webhook-body-sha256` |
 | Record | `control-plane.database-definition` | Schema 1 | Class `definition`; subject `control-plane-database`; minimum class `organization` |
 | Record | `principal.definition` | Schema 1 | Class `definition`; subject `operator-principal`; minimum class `organization` |
@@ -79,6 +80,7 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Record | `github.source-checkpoint-observation` | Schema 1 | Class `observation`; subject `github-repository`; complete bounded audit boundary for one registered scope |
 | Record | `github.source-gap-observation` | Schema 3 | Class `observation`; subject `github-repository`; open interval lower-bounded by the latest checkpoint, with explicit interval or delivery-content failure kind |
 | Record | `github.source-gap-repair-observation` | Schema 3 | Class `observation`; subject `github-repository`; terminal complete-audit repair, with exact API-audit citations for delivery-content gaps |
+| Records | `github.installation-repository-observation` / `github.installation-repository-reconciled` | Schema 1 | Classes `observation` / `fact`; subject `github-repository`; App installation access reconciliation without changing enrollment |
 | Event | `control-plane.initialized` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
 | Event | `control-plane.integrity-checked` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
 | Event | `core.snapshot-activated` | Schema 1 | Subject `core-snapshot`; minimum class `organization` |
@@ -97,6 +99,7 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Event | `github.source-checkpoint-recorded` | Schema 1 | Subject `github-repository`; checkpoint accepted |
 | Event | `github.source-gap-opened` | Schema 3 | Subject `github-repository`; lower-bounded gap opened |
 | Event | `github.source-gap-repaired` | Schema 3 | Subject `github-repository`; exact evidence-bound repair accepted |
+| Event | `github.installation-repository-reconciliation-recorded` | Schema 1 | Subject `github-repository`; installation access outcome durably recorded |
 | Command | `control-plane.initialize` | Schema 1 | Outputs database definition, principal definition, then initialization event |
 | Command | `control-plane.check-integrity` | Schema 1 | Outputs the integrity observation, then integrity-checked event |
 | Command | `core.activate-snapshot` | Schema 1 | Outputs snapshot definition, active fact, then activation event |
@@ -115,11 +118,13 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Command | `github.record-source-checkpoint` | Schema 1 | Outputs checkpoint observation, then event |
 | Command | `github.open-source-gap` | Schema 3 | Outputs open-gap observation, then event |
 | Command | `github.repair-source-gap` | Schema 3 | Outputs successor checkpoint, terminal repair observation, then event |
+| Command | `github.record-installation-reconciliation` | Schema 1 | Outputs installation observation, reconciliation fact, then event |
 | Predicate | `core.snapshot-active` | Contract 1 | Established by automatic activation or operator rollback; latest transaction sequence wins |
 | Predicate | `repository.core-authorized` | Contract 1 | Established only from an active retained Core declaration |
 | Predicate | `repository.github-identity-reconciled` | Contract 1 | Established only from bounded GitHub metadata and bound Core authority |
 | Predicate | `repository.canonical-surfaces-reconciled` | Contract 1 | Established only from bounded exact-commit evidence and bound identity |
 | Predicate | `repository.enrolled` | Contract 1 | Established only from current active prerequisite facts |
+| Predicate | `github.installation-repository-reconciled` | Contract 1 | Latest App/repository access outcome; only `active` is healthy for GitHub observation |
 | Projection | `control-plane.subject-lookup` | Contract and transformation version 2; information-handling version 1 | Stable subjects and their first durable creation records for internal diagnostics |
 | Projection | `control-plane.event-cursor` | Contract, transformation, and information-handling version 1 | Payload-free event cursor for internal diagnostics and ProcessObserver |
 
@@ -130,7 +135,7 @@ invalid:
 {
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
   "operatorPrincipalId": "0198b0a6-c200-7abc-8def-0123456789ac",
-  "registryVersion": 17,
+  "registryVersion": 18,
   "schemaVersion": 7
 }
 ```
@@ -153,7 +158,7 @@ The integrity observation and event payload have this exact shape:
 {
   "checkedThroughSequence": 1,
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
-  "registryVersion": 17,
+  "registryVersion": 18,
   "result": "ok",
   "schemaVersion": 7
 }
@@ -362,12 +367,24 @@ or normalization failures are `unavailable`.
 The result retains no JWT, token, raw response, account object, permission map,
 or event array. An observed result contains only App, installation, repository,
 target type, repository selection, access classification, exact-response
-digest, and server observation time. This acquisition establishes no durable
-record or enrollment; the typed persistence command remains the next slice.
+digest, and server observation time.
+
+`recordGitHubInstallationReconciliation(input)` persists that typed result only
+for an already enrolled immutable repository and exact optimistic sequence. It
+atomically appends observation, reconciliation fact, and event at positions
+`[0,1,2]`, causally rooted in the latest enrollment. Source-backed observed and
+`not-installed` outcomes retain source `github-api` and the exact response
+revision; `unavailable` uses `fluent-system/github-observer` with no invented
+GitHub revision. Replay is bound to the complete inspection for 30 days.
+Startup re-derives command and inspection digests and verifies enrollment,
+source distinction, output order, causation, result, and retention. No outcome
+changes enrollment; only `active` is eligible input to the future delivery-
+audit controller. `githubInstallationReconciliation(repositoryId, appId)` is a
+read-only lookup of the latest validated outcome for that exact pair.
 
 ### Pull-request-delivery coverage commands
 
-Registry v17 fixes one coverage scope:
+Registry v18 fixes one coverage scope:
 `github.pull-request-deliveries:v1`. These commands accept bounded results from
 a deterministic delivery-audit controller after network acquisition; they do
 not call GitHub or independently prove caller-supplied pagination digests.
@@ -577,7 +594,7 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
    initialization transaction.
 5. Older, newer, incomplete, unexpected, or differently identified schemas
    MUST fail closed. Unregistered indexes, triggers, and views are unexpected.
-   Schema version 7 and registry version 17 define no upgrade path from earlier
+   Schema version 7 and registry version 18 define no upgrade path from earlier
    pre-production target stores.
 6. Subject, record, event, command, source, revision, record-class, and
    information-class names MUST come from the code-owned versioned registries.

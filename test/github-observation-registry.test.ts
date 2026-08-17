@@ -15,7 +15,11 @@ import {
 const digest = `sha256:${"a".repeat(64)}`;
 
 test("GitHub observation subjects use exact source-native identities", () => {
-  assert.equal(CONTROL_PLANE_REGISTRY_VERSION, 17);
+  assert.equal(CONTROL_PLANE_REGISTRY_VERSION, 18);
+  assert.equal(commandKindRegistry["github.record-installation-reconciliation"].schemaVersion, 1);
+  assert.equal(recordKindRegistry["github.installation-repository-observation"].schemaVersion, 1);
+  assert.equal(recordKindRegistry["github.installation-repository-reconciled"].schemaVersion, 1);
+  assert.equal(eventKindRegistry["github.installation-repository-reconciliation-recorded"].schemaVersion, 1);
   assert.equal(commandKindRegistry["github.open-source-gap"].schemaVersion, 3);
   assert.equal(commandKindRegistry["github.repair-source-gap"].schemaVersion, 3);
   assert.equal(recordKindRegistry["github.source-gap-observation"].schemaVersion, 3);

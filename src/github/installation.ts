@@ -7,6 +7,7 @@ import {
   GITHUB_API_VERSION,
 } from "./api-contract.ts";
 import type { GitHubAppJwtProvider, GitHubDeliveryFetch } from "./delivery-api.ts";
+import type { GitHubInstallationInspection } from "../control/store.ts";
 
 const MAXIMUM_RESPONSE_BYTES = 1_048_576;
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -41,24 +42,7 @@ export interface GitHubInstallationInspectionInput {
   now?: () => Date;
 }
 
-export type GitHubInstallationInspectionResult =
-  | {
-      kind: "observed";
-      appId: string;
-      repositoryId: string;
-      installationId: string;
-      access: "active" | "suspended" | "permission-mismatch";
-      targetType: "Organization" | "User";
-      repositorySelection: "all" | "selected";
-      responseDigest: string;
-      observedAt: string;
-    }
-  | {
-      kind: "not-installed" | "unavailable";
-      appId: string;
-      repositoryId: string;
-      observedAt: string;
-    };
+export type GitHubInstallationInspectionResult = GitHubInstallationInspection;
 
 export async function inspectGitHubRepositoryInstallation(
   input: GitHubInstallationInspectionInput,
@@ -80,7 +64,14 @@ export async function inspectGitHubRepositoryInstallation(
       if (isRedirect(response.status)) return unavailable(input, observedAt);
     }
     if (response.status === 404) {
-      return { kind: "not-installed", appId: input.appId, repositoryId: input.repositoryId, observedAt };
+      const bytes = await boundedBody(response, MAXIMUM_RESPONSE_BYTES);
+      return {
+        kind: "not-installed",
+        appId: input.appId,
+        repositoryId: input.repositoryId,
+        responseDigest: responseDigest(response.status, bytes),
+        observedAt,
+      };
     }
     if (response.status !== 200) return unavailable(input, observedAt);
     const bytes = await boundedBody(response, MAXIMUM_RESPONSE_BYTES);
@@ -95,7 +86,7 @@ export async function inspectGitHubRepositoryInstallation(
       access: selected.access,
       targetType: selected.targetType,
       repositorySelection: selected.repositorySelection,
-      responseDigest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+      responseDigest: responseDigest(response.status, bytes),
       observedAt,
     };
   } catch {
@@ -226,6 +217,11 @@ function canonicalInstant(value: Date): string {
 
 function unavailable(input: GitHubInstallationInspectionInput, observedAt: string): GitHubInstallationInspectionResult {
   return { kind: "unavailable", appId: input.appId, repositoryId: input.repositoryId, observedAt };
+}
+
+function responseDigest(status: number, bytes: Uint8Array): string {
+  const bodyDigest = createHash("sha256").update(bytes).digest("hex");
+  return `sha256:${createHash("sha256").update(`${status}:${bodyDigest}`).digest("hex")}`;
 }
 
 function isRedirect(status: number): boolean {

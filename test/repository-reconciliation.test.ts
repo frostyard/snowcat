@@ -430,6 +430,79 @@ test("GitHub pull-request delivery rejects forks and closed-state test merge ide
   store.close();
 });
 
+test("GitHub observer installation reconciliation is enrollment-bound, replayable, and source-distinct", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-github-installation-reconciliation-test-"));
+  const path = join(directory, "control.db");
+  let now = new Date("2026-08-17T13:40:00.000Z");
+  const store = new ControlPlaneStore(path, () => now);
+  const candidate = await activationCandidate(enabledDeclaration(), "6".repeat(40), "7".repeat(40));
+  const activation = store.activateCoreSnapshot({ candidate, expectedLastTransactionSequence: 1 });
+  store.recordCoreSourceCheckEligible({
+    checkId: "0198ba91-f200-7000-8000-000000000001",
+    candidate,
+    expectedLastTransactionSequence: activation.transactionSequence,
+  });
+  await reconcileRepositories(
+    store,
+    async () => ({ kind: "found", repositoryId: "9001", owner: "frostyard", name: "example", archived: false, defaultBranch: "main" }),
+    async () => validSurfaceProbe(),
+  );
+  const input = {
+    expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+    inspection: {
+      kind: "observed" as const,
+      appId: "4567",
+      repositoryId: "github.com:9001",
+      installationId: "github.com:installation:7654",
+      access: "active" as const,
+      targetType: "Organization" as const,
+      repositorySelection: "selected" as const,
+      responseDigest: `sha256:${"8".repeat(64)}`,
+      observedAt: "2026-08-17T13:39:00.000Z",
+    },
+  };
+  const active = store.recordGitHubInstallationReconciliation(input);
+  assert.equal(active.access, "active");
+  assert.equal(active.installationId, "github.com:installation:7654");
+  assert.deepEqual(store.recordGitHubInstallationReconciliation(input), active);
+  const outputs = store.occurrences().slice(-3);
+  assert.deepEqual(outputs.map((occurrence) => occurrence.kind), [
+    "github.installation-repository-observation",
+    "github.installation-repository-reconciled",
+    "github.installation-repository-reconciliation-recorded",
+  ]);
+  assert.equal(outputs[0]?.sourceKind, "github-api");
+  assert.equal(outputs[0]?.sourceRevisionValue, input.inspection.responseDigest);
+
+  now = new Date("2026-08-17T13:45:00.000Z");
+  const unavailable = store.recordGitHubInstallationReconciliation({
+    expectedLastTransactionSequence: store.metadata().lastTransactionSequence,
+    inspection: {
+      kind: "unavailable",
+      appId: "4567",
+      repositoryId: "github.com:9001",
+      observedAt: "2026-08-17T13:44:00.000Z",
+    },
+  });
+  assert.equal(unavailable.access, "unavailable");
+  assert.equal(store.occurrences().at(-3)?.sourceKind, "fluent-system");
+  assert.equal(
+    store.githubInstallationReconciliation("github.com:9001", "4567")?.access,
+    "unavailable",
+  );
+  store.close();
+
+  const reopened = new ControlPlaneStore(path);
+  assert.equal(reopened.metadata().lastTransactionSequence, unavailable.transactionSequence);
+  reopened.close();
+
+  const raw = new DatabaseSync(path);
+  raw.prepare("UPDATE durable_occurrences SET source_revision_value = ? WHERE record_id = ?")
+    .run(`sha256:${"9".repeat(64)}`, active.observationRecordId);
+  raw.close();
+  assert.throws(() => new ControlPlaneStore(path), /GitHub installation reconciliation lineage mismatch/);
+});
+
 test("GitHub delivery-audit checkpoints lower-bound gaps and close them only through complete repair", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fluent-github-coverage-test-"));
   const path = join(directory, "control.db");

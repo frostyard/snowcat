@@ -128,7 +128,7 @@ does not itself enroll the repository in the fleet.
 
 ## Phase 4 — Observe GitHub without impersonating workers (large)
 
-- Registry v17 and schema v7 implement the first internal, enrollment-bound
+- Registry v18 and schema v7 implement the first internal, enrollment-bound
   post-authentication transaction for an allowlisted same-repository
   pull-request delivery. It writes a distinct receipt observation,
   pull-request observation, and audit event with exact replay, 30-day receipt
@@ -148,7 +148,8 @@ does not itself enroll the repository in the fleet.
   audits, and complete interval audit before closure. Bounded App-JWT
   repository-installation acquisition now classifies exact read-only access,
   suspension, absence, mismatch, and unavailability without changing
-  enrollment. Durable installation binding, automatic gap creation,
+  enrollment, and its typed command durably distinguishes source-backed access
+  outcomes from Fluent-observed unavailability. Automatic gap creation,
   scheduling, and leases remain.
 - The source-independent `conclusive-run-rate:v1` arithmetic evaluator is
   implemented under

@@ -99,8 +99,10 @@ repository-selection, access classification, exact-response digest, and
 observation time. Account content and raw permission/event objects are
 discarded. `active` requires the exact v1 read-only permissions and subscribed
 events above; absence, suspension, a permission/event mismatch, and source
-unavailability remain distinct. This acquisition does not itself create a
-durable binding or change enrollment.
+unavailability remain distinct. The typed store command durably reconciles the
+result as an observation, outcome fact, and event rooted in prior enrollment.
+It keeps source-backed outcomes distinct from Fluent-observed unavailability
+and never changes enrollment.
 
 ### Webhook ingress
 
@@ -135,7 +137,7 @@ observed subject.
 
 ### Durable observation families
 
-Registry version 17 assigns the source-native subject identities and purpose-
+Registry version 18 assigns the source-native subject identities and purpose-
 specific revision kinds below. The implementing records and commands will
 assign exact registered kinds and payload schemas without changing these
 identity joins:
@@ -155,7 +157,7 @@ identity joins:
 
 Every family in this table uses or will use a registered `observation` record
 kind; the design does not introduce another generic record class. Registry
-version 17 additionally registers the direct delivery receipt, API delivery
+version 18 additionally registers the direct delivery receipt, API delivery
 audit, pull-request, checkpoint, gap, and repair observation records plus their
 atomic events and commands. Pull-request observation schema 2 names either its
 direct receipt or API audit as the acquisition record. Other rows remain

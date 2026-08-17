@@ -143,6 +143,11 @@ removed. -->
   repository-access acquisition. Treat only its `active` result as a healthy
   observer installation binding; suspension, absence, overprivilege, and
   unavailability remain distinct from repository enrollment.
+- Persist that result only through
+  `ControlPlaneStore.recordGitHubInstallationReconciliation`. Source-backed
+  outcomes retain the exact response revision; `unavailable` is a Fluent
+  acquisition outcome with no invented GitHub revision. The command never
+  changes repository enrollment.
 - Keep the target control-plane store separate from the disposable queue-spike
   store. Target schema and startup live in
   [`src/control/store.ts`](src/control/store.ts); closed vocabulary lives only

@@ -2,7 +2,7 @@ import { isUuidV7, type JsonValue } from "./encoding.ts";
 
 export const CONTROL_PLANE_APPLICATION_ID = 1_179_405_908; // ASCII "FLNT"
 export const CONTROL_PLANE_SCHEMA_VERSION = 7;
-export const CONTROL_PLANE_REGISTRY_VERSION = 17;
+export const CONTROL_PLANE_REGISTRY_VERSION = 18;
 
 export const informationClasses = ["public", "organization", "restricted"] as const;
 export type InformationClass = (typeof informationClasses)[number];
@@ -55,6 +55,7 @@ export const subjectKindRegistry = {
       "github-branch-transition-sha256",
       "github-source-checkpoint-sha256",
       "github-source-gap-sha256",
+      "github-installation-reconciliation-sha256",
     ],
     validateId: (value: string) => /^github\.com:[1-9][0-9]{0,19}$/.test(value),
   },
@@ -133,6 +134,12 @@ export const revisionKindRegistry = {
   "github-source-gap-sha256": {
     validate: (value: string) => /^sha256:[0-9a-f]{64}$/.test(value),
   },
+  "github-installation-response-sha256": {
+    validate: (value: string) => /^sha256:[0-9a-f]{64}$/.test(value),
+  },
+  "github-installation-reconciliation-sha256": {
+    validate: (value: string) => /^sha256:[0-9a-f]{64}$/.test(value),
+  },
 } as const;
 
 export const sourceKindRegistry = {
@@ -155,6 +162,7 @@ export const sourceKindRegistry = {
       "github-branch-transition-sha256",
       "github-check-run-sha256",
       "github-commit-status-sha256",
+      "github-installation-response-sha256",
     ],
   },
   "github-app-webhook": {
@@ -350,6 +358,20 @@ export const recordKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isGitHubSourceGapRepairPayload,
   },
+  "github.installation-repository-observation": {
+    schemaVersion: 1,
+    recordClass: "observation",
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isGitHubInstallationReconciliationPayload,
+  },
+  "github.installation-repository-reconciled": {
+    schemaVersion: 1,
+    recordClass: "fact",
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isGitHubInstallationReconciliationPayload,
+  },
 } as const;
 
 export const eventKindRegistry = {
@@ -467,6 +489,12 @@ export const eventKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isGitHubSourceGapRepairPayload,
   },
+  "github.installation-repository-reconciliation-recorded": {
+    schemaVersion: 1,
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isGitHubInstallationReconciliationPayload,
+  },
 } as const;
 
 export const commandKindRegistry = {
@@ -580,6 +608,14 @@ export const commandKindRegistry = {
       "github.source-gap-repaired",
     ],
   },
+  "github.record-installation-reconciliation": {
+    schemaVersion: 1,
+    outputKinds: [
+      "github.installation-repository-observation",
+      "github.installation-repository-reconciled",
+      "github.installation-repository-reconciliation-recorded",
+    ],
+  },
 } as const;
 
 export const predicateContractRegistry = {
@@ -622,6 +658,14 @@ export const predicateContractRegistry = {
     establishedBy: ["repository.establish-enrollment"],
     precedence: "active-prerequisite-facts",
     consumers: ["repository-eligibility", "repository-controller"],
+  },
+  "github.installation-repository-reconciled": {
+    contractVersion: 1,
+    recordClass: "fact",
+    subjectKinds: ["github-repository"],
+    establishedBy: ["github.record-installation-reconciliation"],
+    precedence: "latest-observer-app-installation-observation",
+    consumers: ["github-delivery-audit-controller", "github-observation-eligibility"],
   },
 } as const;
 
@@ -1127,6 +1171,21 @@ export interface GitHubSourceGapRepairPayload extends Record<string, JsonValue> 
   repairAuditRecordIds: string[];
   repairDigest: string;
   repairedAt: string;
+}
+
+export interface GitHubInstallationReconciliationPayload extends Record<string, JsonValue> {
+  repositoryId: string;
+  appId: string;
+  installationId: string | null;
+  access: "active" | "suspended" | "permission-mismatch" | "not-installed" | "unavailable";
+  targetType: "Organization" | "User" | null;
+  repositorySelection: "all" | "selected" | null;
+  responseDigest: string | null;
+  sourceObservedAt: string;
+  observationRecordId: string;
+  reconciliationRecordId: string;
+  eventRecordId: string;
+  recordedAt: string;
 }
 
 export function assertSubject(kind: string, id: string): asserts kind is SubjectKind {
@@ -2267,6 +2326,51 @@ function isGitHubSourceGapRepairPayload(value: unknown): value is GitHubSourceGa
     ? value.repairAuditRecordIds.length === 0
     : value.repairAuditRecordIds.length > 0;
   return evidenceShape && end > lower && new Date(value.repairedAt).getTime() >= end;
+}
+
+function isGitHubInstallationReconciliationPayload(
+  value: unknown,
+): value is GitHubInstallationReconciliationPayload {
+  if (
+    !isExactObject(value, [
+      "repositoryId",
+      "appId",
+      "installationId",
+      "access",
+      "targetType",
+      "repositorySelection",
+      "responseDigest",
+      "sourceObservedAt",
+      "observationRecordId",
+      "reconciliationRecordId",
+      "eventRecordId",
+      "recordedAt",
+    ]) ||
+    !isGitHubRepositoryId(value.repositoryId) ||
+    !isGitHubNumericId(value.appId) ||
+    !(value.access === "active" || value.access === "suspended" ||
+      value.access === "permission-mismatch" || value.access === "not-installed" ||
+      value.access === "unavailable") ||
+    !isUtcInstant(value.sourceObservedAt) ||
+    !isUuid(value.observationRecordId) ||
+    !isUuid(value.reconciliationRecordId) ||
+    !isUuid(value.eventRecordId) ||
+    new Set([value.observationRecordId, value.reconciliationRecordId, value.eventRecordId]).size !== 3 ||
+    !isUtcInstant(value.recordedAt) ||
+    new Date(value.recordedAt).getTime() < new Date(value.sourceObservedAt).getTime()
+  ) return false;
+  if (value.access === "unavailable") {
+    return value.installationId === null && value.targetType === null &&
+      value.repositorySelection === null && value.responseDigest === null;
+  }
+  if (value.access === "not-installed") {
+    return value.installationId === null && value.targetType === null &&
+      value.repositorySelection === null && isSha256(value.responseDigest);
+  }
+  return isGitHubInstallationId(value.installationId) &&
+    (value.targetType === "Organization" || value.targetType === "User") &&
+    (value.repositorySelection === "all" || value.repositorySelection === "selected") &&
+    isSha256(value.responseDigest);
 }
 
 function isGitHubSourceGapDeliverySet(
