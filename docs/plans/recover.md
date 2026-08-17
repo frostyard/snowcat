@@ -26,7 +26,7 @@ schema with no upgrade path.
 - **Done when:** `npm run check` passes with the ADR, this plan, and the
   design/spec back-links in place, and the roadmap links here.
 
-## Phase 1 — Make the queue deployable (small)
+## Phase 1 — Make the queue deployable (completed 2026-08-17)
 
 - Replace `QueueStore`'s single idempotent migration block with a numbered,
   forward-only migration ladder per the
@@ -44,7 +44,9 @@ schema with no upgrade path.
   MCP servers after upgrade, backup cadence and secret handling.
 - **Done when:** the live queue database opens under the new ladder with its
   history intact, a fresh checkout backs it up and verifies the manifest, and
-  the README documents the operating layout.
+  the README documents the operating layout. Verified 2026-08-17: the operator
+  queue (51 items, 170 events) upgraded from version 1 to 2 in place, its
+  backup manifest re-derived byte for byte, and `npm run check` passes.
 
 ## Phase 2 — Real work sources (small)
 

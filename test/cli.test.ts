@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { QueueStore } from "../src/queue/store.ts";
+import { QueueStore, SCHEMA_VERSION } from "../src/queue/store.ts";
 
 test("administrative queue listings do not expose a live lease token", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fluent-cli-test-"));
@@ -176,3 +176,66 @@ function stringEnvironment(source: NodeJS.ProcessEnv): Record<string, string> {
     Object.entries(source).filter((entry): entry is [string, string] => entry[1] !== undefined),
   );
 }
+
+test("operator CLI reports metadata, backs up to a new path, and verifies the copy without printing lease tokens", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-backup-test-"));
+  const path = join(directory, "queue.db");
+  const queue = new QueueStore(path);
+  queue.setRepositoryEnabled("frostyard/updex", true);
+  queue.enqueueSeed({
+    repository: "frostyard/updex",
+    kind: "testing-gap-discovery",
+    objective: "Identify one testing gap.",
+    instructions: "Read and report only.",
+    acceptanceCriteria: ["One gap has concrete evidence."],
+    allowedActions: ["read"],
+    delegableActions: [],
+    createdBy: "operator:test",
+  });
+  const claimed = queue.claim({ worker: "claude:updex:backup" })!;
+  queue.close();
+  const env = stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path });
+  const run = (...args: string[]) =>
+    spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env,
+    });
+
+  const metadata = run("metadata");
+  assert.equal(metadata.status, 0, metadata.stderr);
+  const meta = JSON.parse(metadata.stdout) as Record<string, unknown>;
+  assert.equal(meta.databasePath, path);
+  assert.equal(meta.schemaVersion, SCHEMA_VERSION);
+  assert.equal(meta.workItems, 1);
+  assert.match(String(meta.databaseId), /^[0-9a-f-]{36}$/);
+
+  const missing = run("backup");
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /backup path is required/);
+
+  const backupPath = join(directory, "backups", "queue.db");
+  const backup = run("backup", backupPath);
+  assert.equal(backup.status, 0, backup.stderr);
+  const manifest = JSON.parse(backup.stdout) as Record<string, unknown>;
+  assert.equal(manifest.backupPath, backupPath);
+  assert.equal(manifest.databaseId, meta.databaseId);
+  assert.equal(manifest.workItems, 1);
+  assert.equal(backup.stdout.includes(claimed.leaseToken!), false);
+
+  const again = run("backup", backupPath);
+  assert.notEqual(again.status, 0);
+  assert.match(again.stderr, /already exists/);
+
+  const verify = run("verify-backup", backupPath);
+  assert.equal(verify.status, 0, verify.stderr);
+  const inspected = JSON.parse(verify.stdout) as Record<string, unknown>;
+  assert.equal(inspected.sha256, manifest.sha256);
+  assert.equal(inspected.databaseId, manifest.databaseId);
+  assert.equal(inspected.lastEventSequence, manifest.lastEventSequence);
+  assert.equal(verify.stdout.includes(claimed.leaseToken!), false);
+
+  const foreign = run("verify-backup", join(directory, "nope.db"));
+  assert.notEqual(foreign.status, 0);
+  assert.match(foreign.stderr, /does not exist/);
+});

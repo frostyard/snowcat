@@ -43,6 +43,14 @@ try {
     print(withoutLeaseToken(queue.cancel(id, "operator:cli", reason)));
   } else if (command === "list") {
     print(queue.list({ status: parseStatus(args[0]) }).map(withoutLeaseToken));
+  } else if (command === "metadata") {
+    print(queue.metadata());
+  } else if (command === "backup") {
+    const path = required(args[0], "backup path");
+    print(queue.backup(path));
+  } else if (command === "verify-backup") {
+    const path = required(args[0], "backup path");
+    print(QueueStore.inspectBackup(path));
   } else {
     console.error("Usage: npm run queue -- opt-in <owner/repo>");
     console.error("       npm run queue -- opt-out <owner/repo>");
@@ -54,6 +62,9 @@ try {
     console.error("       npm run queue -- requeue <work-item-id> <reason>");
     console.error("       npm run queue -- cancel <work-item-id> <reason>");
     console.error("       npm run queue -- list [proposed|queued|claimed|completed|blocked|cancelled]");
+    console.error("       npm run queue -- metadata");
+    console.error("       npm run queue -- backup <new-file-path>");
+    console.error("       npm run queue -- verify-backup <backup-file-path>");
     process.exitCode = 1;
   }
 } catch (error) {

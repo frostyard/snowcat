@@ -154,8 +154,27 @@ operator step the guard cannot perform.
   failing immediately with `SQLITE_BUSY`.
 - Opening a database that is already at the current schema version performs no
   schema writes: `list`, `get`, and server start-up do not take the write lock
-  or rebuild indexes. Migration runs once, inside a single transaction, when
-  the database's `user_version` is behind the code.
+  or rebuild indexes. When `user_version` is behind the code, the forward-only
+  migration ladder applies every missing rung inside a single write
+  transaction; a newer database is refused. Rung 2 gives each database an
+  immutable `database_id` that backups carry.
+- Host layout for v1: one operator host, `FLUENT_QUEUE_DB` set to an absolute
+  path outside the checkout (the default `./data/queue.db` is relative to the
+  process working directory), MCP served over stdio from that host, and
+  workers started by the operator on the same host. `npm run queue -- metadata`
+  is the sanity check that a process is looking at the intended database.
+- Backup: `npm run queue -- backup <new-path>` snapshots the live queue with
+  `VACUUM INTO`, verifies the copy, and prints a manifest; save the manifest
+  beside the file. `verify-backup <path>` re-derives it later. The backup file
+  contains lease tokens and is created `0600`; keep it under the same access
+  controls as the live database. Restore is a file operation: stop MCP servers
+  and feeders, verify the backup, copy it to a new path, point
+  `FLUENT_QUEUE_DB` at that path, and restart. Opening the copy migrates it to
+  WAL mode; expired leases in it are reclaimed by the next claim. `VACUUM
+  INTO` was chosen over `node:sqlite`'s asynchronous `backup()` because the
+  latter stalled for ~30 s in-process on Node 26.7 whenever another SQLite
+  connection was open and the source had fresh WAL frames; the synchronous
+  snapshot has no threadpool hand-off to race.
 - Every MCP server process and CLI invocation opens its own connection to the
   queue file, so long-lived processes can outlive a code change. Restart
   Fluent MCP servers after upgrading; the database triggers and schema-version

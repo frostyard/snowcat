@@ -1,0 +1,228 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import test from "node:test";
+
+import { QueueStore, SCHEMA_VERSION } from "../src/queue/store.ts";
+
+type Row = Record<string, unknown>;
+
+/**
+ * Builds a version-1 queue database by hand: the baseline tables and triggers
+ * without `queue_metadata`, stamped `user_version = 1`, with one opted-in
+ * repository, one queued item, and one event — the shape every pre-ladder
+ * database on an operator host has.
+ */
+function createVersionOneDatabase(path: string): { itemId: string } {
+  const db = new DatabaseSync(path);
+  db.exec(`
+    CREATE TABLE repositories (
+      slug TEXT PRIMARY KEY,
+      enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE work_items (
+      id TEXT PRIMARY KEY,
+      root_id TEXT NOT NULL,
+      parent_id TEXT REFERENCES work_items(id),
+      repository TEXT NOT NULL REFERENCES repositories(slug),
+      kind TEXT NOT NULL,
+      objective TEXT NOT NULL,
+      instructions TEXT NOT NULL,
+      acceptance_criteria_json TEXT NOT NULL,
+      allowed_actions_json TEXT NOT NULL,
+      delegable_actions_json TEXT NOT NULL,
+      priority INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL CHECK (status IN ('queued', 'claimed', 'completed', 'blocked', 'cancelled')),
+      admitted INTEGER NOT NULL DEFAULT 1 CHECK (admitted IN (0, 1)),
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      lease_owner TEXT,
+      lease_token TEXT,
+      lease_expires_at TEXT,
+      result_json TEXT
+    );
+    CREATE TABLE work_events (
+      sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+      work_item_id TEXT NOT NULL REFERENCES work_items(id),
+      event_type TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      occurred_at TEXT NOT NULL
+    );
+    CREATE INDEX work_items_claimable
+      ON work_items(status, admitted, lease_expires_at, priority DESC, created_at);
+    CREATE INDEX work_items_lineage ON work_items(root_id, parent_id);
+    CREATE TRIGGER work_items_claim_requires_admission
+      BEFORE UPDATE OF status ON work_items
+      WHEN NEW.status = 'claimed' AND (OLD.admitted = 0 OR NEW.admitted = 0)
+    BEGIN
+      SELECT RAISE(ABORT, 'work item must be admitted before it can be claimed');
+    END;
+    CREATE TRIGGER work_items_children_start_proposed
+      BEFORE INSERT ON work_items
+      WHEN NEW.parent_id IS NOT NULL AND NEW.admitted = 1
+    BEGIN
+      SELECT RAISE(ABORT, 'child work items must be created as proposed (admitted = 0)');
+    END;
+    INSERT INTO repositories VALUES ('frostyard/updex', 1, '2026-08-15T00:00:00.000Z', '2026-08-15T00:00:00.000Z');
+    INSERT INTO work_items (
+      id, root_id, repository, kind, objective, instructions, acceptance_criteria_json,
+      allowed_actions_json, delegable_actions_json, priority, status, admitted, created_by, created_at, updated_at
+    ) VALUES (
+      '11111111-1111-4111-8111-111111111111', '11111111-1111-4111-8111-111111111111', 'frostyard/updex',
+      'testing-gap-discovery', 'Find one gap.', 'Read only.', '["One gap."]', '["read"]', '[]',
+      3, 'queued', 1, 'operator:legacy', '2026-08-15T00:00:00.000Z', '2026-08-15T00:00:00.000Z'
+    );
+    INSERT INTO work_events (work_item_id, event_type, actor, payload_json, occurred_at)
+      VALUES ('11111111-1111-4111-8111-111111111111', 'work.queued', 'operator:legacy', '{"root":true}', '2026-08-15T00:00:00.000Z');
+    PRAGMA user_version = 1;
+  `);
+  db.close();
+  return { itemId: "11111111-1111-4111-8111-111111111111" };
+}
+
+test("a version-1 database upgrades in place through the ladder and keeps its history", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-ladder-test-"));
+  const path = join(directory, "queue.db");
+  const { itemId } = createVersionOneDatabase(path);
+  assert.equal(SCHEMA_VERSION, 2, "this test pins the ladder at rung 2; extend it when a rung is added");
+
+  const queue = new QueueStore(path);
+  test.after(() => queue.close());
+
+  assert.equal(queue.schemaVersion(), SCHEMA_VERSION);
+  const metadata = queue.metadata();
+  assert.match(metadata.databaseId, /^[0-9a-f-]{36}$/);
+  assert.equal(metadata.schemaVersion, SCHEMA_VERSION);
+  assert.equal(metadata.workItems, 1);
+  assert.equal(metadata.workEvents, 1);
+  assert.equal(metadata.lastEventSequence, 1);
+
+  // History and behavior survive: the legacy item is still claimable and keeps its priority.
+  const item = queue.get(itemId);
+  assert.equal(item?.status, "queued");
+  assert.equal(item?.priority, 3);
+  const claimed = queue.claim({ worker: "claude:ladder-test" });
+  assert.equal(claimed?.id, itemId);
+
+  // Re-opening runs no rungs and preserves the identity assigned during upgrade.
+  const again = new QueueStore(path);
+  assert.equal(again.metadata().databaseId, metadata.databaseId);
+  again.close();
+});
+
+test("re-running the ladder from an unversioned database converges without changing the identity", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-ladder-rerun-test-"));
+  const path = join(directory, "queue.db");
+  const first = new QueueStore(path);
+  const identity = first.metadata().databaseId;
+  first.close();
+
+  const raw = new DatabaseSync(path);
+  raw.exec("PRAGMA user_version = 0");
+  raw.close();
+
+  const rerun = new QueueStore(path);
+  test.after(() => rerun.close());
+  assert.equal(rerun.schemaVersion(), SCHEMA_VERSION);
+  assert.equal(rerun.metadata().databaseId, identity, "rung 2 must be idempotent so lineage is stable");
+});
+
+test("a database newer than the ladder is refused, and one older is upgraded rather than refused", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-ladder-refuse-test-"));
+  const path = join(directory, "queue.db");
+  new QueueStore(path).close();
+  const raw = new DatabaseSync(path);
+  raw.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`);
+  raw.close();
+  assert.throws(() => new QueueStore(path), /newer than the supported version/);
+
+  const older = new DatabaseSync(path);
+  older.exec("PRAGMA user_version = 1");
+  older.close();
+  const upgraded = new QueueStore(path);
+  assert.equal(upgraded.schemaVersion(), SCHEMA_VERSION);
+  upgraded.close();
+});
+
+test("backup copies the live queue to a new file, verifies it, and never overwrites", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-backup-test-"));
+  const path = join(directory, "queue.db");
+  const queue = new QueueStore(path);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/updex", true);
+  const seed = queue.enqueueSeed({
+    repository: "frostyard/updex",
+    kind: "testing-gap-discovery",
+    objective: "Identify one testing gap.",
+    instructions: "Read and report only.",
+    acceptanceCriteria: ["One gap has concrete evidence."],
+    allowedActions: ["read"],
+    delegableActions: [],
+    createdBy: "operator:test",
+  });
+  const claimed = queue.claim({ worker: "claude:backup-test" })!;
+  const live = queue.metadata();
+
+  assert.throws(() => queue.backup(path), /must differ from the live database path/);
+  assert.throws(() => queue.backup(":memory:"), /filesystem path/);
+
+  const backupPath = join(directory, "backups", "queue-1.db");
+  const manifest = queue.backup(backupPath);
+  assert.equal(manifest.formatVersion, 1);
+  assert.equal(manifest.backupPath, backupPath);
+  assert.equal(manifest.databaseId, live.databaseId);
+  assert.equal(manifest.schemaVersion, SCHEMA_VERSION);
+  assert.equal(manifest.workItems, 1);
+  assert.equal(manifest.workEvents, live.workEvents);
+  assert.equal(manifest.lastEventSequence, live.lastEventSequence);
+  assert.equal(manifest.sha256, createHash("sha256").update(readFileSync(backupPath)).digest("hex"));
+  assert.equal(statSync(backupPath).mode & 0o777, 0o600, "backups carry lease tokens and are created private");
+
+  // Inspection re-derives the manifest byte for byte, and refuses to overwrite an existing path.
+  assert.deepEqual(QueueStore.inspectBackup(backupPath, manifest.createdAt), manifest);
+  assert.throws(() => queue.backup(backupPath), /already exists/);
+  assert.throws(() => QueueStore.inspectBackup(join(directory, "missing.db")), /does not exist/);
+
+  // The copy is a complete, independent queue: same item, same lease, same events.
+  // Opening it as a QueueStore is a restore: it switches the file to WAL and changes its digest,
+  // which is why verification precedes restore.
+  const restored = new QueueStore(backupPath);
+  assert.equal(restored.get(seed.id)?.leaseOwner, "claude:backup-test");
+  assert.equal(restored.get(seed.id)?.leaseToken, claimed.leaseToken);
+  assert.equal(restored.events(seed.id).length, queue.events(seed.id).length);
+  assert.equal(restored.metadata().databaseId, live.databaseId);
+  restored.close();
+  assert.notEqual(QueueStore.inspectBackup(backupPath).sha256, manifest.sha256, "opening a backup changes it");
+
+  // Writes after the backup do not invalidate it; a later backup carries the later ledger.
+  queue.heartbeat(seed.id, claimed.leaseToken!, "claude:backup-test");
+  const later = queue.backup(join(directory, "backups", "queue-2.db"));
+  assert.ok(later.lastEventSequence >= manifest.lastEventSequence);
+  assert.equal(later.databaseId, manifest.databaseId);
+});
+
+test("inspection rejects a file that is not a supported queue backup", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-backup-reject-test-"));
+  const foreign = join(directory, "foreign.db");
+  const db = new DatabaseSync(foreign);
+  db.exec("CREATE TABLE unrelated (id INTEGER PRIMARY KEY)");
+  db.close();
+  assert.throws(() => QueueStore.inspectBackup(foreign), /schema version 0 does not match/);
+
+  const stripped = join(directory, "stripped.db");
+  new QueueStore(stripped).close();
+  const raw = new DatabaseSync(stripped);
+  raw.exec("DELETE FROM queue_metadata");
+  raw.close();
+  assert.throws(() => QueueStore.inspectBackup(stripped), /no database identity/);
+  const rows = (new DatabaseSync(stripped, { readOnly: true }).prepare("SELECT * FROM queue_metadata").all()) as Row[];
+  assert.equal(rows.length, 0);
+});

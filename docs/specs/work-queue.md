@@ -152,8 +152,14 @@ state with a `work.requeued` event. Cancel stores the operator reason in
     `PRAGMA user_version`, MUST refuse to open a database whose version is
     newer than its own, and MUST re-check the version inside each write
     transaction so an already-open store rejects its next mutation after
-    another process migrates the database forward. This guard bounds future
-    version drift only; processes running code from before the guard existed
+    another process migrates the database forward. A database at an older
+    supported version MUST be upgraded in place through a forward-only,
+    numbered migration ladder inside one write transaction: rung N upgrades
+    version N-1 to N, rungs are appended and never edited or reordered, every
+    rung is idempotent, and `SCHEMA_VERSION` equals the ladder length. Rung 1
+    is the baseline schema with admission triggers; rung 2 adds
+    `queue_metadata` carrying an immutable per-database `database_id` and
+    `created_at`. Processes running code from before the version guard existed
     are stopped by rule 20's database constraint, not by this check.
 22. Scheduling priority is operator-owned. Only operator-authored or
     approved-policy seed work MAY specify `priority`, and it MUST be a safe
@@ -186,12 +192,33 @@ state with a `work.requeued` event. Cancel stores the operator reason in
     MUST create at most one active root per kind, and any validation or insert
     failure MUST roll back the whole batch. Repository opt-in MUST be checked
     under the same write lock as root insertion.
+27. `metadata` MUST report the resolved database path, `database_id`,
+    schema version, creation time, item and event counts, and the last event
+    sequence, without exposing any lease token.
+28. `backup <path>` MUST refuse `:memory:`, the live database path, and any
+    existing path; MUST reserve the new file with mode `0600` before writing;
+    MUST copy a consistent snapshot with `VACUUM INTO` on the live connection;
+    and MUST then re-open the copy read-only, pass `PRAGMA quick_check`,
+    and confirm the copy carries the live `database_id`, the supported schema
+    version, and an event sequence no older than the live ledger at the start
+    of the backup, before printing a manifest containing the backup path,
+    `database_id`, schema version, counts, last event sequence, SHA-256 of the
+    file, and creation time. The manifest MUST NOT contain lease tokens; the
+    backup file does, and MUST be stored with the same access controls as the
+    live database.
+29. `verify-backup <path>` MUST re-derive the manifest from the file alone
+    and MUST fail for a missing file, a failed `quick_check`, a schema version
+    other than the supported one, or a missing `database_id`. Verification
+    MUST precede restore: opening a backup with `QueueStore` switches it to
+    WAL mode and changes its digest. Restore is an operator file operation into
+    a new path; no queue command overwrites a live database.
 
 ## Derived artifacts
 
 | Artifact | Derivation |
 | --- | --- |
-| SQLite schema | Created by `QueueStore` from this work-item model; admission triggers and `user_version` per rules 20–21 |
+| SQLite schema | Created and upgraded by `QueueStore`'s migration ladder from this work-item model; admission triggers and `user_version` per rules 20–21 |
+| Backup manifest | Derived by `backup` and re-derived by `verify-backup` per rules 28–29 |
 | MCP worker behavior | Portable `work-fluent-queue` skill constrained by this contract |
 | Testing-gap seed | Deterministic CLI instance of this contract |
 

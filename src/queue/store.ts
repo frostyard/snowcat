@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 
@@ -27,11 +27,41 @@ const MAX_LINEAGE_DEPTH = 4;
 const BUSY_TIMEOUT_MS = 5000;
 
 /**
- * Schema version recorded in SQLite `PRAGMA user_version`. Bump it whenever a
- * migration changes queue semantics so a process running older code refuses
- * to keep writing to a database that newer code has already migrated.
+ * Schema version recorded in SQLite `PRAGMA user_version`. It equals the length
+ * of the migration ladder below: rung N upgrades a database from version N-1
+ * to N. A process running older code refuses to keep writing to a database
+ * that newer code has already migrated; newer code upgrades an older database
+ * in place, forward only, inside one write transaction.
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
+
+/**
+ * Backup manifest emitted by `QueueStore.backup` and re-derived by
+ * `QueueStore.inspectBackup`. `databaseId` is the queue's lineage identity
+ * (rung 2); a manifest whose identity differs from the live database was not
+ * taken from it.
+ */
+export interface QueueBackupManifest {
+  formatVersion: 1;
+  backupPath: string;
+  databaseId: string;
+  schemaVersion: number;
+  lastEventSequence: number;
+  workItems: number;
+  workEvents: number;
+  sha256: string;
+  createdAt: string;
+}
+
+export interface QueueMetadata {
+  databasePath: string;
+  databaseId: string;
+  schemaVersion: number;
+  createdAt: string;
+  workItems: number;
+  workEvents: number;
+  lastEventSequence: number;
+}
 
 /**
  * Principal namespaces written only by Fluent itself (operator CLI, feeders,
@@ -53,17 +83,21 @@ export function validateWorkerIdentity(worker: string): string {
 }
 
 export function queueDatabasePath(): string {
-  return process.env.FLUENT_QUEUE_DB ?? resolve("./data/queue.db");
+  const configured = process.env.FLUENT_QUEUE_DB;
+  if (configured === ":memory:") return configured;
+  return resolve(configured ?? "./data/queue.db");
 }
 
 export class QueueStore {
   private readonly db: DatabaseSync;
+  private readonly databasePath: string;
 
   constructor(
     path: string,
     private readonly clock: () => Date = () => new Date(),
   ) {
-    if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
+    this.databasePath = path === ":memory:" ? path : resolve(path);
+    if (path !== ":memory:") mkdirSync(dirname(this.databasePath), { recursive: true });
     // Install the busy handler while SQLite opens the connection. Setting it
     // later with PRAGMA leaves journal-mode negotiation and startup reads able
     // to fail immediately when another process is closing a write transaction.
@@ -87,6 +121,90 @@ export class QueueStore {
 
   close(): void {
     this.db.close();
+  }
+
+  metadata(): QueueMetadata {
+    const rows = this.db.prepare("SELECT key, value FROM queue_metadata").all() as Row[];
+    const values = new Map(rows.map((row) => [String(row.key), String(row.value)]));
+    const databaseId = values.get("database_id");
+    const createdAt = values.get("created_at");
+    if (!databaseId || !createdAt) throw new Error("queue metadata is incomplete; the database was not migrated");
+    return {
+      databasePath: this.databasePath,
+      databaseId,
+      schemaVersion: this.schemaVersion(),
+      createdAt,
+      ...countRows(this.db),
+    };
+  }
+
+  /**
+   * Copies the live database to a new file with `VACUUM INTO`, a consistent
+   * snapshot taken on this connection without touching the WAL, then re-opens
+   * the copy read-only and verifies it before returning its manifest. The copy
+   * contains lease tokens: store it with the same access controls as the live
+   * database. Restore is an operator file operation; this store never
+   * overwrites a live path. Verify a backup before opening it with
+   * `QueueStore`, because opening switches the copy to WAL mode and changes
+   * its bytes.
+   */
+  backup(path: string): QueueBackupManifest {
+    if (path === ":memory:") throw new Error("backup path must be a filesystem path");
+    const backupPath = resolve(path);
+    if (backupPath === this.databasePath) throw new Error("backup path must differ from the live database path");
+    if (existsSync(backupPath)) throw new Error(`backup path already exists: ${backupPath}`);
+    const before = this.metadata();
+    const createdAt = this.now();
+    mkdirSync(dirname(backupPath), { recursive: true });
+    reserveBackupPath(backupPath);
+    this.db.prepare("VACUUM INTO ?").run(backupPath);
+    const manifest = QueueStore.inspectBackup(backupPath, createdAt);
+    if (manifest.databaseId !== before.databaseId) {
+      throw new Error("completed backup does not carry the live database identity");
+    }
+    if (manifest.schemaVersion !== before.schemaVersion) {
+      throw new Error("completed backup does not carry the live schema version");
+    }
+    if (manifest.lastEventSequence < before.lastEventSequence) {
+      throw new Error("completed backup is older than the live event ledger");
+    }
+    return manifest;
+  }
+
+  /**
+   * Opens a backup read-only, runs `PRAGMA quick_check`, and derives the
+   * manifest a fresh backup would have produced. Compare `databaseId`,
+   * `schemaVersion`, `lastEventSequence`, and `sha256` against the manifest
+   * saved at backup time before restoring.
+   */
+  static inspectBackup(path: string, createdAt?: string): QueueBackupManifest {
+    const backupPath = resolve(path);
+    if (!existsSync(backupPath)) throw new Error(`backup file does not exist: ${backupPath}`);
+    const db = new DatabaseSync(backupPath, { readOnly: true });
+    try {
+      const check = db.prepare("PRAGMA quick_check").all() as Row[];
+      if (check.length !== 1 || String(check[0]?.quick_check) !== "ok") {
+        throw new Error(`backup failed quick_check: ${check.map((row) => String(row.quick_check)).join("; ")}`);
+      }
+      const schemaVersion = Number((db.prepare("PRAGMA user_version").get() as Row).user_version);
+      if (schemaVersion !== SCHEMA_VERSION) {
+        throw new Error(`backup schema version ${schemaVersion} does not match the supported version ${SCHEMA_VERSION}`);
+      }
+      const row = db.prepare("SELECT value FROM queue_metadata WHERE key = 'database_id'").get() as Row | undefined;
+      const databaseId = row ? String(row.value) : "";
+      if (!databaseId) throw new Error("backup carries no database identity");
+      return {
+        formatVersion: 1,
+        backupPath,
+        databaseId,
+        schemaVersion,
+        ...countRows(db),
+        sha256: createHash("sha256").update(readFileSync(backupPath)).digest("hex"),
+        createdAt: createdAt ?? new Date().toISOString(),
+      };
+    } finally {
+      db.close();
+    }
   }
 
   setRepositoryEnabled(repository: string, enabled: boolean): void {
@@ -479,83 +597,20 @@ export class QueueStore {
     }
   }
 
-  /** Runs inside migrate()'s transaction. Every statement must be idempotent. */
+  /**
+   * Runs inside migrate()'s transaction. Applies every rung above the current
+   * `user_version` in order and stamps the version after each one, so a
+   * database at any supported older version upgrades forward in place.
+   */
   private applyMigrations(): void {
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS repositories (
-        slug TEXT PRIMARY KEY,
-        enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS work_items (
-        id TEXT PRIMARY KEY,
-        root_id TEXT NOT NULL,
-        parent_id TEXT REFERENCES work_items(id),
-        repository TEXT NOT NULL REFERENCES repositories(slug),
-        kind TEXT NOT NULL,
-        objective TEXT NOT NULL,
-        instructions TEXT NOT NULL,
-        acceptance_criteria_json TEXT NOT NULL,
-        allowed_actions_json TEXT NOT NULL,
-        delegable_actions_json TEXT NOT NULL,
-        priority INTEGER NOT NULL DEFAULT 0,
-        status TEXT NOT NULL CHECK (status IN ('queued', 'claimed', 'completed', 'blocked', 'cancelled')),
-        admitted INTEGER NOT NULL DEFAULT 1 CHECK (admitted IN (0, 1)),
-        created_by TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        lease_owner TEXT,
-        lease_token TEXT,
-        lease_expires_at TEXT,
-        result_json TEXT
-      );
-
-      CREATE TABLE IF NOT EXISTS work_events (
-        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-        work_item_id TEXT NOT NULL REFERENCES work_items(id),
-        event_type TEXT NOT NULL,
-        actor TEXT NOT NULL,
-        payload_json TEXT NOT NULL,
-        occurred_at TEXT NOT NULL
-      );
-    `);
-
-    const columns = this.db.prepare("PRAGMA table_info(work_items)").all() as Row[];
-    if (!columns.some((column) => String(column.name) === "admitted")) {
-      this.db.exec("ALTER TABLE work_items ADD COLUMN admitted INTEGER NOT NULL DEFAULT 1 CHECK (admitted IN (0, 1))");
+    let version = this.schemaVersion();
+    while (version < SCHEMA_VERSION) {
+      const rung = MIGRATIONS[version];
+      if (!rung) throw new Error(`queue migration ladder has no rung for version ${version + 1}`);
+      rung(this.db, { now: this.now() });
+      version += 1;
+      this.db.exec(`PRAGMA user_version = ${version}`);
     }
-
-    // Databases created before the schema was versioned may carry a claimable
-    // index that predates the admitted column; rebuild it once, then keep it.
-    this.db.exec(`
-      DROP INDEX IF EXISTS work_items_claimable;
-      CREATE INDEX IF NOT EXISTS work_items_claimable
-        ON work_items(status, admitted, lease_expires_at, priority DESC, created_at);
-      CREATE INDEX IF NOT EXISTS work_items_lineage ON work_items(root_id, parent_id);
-    `);
-
-    // Admission is enforced by the database itself so that a process still
-    // running older code (which neither filters on nor writes the admitted
-    // column) cannot claim or create claimable work through legacy SQL.
-    this.db.exec(`
-      CREATE TRIGGER IF NOT EXISTS work_items_claim_requires_admission
-        BEFORE UPDATE OF status ON work_items
-        WHEN NEW.status = 'claimed' AND (OLD.admitted = 0 OR NEW.admitted = 0)
-      BEGIN
-        SELECT RAISE(ABORT, 'work item must be admitted before it can be claimed');
-      END;
-
-      CREATE TRIGGER IF NOT EXISTS work_items_children_start_proposed
-        BEFORE INSERT ON work_items
-        WHEN NEW.parent_id IS NOT NULL AND NEW.admitted = 1
-      BEGIN
-        SELECT RAISE(ABORT, 'child work items must be created as proposed (admitted = 0)');
-      END;
-    `);
-
-    this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   }
 
   private assertSupportedSchemaVersion(): void {
@@ -802,4 +857,125 @@ function boundedLease(seconds = DEFAULT_LEASE_SECONDS): number {
     throw new Error(`leaseSeconds must be an integer between 30 and ${MAX_LEASE_SECONDS}`);
   }
   return seconds;
+}
+
+type Migration = (db: DatabaseSync, context: { now: string }) => void;
+
+/**
+ * Forward-only migration ladder. Index N-1 upgrades a database from version
+ * N-1 to N. Rungs are appended, never edited or reordered, and every statement
+ * is idempotent so an unversioned database that already carries some objects
+ * converges on the same schema.
+ */
+const MIGRATIONS: readonly Migration[] = [
+  // Rung 1: the baseline queue schema, admission triggers, and indexes.
+  (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS repositories (
+        slug TEXT PRIMARY KEY,
+        enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS work_items (
+        id TEXT PRIMARY KEY,
+        root_id TEXT NOT NULL,
+        parent_id TEXT REFERENCES work_items(id),
+        repository TEXT NOT NULL REFERENCES repositories(slug),
+        kind TEXT NOT NULL,
+        objective TEXT NOT NULL,
+        instructions TEXT NOT NULL,
+        acceptance_criteria_json TEXT NOT NULL,
+        allowed_actions_json TEXT NOT NULL,
+        delegable_actions_json TEXT NOT NULL,
+        priority INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL CHECK (status IN ('queued', 'claimed', 'completed', 'blocked', 'cancelled')),
+        admitted INTEGER NOT NULL DEFAULT 1 CHECK (admitted IN (0, 1)),
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        lease_owner TEXT,
+        lease_token TEXT,
+        lease_expires_at TEXT,
+        result_json TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS work_events (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        work_item_id TEXT NOT NULL REFERENCES work_items(id),
+        event_type TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        occurred_at TEXT NOT NULL
+      );
+    `);
+
+    const columns = db.prepare("PRAGMA table_info(work_items)").all() as Row[];
+    if (!columns.some((column) => String(column.name) === "admitted")) {
+      db.exec("ALTER TABLE work_items ADD COLUMN admitted INTEGER NOT NULL DEFAULT 1 CHECK (admitted IN (0, 1))");
+    }
+
+    // Databases created before the schema was versioned may carry a claimable
+    // index that predates the admitted column; rebuild it once, then keep it.
+    db.exec(`
+      DROP INDEX IF EXISTS work_items_claimable;
+      CREATE INDEX IF NOT EXISTS work_items_claimable
+        ON work_items(status, admitted, lease_expires_at, priority DESC, created_at);
+      CREATE INDEX IF NOT EXISTS work_items_lineage ON work_items(root_id, parent_id);
+    `);
+
+    // Admission is enforced by the database itself so that a process still
+    // running older code (which neither filters on nor writes the admitted
+    // column) cannot claim or create claimable work through legacy SQL.
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS work_items_claim_requires_admission
+        BEFORE UPDATE OF status ON work_items
+        WHEN NEW.status = 'claimed' AND (OLD.admitted = 0 OR NEW.admitted = 0)
+      BEGIN
+        SELECT RAISE(ABORT, 'work item must be admitted before it can be claimed');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS work_items_children_start_proposed
+        BEFORE INSERT ON work_items
+        WHEN NEW.parent_id IS NOT NULL AND NEW.admitted = 1
+      BEGIN
+        SELECT RAISE(ABORT, 'child work items must be created as proposed (admitted = 0)');
+      END;
+    `);
+  },
+  // Rung 2: durable per-database lineage identity for backup verification.
+  (db, { now }) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS queue_metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    `);
+    db.prepare("INSERT OR IGNORE INTO queue_metadata (key, value) VALUES ('database_id', ?)").run(randomUUID());
+    db.prepare("INSERT OR IGNORE INTO queue_metadata (key, value) VALUES ('created_at', ?)").run(now);
+  },
+];
+
+if (MIGRATIONS.length !== SCHEMA_VERSION) {
+  throw new Error(`SCHEMA_VERSION ${SCHEMA_VERSION} does not match the migration ladder length ${MIGRATIONS.length}`);
+}
+
+function countRows(db: DatabaseSync): { workItems: number; workEvents: number; lastEventSequence: number } {
+  const items = db.prepare("SELECT COUNT(*) AS count FROM work_items").get() as Row;
+  const events = db.prepare("SELECT COUNT(*) AS count, COALESCE(MAX(sequence), 0) AS last FROM work_events").get() as Row;
+  return {
+    workItems: Number(items.count),
+    workEvents: Number(events.count),
+    lastEventSequence: Number(events.last),
+  };
+}
+
+function reserveBackupPath(path: string): void {
+  try {
+    closeSync(openSync(path, "wx", 0o600));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`backup path could not be reserved without overwrite: ${detail}`);
+  }
 }

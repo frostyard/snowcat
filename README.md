@@ -108,6 +108,26 @@ client to "work the Fluent queue." The portable
 [worker skill](.agents/skills/work-fluent-queue/SKILL.md) claims at most one
 item per invocation by default.
 
+## Operating the queue
+
+Under [ADR-0059](docs/adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md)
+the queue is the v1 work engine and its database is durable state; the
+[recovery plan](docs/plans/recover.md) is the current delivery order. Run it on
+one operator host:
+
+```bash
+export FLUENT_QUEUE_DB=/var/lib/fluent/queue.db   # absolute; default is ./data/queue.db
+npm run --silent queue -- metadata                 # path, database_id, schema version, counts
+npm run --silent queue -- backup /var/backups/fluent/queue-$(date -u +%Y%m%dT%H%M%SZ).db > manifest.json
+npm run --silent queue -- verify-backup /var/backups/fluent/queue-<stamp>.db
+```
+
+Opening an older database upgrades it in place through a forward-only
+migration ladder; a newer one is refused. Restart MCP servers after upgrading
+Fluent — an already-open process refuses its next write once the schema moves.
+Backups contain lease tokens and are created `0600`; restore is a file copy to
+a new path after `verify-backup`, never an overwrite of the live file.
+
 The optional local clerk defaults to `http://10.0.1.200:13305/v1` and
 `Qwen3.8-27B-GGUF-UD-Q4_K_XL`. Fluent remains useful when that endpoint is
 absent, and subscription credentials never enter Fluent.

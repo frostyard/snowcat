@@ -152,11 +152,20 @@ removed. -->
   outcomes retain the exact response revision; `unavailable` is a Fluent
   acquisition outcome with no invented GitHub revision. The command never
   changes repository enrollment.
-- Keep the target control-plane store separate from the disposable queue-spike
-  store. Target schema and startup live in
+- The queue store in [`src/queue/store.ts`](src/queue/store.ts) and the MCP
+  contract are the v1 work engine
+  ([ADR-0059](docs/adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md));
+  the [recovery plan](docs/plans/recover.md) is the current delivery order.
+  Change the queue schema only by appending an idempotent rung to its
+  migration ladder and bumping `SCHEMA_VERSION`; never edit or reorder a rung.
+  Use `npm run --silent queue -- metadata | backup <new-path> | verify-backup
+  <path>` for host operations; no queue command overwrites a live database.
+- Keep the target control-plane store separate from the queue store. It is an
+  authority and observation sidecar: target schema and startup live in
   [`src/control/store.ts`](src/control/store.ts); closed vocabulary lives only
   in [`src/control/registry.ts`](src/control/registry.ts). Do not add a generic
-  record or fact mutation surface.
+  record or fact mutation surface, and do not add control-plane registry or
+  schema versions that no recovery-plan phase consumes.
 - Run `npm run check` before calling any change done. CI must run the same
   recipe, so a local pass is a CI pass.
 - Tests are `*.test.ts` files anywhere under `test/`, discovered recursively by

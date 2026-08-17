@@ -658,8 +658,9 @@ test("a queue store refuses databases newer than its schema version, even after 
   // A later migration from another process advances the database version.
   other.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`);
 
-  assert.throws(() => new QueueStore(path), /schema version 2 is newer than the supported version 1/);
-  assert.throws(() => seedTestingGap(queue, "frostyard/core"), /schema version 2 is newer than the supported version 1/);
+  const newer = new RegExp(`schema version ${SCHEMA_VERSION + 1} is newer than the supported version ${SCHEMA_VERSION}`);
+  assert.throws(() => new QueueStore(path), newer);
+  assert.throws(() => seedTestingGap(queue, "frostyard/core"), newer);
   assert.throws(() => queue.setRepositoryEnabled("frostyard/core", false), /newer than the supported version/);
   assert.equal(queue.list({ repository: "frostyard/core" }).length, 0);
   assert.equal(
