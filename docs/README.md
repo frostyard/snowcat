@@ -83,6 +83,7 @@ Docs are split by the question they answer:
 - [Core snapshot ingestion](design/core-snapshot-ingestion.md)
 - [Repository enrollment](design/repository-enrollment.md)
 - [Success-measure verification](design/success-measure-verification.md)
+- [Operating enforced required checks](design/required-check-ruleset-operations.md)
 
 ### Specs
 

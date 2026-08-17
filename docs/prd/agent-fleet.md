@@ -2151,7 +2151,9 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   [control-plane kernel](../design/control-plane-kernel.md), and
   [core snapshot ingestion](../design/core-snapshot-ingestion.md), plus
   [repository enrollment](../design/repository-enrollment.md) and
-  [success-measure verification](../design/success-measure-verification.md)
+  [success-measure verification](../design/success-measure-verification.md),
+  with the operator-facing
+  [required-check ruleset runbook](../design/required-check-ruleset-operations.md)
 - Contracts: [work queue](../specs/work-queue.md),
   [control-plane kernel](../specs/control-plane-kernel.md), and
   [core snapshot verification](../specs/core-snapshot-verification.md), plus

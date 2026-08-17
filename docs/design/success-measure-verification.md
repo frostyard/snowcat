@@ -184,6 +184,8 @@ count or elapsed time into outcome success.
   activate until its source adapter and every other referenced mechanism land.
 - A required-check window cannot begin on a repository without an active,
   non-empty, integration-bound GitHub ruleset applying to its default branch.
+  Operators configure and verify that boundary through the
+  [required-check ruleset runbook](required-check-ruleset-operations.md).
 - Keep old retained snapshots and profile bytes available for rollback and
   historical evidence explanation.
 
@@ -202,6 +204,8 @@ count or elapsed time into outcome success.
 - Built in:
   [product foundation roadmap — Phases 2 and 9](../plans/product-foundation-roadmap.md)
 - Product: [agent fleet PRD](../prd/agent-fleet.md)
+- Operations:
+  [enforced required-check rulesets](required-check-ruleset-operations.md)
 - Source constraints:
   [GitHub check-runs API](https://docs.github.com/en/rest/checks/runs) and
   [GitHub protected-branch required checks](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches),

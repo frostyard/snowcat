@@ -137,6 +137,9 @@ does not itself enroll the repository in the fleet.
   boundary from
   [ADR-0056](../adr/0056-derive-required-checks-from-enforced-github-rules.md).
   The earlier `github-check-runs:v1` placeholder will not be registered.
+- Configure and verify each initial repository through the
+  [enforced required-check ruleset runbook](../design/required-check-ruleset-operations.md)
+  before opening its first observation window.
 - Author and implement the GitHub observation and reconciliation design/spec
   required by
   [ADR-0018](../adr/0018-bind-worker-sessions-and-verify-github-artifacts.md).
