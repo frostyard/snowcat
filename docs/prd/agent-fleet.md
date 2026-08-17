@@ -1850,8 +1850,8 @@ contract or code exists.
 
 ### Implemented vertical-slice baseline
 
-The code currently implements only the host-local queue vertical slice described
-by the [current design](../design/queue-execution-boundary.md),
+The code retains the host-local queue vertical slice described by the
+[queue design](../design/queue-execution-boundary.md),
 [work-queue spec](../specs/work-queue.md), and
 [completed spike plan](../plans/queue-vertical-spike.md):
 
@@ -1865,10 +1865,10 @@ by the [current design](../design/queue-execution-boundary.md),
 - optional local-model queue-clerk compatibility outside the control path; and
 - tests for current admission, lease, lineage, concurrency, and MCP boundaries.
 
-The spike does **not** implement the later accepted core importer,
-RepositoryController, FleetController, ProcessObserver, GitHub reconciliation,
-worker grants, factored scheduler, OperatorInbox, maintenance roles, feature
-delivery pipeline, or outcome verification.
+That disposable spike does **not** implement the target control plane described
+below. FleetController, ProcessObserver, worker grants, the factored scheduler,
+OperatorInbox, maintenance roles, the feature-delivery pipeline, GitHub
+artifact observation, and outcome fact establishment remain unimplemented.
 
 The separate target [control-plane kernel](../design/control-plane-kernel.md)
 now implements clean database identity, a distinct stable implicit local-
@@ -1913,10 +1913,13 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   a closed evaluator permits automatic held-work recovery only after unchanged
   transient GitHub or surface outages; target work persistence and operator
   disposition commands remain. Snapshot validation now also accepts the
-  backward-compatible verification-profile extension, pins its exact schema,
-  validates and retains live profiles and conformance fixtures, and prevents
-  automatic removal or mutation after activation without claiming that any
-  measure mechanism is executable yet.
+  backward-compatible verification-profile and Goal extensions, pins their
+  exact schemas, validates referenced profiles, parameters, lifecycle, and
+  conformance fixtures, and prevents unsafe automatic removal or mutation.
+  The closed mechanism registry now contains the real callable
+  `conclusive-run-rate:v1` evaluator; its GitHub source adapter, evidence
+  retention, fact establishment, and Goal application remain unimplemented, so
+  a representative live Goal still fails closed.
   The kernel does not yet implement target work, general fact mutation, general
   operational state, fleet coordination, or worker mutation and never reads or
   imports the spike database.
@@ -1925,7 +1928,7 @@ elapsed source freshness from the stricter new-admission gate. Its durable
 
 | Track | What remains before implementation is well specified |
 | --- | --- |
-| Core contract and migration | Remaining organization JSON Schemas and fixtures and canonical-surface migrations; verification-profile import is implemented but goals, referenced-profile resolution, mechanism support, and evidence execution remain |
+| Core contract and migration | Remaining organization JSON Schemas, fixtures, and canonical-surface migrations; verification-profile and Goal import are implemented, while all remaining record kinds, Goal application, source adapters, evidence retention, and fact establishment remain |
 | Control-plane domain model | Execute the [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md): specify exact durable schemas, predicates, reducers, events, projections, invalidation, idempotency, and state machines in a fresh target database shared by RepositoryController, FleetController, ProcessObserver, scheduling, and decisions |
 | GitHub observation | GitHub App permissions, installation and actor mapping, CI/review/merge and artifact reconciliation, polling versus webhooks, forks, outage behavior, and external decision signals |
 | Workflow contracts | Versioned role briefs, evidence schemas, skills, attempt budgets, and deterministic gates for maintenance, planning, review, implementation, repair, and verification |
@@ -1984,9 +1987,13 @@ elapsed source freshness from the stricter new-admission gate. Its durable
 - What exact plan and slice limits, predecessor-signal vocabulary, publication
   UX, target-owner review rules, and old-plan reconciliation transitions finish
   the approved delivery-plan contract?
-- Which initial verification profiles and closed Fluent mechanism versions
-  ship for delivery, which named roles satisfy attestation policies, and what
-  evidence retention, expiry, and confounding rules apply to each profile?
+- Beyond the implemented `conclusive-run-rate:v1` evaluator, which initial
+  verification profiles and closed Fluent mechanism versions ship for
+  delivery, which named roles satisfy attestation policies, and what evidence
+  retention, expiry, and confounding rules apply to each profile?
+- What exact expected population, required-check identity, rerun reduction,
+  conclusion classification, pagination proof, and fork behavior make
+  `github-check-runs:v1` complete enough to register?
 - What reviewer capability profile, trigger UX, fingerprint algorithm,
   material-scope lineage reset, and unavailable-CI policy implement bounded
   adversarial review consistently across PRDs, plans, and pull requests?
@@ -2132,6 +2139,8 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   [ADR-0053](../adr/0053-resume-only-unchanged-transient-held-work.md), with
   executable success-measure contracts in
   [ADR-0054](../adr/0054-bind-success-measures-to-versioned-verification-profiles.md),
+  with evidence populations separated from rate evaluation in
+  [ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md),
   and the
   [Fluent ubiquitous language](../domain/ubiquitous-language.md)
 - Designs: [queue execution boundary](../design/queue-execution-boundary.md),
@@ -2150,7 +2159,9 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   and [repository surface reconciliation](../specs/repository-surface-reconciliation.md),
   and [local repository holds](../specs/repository-local-holds.md), and
   [held-work recovery](../specs/repository-held-work-recovery.md), and
-  [verification-profile ingestion](../specs/verification-profile-ingestion.md)
+  [verification-profile ingestion](../specs/verification-profile-ingestion.md),
+  [Goal ingestion](../specs/goal-ingestion.md), and the
+  [conclusive-run-rate evaluator](../specs/conclusive-run-rate-evaluator.md)
 - Delivery: [queue vertical spike](../plans/queue-vertical-spike.md),
   [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md),
   [core snapshot ingestion](../plans/core-snapshot-ingestion.md), and

@@ -69,6 +69,7 @@ Docs are split by the question they answer:
 - [0052 — Bind local repository holds to explicit operator decisions](adr/0052-bind-local-repository-holds-to-explicit-operator-decisions.md)
 - [0053 — Resume only unchanged transient held work](adr/0053-resume-only-unchanged-transient-held-work.md)
 - [0054 — Bind success measures to versioned verification profiles](adr/0054-bind-success-measures-to-versioned-verification-profiles.md)
+- [0055 — Separate evidence population from rate evaluation](adr/0055-separate-evidence-population-from-rate-evaluation.md)
 
 ### Domain language
 
@@ -97,6 +98,7 @@ Docs are split by the question they answer:
 - [Repository held-work recovery](specs/repository-held-work-recovery.md)
 - [Verification-profile ingestion](specs/verification-profile-ingestion.md)
 - [Goal ingestion](specs/goal-ingestion.md)
+- [Conclusive-run-rate evaluator](specs/conclusive-run-rate-evaluator.md)
 
 ### Plans
 

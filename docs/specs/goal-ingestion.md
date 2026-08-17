@@ -51,10 +51,10 @@ their exact prior shapes.
    mechanisms. Live Goals resolve only the live catalog.
 8. Before a live Goal can enter a candidate report, every adapter, evaluator,
    or attestation policy named by its profiles MUST have a real versioned entry
-   in Fluent's closed implementation registry. The registry is currently
-   empty, so Goal-capable snapshots with fixtures and zero live Goals are
-   accepted, while every live Goal is rejected with bounded unsupported-
-   mechanism detail.
+   in Fluent's closed implementation registry. The registry currently contains
+   `conclusive-run-rate:v1` but no source adapter, so Goal-capable snapshots
+   with fixtures and zero live Goals are accepted while the representative live
+   Goal is rejected with bounded `github-check-runs:v1` detail.
 9. Once implementations permit live Goals, later automatic activation MUST
    retain the envelope and Goal schemas and every historically activated Goal
    path, including after rollback. Goal content may change, but transition from
@@ -90,7 +90,8 @@ their exact prior shapes.
   [Core snapshot ingestion](../design/core-snapshot-ingestion.md) and
   [success-measure verification](../design/success-measure-verification.md)
 - Supporting contract:
-  [verification-profile ingestion](verification-profile-ingestion.md)
+  [verification-profile ingestion](verification-profile-ingestion.md) and the
+  [conclusive-run-rate evaluator](conclusive-run-rate-evaluator.md)
 - Producer contract:
   [Core organization goals](https://github.com/frostyard/core/blob/main/docs/specs/organization-goals.md)
 - Delivery: [Core snapshot ingestion plan](../plans/core-snapshot-ingestion.md)

@@ -111,7 +111,11 @@ test("the bundled validator accepts Goal-capable Core and enforces retained life
         liveProfile,
         entryFor(liveGoalPath, json(validGoal("active"))),
       ]),
-    /references unsupported verification mechanisms/,
+    (error) =>
+      error instanceof CoreValidationError &&
+      /references unsupported verification mechanisms/.test(error.message) &&
+      error.details.length === 1 &&
+      error.details[0] === "source adapter github-check-runs:v1",
   );
 
   const catalogWithGoal = (status: Parameters<typeof validGoal>[0]) => ({

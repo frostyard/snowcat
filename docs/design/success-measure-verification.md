@@ -2,27 +2,30 @@
 
 Living document. Rationale:
 [ADR-0031](../adr/0031-separate-delivery-from-outcome-achievement.md) and
-[ADR-0054](../adr/0054-bind-success-measures-to-versioned-verification-profiles.md).
+[ADR-0054](../adr/0054-bind-success-measures-to-versioned-verification-profiles.md),
+with evidence-population boundaries from
+[ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md).
 Current contract:
-[verification-profile ingestion](../specs/verification-profile-ingestion.md)
-and [Goal ingestion](../specs/goal-ingestion.md).
+[verification-profile ingestion](../specs/verification-profile-ingestion.md),
+[Goal ingestion](../specs/goal-ingestion.md), and the first executable
+[conclusive-run-rate evaluator](../specs/conclusive-run-rate-evaluator.md).
 
 ## Overview
 
 Success-measure verification connects reviewed outcome intent in Core to
 versioned executable mechanisms in Fluent without executing repository-authored
 code or treating a model verdict as authority. The implemented foundation
-imports and retains profile definitions and validates Goal fixtures, references,
-parameters, and lifecycle rules. Mechanism implementations, Goal application,
-evidence collection, evaluation, attestation, and aggregation remain later
-delivery work.
+imports and retains profile definitions, validates Goal fixtures, references,
+parameters, and lifecycle rules, and exposes one pure registered evaluator.
+Goal application, source adapters, evidence retention, fact establishment,
+attestation, and aggregation remain later delivery work.
 
 ```text
 Core profile + measure declaration
           │ strict snapshot validation and exact retention
           ▼
 profile resolution + parameter validation          (Goal import implemented)
-          │ closed Fluent mechanism registry
+          │ closed Fluent mechanism registry       (first evaluator implemented)
           ▼
 trusted observations / deterministic facts / attestation
           │ versioned evaluation and evidence retention
@@ -84,14 +87,16 @@ evidence mode, typed subject, absolute start/end instants, exact profile ID and
 version, and parameters. Resolution fails when the profile is absent, the mode
 differs, parameters fail its embedded schema, the subject kind is unsupported,
 the window is invalid, or any named mechanism version is absent from Fluent's
-closed registry. That registry currently has no implementations, so the merged
-fixture-only Goal contract validates while a live Goal fails closed.
+closed registry. That registry currently contains
+`conclusive-run-rate:v1` but not its proposed `github-check-runs:v1` source
+adapter, so the merged fixture-only Goal contract validates while the
+representative live Goal still fails closed.
 
 Profiles may be published before they are referenced. Publication alone does
 not claim executable support, create a controller timer, collect observations,
 or make work eligible.
 
-### Evidence and evaluation
+### Evidence population and evaluation
 
 A deterministic evaluator consumes only registered trusted facts and records
 the exact predicate and mechanism versions, subject revisions, inputs, and
@@ -101,11 +106,29 @@ confounding evidence without holding a worker lease. A human-attested profile
 routes a typed decision to an authorized named principal and retains the
 subject, evidence, rationale, decision, and time.
 
-Each evaluation produces a conclusive satisfied or failed result, or `unable`
-when required evidence is missing, unavailable, unsupported, or materially
-confounded. A capable worker may propose or critique evidence but cannot write
-the verification fact. Aggregation preserves every criterion result and follows
-ADR-0031; it never converts merge count or elapsed time into outcome success.
+ADR-0055 requires a source adapter to produce a closed evidence population
+independently of the evaluator. Missing expected occurrences remain in that
+population; source incompleteness cannot shrink the denominator. The implemented
+`conclusive-run-rate:v1` evaluator validates unique keys and classifications,
+counts `conclusive` occurrences over the full population, and compares the
+integer ratio to the declared threshold without rounded display arithmetic. An
+open window, incomplete coverage, or empty population returns `unable`.
+
+The evaluator deliberately does not decide which GitHub commits or required
+checks belong in the population, how reruns or duplicate names collapse, or
+which GitHub conclusions are conclusive. Those are versioned
+`github-check-runs` adapter semantics and remain unsupported. GitHub's API lists
+check runs for an exact ref, may cap a ref query at runs associated with the
+1,000 most recent check suites, and can return incomplete fork associations;
+registering the adapter before those boundaries are implemented would make an
+unsupported claim.
+
+Each completed mechanism evaluation produces `satisfied`, `failed`, or
+`unable`. A capable worker may propose or critique evidence but cannot write the
+verification fact. The current evaluator returns a result only; evidence
+retention and fact establishment are not yet implemented. Future aggregation
+preserves every criterion result and follows ADR-0031; it never converts merge
+count or elapsed time into outcome success.
 
 ## Operational notes
 
@@ -114,9 +137,9 @@ ADR-0031; it never converts merge count or elapsed time into outcome success.
   consumer byte drift, not a retryable source outage.
 - A profile fixture failure rejects the complete candidate and leaves the last
   active snapshot authoritative.
-- Imported profiles currently have no execution surface. Goal fixtures prove
-  the contract, but a live Goal cannot activate until its closed mechanism
-  implementations land.
+- The closed registry now resolves `conclusive-run-rate:v1` to real callable
+  code. Goal fixtures prove the surrounding contract, but a live Goal cannot
+  activate until its source adapter and every other referenced mechanism land.
 - Keep old retained snapshots and profile bytes available for rollback and
   historical evidence explanation.
 
@@ -124,11 +147,16 @@ ADR-0031; it never converts merge count or elapsed time into outcome success.
 
 - Rationale:
   [ADR-0031](../adr/0031-separate-delivery-from-outcome-achievement.md) and
-  [ADR-0054](../adr/0054-bind-success-measures-to-versioned-verification-profiles.md)
+  [ADR-0054](../adr/0054-bind-success-measures-to-versioned-verification-profiles.md),
+  with [ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md)
 - Contracts:
   [verification-profile ingestion](../specs/verification-profile-ingestion.md),
-  [Goal ingestion](../specs/goal-ingestion.md), and
+  [Goal ingestion](../specs/goal-ingestion.md),
+  [conclusive-run-rate evaluator](../specs/conclusive-run-rate-evaluator.md), and
   [Core snapshot verification](../specs/core-snapshot-verification.md)
 - Built in:
   [product foundation roadmap — Phases 2 and 9](../plans/product-foundation-roadmap.md)
 - Product: [agent fleet PRD](../prd/agent-fleet.md)
+- Source constraints:
+  [GitHub check-runs API](https://docs.github.com/en/rest/checks/runs) and
+  [GitHub protected-branch required checks](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)

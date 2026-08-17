@@ -128,6 +128,13 @@ does not itself enroll the repository in the fleet.
 
 ## Phase 4 — Observe GitHub without impersonating workers (large)
 
+- The source-independent `conclusive-run-rate:v1` arithmetic evaluator is
+  implemented under
+  [ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md)
+  and its [exact contract](../specs/conclusive-run-rate-evaluator.md). The
+  `github-check-runs:v1` adapter remains deliberately unregistered until this
+  phase defines and implements population selection, source completeness,
+  reruns, required-check identity, pagination, and fork behavior.
 - Author and implement the GitHub observation and reconciliation design/spec
   required by
   [ADR-0018](../adr/0018-bind-worker-sessions-and-verify-github-artifacts.md).
@@ -286,6 +293,10 @@ does not itself enroll the repository in the fleet.
 - **Numeric targets:** collect Phase 5–9 baselines before setting targets, but
   define the measurement formulas and minimum sample rules earlier so targets
   cannot be selected after seeing favorable data.
+- **GitHub check population:** decide whether the first adapter observes
+  default-branch commits, merged pull-request head revisions, or another exact
+  population, and define required-check identity and conclusion classification
+  before registering `github-check-runs:v1`.
 - **UI timing:** retain CLI/API as the acceptance surface until Phase 5 behavior
   stabilizes; do not use UI work to conceal unsettled decision semantics.
 

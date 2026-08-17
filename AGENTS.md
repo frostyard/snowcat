@@ -64,6 +64,11 @@ removed. -->
   [`src/core/validator.ts`](src/core/validator.ts). Goal fixtures validate
   without implementations; a live Goal fails activation until every referenced
   adapter, evaluator, or attestation policy has a real versioned registry entry.
+- Register verification mechanisms only through callable implementations in
+  [`src/verification/registry.ts`](src/verification/registry.ts). The current
+  registry supports `conclusive-run-rate:v1` but deliberately not
+  `github-check-runs:v1`; source incompleteness must never shrink an evaluator's
+  evidence population.
 - Use `npm run --silent core -- activate <expected-control-plane-sequence>` for
   automatic Core authority mutation. After the first activation it
   verifies Git ancestry from the active source commit, then independently

@@ -5,6 +5,11 @@ import { Ajv2020, type ValidateFunction } from "ajv/dist/2020.js";
 import { getNodeValue, parseTree, printParseErrorCode, type Node as JsonNode } from "jsonc-parser";
 
 import { canonicalJson, sha256, type JsonValue } from "../control/encoding.ts";
+import {
+  supportsVerificationAttestationPolicy,
+  supportsVerificationEvaluator,
+  supportsVerificationSourceAdapter,
+} from "../verification/registry.ts";
 
 const SCHEMA_PATHS = {
   envelope: "organization/schemas/v1/envelope.schema.json",
@@ -46,12 +51,6 @@ const FIXTURE_PATH =
   /^organization\/fixtures\/v1\/(valid|invalid)\/(repository-agent-governance|repository-surfaces|repository|verification-profile|goal)(?:-[a-z0-9-]+)?\.json$/;
 const MAX_VERIFICATION_PROFILE_BYTES = 65_536;
 const MAX_GOAL_BYTES = 65_536;
-const SUPPORTED_VERIFICATION_MECHANISMS = Object.freeze({
-  evaluators: new Set<string>(),
-  sourceAdapters: new Set<string>(),
-  attestationPolicies: new Set<string>(),
-});
-
 type SchemaKind = keyof typeof SCHEMA_PATHS;
 type FixtureKind = Exclude<SchemaKind, "envelope">;
 type OptionalSchemaKind = "verificationProfile" | "envelope" | "goal";
@@ -691,19 +690,19 @@ function assertVerificationProfileExecutable(
   const unsupported: string[] = [];
   if (profile.mechanism.kind === "deterministic-evaluator") {
     const key = mechanismKey(profile.mechanism.evaluator);
-    if (!SUPPORTED_VERIFICATION_MECHANISMS.evaluators.has(key)) unsupported.push(`evaluator ${key}`);
+    if (!supportsVerificationEvaluator(key)) unsupported.push(`evaluator ${key}`);
   } else if (profile.mechanism.kind === "observational-evaluator") {
     const adapterKey = mechanismKey(profile.mechanism.source_adapter);
     const evaluatorKey = mechanismKey(profile.mechanism.evaluator);
-    if (!SUPPORTED_VERIFICATION_MECHANISMS.sourceAdapters.has(adapterKey)) {
+    if (!supportsVerificationSourceAdapter(adapterKey)) {
       unsupported.push(`source adapter ${adapterKey}`);
     }
-    if (!SUPPORTED_VERIFICATION_MECHANISMS.evaluators.has(evaluatorKey)) {
+    if (!supportsVerificationEvaluator(evaluatorKey)) {
       unsupported.push(`evaluator ${evaluatorKey}`);
     }
   } else {
     const key = mechanismKey(profile.mechanism.attestation_policy);
-    if (!SUPPORTED_VERIFICATION_MECHANISMS.attestationPolicies.has(key)) {
+    if (!supportsVerificationAttestationPolicy(key)) {
       unsupported.push(`attestation policy ${key}`);
     }
   }

@@ -1,7 +1,7 @@
 # Domain language: Fluent
 
 - **Status:** Living
-- **Last updated:** 2026-08-16
+- **Last updated:** 2026-08-17
 
 ## Scope
 
@@ -583,6 +583,26 @@ measure, policy, fact, or executable script from Core.
 
 **Avoid:** metric DSL; goal; predicate contract; model rubric; remote query.
 ([ADR-0054](../adr/0054-bind-success-measures-to-versioned-verification-profiles.md))
+
+#### Evidence population
+
+The closed set of uniquely keyed expected occurrences that a registered source
+adapter declares complete for one subject and observation window. It includes
+missing expected occurrences and is not whatever records a source happened to
+return.
+
+**Avoid:** API response list; successful observations only; evaluator-selected
+sample. ([ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md))
+
+#### Verification result
+
+The bounded `satisfied`, `failed`, or `unable` output of one exact verification
+mechanism version over retained evidence. A result is not by itself a Goal
+lifecycle change, aggregate outcome fact, or worker recommendation.
+
+**Avoid:** Goal status; model verdict; generic success.
+([ADR-0031](../adr/0031-separate-delivery-from-outcome-achievement.md),
+[ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md))
 
 ### Organization governance
 
