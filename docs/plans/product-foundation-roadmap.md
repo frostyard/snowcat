@@ -81,6 +81,13 @@ does not itself enroll the repository in the fleet.
   [ingestion plan](core-snapshot-ingestion.md). Fluent can now retain and
   activate the disabled fixture declaration without treating it as enrollment.
   The remaining record kinds below keep this phase open.
+- Core PR #81 proposes the versioned verification-profile producer contract.
+  Fluent's backward-compatible consumer support is implemented first through
+  the [success-measure verification design](../design/success-measure-verification.md)
+  and [profile-ingestion contract](../specs/verification-profile-ingestion.md):
+  legacy snapshots remain valid, while the extension is pinned, retained, and
+  cannot be removed or mutated by automatic forward activation after adoption,
+  including after rollback.
 - In `frostyard/core`, record the required core-side ADR that changes its current
   repository boundary, then author the canonical paths and strict schemas from
   [ADRs 0007–0017](../adr/0007-use-frostyard-core-as-the-organization-authority.md)
@@ -229,7 +236,9 @@ does not itself enroll the repository in the fleet.
   [ADRs 0030–0031](../adr/0030-execute-one-slice-through-one-pull-request.md).
 - Exercise deterministic, observational, and human-attested evidence modes while
   keeping implementation-complete, delivered, measuring, and outcome-achieved
-  distinct.
+  distinct. Every criterion and measure resolves through the exact profile,
+  subject, absolute window, and parameter rules in the
+  [success-measure verification design](../design/success-measure-verification.md).
 - **Done when:** one approved core PRD becomes an adversarially reviewed plan,
   produces ordered PRs through operator-started workers, verifies every slice at
   its merge revision, and reports initiative success measures without treating

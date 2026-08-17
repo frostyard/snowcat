@@ -68,6 +68,7 @@ Docs are split by the question they answer:
 - [0051 — Pin surfaces to the observed default-branch head](adr/0051-pin-surfaces-to-the-observed-default-branch-head.md)
 - [0052 — Bind local repository holds to explicit operator decisions](adr/0052-bind-local-repository-holds-to-explicit-operator-decisions.md)
 - [0053 — Resume only unchanged transient held work](adr/0053-resume-only-unchanged-transient-held-work.md)
+- [0054 — Bind success measures to versioned verification profiles](adr/0054-bind-success-measures-to-versioned-verification-profiles.md)
 
 ### Domain language
 
@@ -79,6 +80,7 @@ Docs are split by the question they answer:
 - [Control-plane kernel](design/control-plane-kernel.md)
 - [Core snapshot ingestion](design/core-snapshot-ingestion.md)
 - [Repository enrollment](design/repository-enrollment.md)
+- [Success-measure verification](design/success-measure-verification.md)
 
 ### Specs
 
@@ -93,6 +95,7 @@ Docs are split by the question they answer:
 - [Repository surface reconciliation](specs/repository-surface-reconciliation.md)
 - [Local repository holds](specs/repository-local-holds.md)
 - [Repository held-work recovery](specs/repository-held-work-recovery.md)
+- [Verification-profile ingestion](specs/verification-profile-ingestion.md)
 
 ### Plans
 

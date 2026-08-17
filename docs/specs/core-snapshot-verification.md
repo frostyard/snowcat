@@ -30,10 +30,12 @@ Success emits one JSON object with these fields:
 | `commitId`, `treeId` | string | Exact 40- or 64-lowercase-hex Git commit and `organization` tree objects |
 | `catalogDigest` | SHA-256 string | Digest of the canonical path-sorted file catalog |
 | `fileCount`, `totalBytes` | integer | Bounded materialized tree totals |
-| `schemaDigests` | object | Exact expected/fetched schema-blob digests by contract kind |
+| `schemaDigests` | object | Exact expected/fetched schema-blob digests by contract kind; the verification-profile digest is absent only for a legacy catalog |
 | `repositoryCount` | integer | Number of valid live repository declarations |
+| `verificationProfileCount` | integer | Number of valid live verification profiles; zero for a legacy catalog |
 | `validFixtureCount`, `invalidFixtureCount` | integer | Conformance fixtures that behaved as declared |
 | `repositories` | array | Declaration path, byte digest, and strictly validated declaration |
+| `verificationProfiles` | array | Profile path, byte digest, and strictly validated profile; empty for a legacy catalog |
 
 Failure emits no success JSON, writes a bounded diagnostic to stderr, and exits
 nonzero.
@@ -60,18 +62,20 @@ nonzero.
    `organization/`. Symlinks, submodules, non-blobs, invalid UTF-8 paths,
    traversal components, duplicates, and unknown paths MUST reject the entire
    candidate.
-7. `organization/README.md`, all three supported v1 schemas, and the v1
-   repository-surface contract MUST exist. A schema blob MUST match Fluent's
-   exact expected SHA-256 digest before its fetched content is used for parity
-   comparison.
+7. `organization/README.md`, the three required v1 schemas, and the v1
+   repository-surface contract MUST exist. The optional profile-capable
+   extension MUST satisfy the
+   [verification-profile ingestion contract](verification-profile-ingestion.md).
+   Every present schema blob MUST match Fluent's exact expected SHA-256 digest
+   before its fetched content is used for parity comparison.
 8. Fluent MUST compile its bundled schemas, not dynamically trust a changed
    fetched schema. The bundled and fetched parsed schema content MUST be
    canonically equal.
 9. Every JSON document interpreted by the contract MUST be strict UTF-8 JSON
    without comments, trailing commas, empty content, or duplicate object keys.
-10. Live records and conformance fixtures MUST satisfy their schema and the
-    path, identity, owner, surface, repository-ID, and protected-boundary
-    invariants implemented by core PR #80.
+10. Live records, contracts, and conformance fixtures MUST satisfy their schema
+    and the path, identity, owner, surface, repository-ID, protected-boundary,
+    and verification-profile invariants implemented by Core PRs #80 and #81.
 11. Every recognized valid fixture MUST pass and every recognized invalid
     fixture MUST fail. At least one of each MUST exist.
 12. The catalog digest MUST cover every recognized tree entry's path, regular
@@ -99,5 +103,6 @@ nonzero.
   enrollment semantics from
   [ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md)
 - Context: [core snapshot ingestion](../design/core-snapshot-ingestion.md)
+- Extension: [verification-profile ingestion](verification-profile-ingestion.md)
 - Downstream authority contract: [Core snapshot activation](core-snapshot-activation.md)
 - Delivery: [core snapshot ingestion plan](../plans/core-snapshot-ingestion.md)

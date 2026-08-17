@@ -871,28 +871,35 @@ function isIntegrityPayload(value: unknown): value is IntegrityPayload {
 }
 
 function isCoreSnapshotDefinitionPayload(value: unknown): value is CoreSnapshotDefinitionPayload {
+  const requiredKeys = [
+    "snapshotId",
+    "sourceRepositoryId",
+    "sourceUrl",
+    "sourceRef",
+    "sourceCommitId",
+    "sourceTreeId",
+    "catalogDigest",
+    "fileCount",
+    "totalBytes",
+    "repositoryCount",
+    "validFixtureCount",
+    "invalidFixtureCount",
+    "schemaDigests",
+    "importedAt",
+  ];
   if (
-    !isExactObject(value, [
-      "snapshotId",
-      "sourceRepositoryId",
-      "sourceUrl",
-      "sourceRef",
-      "sourceCommitId",
-      "sourceTreeId",
-      "catalogDigest",
-      "fileCount",
-      "totalBytes",
-      "repositoryCount",
-      "validFixtureCount",
-      "invalidFixtureCount",
-      "schemaDigests",
-      "importedAt",
-    ])
+    !isExactObject(value, requiredKeys) &&
+    !isExactObject(value, [...requiredKeys, "verificationProfileCount"])
   ) {
     return false;
   }
   const schemaDigests = value.schemaDigests;
-  if (!isExactObject(schemaDigests, ["repository", "surfaces", "governance"])) return false;
+  if (
+    !isExactObject(schemaDigests, ["repository", "surfaces", "governance"]) &&
+    !isExactObject(schemaDigests, ["repository", "surfaces", "governance", "verificationProfile"])
+  ) {
+    return false;
+  }
   return (
     typeof value.snapshotId === "string" &&
     isUuidV7(value.snapshotId) &&
@@ -911,6 +918,8 @@ function isCoreSnapshotDefinitionPayload(value: unknown): value is CoreSnapshotD
     isPositiveInteger(value.fileCount) &&
     isNonNegativeInteger(value.totalBytes) &&
     isNonNegativeInteger(value.repositoryCount) &&
+    (value.verificationProfileCount === undefined ||
+      isNonNegativeInteger(value.verificationProfileCount)) &&
     isPositiveInteger(value.validFixtureCount) &&
     isPositiveInteger(value.invalidFixtureCount) &&
     Object.values(schemaDigests).every(isSha256) &&

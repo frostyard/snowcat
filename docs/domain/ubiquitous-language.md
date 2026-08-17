@@ -565,12 +565,24 @@ product success.
 #### Success measure
 
 A declared measure of whether a goal or initiative achieved its intended
-outcome, with an evidence mode, subject, decision rule, and observation window.
-Success measures remain distinct from merged artifacts and slice acceptance.
+outcome, with an evidence mode, subject, absolute observation window, and exact
+verification profile plus parameters as its decision rule. Success measures
+remain distinct from merged artifacts and slice acceptance.
 
 **Avoid:** acceptance criterion; activity count; convenient proxy.
 ([ADR-0009](../adr/0009-apply-goals-through-discovery-and-admission.md),
-[ADR-0031](../adr/0031-separate-delivery-from-outcome-achievement.md))
+[ADR-0031](../adr/0031-separate-delivery-from-outcome-achievement.md),
+[ADR-0054](../adr/0054-bind-success-measures-to-versioned-verification-profiles.md))
+
+#### Verification profile
+
+An immutable versioned Core contract binding one evidence mode to closed
+versioned Fluent mechanism identifiers and a strict parameter schema. A profile
+supplies reusable verification mechanics but is not an organization record,
+measure, policy, fact, or executable script from Core.
+
+**Avoid:** metric DSL; goal; predicate contract; model rubric; remote query.
+([ADR-0054](../adr/0054-bind-success-measures-to-versioned-verification-profiles.md))
 
 ### Organization governance
 

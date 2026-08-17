@@ -15,7 +15,12 @@ import {
   verifyCoreSourceContinuity,
   type InspectedCoreCandidate,
 } from "../src/core/git-source.ts";
-import { CoreValidationError, validateCoreCatalog, type CoreTreeEntry } from "../src/core/validator.ts";
+import {
+  assertVerificationProfileRetention,
+  CoreValidationError,
+  validateCoreCatalog,
+  type CoreTreeEntry,
+} from "../src/core/validator.ts";
 import { synchronizeCoreSource } from "../src/core/synchronize.ts";
 import { ControlPlaneStore, CoreSnapshotPersistenceError } from "../src/control/store.ts";
 import { uuidV7 } from "../src/control/encoding.ts";
@@ -27,10 +32,47 @@ test("the bundled validator accepts the current core repository-authority shape 
 
   assert.equal(first.catalogDigest, second.catalogDigest);
   assert.equal(first.repositoryCount, 1);
+  assert.equal(first.verificationProfileCount, 0);
+  assert.deepEqual(first.verificationProfiles, []);
+  assert.equal(first.schemaDigests.verificationProfile, undefined);
   assert.equal(first.validFixtureCount, 3);
   assert.equal(first.invalidFixtureCount, 1);
   assert.equal(first.repositories[0]?.declaration.repository.repository_id, "1331309458");
   assert.equal(first.repositories[0]?.declaration.fleet_state, "disabled");
+});
+
+test("the bundled validator accepts profile-capable Core while preserving legacy rollback", async () => {
+  const legacyEntries = await validCoreEntries();
+  const profileContractEntries = await verificationProfileContractEntries();
+  const capableEntries = [...legacyEntries, ...profileContractEntries];
+  const capable = validateCoreCatalog(capableEntries);
+
+  assert.equal(capable.verificationProfileCount, 0);
+  assert.equal(
+    capable.schemaDigests.verificationProfile,
+    "sha256:5562df1740d133ff32a7bcfc488907b3783a3eda9ba8e8e1d9559a07f44a4507",
+  );
+  assert.equal(capable.validFixtureCount, 4);
+  assert.equal(capable.invalidFixtureCount, 3);
+
+  const liveEntry = entryFor(
+    "organization/contracts/verification-profiles/required-check-reliability/v1.json",
+    json(validVerificationProfile()),
+  );
+  const withLiveProfile = validateCoreCatalog([...capableEntries, liveEntry]);
+  assert.equal(withLiveProfile.verificationProfileCount, 1);
+  assert.equal(withLiveProfile.verificationProfiles[0]?.profile.profile.id, "required-check-reliability");
+
+  const legacy = validateCoreCatalog(legacyEntries);
+  assert.doesNotThrow(() => assertVerificationProfileRetention(legacy, capable));
+  assert.throws(
+    () => assertVerificationProfileRetention(capable, legacy),
+    /verification profile schema must be retained/,
+  );
+  assert.throws(
+    () => assertVerificationProfileRetention(withLiveProfile, capable),
+    /verification profile versions are immutable and retained/,
+  );
 });
 
 test("schema byte drift and duplicate live keys fail the candidate", async () => {
@@ -702,6 +744,78 @@ test("a validated Core candidate is retained and activated atomically with exact
   reopened.close();
 });
 
+test("automatic activation retains adopted verification profiles while rollback may select legacy", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-core-profile-activation-test-"));
+  const path = join(directory, "control-plane.db");
+  const store = new ControlPlaneStore(
+    path,
+    () => new Date("2026-08-16T13:20:00.000Z"),
+  );
+  const legacy = await activationCandidate("1".repeat(40), "2".repeat(40));
+  const legacyActivation = store.activateCoreSnapshot({
+    candidate: legacy,
+    expectedLastTransactionSequence: 1,
+  });
+  const profileCapable = await profileActivationCandidate("3".repeat(40), "4".repeat(40));
+  const profileActivation = store.activateCoreSnapshot({
+    candidate: profileCapable,
+    expectedLastTransactionSequence: legacyActivation.transactionSequence,
+    continuityAncestorCommitId: legacy.commitId,
+  });
+  assert.equal(profileCapable.verificationProfileCount, 1);
+  assert.equal(profileActivation.transactionSequence, 3);
+
+  const removed = await activationCandidate("5".repeat(40), "6".repeat(40));
+  assert.throws(
+    () =>
+      store.activateCoreSnapshot({
+        candidate: removed,
+        expectedLastTransactionSequence: profileActivation.transactionSequence,
+        continuityAncestorCommitId: profileCapable.commitId,
+      }),
+    /verification profile schema must be retained/,
+  );
+  const rollback = store.rollbackCoreSnapshot({
+    candidate: legacy,
+    expectedLastTransactionSequence: profileActivation.transactionSequence,
+    reason: "Restore the exact retained authority that predates verification profiles",
+  });
+  assert.equal(rollback.sourceCommitId, legacy.commitId);
+  assert.equal(rollback.transactionSequence, 4);
+
+  const changedFiles = profileCapable.files.map((entry) =>
+    entry.path ===
+    "organization/contracts/verification-profiles/required-check-reliability/v1.json"
+      ? entryFor(
+          entry.path,
+          json({ ...validVerificationProfile(), description: "Changed after an operator rollback." }),
+        )
+      : entry,
+  );
+  const changedAfterRollback: InspectedCoreCandidate = {
+    sourceUrl: profileCapable.sourceUrl,
+    ref: profileCapable.ref,
+    commitId: "7".repeat(40),
+    treeId: "8".repeat(40),
+    files: changedFiles,
+    ...validateCoreCatalog(changedFiles),
+  };
+  assert.throws(
+    () =>
+      store.activateCoreSnapshot({
+        candidate: changedAfterRollback,
+        expectedLastTransactionSequence: rollback.transactionSequence,
+        continuityAncestorCommitId: legacy.commitId,
+      }),
+    /verification profile versions are immutable and retained/,
+  );
+  store.close();
+
+  const reopened = new ControlPlaneStore(path);
+  assert.equal(reopened.activeCoreSnapshot()?.sourceCommitId, legacy.commitId);
+  reopened.close();
+});
+
 test("the shared source synchronizer activates and then records an unchanged eligible check", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fluent-core-synchronizer-test-"));
   let now = new Date("2026-08-16T13:30:00.000Z");
@@ -940,6 +1054,28 @@ async function activationCandidate(commitId: string, treeId: string): Promise<In
   };
 }
 
+async function profileActivationCandidate(
+  commitId: string,
+  treeId: string,
+): Promise<InspectedCoreCandidate> {
+  const files = [
+    ...(await validCoreEntries()),
+    ...(await verificationProfileContractEntries()),
+    entryFor(
+      "organization/contracts/verification-profiles/required-check-reliability/v1.json",
+      json(validVerificationProfile()),
+    ),
+  ];
+  return {
+    sourceUrl: "https://github.com/frostyard/core.git",
+    ref: "refs/heads/main",
+    commitId,
+    treeId,
+    files,
+    ...validateCoreCatalog(files),
+  };
+}
+
 async function validCoreEntries(): Promise<CoreTreeEntry[]> {
   const repository = {
     schema_version: 1,
@@ -1022,6 +1158,84 @@ async function validCoreEntries(): Promise<CoreTreeEntry[]> {
     entries.push(entryFor(`organization/schemas/v1/${name}`, bundled));
   }
   return entries;
+}
+
+async function verificationProfileContractEntries(): Promise<CoreTreeEntry[]> {
+  const bundled = await readFile(
+    new URL("../src/core/schemas/v1/verification-profile.schema.json", import.meta.url),
+  );
+  const mismatched = {
+    ...validVerificationProfile(),
+    profile: { id: "mode-mismatch", version: 1 },
+    evidence_mode: "deterministic",
+    mechanism: {
+      kind: "attestation-policy",
+      attestation_policy: { id: "maintainer-attestation", version: 1 },
+    },
+    parameter_schema: emptyParameterSchema("mode-mismatch"),
+  };
+  const externalReference = {
+    ...validVerificationProfile(),
+    profile: { id: "external-reference", version: 1 },
+    evidence_mode: "deterministic",
+    mechanism: {
+      kind: "deterministic-evaluator",
+      evaluator: { id: "external-reference", version: 1 },
+    },
+    parameter_schema: {
+      ...emptyParameterSchema("external-reference"),
+      properties: { unsafe: { $ref: "https://example.com/remote.schema.json" } },
+    },
+  };
+  return [
+    entryFor("organization/schemas/v1/verification-profile.schema.json", bundled),
+    entryFor(
+      "organization/fixtures/v1/valid/verification-profile.json",
+      json(validVerificationProfile()),
+    ),
+    entryFor(
+      "organization/fixtures/v1/invalid/verification-profile-mode-mismatch.json",
+      json(mismatched),
+    ),
+    entryFor(
+      "organization/fixtures/v1/invalid/verification-profile-external-ref.json",
+      json(externalReference),
+    ),
+  ];
+}
+
+function validVerificationProfile(): Record<string, unknown> {
+  return {
+    schema_version: 1,
+    profile: { id: "required-check-reliability", version: 1 },
+    description: "Evaluate required-check conclusions over a declared repository and time window.",
+    evidence_mode: "observational",
+    mechanism: {
+      kind: "observational-evaluator",
+      source_adapter: { id: "github-check-runs", version: 1 },
+      evaluator: { id: "conclusive-run-rate", version: 1 },
+    },
+    parameter_schema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $id: "https://frostyard.org/schemas/organization/verification-profiles/required-check-reliability/v1-parameters.schema.json",
+      type: "object",
+      additionalProperties: false,
+      required: ["minimum_rate"],
+      properties: { minimum_rate: { type: "number", minimum: 0, maximum: 1 } },
+    },
+  };
+}
+
+function emptyParameterSchema(profileId: string): Record<string, unknown> {
+  return {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    $id:
+      `https://frostyard.org/schemas/organization/verification-profiles/` +
+      `${profileId}/v1-parameters.schema.json`,
+    type: "object",
+    additionalProperties: false,
+    properties: {},
+  };
 }
 
 function entryFor(path: string, bytes: Uint8Array): CoreTreeEntry {

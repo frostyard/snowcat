@@ -1039,15 +1039,20 @@ targets are required before this PRD can become Approved.
     reconciling required merge-time gates. A merge with unresolved gates MUST
     remain a merge fact without advancing to outcome verification.
 220. A verification brief MUST bind initiative, PRD digest, plan and slice,
-    exact merge revision, every acceptance criterion and evidence mode, source
-    and decision rule, observation window, required evidence and owner,
-    relevant contracts and predecessor outputs, confounding changes, allowed
-    reads, and attempt identity.
+    exact merge revision, every acceptance criterion and evidence mode, typed
+    subject, exact verification-profile version and parameters, absolute
+    observation window, required evidence and owner, relevant contracts and
+    predecessor outputs, confounding changes, allowed reads, and attempt
+    identity.
 221. Every slice acceptance criterion and initiative success measure MUST
     declare exactly one evidence mode: `deterministic`, `observational`, or
-    `human-attested`. Automation MUST be preferred only when it measures the
-    actual requirement; Fluent MUST NOT substitute a convenient proxy for a
-    semantic outcome.
+    `human-attested`, and MUST reference one exact versioned verification
+    profile whose mode matches. Its typed subject, absolute observation window,
+    and parameters MUST be complete, and the parameters MUST pass the profile's
+    embedded schema. The profile plus parameters MUST be the v1 decision rule;
+    scripts, generic expressions, and parallel prose rules MUST be rejected.
+    Automation MUST be preferred only when it measures the actual requirement;
+    Fluent MUST NOT substitute a convenient proxy for a semantic outcome.
 222. A `deterministic` criterion MUST use a versioned evaluator over trusted
     repository, CI, artifact, or system facts and retain reproducible inputs,
     evaluator version, and result.
@@ -1086,10 +1091,12 @@ targets are required before this PRD can become Approved.
     outcome achievement MUST NOT itself authorize rollback, more features, a
     new plan, or a lifecycle change.
 231. An approved delivery plan MUST operationalize every required PRD success
-    measure with evidence mode, subject, source, baseline where applicable,
-    threshold or accountable human owner, observation window, and aggregation
-    rule. It MUST NOT silently weaken, replace, or omit a PRD measure;
-    unmeasurable required outcomes MUST block planning pending resolution.
+    measure with evidence mode, typed subject, exact verification profile and
+    valid parameters, absolute observation window, and aggregation rule. The
+    selected profile parameters MUST encode source-specific baseline,
+    threshold, attribution, or accountable-human requirements. The plan MUST
+    NOT silently weaken, replace, or omit a PRD measure; unmeasurable required
+    outcomes MUST block planning pending resolution.
 232. Every derived initiative state MUST expose its exact plan, slices,
     criteria, measures, evidence, and source revisions. Fluent MUST NOT infer
     business success from PR count, merge count, CI status, issue closure,
@@ -1827,7 +1834,7 @@ contract or code exists.
 | Admission and lineage | Worker-created follow-ups begin as proposals, admission is database-enforced, and attempts and GitHub artifacts retain distinct verified lineage | [ADR-0005](../adr/0005-admit-worker-created-work-before-claiming.md), [ADR-0006](../adr/0006-enforce-admission-in-the-database.md), [ADR-0018](../adr/0018-bind-worker-sessions-and-verify-github-artifacts.md) |
 | Organization authority | `frostyard/core` owns canonical strict JSON organization records, enrollment, goals, policy, knowledge, versioned criteria, exceptions, relationships, initiatives, and immutable delivery-plan approval | [ADR-0007](../adr/0007-use-frostyard-core-as-the-organization-authority.md) through [ADR-0017](../adr/0017-standardize-actions-boundaries-and-risk.md), plus [ADR-0026](../adr/0026-coordinate-enrolled-repositories-with-fleetcontroller.md) through [ADR-0028](../adr/0028-approve-immutable-delivery-plans-in-core.md) |
 | Repository maintenance | Deterministic RepositoryControllers run bounded quality, CI, security, and architecture maintenance workflows against canonical repository surfaces | [ADR-0020](../adr/0020-call-the-repository-coordinator-repositorycontroller.md) through [ADR-0025](../adr/0025-ground-architecture-in-accepted-direction.md) |
-| Fleet and feature delivery | FleetController coordinates cross-repository contracts; approved core PRDs become immutable dependency-ordered plans, bounded slice PRs, review, repair, post-merge verification, and measured outcomes | [ADR-0019](../adr/0019-include-feature-delivery-in-v1.md), [ADR-0026](../adr/0026-coordinate-enrolled-repositories-with-fleetcontroller.md) through [ADR-0031](../adr/0031-separate-delivery-from-outcome-achievement.md) |
+| Fleet and feature delivery | FleetController coordinates cross-repository contracts; approved core PRDs become immutable dependency-ordered plans, bounded slice PRs, review, repair, post-merge verification, and profile-bound measured outcomes | [ADR-0019](../adr/0019-include-feature-delivery-in-v1.md), [ADR-0026](../adr/0026-coordinate-enrolled-repositories-with-fleetcontroller.md) through [ADR-0031](../adr/0031-separate-delivery-from-outcome-achievement.md), and [ADR-0054](../adr/0054-bind-success-measures-to-versioned-verification-profiles.md) |
 | Worker routing and capacity | Operator-issued grants route repository-dedicated and fleet-specialist sessions; bounded fair scheduling applies WIP limits and reports capacity gaps | [ADR-0032](../adr/0032-route-work-with-operator-issued-grants.md), [ADR-0034](../adr/0034-schedule-a-bounded-ready-inventory.md) |
 | Process improvement | Deterministic ProcessObserver uses mature versioned baselines, scoped andons, and governed analyst proposals without a self-modifying loop | [ADR-0033](../adr/0033-observe-processes-and-pull-scoped-andons.md) |
 | Human authority | Typed optimistic-concurrency decisions feed OperatorInbox while core, repository, GitHub, and restricted-security acts remain in their canonical authority systems | [ADR-0035](../adr/0035-route-human-authority-through-typed-decisions.md) |
@@ -1905,7 +1912,11 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   repository status now exposes a stable semantic authority-context digest and
   a closed evaluator permits automatic held-work recovery only after unchanged
   transient GitHub or surface outages; target work persistence and operator
-  disposition commands remain.
+  disposition commands remain. Snapshot validation now also accepts the
+  backward-compatible verification-profile extension, pins its exact schema,
+  validates and retains live profiles and conformance fixtures, and prevents
+  automatic removal or mutation after activation without claiming that any
+  measure mechanism is executable yet.
   The kernel does not yet implement target work, general fact mutation, general
   operational state, fleet coordination, or worker mutation and never reads or
   imports the spike database.
@@ -1914,7 +1925,7 @@ elapsed source freshness from the stricter new-admission gate. Its durable
 
 | Track | What remains before implementation is well specified |
 | --- | --- |
-| Core contract and migration | Remaining organization JSON Schemas and fixtures and canonical-surface migrations; the held-work digest and recovery evaluator are implemented, while target-work persistence and disposition commands remain in the control-plane track |
+| Core contract and migration | Remaining organization JSON Schemas and fixtures and canonical-surface migrations; verification-profile import is implemented but goals, referenced-profile resolution, mechanism support, and evidence execution remain |
 | Control-plane domain model | Execute the [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md): specify exact durable schemas, predicates, reducers, events, projections, invalidation, idempotency, and state machines in a fresh target database shared by RepositoryController, FleetController, ProcessObserver, scheduling, and decisions |
 | GitHub observation | GitHub App permissions, installation and actor mapping, CI/review/merge and artifact reconciliation, polling versus webhooks, forks, outage behavior, and external decision signals |
 | Workflow contracts | Versioned role briefs, evidence schemas, skills, attempt budgets, and deterministic gates for maintenance, planning, review, implementation, repair, and verification |
@@ -1973,9 +1984,9 @@ elapsed source freshness from the stricter new-admission gate. Its durable
 - What exact plan and slice limits, predecessor-signal vocabulary, publication
   UX, target-owner review rules, and old-plan reconciliation transitions finish
   the approved delivery-plan contract?
-- What versioned delivery-evaluator interface, trusted observation adapters,
-  attester roles, evidence retention and expiry, confounding-change rules, and
-  default measurement windows implement slice and initiative verification?
+- Which initial verification profiles and closed Fluent mechanism versions
+  ship for delivery, which named roles satisfy attestation policies, and what
+  evidence retention, expiry, and confounding rules apply to each profile?
 - What reviewer capability profile, trigger UX, fingerprint algorithm,
   material-scope lineage reset, and unavailable-CI policy implement bounded
   adversarial review consistently across PRDs, plans, and pull requests?
@@ -2118,12 +2129,16 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   with explicit local operator holds in
   [ADR-0052](../adr/0052-bind-local-repository-holds-to-explicit-operator-decisions.md),
   with unchanged transient recovery in
-  [ADR-0053](../adr/0053-resume-only-unchanged-transient-held-work.md), and the
+  [ADR-0053](../adr/0053-resume-only-unchanged-transient-held-work.md), with
+  executable success-measure contracts in
+  [ADR-0054](../adr/0054-bind-success-measures-to-versioned-verification-profiles.md),
+  and the
   [Fluent ubiquitous language](../domain/ubiquitous-language.md)
 - Designs: [queue execution boundary](../design/queue-execution-boundary.md),
   [control-plane kernel](../design/control-plane-kernel.md), and
   [core snapshot ingestion](../design/core-snapshot-ingestion.md), plus
-  [repository enrollment](../design/repository-enrollment.md)
+  [repository enrollment](../design/repository-enrollment.md) and
+  [success-measure verification](../design/success-measure-verification.md)
 - Contracts: [work queue](../specs/work-queue.md),
   [control-plane kernel](../specs/control-plane-kernel.md), and
   [core snapshot verification](../specs/core-snapshot-verification.md), plus
@@ -2134,7 +2149,8 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   [repository authority reconciliation](../specs/repository-authority-reconciliation.md)
   and [repository surface reconciliation](../specs/repository-surface-reconciliation.md),
   and [local repository holds](../specs/repository-local-holds.md), and
-  [held-work recovery](../specs/repository-held-work-recovery.md)
+  [held-work recovery](../specs/repository-held-work-recovery.md), and
+  [verification-profile ingestion](../specs/verification-profile-ingestion.md)
 - Delivery: [queue vertical spike](../plans/queue-vertical-spike.md),
   [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md),
   [core snapshot ingestion](../plans/core-snapshot-ingestion.md), and

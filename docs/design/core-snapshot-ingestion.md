@@ -12,9 +12,13 @@ Polling rationale:
 [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md).
 Repository reconciliation rationale:
 [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md).
+Verification-profile rationale:
+[ADR-0054](../adr/0054-bind-success-measures-to-versioned-verification-profiles.md).
 Contracts: [core snapshot verification](../specs/core-snapshot-verification.md)
 [Core snapshot activation](../specs/core-snapshot-activation.md), and
 [Core source readiness](../specs/core-source-readiness.md).
+Profile contract:
+[verification-profile ingestion](../specs/verification-profile-ingestion.md).
 Retention contract:
 [Core check-detail retention](../specs/core-check-detail-retention.md).
 Polling contract: [Core source polling](../specs/core-source-polling.md).
@@ -76,8 +80,11 @@ object graph must be present in the fetched mirror exactly as addressed.
 
 ### Bundled contract and parity
 
-Fluent bundles the three schema documents implemented by merged core PR #80:
-repository declaration, repository surfaces, and repository agent governance.
+Fluent bundles the three required schema documents implemented by merged core
+PR #80: repository declaration, repository surfaces, and repository agent
+governance. It also bundles the profile-capable extension proposed in Core PR
+#81. Legacy candidates remain accepted without that extension; any profile
+path requires its exact schema and profile-specific conformance fixtures.
 The expected SHA-256 digest of each exact core schema blob is compiled into
 Fluent. A fetched schema must match that byte digest, and its parsed canonical
 content must match the bundled validator schema, before validation begins.
@@ -87,15 +94,19 @@ The independent validator uses the same pinned Ajv 2020 and `jsonc-parser`
 versions as core. It rejects invalid UTF-8, comments, trailing commas, duplicate
 keys, unknown properties through the schemas, path/identity mismatch,
 duplicate repository identities and owners, invalid surface catalogs, and
-duplicate protected boundaries. It runs every recognized valid and invalid
-fixture and refuses a corpus without both classes.
+duplicate protected boundaries. Profile-capable validation additionally checks
+profile identity and size, mode/mechanism agreement, closed embedded parameter
+schemas, document-local references, and strict schema compilation. It runs
+every recognized valid and invalid fixture and refuses a corpus without both
+classes or without both profile-fixture classes once that extension exists.
 
 ### Candidate catalog
 
 Every recognized file contributes path, regular-file mode, Git object ID,
 byte size, and content digest to a path-sorted canonical catalog digest. The
 reported candidate binds source URL, source ref, commit ID, organization tree
-ID, schema digests, fixture counts, and parsed repository declarations.
+ID, schema digests, fixture counts, parsed repository declarations, and
+validated verification profiles when present.
 Repository declarations remain declarations: the merged `frostyard/core`
 declaration is currently `disabled`, and even a future `enabled` declaration
 will not become enrollment until the snapshot is active, its declaration and
@@ -153,6 +164,13 @@ lineage, an indefinitely retained idempotency receipt, and advanced metadata
 watermarks. The pointer moves last. Any failure rolls back all of these writes,
 including SQLite's sequence allocation. Prior snapshots remain immutable and
 available after another commit activates.
+
+Automatic activation permits the one-way compatibility transition from a
+legacy catalog to a profile-capable catalog. After any such activation, the
+profile schema and every historically activated profile identity/content digest
+must be retained by later automatic candidates, including after rollback. An
+attributed operator rollback may still select an exact retained legacy
+snapshot.
 
 Startup revalidates the durable envelope and source vocabulary, recomputes each
 file and complete catalog digest, checks parsed declarations against raw bytes,
@@ -232,8 +250,10 @@ more than once per 24 hours.
 - `FLUENT_CORE_URL`, `FLUENT_CORE_REF`, and `FLUENT_CORE_MIRROR` select the
   exact allowed source, branch ref, and host-local mirror path.
 - A valid report proves compatibility with the implemented repository-authority
-  slice only. Core roadmap record kinds that do not yet exist remain unsupported
-  and any unknown `organization/` path fails closed.
+  and verification-profile contract slices only. Profile import does not claim
+  mechanism support or execute a measure. Core roadmap record kinds that do not
+  yet exist remain unsupported and any unknown `organization/` path fails
+  closed.
 - A failed fetch or validation before the first activation leaves no last-known-
   good state. Atomic activation now preserves an existing current snapshot;
   durable rejected-candidate diagnostics preserve the failure. The readiness
@@ -275,6 +295,7 @@ The exact record and read contract is
   and [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md)
   and [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md)
   and [ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md)
+  and [ADR-0054](../adr/0054-bind-success-measures-to-versioned-verification-profiles.md)
 - Contracts: [core snapshot verification](../specs/core-snapshot-verification.md)
   [Core snapshot activation](../specs/core-snapshot-activation.md), and
   [Core source readiness](../specs/core-source-readiness.md)
@@ -282,5 +303,6 @@ The exact record and read contract is
   and [Core source polling](../specs/core-source-polling.md)
   and [repository authority reconciliation](../specs/repository-authority-reconciliation.md)
   and [repository surface reconciliation](../specs/repository-surface-reconciliation.md)
+  and [verification-profile ingestion](../specs/verification-profile-ingestion.md)
 - Built in: [Core snapshot ingestion — Phases 1–4](../plans/core-snapshot-ingestion.md)
 - Product: [GitHub organization agent fleet](../prd/agent-fleet.md)
