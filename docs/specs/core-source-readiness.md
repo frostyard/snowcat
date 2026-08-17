@@ -139,3 +139,4 @@ its causally linked event is `core.stale-source-override-issued`.
 - Evidence retention: [Core check-detail retention](core-check-detail-retention.md)
 - Periodic producer: [Core source polling](core-source-polling.md)
 - Delivery: [Core snapshot ingestion plan](../plans/core-snapshot-ingestion.md)
+- Consumer: [repository authority reconciliation](repository-authority-reconciliation.md)

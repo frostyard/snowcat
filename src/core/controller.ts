@@ -6,8 +6,13 @@ import {
   type CorePollClaimResult,
   type CorePollState,
 } from "../control/store.ts";
+import {
+  reconcileRepositories,
+  type RepositoryReconciliationPassResult,
+} from "../repository/controller.ts";
 
 export type CoreSourceSynchronizer = typeof synchronizeCoreSource;
+export type RepositoryReconciler = typeof reconcileRepositories;
 
 export type CorePollOnceResult =
   | Extract<CorePollClaimResult, { status: "not-due" | "in-flight" }>
@@ -19,6 +24,7 @@ export type CorePollOnceResult =
       synchronizationStatus: CoreSynchronizationResult["status"] | "controller-error";
       activation: "activated" | "unchanged" | null;
       pruneResult: CoreCheckDetailPruneResult | null;
+      repositoryReconciliation: RepositoryReconciliationPassResult | null;
       sourceFailure: string | null;
       controllerError: string | null;
       state: CorePollState;
@@ -29,16 +35,21 @@ export async function runCorePollOnce(
   config: CoreGitSourceConfig,
   healthyIntervalSeconds: number,
   synchronize: CoreSourceSynchronizer = synchronizeCoreSource,
+  reconcile: RepositoryReconciler | undefined = undefined,
 ): Promise<CorePollOnceResult> {
   const claim = store.claimCorePoll(healthyIntervalSeconds);
   if (claim.status !== "claimed") return claim;
 
   let synchronization: CoreSynchronizationResult | null = null;
   let pruneResult: CoreCheckDetailPruneResult | null = null;
+  let repositoryReconciliation: RepositoryReconciliationPassResult | null = null;
   let controllerError: Error | null = null;
   try {
     synchronization = await synchronize(config, store, claim.controlPlaneSequence);
     if (synchronization.diagnosticError) controllerError = synchronization.diagnosticError;
+    if (synchronization.status === "accepted" && controllerError === null && reconcile) {
+      repositoryReconciliation = await reconcile(store);
+    }
     if (claim.pruneDue && controllerError === null) {
       try {
         pruneResult = store.pruneCoreCheckDetail({
@@ -67,6 +78,7 @@ export async function runCorePollOnce(
     synchronizationStatus: controllerError === null ? (synchronization?.status ?? "controller-error") : "controller-error",
     activation: synchronization?.activation ?? null,
     pruneResult,
+    repositoryReconciliation,
     sourceFailure: synchronization?.failure ? sanitizeCoreDiagnostic(synchronization.failure.message) : null,
     controllerError: controllerError ? sanitizeCoreDiagnostic(controllerError.message) : null,
     state,
@@ -79,10 +91,11 @@ export async function runCorePollingLoop(
   healthyIntervalSeconds: number,
   shouldStop: () => boolean,
   emit: (result: CorePollOnceResult) => void,
+  reconcile: RepositoryReconciler | undefined = undefined,
 ): Promise<void> {
   let lastWaitingKey: string | null = null;
   while (!shouldStop()) {
-    const result = await runCorePollOnce(store, config, healthyIntervalSeconds);
+    const result = await runCorePollOnce(store, config, healthyIntervalSeconds, synchronizeCoreSource, reconcile);
     const waitingKey =
       result.status === "in-flight"
         ? `in-flight:${result.runId}:${result.expiresAt}`

@@ -9,7 +9,13 @@ import {
   coreCheckDetailCutoff,
   selectCoreCheckDetailForPrune,
 } from "./check-detail-retention.ts";
-import { validateCoreCatalog, type CoreTreeEntry } from "../core/validator.ts";
+import {
+  assertRepositoryDeclarationRetention,
+  validateCoreCatalog,
+  type CoreTreeEntry,
+  type RepositoryDeclaration,
+  type ValidatedRepositoryDeclaration,
+} from "../core/validator.ts";
 import type { InspectedCoreCandidate } from "../core/git-source.ts";
 import {
   CORE_POLL_DEFAULT_INTERVAL_SECONDS,
@@ -44,6 +50,11 @@ import {
   type CoreRollbackDecisionPayload,
   type CoreSourceCheckEligiblePayload,
   type CoreStaleSourceOverrideDecisionPayload,
+  type RepositoryCoreAuthorityPayload,
+  type RepositoryAccountableOwner,
+  type RepositoryGitHubReconciliationPayload,
+  type RepositoryGitHubResult,
+  type RepositoryPreSurfaceState,
   type ProjectionName,
   type RecordClass,
   type SubjectKind,
@@ -344,6 +355,76 @@ export interface ActiveCoreSnapshot {
   catalogDigest: string;
   activatedAt: string;
   transactionSequence: number;
+}
+
+export interface ActiveCoreRepositoryCatalog {
+  snapshot: ActiveCoreSnapshot;
+  repositories: ValidatedRepositoryDeclaration[];
+}
+
+export interface RepositoryCoreAuthorityInput {
+  expectedLastTransactionSequence: number;
+  coreSnapshotId: string;
+  repositoryId: string;
+}
+
+export interface RepositoryCoreAuthorityResult {
+  repositoryId: string;
+  coreSnapshotId: string;
+  declarationRecordId: string;
+  coreAuthorizationRecordId: string;
+  eventRecordId: string;
+  authorizedAt: string;
+  transactionPositions: readonly [0, 1, 2];
+  transactionSequence: number;
+}
+
+export type RepositoryGitHubInspectionInput =
+  | { kind: "missing" }
+  | { kind: "unavailable" }
+  | {
+      kind: "found";
+      repositoryId: string;
+      owner: string;
+      name: string;
+      archived: boolean;
+    };
+
+export interface RepositoryGitHubReconciliationInput {
+  expectedLastTransactionSequence: number;
+  coreAuthorizationRecordId: string;
+  inspection: RepositoryGitHubInspectionInput;
+}
+
+export interface RepositoryGitHubReconciliationResult {
+  repositoryId: string;
+  coreSnapshotId: string;
+  coreAuthorizationRecordId: string;
+  observationRecordId: string;
+  reconciliationRecordId: string;
+  eventRecordId: string;
+  result: RepositoryGitHubResult;
+  effectiveState: RepositoryPreSurfaceState;
+  checkedAt: string;
+  responseDigest: string;
+  transactionPositions: readonly [0, 1, 2];
+  transactionSequence: number;
+}
+
+export interface RepositoryPreSurfaceStatus {
+  repositoryId: string;
+  owner: string;
+  name: string;
+  coreSnapshotId: string;
+  coreAuthorizationRecordId: string | null;
+  fleetState: RepositoryDeclaration["fleet_state"];
+  maintenancePrograms: RepositoryDeclaration["maintenance_programs"];
+  actionCeiling: RepositoryDeclaration["action_ceiling"];
+  accountableOwners: RepositoryDeclaration["accountable_owners"];
+  surfaceContractVersion: 1;
+  githubReconciliationRecordId: string | null;
+  githubResult: RepositoryGitHubResult | null;
+  effectiveState: RepositoryPreSurfaceState;
 }
 
 export interface ProjectionAccess {
@@ -729,6 +810,427 @@ export class ControlPlaneStore {
       activatedAt: String(row.activated_at),
       transactionSequence: Number(row.activated_transaction_sequence),
     };
+  }
+
+  activeCoreRepositoryCatalog(): ActiveCoreRepositoryCatalog | undefined {
+    const snapshot = this.activeCoreSnapshot();
+    if (!snapshot) return undefined;
+    const candidate = this.retainedCoreCandidate(snapshot.sourceCommitId);
+    if (!candidate || candidate.catalogDigest !== snapshot.catalogDigest) {
+      throw new Error("active Core repository catalog is not retained exactly");
+    }
+    return {
+      snapshot,
+      repositories: candidate.repositories.map((repository) => ({
+        path: repository.path,
+        contentDigest: repository.contentDigest,
+        declaration: structuredClone(repository.declaration),
+      })),
+    };
+  }
+
+  repositoryStatuses(): RepositoryPreSurfaceStatus[] {
+    const catalog = this.activeCoreRepositoryCatalog();
+    if (!catalog) return [];
+    const rows = this.db
+      .prepare(
+        `SELECT occurrence.record_id, occurrence.payload_json, occurrence.transaction_sequence
+         FROM durable_occurrences occurrence
+         JOIN durable_records record ON record.record_id = occurrence.record_id
+         WHERE occurrence.kind = 'repository.core-authorized'
+           AND record.record_class = 'fact'
+         ORDER BY occurrence.transaction_sequence DESC`,
+      )
+      .all() as Row[];
+    const authorityByRepository = new Map<string, { recordId: string; payload: RepositoryCoreAuthorityPayload }>();
+    for (const row of rows) {
+      const payload = parseJson(String(row.payload_json));
+      if (!recordKindRegistry["repository.core-authorized"].validatePayload(payload)) {
+        throw new Error(`invalid repository Core authorization: ${String(row.record_id)}`);
+      }
+      if (payload.coreSnapshotId !== catalog.snapshot.snapshotId || authorityByRepository.has(payload.repositoryId)) {
+        continue;
+      }
+      authorityByRepository.set(payload.repositoryId, {
+        recordId: String(row.record_id),
+        payload,
+      });
+    }
+    const reconciliationRows = this.db
+      .prepare(
+        `SELECT occurrence.record_id, occurrence.payload_json, occurrence.transaction_sequence
+         FROM durable_occurrences occurrence
+         JOIN durable_records record ON record.record_id = occurrence.record_id
+         WHERE occurrence.kind = 'repository.github-identity-reconciled'
+           AND record.record_class = 'fact'
+         ORDER BY occurrence.transaction_sequence DESC`,
+      )
+      .all() as Row[];
+    const reconciliationByAuthority = new Map<
+      string,
+      { recordId: string; payload: RepositoryGitHubReconciliationPayload }
+    >();
+    for (const row of reconciliationRows) {
+      const payload = parseJson(String(row.payload_json));
+      if (!recordKindRegistry["repository.github-identity-reconciled"].validatePayload(payload)) {
+        throw new Error(`invalid repository GitHub reconciliation: ${String(row.record_id)}`);
+      }
+      if (!reconciliationByAuthority.has(payload.coreAuthorizationRecordId)) {
+        reconciliationByAuthority.set(payload.coreAuthorizationRecordId, {
+          recordId: String(row.record_id),
+          payload,
+        });
+      }
+    }
+    const statuses: RepositoryPreSurfaceStatus[] = [];
+    for (const repository of catalog.repositories) {
+      const repositoryId = `github.com:${repository.declaration.repository.repository_id}`;
+      const authority = authorityByRepository.get(repositoryId);
+      if (!authority) {
+        statuses.push({
+          repositoryId,
+          owner: repository.declaration.repository.owner,
+          name: repository.declaration.repository.name,
+          coreSnapshotId: catalog.snapshot.snapshotId,
+          coreAuthorizationRecordId: null,
+          fleetState: repository.declaration.fleet_state,
+          maintenancePrograms: [...repository.declaration.maintenance_programs],
+          actionCeiling: [...repository.declaration.action_ceiling],
+          accountableOwners: structuredClone(repository.declaration.accountable_owners),
+          surfaceContractVersion: 1,
+          githubReconciliationRecordId: null,
+          githubResult: null,
+          effectiveState: "awaiting-authority",
+        });
+        continue;
+      }
+      const github = reconciliationByAuthority.get(authority.recordId);
+      const effectiveState: RepositoryPreSurfaceState =
+        authority.payload.fleetState === "disabled"
+          ? "disabled"
+          : authority.payload.fleetState === "paused"
+            ? "paused"
+            : github === undefined
+              ? "awaiting-github"
+              : github.payload.result === "matched"
+                ? "awaiting-surfaces"
+                : "github-held";
+      statuses.push({
+        repositoryId,
+        owner: authority.payload.owner,
+        name: authority.payload.name,
+        coreSnapshotId: catalog.snapshot.snapshotId,
+        coreAuthorizationRecordId: authority.recordId,
+        fleetState: authority.payload.fleetState,
+        maintenancePrograms: [...authority.payload.maintenancePrograms],
+        actionCeiling: [...authority.payload.actionCeiling],
+        accountableOwners: structuredClone(
+          authority.payload.accountableOwners,
+        ) as RepositoryDeclaration["accountable_owners"],
+        surfaceContractVersion: 1,
+        githubReconciliationRecordId: github?.recordId ?? null,
+        githubResult: github?.payload.result ?? null,
+        effectiveState,
+      });
+    }
+    return statuses.sort((left, right) => left.repositoryId.localeCompare(right.repositoryId));
+  }
+
+  materializeRepositoryCoreAuthority(input: RepositoryCoreAuthorityInput): RepositoryCoreAuthorityResult {
+    assertExpectedSequence(input.expectedLastTransactionSequence);
+    if (!isUuidV7(input.coreSnapshotId)) throw new Error("Core snapshot ID must be UUIDv7");
+    assertSubject("github-repository", input.repositoryId);
+    const idempotencyKey = `repo-core:${input.coreSnapshotId}:${input.repositoryId.slice("github.com:".length)}`;
+    const commandPayloadJson = canonicalJson({
+      coreSnapshotId: input.coreSnapshotId,
+      repositoryId: input.repositoryId,
+    });
+    const commandPayloadDigest = sha256(commandPayloadJson);
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.verifyExisting(this.applicationTables());
+      const metadata = this.metadata();
+      const commandScope = `database:${metadata.databaseLineageId}`;
+      const prior = this.db
+        .prepare(
+          `SELECT payload_digest, result_json FROM idempotency_receipts
+           WHERE command_scope = ? AND command_kind = 'repository.materialize-core-authority'
+             AND command_schema_version = 1 AND idempotency_key = ?`,
+        )
+        .get(commandScope, idempotencyKey) as Row | undefined;
+      if (prior) {
+        if (String(prior.payload_digest) !== commandPayloadDigest) {
+          throw new Error("repository Core authority idempotency payload changed");
+        }
+        const result = parseRepositoryCoreAuthorityResult(parseJson(String(prior.result_json)));
+        this.db.exec("COMMIT");
+        return result;
+      }
+      const evaluationTime = this.now();
+      assertCommandTimeAndSequence(metadata, evaluationTime, input.expectedLastTransactionSequence);
+      const readiness = this.coreAdmissionReadinessWithoutOverride(evaluationTime);
+      const effectiveReadiness = this.coreAdmissionReadiness(evaluationTime);
+      if (!effectiveReadiness.ready) {
+        throw new Error(`Core admission readiness is ${readiness.reason}; repository authority cannot advance`);
+      }
+      const catalog = this.activeCoreRepositoryCatalog();
+      if (!catalog || catalog.snapshot.snapshotId !== input.coreSnapshotId) {
+        throw new Error("repository authority command does not bind the active Core snapshot");
+      }
+      const declared = catalog.repositories.find(
+        (repository) =>
+          `github.com:${repository.declaration.repository.repository_id}` === input.repositoryId,
+      );
+      if (!declared) throw new Error("repository is not declared by the active Core snapshot");
+
+      const transactionId = uuidV7(new Date(evaluationTime));
+      const declarationRecordId = uuidV7(new Date(evaluationTime));
+      const coreAuthorizationRecordId = uuidV7(new Date(evaluationTime));
+      const eventRecordId = uuidV7(new Date(evaluationTime));
+      const correlationId = uuidV7(new Date(evaluationTime));
+      const declaration = declared.declaration;
+      const payload = {
+        repositoryId: input.repositoryId,
+        coreSnapshotId: catalog.snapshot.snapshotId,
+        declarationRecordId,
+        coreAuthorizationRecordId,
+        eventRecordId,
+        sourceCommitId: catalog.snapshot.sourceCommitId,
+        declarationPath: declared.path,
+        declarationDigest: declared.contentDigest,
+        owner: declaration.repository.owner,
+        name: declaration.repository.name,
+        accountableOwners: declaration.accountable_owners.map(
+          (owner): RepositoryAccountableOwner =>
+            owner.kind === "github-user"
+              ? ({ kind: "github-user", login: owner.login! } as RepositoryAccountableOwner)
+              : ({ kind: "github-team", slug: owner.slug! } as RepositoryAccountableOwner),
+        ),
+        fleetState: declaration.fleet_state,
+        maintenancePrograms: declaration.maintenance_programs,
+        actionCeiling: declaration.action_ceiling,
+        surfaceContractVersion: declaration.surface_contract_version,
+        authorizedAt: evaluationTime,
+      } satisfies RepositoryCoreAuthorityPayload;
+      if (!recordKindRegistry["repository.core-authorized"].validatePayload(payload)) {
+        throw new Error("retained repository declaration is outside the authority record contract");
+      }
+      const payloadJson = canonicalJson(payload);
+      const payloadDigest = sha256(payloadJson);
+      const transaction = this.db
+        .prepare(
+          `INSERT INTO control_transactions (
+             transaction_id, command_kind, command_schema_version, principal_kind,
+             principal_id, session_id, idempotency_key, payload_digest,
+             evaluation_time, recorded_at
+           ) VALUES (?, 'repository.materialize-core-authority', 1, 'fluent-system', 'kernel', NULL, ?, ?, ?, ?)`,
+        )
+        .run(transactionId, idempotencyKey, commandPayloadDigest, evaluationTime, evaluationTime);
+      const sequence = Number(transaction.lastInsertRowid);
+      const existingSubject = this.db
+        .prepare("SELECT 1 AS present FROM subjects WHERE subject_kind = 'github-repository' AND subject_id = ?")
+        .get(input.repositoryId) as Row | undefined;
+      if (!existingSubject) {
+        this.db
+          .prepare(
+            `INSERT INTO subjects (subject_kind, subject_id, created_transaction_sequence)
+             VALUES ('github-repository', ?, ?)`,
+          )
+          .run(input.repositoryId, sequence);
+      }
+      const source = {
+        sourceKind: "github-repository",
+        sourceId: "github.com:1331309458",
+        sourceRevisionKind: "git-commit-sha1",
+        sourceRevisionValue: `sha1:${catalog.snapshot.sourceCommitId}`,
+      };
+      const scope = canonicalJson({ deploymentId: metadata.databaseLineageId });
+      for (const occurrence of [
+        { recordId: declarationRecordId, occurrenceType: "record" as const, kind: "repository.declaration-definition", recordClass: "definition" as const },
+        { recordId: coreAuthorizationRecordId, occurrenceType: "record" as const, kind: "repository.core-authorized", recordClass: "fact" as const },
+        { recordId: eventRecordId, occurrenceType: "event" as const, kind: "repository.core-authority-reconciled" },
+      ].map((value, transactionPosition) => ({ ...value, transactionPosition }))) {
+        this.insertOccurrence({
+          ...occurrence,
+          schemaVersion: 1,
+          subjectKind: "github-repository",
+          subjectId: input.repositoryId,
+          revisionKind: "core-declaration-sha256",
+          revisionValue: declared.contentDigest,
+          ...source,
+          informationClass: "organization",
+          informationScopeJson: scope,
+          payloadJson,
+          payloadDigest,
+          correlationId,
+          transactionSequence: sequence,
+          recordedAt: evaluationTime,
+        });
+      }
+      const result: RepositoryCoreAuthorityResult = {
+        repositoryId: input.repositoryId,
+        coreSnapshotId: catalog.snapshot.snapshotId,
+        declarationRecordId,
+        coreAuthorizationRecordId,
+        eventRecordId,
+        authorizedAt: evaluationTime,
+        transactionPositions: [0, 1, 2],
+        transactionSequence: sequence,
+      };
+      this.insertReceipt(commandScope, "repository.materialize-core-authority", idempotencyKey, commandPayloadDigest, result, sequence);
+      this.advanceControlMetadata(evaluationTime, sequence);
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  recordRepositoryGitHubIdentity(
+    input: RepositoryGitHubReconciliationInput,
+  ): RepositoryGitHubReconciliationResult {
+    assertExpectedSequence(input.expectedLastTransactionSequence);
+    const inspection = normalizeRepositoryGitHubInspection(input.inspection);
+    const responseDigest = sha256(canonicalJson(inspection as unknown as JsonValue));
+    const idempotencyKey = `repo-gh:${input.coreAuthorizationRecordId}:${responseDigest.slice("sha256:".length)}`;
+    const commandPayloadJson = canonicalJson({
+      coreAuthorizationRecordId: input.coreAuthorizationRecordId,
+      inspection: inspection as unknown as JsonValue,
+    });
+    const commandPayloadDigest = sha256(commandPayloadJson);
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.verifyExisting(this.applicationTables());
+      const metadata = this.metadata();
+      const commandScope = `database:${metadata.databaseLineageId}`;
+      const prior = this.db
+        .prepare(
+          `SELECT payload_digest, result_json FROM idempotency_receipts
+           WHERE command_scope = ? AND command_kind = 'repository.record-github-identity'
+             AND command_schema_version = 1 AND idempotency_key = ?`,
+        )
+        .get(commandScope, idempotencyKey) as Row | undefined;
+      if (prior) {
+        if (String(prior.payload_digest) !== commandPayloadDigest) {
+          throw new Error("repository GitHub reconciliation idempotency payload changed");
+        }
+        const result = parseRepositoryGitHubReconciliationResult(parseJson(String(prior.result_json)));
+        this.db.exec("COMMIT");
+        return result;
+      }
+      const evaluationTime = this.now();
+      assertCommandTimeAndSequence(metadata, evaluationTime, input.expectedLastTransactionSequence);
+      const authorityRow = this.db
+        .prepare(
+          `SELECT occurrence.* FROM durable_occurrences occurrence
+           JOIN durable_records record ON record.record_id = occurrence.record_id
+           WHERE occurrence.record_id = ? AND occurrence.kind = 'repository.core-authorized'
+             AND record.record_class = 'fact'`,
+        )
+        .get(input.coreAuthorizationRecordId) as Row | undefined;
+      if (!authorityRow) throw new Error("repository GitHub reconciliation requires a Core authorization fact");
+      const authorityPayload = parseJson(String(authorityRow.payload_json));
+      if (!recordKindRegistry["repository.core-authorized"].validatePayload(authorityPayload)) {
+        throw new Error("repository Core authorization fact is invalid");
+      }
+      const active = this.activeCoreSnapshot();
+      if (!active || active.snapshotId !== authorityPayload.coreSnapshotId) {
+        throw new Error("repository GitHub reconciliation authority is not from the active Core snapshot");
+      }
+      const resultKind = classifyRepositoryGitHubInspection(authorityPayload, inspection);
+      const effectiveState = repositoryPreSurfaceState(authorityPayload.fleetState, resultKind);
+      const transactionId = uuidV7(new Date(evaluationTime));
+      const observationRecordId = uuidV7(new Date(evaluationTime));
+      const reconciliationRecordId = uuidV7(new Date(evaluationTime));
+      const eventRecordId = uuidV7(new Date(evaluationTime));
+      const correlationId = uuidV7(new Date(evaluationTime));
+      const payload = {
+        repositoryId: authorityPayload.repositoryId,
+        coreSnapshotId: authorityPayload.coreSnapshotId,
+        coreAuthorizationRecordId: input.coreAuthorizationRecordId,
+        observationRecordId,
+        reconciliationRecordId,
+        eventRecordId,
+        declaredOwner: authorityPayload.owner,
+        declaredName: authorityPayload.name,
+        declaredRepositoryId: authorityPayload.repositoryId.slice("github.com:".length),
+        fleetState: authorityPayload.fleetState,
+        observedOwner: inspection.kind === "found" ? inspection.owner : null,
+        observedName: inspection.kind === "found" ? inspection.name : null,
+        observedRepositoryId: inspection.kind === "found" ? inspection.repositoryId : null,
+        archived: inspection.kind === "found" ? inspection.archived : null,
+        result: resultKind,
+        effectiveState,
+        checkedAt: evaluationTime,
+        responseDigest,
+      } satisfies RepositoryGitHubReconciliationPayload;
+      if (!recordKindRegistry["repository.github-identity-reconciled"].validatePayload(payload)) {
+        throw new Error("repository GitHub result is outside the reconciliation record contract");
+      }
+      const payloadJson = canonicalJson(payload);
+      const payloadDigest = sha256(payloadJson);
+      const transaction = this.db
+        .prepare(
+          `INSERT INTO control_transactions (
+             transaction_id, command_kind, command_schema_version, principal_kind,
+             principal_id, session_id, idempotency_key, payload_digest,
+             evaluation_time, recorded_at
+           ) VALUES (?, 'repository.record-github-identity', 1, 'fluent-system', 'kernel', NULL, ?, ?, ?, ?)`,
+        )
+        .run(transactionId, idempotencyKey, commandPayloadDigest, evaluationTime, evaluationTime);
+      const sequence = Number(transaction.lastInsertRowid);
+      const scope = canonicalJson({ deploymentId: metadata.databaseLineageId });
+      for (const occurrence of [
+        { recordId: observationRecordId, occurrenceType: "record" as const, kind: "repository.github-identity-observation", recordClass: "observation" as const },
+        { recordId: reconciliationRecordId, occurrenceType: "record" as const, kind: "repository.github-identity-reconciled", recordClass: "fact" as const },
+        { recordId: eventRecordId, occurrenceType: "event" as const, kind: "repository.github-identity-reconciliation-recorded" },
+      ].map((value, transactionPosition) => ({ ...value, transactionPosition }))) {
+        this.insertOccurrence({
+          ...occurrence,
+          schemaVersion: 1,
+          subjectKind: "github-repository",
+          subjectId: authorityPayload.repositoryId,
+          revisionKind: "github-metadata-sha256",
+          revisionValue: responseDigest,
+          sourceKind: "github-api",
+          sourceId: "api.github.com",
+          sourceRevisionKind: "github-metadata-sha256",
+          sourceRevisionValue: responseDigest,
+          informationClass: "organization",
+          informationScopeJson: scope,
+          payloadJson,
+          payloadDigest,
+          correlationId,
+          causationRecordId: input.coreAuthorizationRecordId,
+          transactionSequence: sequence,
+          recordedAt: evaluationTime,
+        });
+      }
+      const result: RepositoryGitHubReconciliationResult = {
+        repositoryId: authorityPayload.repositoryId,
+        coreSnapshotId: authorityPayload.coreSnapshotId,
+        coreAuthorizationRecordId: input.coreAuthorizationRecordId,
+        observationRecordId,
+        reconciliationRecordId,
+        eventRecordId,
+        result: resultKind,
+        effectiveState,
+        checkedAt: evaluationTime,
+        responseDigest,
+        transactionPositions: [0, 1, 2],
+        transactionSequence: sequence,
+      };
+      this.insertReceipt(commandScope, "repository.record-github-identity", idempotencyKey, commandPayloadDigest, result, sequence);
+      this.advanceControlMetadata(evaluationTime, sequence);
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   coreAdmissionReadiness(evaluatedAt = this.now()): CoreAdmissionReadiness {
@@ -1367,6 +1869,9 @@ export class ControlPlaneStore {
       }
       const active = this.activeCoreSnapshot();
       if (active) {
+        const activeCandidate = this.retainedCoreCandidate(active.sourceCommitId);
+        if (!activeCandidate) throw new Error("active Core candidate is not retained");
+        assertRepositoryDeclarationRetention(activeCandidate, validated);
         if (input.continuityAncestorCommitId !== active.sourceCommitId) {
           throw new Error(
             `automatic Core activation requires source continuity from active commit ${active.sourceCommitId}`,
@@ -1656,6 +2161,9 @@ export class ControlPlaneStore {
       }
       const previous = this.activeCoreSnapshot();
       if (!previous) throw new Error("Core rollback requires an active snapshot");
+      const previousCandidate = this.retainedCoreCandidate(previous.sourceCommitId);
+      if (!previousCandidate) throw new Error("active Core candidate is not retained");
+      assertRepositoryDeclarationRetention(previousCandidate, validated);
       if (previous.sourceCommitId === candidate.commitId) {
         throw new Error("Core rollback target is already the active source commit");
       }
@@ -3197,6 +3705,42 @@ export class ControlPlaneStore {
     }
   }
 
+  private insertReceipt(
+    commandScope: string,
+    commandKind: "repository.materialize-core-authority" | "repository.record-github-identity",
+    idempotencyKey: string,
+    payloadDigest: string,
+    result: RepositoryCoreAuthorityResult | RepositoryGitHubReconciliationResult,
+    transactionSequence: number,
+  ): void {
+    this.db
+      .prepare(
+        `INSERT INTO idempotency_receipts (
+           command_scope, command_kind, command_schema_version, idempotency_key,
+           payload_digest, result_json, transaction_sequence, retained_until
+         ) VALUES (?, ?, 1, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        commandScope,
+        commandKind,
+        idempotencyKey,
+        payloadDigest,
+        canonicalJson(result as unknown as JsonValue),
+        transactionSequence,
+        IDEMPOTENCY_RETAINED_UNTIL,
+      );
+  }
+
+  private advanceControlMetadata(evaluationTime: string, transactionSequence: number): void {
+    this.db
+      .prepare(
+        `UPDATE control_plane_metadata
+         SET control_time_watermark = ?, last_transaction_sequence = ?
+         WHERE singleton = 1`,
+      )
+      .run(evaluationTime, transactionSequence);
+  }
+
   private buildProjectionShadow(
     projectionName: ProjectionName,
     sourceSequence: number,
@@ -3715,6 +4259,28 @@ export class ControlPlaneStore {
         if (outputs[0]!.payload_digest !== outputs[1]!.payload_digest) {
           throw new Error(`Core check-detail prune outputs disagree: ${String(row.sequence)}`);
         }
+      } else if (row.command_kind === "repository.materialize-core-authority") {
+        if (
+          typeof row.idempotency_key !== "string" ||
+          !/^repo-core:[0-9a-f-]{36}:[1-9][0-9]{0,19}$/.test(row.idempotency_key) ||
+          row.principal_kind !== "fluent-system" ||
+          row.principal_id !== "kernel" ||
+          receiptCount !== 1 ||
+          !outputs.every((output) => output.payload_digest === outputs[0]!.payload_digest)
+        ) {
+          throw new Error(`repository Core authority transaction shape is invalid: ${String(row.sequence)}`);
+        }
+      } else if (row.command_kind === "repository.record-github-identity") {
+        if (
+          typeof row.idempotency_key !== "string" ||
+          !/^repo-gh:[0-9a-f-]{36}:[0-9a-f]{64}$/.test(row.idempotency_key) ||
+          row.principal_kind !== "fluent-system" ||
+          row.principal_id !== "kernel" ||
+          receiptCount !== 1 ||
+          !outputs.every((output) => output.payload_digest === outputs[0]!.payload_digest)
+        ) {
+          throw new Error(`repository GitHub reconciliation transaction shape is invalid: ${String(row.sequence)}`);
+        }
       }
     }
 
@@ -3956,6 +4522,104 @@ export class ControlPlaneStore {
           String(row.recorded_at) !== rollback.activatedAt
         ) {
           throw new Error(`Core rollback activation lineage mismatch: ${String(row.record_id)}`);
+        }
+      }
+      if (
+        String(row.kind) === "repository.declaration-definition" ||
+        String(row.kind) === "repository.core-authorized" ||
+        String(row.kind) === "repository.core-authority-reconciled"
+      ) {
+        const authority = payload as RepositoryCoreAuthorityPayload;
+        const snapshot = this.db
+          .prepare("SELECT source_commit_id FROM core_snapshots WHERE snapshot_id = ?")
+          .get(authority.coreSnapshotId) as Row | undefined;
+        const declaration = this.db
+          .prepare(
+            `SELECT content_digest, parsed_json FROM core_snapshot_files
+             WHERE snapshot_id = ? AND path = ?`,
+          )
+          .get(authority.coreSnapshotId, authority.declarationPath) as Row | undefined;
+        const expectedRecordId =
+          String(row.kind) === "repository.declaration-definition"
+            ? authority.declarationRecordId
+            : String(row.kind) === "repository.core-authorized"
+              ? authority.coreAuthorizationRecordId
+              : authority.eventRecordId;
+        const parsedDeclaration = declaration?.parsed_json
+          ? (parseJson(String(declaration.parsed_json)) as unknown as RepositoryDeclaration)
+          : undefined;
+        if (
+          String(row.subject_kind) !== "github-repository" ||
+          String(row.subject_id) !== authority.repositoryId ||
+          (expectedRecordId !== null && String(row.record_id) !== expectedRecordId) ||
+          String(row.revision_kind) !== "core-declaration-sha256" ||
+          String(row.revision_value) !== authority.declarationDigest ||
+          String(row.source_kind) !== "github-repository" ||
+          String(row.source_id) !== "github.com:1331309458" ||
+          String(row.source_revision_kind) !== "git-commit-sha1" ||
+          String(row.source_revision_value) !== `sha1:${authority.sourceCommitId}` ||
+          row.causation_record_id != null ||
+          String(row.recorded_at) !== authority.authorizedAt ||
+          !snapshot ||
+          String(snapshot.source_commit_id) !== authority.sourceCommitId ||
+          !declaration ||
+          String(declaration.content_digest) !== authority.declarationDigest ||
+          !parsedDeclaration ||
+          `github.com:${parsedDeclaration.repository.repository_id}` !== authority.repositoryId ||
+          parsedDeclaration.repository.owner !== authority.owner ||
+          parsedDeclaration.repository.name !== authority.name ||
+          parsedDeclaration.fleet_state !== authority.fleetState ||
+          canonicalJson(parsedDeclaration.maintenance_programs) !== canonicalJson(authority.maintenancePrograms) ||
+          canonicalJson(parsedDeclaration.action_ceiling) !== canonicalJson(authority.actionCeiling) ||
+          canonicalJson(parsedDeclaration.accountable_owners as unknown as JsonValue) !==
+            canonicalJson(authority.accountableOwners) ||
+          parsedDeclaration.surface_contract_version !== authority.surfaceContractVersion
+        ) {
+          throw new Error(`repository Core authority lineage mismatch: ${String(row.record_id)}`);
+        }
+      }
+      if (
+        String(row.kind) === "repository.github-identity-observation" ||
+        String(row.kind) === "repository.github-identity-reconciled" ||
+        String(row.kind) === "repository.github-identity-reconciliation-recorded"
+      ) {
+        const reconciliation = payload as RepositoryGitHubReconciliationPayload;
+        const authority = this.db
+          .prepare(
+            `SELECT payload_json FROM durable_occurrences
+             WHERE record_id = ? AND kind = 'repository.core-authorized'`,
+          )
+          .get(reconciliation.coreAuthorizationRecordId) as Row | undefined;
+        const authorityPayload = authority
+          ? parseJson(String(authority.payload_json))
+          : undefined;
+        const expectedRecordId =
+          String(row.kind) === "repository.github-identity-observation"
+            ? reconciliation.observationRecordId
+            : String(row.kind) === "repository.github-identity-reconciled"
+              ? reconciliation.reconciliationRecordId
+              : reconciliation.eventRecordId;
+        if (
+          !authorityPayload ||
+          !recordKindRegistry["repository.core-authorized"].validatePayload(authorityPayload) ||
+          String(row.subject_kind) !== "github-repository" ||
+          String(row.subject_id) !== reconciliation.repositoryId ||
+          (expectedRecordId !== null && String(row.record_id) !== expectedRecordId) ||
+          String(row.revision_kind) !== "github-metadata-sha256" ||
+          String(row.revision_value) !== reconciliation.responseDigest ||
+          String(row.source_kind) !== "github-api" ||
+          String(row.source_id) !== "api.github.com" ||
+          String(row.source_revision_kind) !== "github-metadata-sha256" ||
+          String(row.source_revision_value) !== reconciliation.responseDigest ||
+          String(row.causation_record_id) !== reconciliation.coreAuthorizationRecordId ||
+          String(row.recorded_at) !== reconciliation.checkedAt ||
+          authorityPayload.repositoryId !== reconciliation.repositoryId ||
+          authorityPayload.coreSnapshotId !== reconciliation.coreSnapshotId ||
+          authorityPayload.owner !== reconciliation.declaredOwner ||
+          authorityPayload.name !== reconciliation.declaredName ||
+          authorityPayload.fleetState !== reconciliation.fleetState
+        ) {
+          throw new Error(`repository GitHub reconciliation lineage mismatch: ${String(row.record_id)}`);
         }
       }
       if (row.revision_kind === "sha256" && String(row.revision_value) !== String(row.payload_digest)) {
@@ -4231,6 +4895,8 @@ export class ControlPlaneStore {
       if (commandKind === "core.record-source-check-eligible") parseCoreSourceCheckEligibleResult(result);
       if (commandKind === "core.issue-stale-source-override") parseCoreStaleSourceOverrideResult(result);
       if (commandKind === "core.prune-check-detail") parseCoreCheckDetailPruneResult(result);
+      if (commandKind === "repository.materialize-core-authority") parseRepositoryCoreAuthorityResult(result);
+      if (commandKind === "repository.record-github-identity") parseRepositoryGitHubReconciliationResult(result);
       assertUtcInstant(String(row.retained_until), `idempotency receipt ${String(row.idempotency_key)} retention time`);
       if (
         (commandKind === "control-plane.check-integrity" ||
@@ -4239,7 +4905,9 @@ export class ControlPlaneStore {
           commandKind === "core.record-candidate-rejection" ||
           commandKind === "core.record-source-check-eligible" ||
           commandKind === "core.issue-stale-source-override" ||
-          commandKind === "core.prune-check-detail") &&
+          commandKind === "core.prune-check-detail" ||
+          commandKind === "repository.materialize-core-authority" ||
+          commandKind === "repository.record-github-identity") &&
         String(row.retained_until) !== IDEMPOTENCY_RETAINED_UNTIL
       ) {
         throw new Error(`idempotency receipt retention mismatch: ${String(row.idempotency_key)}`);
@@ -4488,6 +5156,50 @@ export class ControlPlaneStore {
           throw new Error(`Core check-detail prune receipt output mismatch: ${String(row.idempotency_key)}`);
         }
       }
+      if (commandKind === "repository.materialize-core-authority") {
+        const authority = parseRepositoryCoreAuthorityResult(result);
+        const outputs = this.db
+          .prepare(
+            `SELECT record_id FROM durable_occurrences
+             WHERE transaction_sequence = ? ORDER BY transaction_position`,
+          )
+          .all(row.transaction_sequence!) as Row[];
+        if (
+          authority.transactionSequence !== Number(row.transaction_sequence) ||
+          authority.authorizedAt !== String(transaction.evaluation_time) ||
+          authority.authorizedAt !== String(transaction.recorded_at) ||
+          String(row.idempotency_key) !==
+            `repo-core:${authority.coreSnapshotId}:${authority.repositoryId.slice("github.com:".length)}` ||
+          outputs.length !== 3 ||
+          String(outputs[0]!.record_id) !== authority.declarationRecordId ||
+          String(outputs[1]!.record_id) !== authority.coreAuthorizationRecordId ||
+          String(outputs[2]!.record_id) !== authority.eventRecordId
+        ) {
+          throw new Error(`repository Core authority receipt output mismatch: ${String(row.idempotency_key)}`);
+        }
+      }
+      if (commandKind === "repository.record-github-identity") {
+        const reconciliation = parseRepositoryGitHubReconciliationResult(result);
+        const outputs = this.db
+          .prepare(
+            `SELECT record_id FROM durable_occurrences
+             WHERE transaction_sequence = ? ORDER BY transaction_position`,
+          )
+          .all(row.transaction_sequence!) as Row[];
+        if (
+          reconciliation.transactionSequence !== Number(row.transaction_sequence) ||
+          reconciliation.checkedAt !== String(transaction.evaluation_time) ||
+          reconciliation.checkedAt !== String(transaction.recorded_at) ||
+          String(row.idempotency_key) !==
+            `repo-gh:${reconciliation.coreAuthorizationRecordId}:${reconciliation.responseDigest.slice("sha256:".length)}` ||
+          outputs.length !== 3 ||
+          String(outputs[0]!.record_id) !== reconciliation.observationRecordId ||
+          String(outputs[1]!.record_id) !== reconciliation.reconciliationRecordId ||
+          String(outputs[2]!.record_id) !== reconciliation.eventRecordId
+        ) {
+          throw new Error(`repository GitHub reconciliation receipt output mismatch: ${String(row.idempotency_key)}`);
+        }
+      }
     }
   }
 
@@ -4619,6 +5331,176 @@ export class ControlPlaneStore {
     if (Number.isNaN(value.getTime())) throw new Error("control-plane clock returned an invalid instant");
     return value.toISOString();
   }
+}
+
+function assertExpectedSequence(value: number): void {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error("expectedLastTransactionSequence must be a positive safe integer");
+  }
+}
+
+function assertCommandTimeAndSequence(
+  metadata: ControlPlaneMetadata,
+  evaluationTime: string,
+  expectedLastTransactionSequence: number,
+): void {
+  if (evaluationTime < metadata.controlTimeWatermark) {
+    throw new Error(
+      `control-plane clock moved backwards behind ${metadata.controlTimeWatermark}; refusing a new write transaction`,
+    );
+  }
+  if (metadata.lastTransactionSequence !== expectedLastTransactionSequence) {
+    throw new Error(
+      `stale control-plane sequence: expected ${expectedLastTransactionSequence}, current ${metadata.lastTransactionSequence}`,
+    );
+  }
+}
+
+function normalizeRepositoryGitHubInspection(
+  input: RepositoryGitHubInspectionInput,
+): RepositoryGitHubInspectionInput {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("repository GitHub inspection must be one typed object");
+  }
+  if (input.kind === "missing" || input.kind === "unavailable") {
+    if (Object.keys(input).length !== 1) throw new Error("repository GitHub absence result has extra fields");
+    return { kind: input.kind };
+  }
+  if (
+    input.kind !== "found" ||
+    Object.keys(input).sort().join(",") !== "archived,kind,name,owner,repositoryId" ||
+    typeof input.repositoryId !== "string" ||
+    !/^[1-9][0-9]{0,19}$/.test(input.repositoryId) ||
+    typeof input.owner !== "string" ||
+    !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(input.owner) ||
+    typeof input.name !== "string" ||
+    !/^[A-Za-z0-9._-]{1,100}$/.test(input.name) ||
+    typeof input.archived !== "boolean"
+  ) {
+    throw new Error("repository GitHub found result is invalid");
+  }
+  return {
+    kind: "found",
+    repositoryId: input.repositoryId,
+    owner: input.owner,
+    name: input.name,
+    archived: input.archived,
+  };
+}
+
+function classifyRepositoryGitHubInspection(
+  authority: RepositoryCoreAuthorityPayload,
+  inspection: RepositoryGitHubInspectionInput,
+): RepositoryGitHubResult {
+  if (inspection.kind === "missing" || inspection.kind === "unavailable") return inspection.kind;
+  if (inspection.repositoryId !== authority.repositoryId.slice("github.com:".length)) return "identity-mismatch";
+  if (
+    inspection.owner.toLowerCase() !== authority.owner.toLowerCase() ||
+    inspection.name.toLowerCase() !== authority.name.toLowerCase()
+  ) {
+    return "locator-mismatch";
+  }
+  if (inspection.archived) return "archived";
+  return "matched";
+}
+
+function repositoryPreSurfaceState(
+  fleetState: RepositoryCoreAuthorityPayload["fleetState"],
+  result: RepositoryGitHubResult,
+): RepositoryPreSurfaceState {
+  if (fleetState === "disabled") return "disabled";
+  if (fleetState === "paused") return "paused";
+  return result === "matched" ? "awaiting-surfaces" : "github-held";
+}
+
+function isExactJsonObject(value: JsonValue, keys: readonly string[]): value is { [key: string]: JsonValue } {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function parseRepositoryCoreAuthorityResult(value: JsonValue): RepositoryCoreAuthorityResult {
+  if (
+    !isExactJsonObject(value, [
+      "repositoryId",
+      "coreSnapshotId",
+      "declarationRecordId",
+      "coreAuthorizationRecordId",
+      "eventRecordId",
+      "authorizedAt",
+      "transactionPositions",
+      "transactionSequence",
+    ]) ||
+    typeof value.repositoryId !== "string" ||
+    !/^github\.com:[1-9][0-9]{0,19}$/.test(value.repositoryId) ||
+    typeof value.coreSnapshotId !== "string" ||
+    !isUuidV7(value.coreSnapshotId) ||
+    typeof value.declarationRecordId !== "string" ||
+    !isUuidV7(value.declarationRecordId) ||
+    typeof value.coreAuthorizationRecordId !== "string" ||
+    !isUuidV7(value.coreAuthorizationRecordId) ||
+    typeof value.eventRecordId !== "string" ||
+    !isUuidV7(value.eventRecordId) ||
+    typeof value.authorizedAt !== "string" ||
+    !Array.isArray(value.transactionPositions) ||
+    canonicalJson(value.transactionPositions) !== "[0,1,2]" ||
+    !Number.isSafeInteger(value.transactionSequence) ||
+    Number(value.transactionSequence) < 1
+  ) {
+    throw new Error("invalid repository Core authority receipt result");
+  }
+  assertUtcInstant(value.authorizedAt, "repository Core authority time");
+  return value as unknown as RepositoryCoreAuthorityResult;
+}
+
+function parseRepositoryGitHubReconciliationResult(value: JsonValue): RepositoryGitHubReconciliationResult {
+  if (
+    !isExactJsonObject(value, [
+      "repositoryId",
+      "coreSnapshotId",
+      "coreAuthorizationRecordId",
+      "observationRecordId",
+      "reconciliationRecordId",
+      "eventRecordId",
+      "result",
+      "effectiveState",
+      "checkedAt",
+      "responseDigest",
+      "transactionPositions",
+      "transactionSequence",
+    ]) ||
+    typeof value.repositoryId !== "string" ||
+    !/^github\.com:[1-9][0-9]{0,19}$/.test(value.repositoryId) ||
+    typeof value.coreSnapshotId !== "string" ||
+    !isUuidV7(value.coreSnapshotId) ||
+    typeof value.coreAuthorizationRecordId !== "string" ||
+    !isUuidV7(value.coreAuthorizationRecordId) ||
+    typeof value.observationRecordId !== "string" ||
+    !isUuidV7(value.observationRecordId) ||
+    typeof value.reconciliationRecordId !== "string" ||
+    !isUuidV7(value.reconciliationRecordId) ||
+    typeof value.eventRecordId !== "string" ||
+    !isUuidV7(value.eventRecordId) ||
+    !(["matched", "missing", "locator-mismatch", "identity-mismatch", "archived", "unavailable"] as const).includes(
+      value.result as RepositoryGitHubResult,
+    ) ||
+    (value.effectiveState !== "disabled" &&
+      value.effectiveState !== "paused" &&
+      value.effectiveState !== "github-held" &&
+      value.effectiveState !== "awaiting-surfaces") ||
+    typeof value.checkedAt !== "string" ||
+    typeof value.responseDigest !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/.test(value.responseDigest) ||
+    !Array.isArray(value.transactionPositions) ||
+    canonicalJson(value.transactionPositions) !== "[0,1,2]" ||
+    !Number.isSafeInteger(value.transactionSequence) ||
+    Number(value.transactionSequence) < 1
+  ) {
+    throw new Error("invalid repository GitHub reconciliation receipt result");
+  }
+  assertUtcInstant(value.checkedAt, "repository GitHub reconciliation time");
+  return value as unknown as RepositoryGitHubReconciliationResult;
 }
 
 function assertCorePollInterval(value: number): void {

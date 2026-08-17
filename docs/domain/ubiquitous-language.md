@@ -793,6 +793,16 @@ runtime enrollment and not a repository-local policy instance.
 **Avoid:** enrollment state; repository opt-in file; local governance policy.
 ([ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md))
 
+#### Repository reconciliation
+
+The deterministic, resumable process that materializes one active Core
+repository declaration, compares its mutable GitHub locator with the immutable
+source identity, and later validates canonical surfaces as separate facts. An
+identity match alone does not establish enrollment.
+
+**Avoid:** repository sync as one status; GitHub lookup as enrollment; agent
+onboarding. ([ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md))
+
 #### Canonical surface
 
 The one declared path and format from which Fluent reads a type of repository or

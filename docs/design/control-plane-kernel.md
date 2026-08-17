@@ -6,11 +6,13 @@ Living document. Rationale:
 [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md),
 [ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md), and
 [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md), plus
-[ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md).
+[ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md), and
+[ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md).
 Contracts: [control-plane kernel](../specs/control-plane-kernel.md) and
 [Core source readiness](../specs/core-source-readiness.md), plus
 [Core check-detail retention](../specs/core-check-detail-retention.md) and
-[Core source polling](../specs/core-source-polling.md).
+[Core source polling](../specs/core-source-polling.md), plus
+[repository authority reconciliation](../specs/repository-authority-reconciliation.md).
 
 ## Overview
 
@@ -20,8 +22,9 @@ read models. The implemented slices initialize the kernel and one stable
 implicit local-operator principal, execute one system integrity command, and
 publish subject-lookup and event-cursor projection generations. The current
 kernel also retains and activates verified Core snapshots through one
-registered fact predicate. It does not yet expose work admission, general fact
-establishment, sessions, grants, or worker operations.
+registered fact predicate and separately materializes Core repository authority
+and bounded GitHub identity facts. It does not yet expose work admission,
+canonical-surface authority, sessions, grants, or worker operations.
 
 ```text
 empty target file
@@ -52,7 +55,7 @@ spike. The path helper rejects equal resolved paths, while store startup also
 recognizes the spike tables and refuses to initialize over them.
 
 The target file identifies itself with SQLite application ID `1179405908`
-(`FLNT`), `PRAGMA user_version = 3`, a server-generated UUIDv7 database-lineage
+(`FLNT`), `PRAGMA user_version = 4`, a server-generated UUIDv7 database-lineage
 ID, a separately generated UUIDv7 operator-principal ID, schema version,
 registry version, control-time watermark, and last committed transaction
 sequence. Opening a current database validates those values and performs no
@@ -62,18 +65,20 @@ schemas fail rather than being guessed or upgraded by this slice.
 ### Closed registries
 
 [`registry.ts`](../../src/control/registry.ts) is the only owner of the current
-kernel vocabulary. Registry version 8 contains the bootstrap, Core snapshot,
-source-check, and rollback contracts:
+kernel vocabulary. Registry version 9 contains the bootstrap, Core snapshot,
+source-check, rollback, and first repository-reconciliation contracts:
 
 | Registry | Initial member | Meaning |
 | --- | --- | --- |
 | Subject kind | `control-plane-database` | One Fluent-native database lineage with UUIDv7 identity |
 | Subject kind | `operator-principal` | The stable human-authority identity implicitly bound by local stdio |
 | Subject kind | `core-snapshot` | One Fluent-native retained catalog identity with UUIDv7 identity |
+| Subject kind | `github-repository` | One immutable source-native GitHub repository identity |
 | Revision kind | `sha256`, `transaction-sequence`, `core-catalog-sha256`, `git-commit-sha1` | Exact payload, database-state, catalog, or source-commit identity |
 | Source kind | `fluent-system` / `kernel` | The deterministic kernel bootstrap source |
 | Source kind | `github-repository` | Immutable GitHub repository ID plus typed Git commit revision |
 | Source kind | `operator-principal` | Stored UUIDv7 human authority with no caller-selected revision |
+| Source kind | `github-api` | Bounded selected metadata from `api.github.com` |
 | Record kind | `control-plane.database-definition` v1 | An `organization`-class definition of the database lineage and schema/registry versions |
 | Record kind | `principal.definition` v1 | The `organization`-class definition of the implicit local operator |
 | Record kind | `control-plane.integrity-observation` v1 | The system's SQLite quick-check observation bound to the checked sequence |
@@ -83,6 +88,7 @@ source-check, and rollback contracts:
 | Record kind | `core.source-check-eligible-observation` v1 | Configured-ref check that exactly matches active authority |
 | Record kind | `core.stale-source-override-decision` v1 | Resolved operator choice bound to stale evidence, active snapshot, and expiry |
 | Record kind | `core.rollback-decision` v1 | Resolved operator choice bound to exact prior Core authority, target commit, and reason |
+| Record kinds | `repository.*` v1 | Exact declaration definition, Core authorization, GitHub observation, and identity-reconciliation fact |
 | Event kind | `control-plane.initialized` v1 | The past-tense account of successful initialization |
 | Event kind | `control-plane.integrity-checked` v1 | The past-tense account of the accepted integrity observation |
 | Event kind | `core.snapshot-activated` v1 | The past-tense account of selecting one snapshot |
@@ -90,9 +96,11 @@ source-check, and rollback contracts:
 | Event kind | `core.source-check-eligible` v1 | The past-tense audit account of one eligible configured-ref check |
 | Event kind | `core.stale-source-override-issued` v1 | The past-tense account causally linked to the override decision |
 | Event kind | `core.snapshot-rollback-activated` v1 | The past-tense account linking an operator decision, prior authority, and new snapshot |
+| Event kinds | `repository.*reconciled` v1 | Past-tense Core-authority and GitHub-identity outcomes |
 | Command kind | `control-plane.initialize` v1 | The fixed bootstrap transaction and its ordered outputs |
 | Command kind | `control-plane.check-integrity` v1 | An optimistic, idempotent system integrity check |
 | Command kind | `core.activate-snapshot` v1 | Atomic retention and activation of one independently revalidated candidate |
+| Command kinds | `repository.materialize-core-authority`, `repository.record-github-identity` v1 | Per-repository optimistic and idempotent reconciliation transactions |
 | Command kind | `core.record-candidate-rejection` v1 | Idempotent bounded rejection observation and event |
 | Command kind | `core.record-source-check-eligible` v1 | Idempotent eligible-check observation and event |
 | Command kind | `core.issue-stale-source-override` v1 | Optimistic attributed decision capped at 24 hours |
@@ -221,6 +229,18 @@ then 60 minutes, suppresses only consecutive equivalent validation/continuity
 detail, and invokes typed retention once daily. The exact behavior lives in
 [Core source polling](../specs/core-source-polling.md).
 
+After an eligible source check, repository reconciliation reads canonical
+declarations from the active retained snapshot. One transaction per declaration
+creates or revises the source-native GitHub repository subject and establishes
+`repository.core-authorized`. Enabled declarations then receive a bounded
+GitHub metadata lookup outside SQLite and a second transaction establishing
+`repository.github-identity-reconciled`. Paused and disabled declarations are
+materialized without an external lookup. The current read derives
+`awaiting-github`, `github-held`, or `awaiting-surfaces`; it cannot derive
+`enrolled` before canonical repository surfaces are validated. Exact behavior
+lives in
+[repository authority reconciliation](../specs/repository-authority-reconciliation.md).
+
 An automatic check that matches the active commit appends an eligible-check
 observation and event without creating another snapshot. Rejection observations
 identify automatic configured-ref checks separately from exact-commit rollback
@@ -332,8 +352,9 @@ closed without disabling unrelated authoritative commands; explicit repair
 replaces the disposable generations.
 
 The public class currently offers secret-safe metadata and occurrence
-inspection plus the system-only integrity and Core activation commands. There
-is no administrative, worker, or generic mutation surface. Authentication,
+inspection plus the system-only integrity, Core activation, and typed repository
+reconciliation commands. There is no administrative, worker, or generic
+mutation surface. Authentication,
 principal/session command binding, general predicates and reducers,
 operational state, authority-sensitive
 projections, bounded clock-rollback recovery, backup activation operations, and
@@ -370,11 +391,13 @@ work lineage are later slices in the
   [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md),
   [ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md), and
   [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md), and
-  [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md)
+  [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md), and
+  [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md)
 - Contracts: [control-plane kernel](../specs/control-plane-kernel.md) and
   [Core snapshot activation](../specs/core-snapshot-activation.md), and
   [Core source readiness](../specs/core-source-readiness.md), and
   [Core check-detail retention](../specs/core-check-detail-retention.md), and
-  [Core source polling](../specs/core-source-polling.md)
+  [Core source polling](../specs/core-source-polling.md), and
+  [repository authority reconciliation](../specs/repository-authority-reconciliation.md)
 - Built in: [control-plane kernel bootstrap — Phases 1–3](../plans/control-plane-kernel-bootstrap.md)
 - Product: [GitHub organization agent fleet](../prd/agent-fleet.md)

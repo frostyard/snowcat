@@ -64,8 +64,9 @@ removed. -->
   automatic Core authority mutation. After the first activation it
   verifies Git ancestry from the active source commit, then independently
   revalidates and atomically retains/activates one candidate through the typed handler in
-  [`src/control/store.ts`](src/control/store.ts); it still creates no enrollment
-  or work.
+  [`src/control/store.ts`](src/control/store.ts). The Core transaction creates
+  no enrollment or work; after its eligible source check the CLI runs the
+  separately typed repository reconciliation pass.
 - Use `npm run --silent core -- rollback <expected-control-plane-sequence>
   <target-commit> <reason>` only for an attributed local-operator rollback
   activation. It creates a resolved typed decision and a new snapshot from
@@ -91,6 +92,11 @@ removed. -->
   `CoreSourceController`, `poll-once` for one due attempt, and `poll-state` for
   its read-only operational state. The healthy interval defaults to 15 minutes;
   configure only through `FLUENT_CORE_POLL_INTERVAL_SECONDS`.
+- Use `npm run --silent repository -- reconcile` to resume one bounded
+  declaration/identity convergence pass and `repository -- status` for its
+  read-only pre-surface states. Identity match is `awaiting-surfaces`, never
+  enrollment; the implementation lives in
+  [`src/repository/controller.ts`](src/repository/controller.ts).
 - Keep the target control-plane store separate from the disposable queue-spike
   store. Target schema and startup live in
   [`src/control/store.ts`](src/control/store.ts); closed vocabulary lives only

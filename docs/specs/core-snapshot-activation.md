@@ -4,7 +4,9 @@ This contract governs the typed control-plane transactions that either turn one
 successfully verified `frostyard/core` candidate into the current retained Core
 snapshot or record a bounded rejection observation when activation cannot
 begin or commit. It is consumed by the host-local Core CLI and internal Fluent
-code; it does not create repository enrollment, reconcile GitHub, or admit work.
+code. The activation transaction itself does not create repository enrollment,
+reconcile GitHub, or admit work; after an accepted source check the host command
+invokes the separate repository reconciliation contract.
 
 ## Interface
 
@@ -39,8 +41,9 @@ The underlying accepted activation result has this shape:
 | `transactionSequence` | positive integer | Allocated control-plane order |
 
 The host-local `activate` command then records the eligible automatic source
-check and emits `{ activation, activationResult, activeSnapshot, sourceCheck,
-readiness }`. `activation` is `activated` or `unchanged`; `activationResult` is
+check, runs one repository reconciliation pass, and emits `{ activation,
+activationResult, activeSnapshot, sourceCheck, readiness,
+repositoryReconciliation }`. `activation` is `activated` or `unchanged`; `activationResult` is
 the result above or null for an unchanged active commit. `sourceCheck` carries
 its own later transaction sequence, which is the sequence callers should use
 for the next command. The command does not create another snapshot for an
@@ -97,7 +100,7 @@ The rejection payload has this exact shape:
 | `activeCommitId` | string or null | Required for continuity failure; exact active source commit used by the ancestry check |
 | `observedAt` | canonical UTC instant | Server evaluation and recorded time |
 
-Schema version `3` and registry version `8` govern three authority tables:
+Schema version `4` and registry version `9` govern three Core authority tables:
 
 | Table | Retained content |
 | --- | --- |
@@ -141,7 +144,8 @@ previous snapshot/commit, decision, operator, and reason.
    activation fact.
 10. Verification or activation MUST NOT interpret a declaration as enrollment,
     reconcile a repository, create a hold, generate work, or execute fetched
-    repository code.
+    repository code. Repository authority and GitHub identity use their
+    separately registered commands after the eligible source-check transaction.
 11. A new automatic activation after the first MUST bind the active source
     commit under the writer lock and MUST proceed only after the source adapter
     verifies that commit as an ancestor of the different candidate commit.
@@ -177,7 +181,7 @@ previous snapshot/commit, decision, operator, and reason.
     implemented under [Core check-detail retention](core-check-detail-retention.md);
     periodic execution is implemented under
     [Core source polling](core-source-polling.md).
-19. A schema version other than `3` or registry version other than `8` MUST fail
+19. A schema version other than `4` or registry version other than `9` MUST fail
     closed. This pre-production version defines no in-place upgrade; initialize
     a fresh target database.
 
@@ -199,10 +203,13 @@ previous snapshot/commit, decision, operator, and reason.
   [ADR-0040](../adr/0040-establish-facts-through-registered-predicate-contracts.md),
   [ADR-0046](../adr/0046-separate-core-source-freshness-from-admission-readiness.md),
   [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md), and
-  [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md)
+  [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md), and
+  [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md)
 - Context: [Core snapshot ingestion](../design/core-snapshot-ingestion.md)
 - Source gate: [Core source readiness](core-source-readiness.md)
 - Diagnostic retention: [Core check-detail retention](core-check-detail-retention.md)
 - Periodic execution: [Core source polling](core-source-polling.md)
+- Downstream repository reconciliation:
+  [repository authority reconciliation](repository-authority-reconciliation.md)
 - Substrate: [control-plane kernel](control-plane-kernel.md)
 - Delivery: [Core snapshot ingestion plan](../plans/core-snapshot-ingestion.md)

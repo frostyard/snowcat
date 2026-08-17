@@ -358,9 +358,12 @@ targets are required before this PRD can become Approved.
     It MUST NOT contain credentials, provider or worker configuration, or
     repository-local implementation details.
 70. Activating the validated core snapshot containing a new `enabled`
-    declaration MUST create the durable RepositoryController and enrollment
-    event without creating work. Fluent MUST retain the source snapshot and PR
-    or commit attribution when available.
+    declaration MUST make that exact declaration eligible for deterministic
+    repository reconciliation. Only after its immutable GitHub identity and
+    required canonical surfaces match MAY Fluent establish enrollment, create
+    the durable RepositoryController and enrollment event, and it MUST do so
+    without creating work. Fluent MUST retain the source snapshot and PR or
+    commit attribution when available.
 71. Fluent MUST reconcile the declaration with GitHub and place only the
     affected repository on hold when the slug is missing, renamed, transferred,
     or archived, the immutable ID differs, or required local policy is
@@ -1881,15 +1884,21 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   detail now has a typed 30-day/10,000-item retention boundary with protected
   readiness and decision evidence. A leased deterministic `CoreSourceController`
   now owns the first narrow operational-state singleton and periodic synchronization.
-  The kernel does not yet implement a target work, general fact, general
-operational-state, repository/fleet controller, or worker mutation path and never
-reads or imports the spike database.
+  Active declarations now materialize as source-native GitHub repository subjects,
+  exact definitions, and `repository.core-authorized` facts. Enabled declarations
+  receive bounded GitHub identity reconciliation as a separate fact; missing,
+  changed, mismatched, archived, and unavailable results remain scoped to that
+  repository. The read model stops honestly at `awaiting-surfaces`, so no
+  RepositoryController or enrollment exists before canonical surface validation.
+  The kernel does not yet implement target work, general fact mutation, general
+  operational state, fleet coordination, or worker mutation and never reads or
+  imports the spike database.
 
 ### Remaining design and delivery tracks
 
 | Track | What remains before implementation is well specified |
 | --- | --- |
-| Core contract and migration | Remaining organization JSON Schemas and fixtures, canonical-surface migrations, and enrollment reconciliation |
+| Core contract and migration | Remaining organization JSON Schemas and fixtures, canonical-surface migrations, exact-commit repository surface validation, local holds, and final enrollment establishment |
 | Control-plane domain model | Execute the [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md): specify exact durable schemas, predicates, reducers, events, projections, invalidation, idempotency, and state machines in a fresh target database shared by RepositoryController, FleetController, ProcessObserver, scheduling, and decisions |
 | GitHub observation | GitHub App permissions, installation and actor mapping, CI/review/merge and artifact reconciliation, polling versus webhooks, forks, outage behavior, and external decision signals |
 | Workflow contracts | Versioned role briefs, evidence schemas, skills, attempt budgets, and deterministic gates for maintenance, planning, review, implementation, repair, and verification |
@@ -2085,18 +2094,22 @@ reads or imports the spike database.
   check-detail retention boundary in
   [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md), with leased
   polling defined by
-  [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md), and the
+  [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md), with
+  repository reconciliation split across exact authority facts by
+  [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md), and the
   [Fluent ubiquitous language](../domain/ubiquitous-language.md)
 - Designs: [queue execution boundary](../design/queue-execution-boundary.md),
   [control-plane kernel](../design/control-plane-kernel.md), and
-  [core snapshot ingestion](../design/core-snapshot-ingestion.md)
+  [core snapshot ingestion](../design/core-snapshot-ingestion.md), plus
+  [repository enrollment](../design/repository-enrollment.md)
 - Contracts: [work queue](../specs/work-queue.md),
   [control-plane kernel](../specs/control-plane-kernel.md), and
   [core snapshot verification](../specs/core-snapshot-verification.md), plus
   [Core snapshot activation](../specs/core-snapshot-activation.md) and
   [Core source readiness](../specs/core-source-readiness.md), plus
   [Core check-detail retention](../specs/core-check-detail-retention.md) and
-  [Core source polling](../specs/core-source-polling.md)
+  [Core source polling](../specs/core-source-polling.md), plus
+  [repository authority reconciliation](../specs/repository-authority-reconciliation.md)
 - Delivery: [queue vertical spike](../plans/queue-vertical-spike.md),
   [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md),
   [core snapshot ingestion](../plans/core-snapshot-ingestion.md), and

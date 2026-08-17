@@ -1,8 +1,8 @@
 import { isUuidV7, type JsonValue } from "./encoding.ts";
 
 export const CONTROL_PLANE_APPLICATION_ID = 1_179_405_908; // ASCII "FLNT"
-export const CONTROL_PLANE_SCHEMA_VERSION = 3;
-export const CONTROL_PLANE_REGISTRY_VERSION = 8;
+export const CONTROL_PLANE_SCHEMA_VERSION = 4;
+export const CONTROL_PLANE_REGISTRY_VERSION = 9;
 
 export const informationClasses = ["public", "organization", "restricted"] as const;
 export type InformationClass = (typeof informationClasses)[number];
@@ -18,8 +18,8 @@ export const recordClasses = [
 export type RecordClass = (typeof recordClasses)[number];
 
 export interface SubjectKindContract {
-  authoritySystem: "fluent";
-  idScheme: "uuidv7";
+  authoritySystem: "fluent" | "github";
+  idScheme: "uuidv7" | "github-qualified-numeric-id";
   revisionKinds: readonly string[];
   validateId: (value: string) => boolean;
 }
@@ -43,6 +43,12 @@ export const subjectKindRegistry = {
     revisionKinds: ["core-catalog-sha256"],
     validateId: isUuidV7,
   },
+  "github-repository": {
+    authoritySystem: "github",
+    idScheme: "github-qualified-numeric-id",
+    revisionKinds: ["core-declaration-sha256", "github-metadata-sha256"],
+    validateId: (value: string) => /^github\.com:[1-9][0-9]{0,19}$/.test(value),
+  },
 } as const satisfies Record<string, SubjectKindContract>;
 
 export const revisionKindRegistry = {
@@ -58,6 +64,12 @@ export const revisionKindRegistry = {
   "git-commit-sha1": {
     validate: (value: string) => /^sha1:[0-9a-f]{40}$/.test(value),
   },
+  "core-declaration-sha256": {
+    validate: (value: string) => /^sha256:[0-9a-f]{64}$/.test(value),
+  },
+  "github-metadata-sha256": {
+    validate: (value: string) => /^sha256:[0-9a-f]{64}$/.test(value),
+  },
 } as const;
 
 export const sourceKindRegistry = {
@@ -68,6 +80,10 @@ export const sourceKindRegistry = {
   "github-repository": {
     validateId: (value: string) => /^github\.com:[1-9][0-9]{0,19}$/.test(value),
     revisionKinds: ["git-commit-sha1"],
+  },
+  "github-api": {
+    validateId: (value: string) => value === "api.github.com",
+    revisionKinds: ["github-metadata-sha256"],
   },
   "operator-principal": {
     validateId: isUuidV7,
@@ -146,6 +162,34 @@ export const recordKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isCoreRollbackDecisionPayload,
   },
+  "repository.declaration-definition": {
+    schemaVersion: 1,
+    recordClass: "definition",
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isRepositoryCoreAuthorityPayload,
+  },
+  "repository.core-authorized": {
+    schemaVersion: 1,
+    recordClass: "fact",
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isRepositoryCoreAuthorityPayload,
+  },
+  "repository.github-identity-observation": {
+    schemaVersion: 1,
+    recordClass: "observation",
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isRepositoryGitHubReconciliationPayload,
+  },
+  "repository.github-identity-reconciled": {
+    schemaVersion: 1,
+    recordClass: "fact",
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isRepositoryGitHubReconciliationPayload,
+  },
 } as const;
 
 export const eventKindRegistry = {
@@ -197,6 +241,18 @@ export const eventKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isCoreRollbackActivatedPayload,
   },
+  "repository.core-authority-reconciled": {
+    schemaVersion: 1,
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isRepositoryCoreAuthorityPayload,
+  },
+  "repository.github-identity-reconciliation-recorded": {
+    schemaVersion: 1,
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isRepositoryGitHubReconciliationPayload,
+  },
 } as const;
 
 export const commandKindRegistry = {
@@ -237,6 +293,22 @@ export const commandKindRegistry = {
       "core.snapshot-rollback-activated",
     ],
   },
+  "repository.materialize-core-authority": {
+    schemaVersion: 1,
+    outputKinds: [
+      "repository.declaration-definition",
+      "repository.core-authorized",
+      "repository.core-authority-reconciled",
+    ],
+  },
+  "repository.record-github-identity": {
+    schemaVersion: 1,
+    outputKinds: [
+      "repository.github-identity-observation",
+      "repository.github-identity-reconciled",
+      "repository.github-identity-reconciliation-recorded",
+    ],
+  },
 } as const;
 
 export const predicateContractRegistry = {
@@ -247,6 +319,22 @@ export const predicateContractRegistry = {
     establishedBy: ["core.activate-snapshot", "core.rollback-snapshot"],
     precedence: "latest-transaction-sequence",
     consumers: ["core-authority"],
+  },
+  "repository.core-authorized": {
+    contractVersion: 1,
+    recordClass: "fact",
+    subjectKinds: ["github-repository"],
+    establishedBy: ["repository.materialize-core-authority"],
+    precedence: "active-core-snapshot",
+    consumers: ["repository-reconciliation", "repository-eligibility"],
+  },
+  "repository.github-identity-reconciled": {
+    contractVersion: 1,
+    recordClass: "fact",
+    subjectKinds: ["github-repository"],
+    establishedBy: ["repository.record-github-identity"],
+    precedence: "bound-core-authorization",
+    consumers: ["repository-reconciliation", "repository-eligibility"],
   },
 } as const;
 
@@ -430,6 +518,68 @@ export interface CoreRollbackActivatedPayload extends Record<string, JsonValue> 
   operatorPrincipalId: string;
   reason: string;
   activatedAt: string;
+}
+
+export type RepositoryFleetState = "enabled" | "paused" | "disabled";
+export type RepositoryMaintenanceProgram = "quality" | "ci" | "security" | "architecture";
+export type RepositoryAction = "read" | "write" | "run-tests" | "open-issue" | "open-pr" | "create-followup";
+export type RepositoryGitHubResult =
+  | "matched"
+  | "missing"
+  | "locator-mismatch"
+  | "identity-mismatch"
+  | "archived"
+  | "unavailable";
+export type RepositoryPreSurfaceState =
+  | "awaiting-authority"
+  | "disabled"
+  | "paused"
+  | "awaiting-github"
+  | "github-held"
+  | "awaiting-surfaces";
+
+export type RepositoryAccountableOwner =
+  | ({ kind: "github-user"; login: string } & Record<string, JsonValue>)
+  | ({ kind: "github-team"; slug: string } & Record<string, JsonValue>);
+
+export interface RepositoryCoreAuthorityPayload extends Record<string, JsonValue> {
+  repositoryId: string;
+  coreSnapshotId: string;
+  declarationRecordId: string;
+  coreAuthorizationRecordId: string;
+  eventRecordId: string;
+  sourceCommitId: string;
+  declarationPath: string;
+  declarationDigest: string;
+  owner: string;
+  name: string;
+  accountableOwners: RepositoryAccountableOwner[];
+  fleetState: RepositoryFleetState;
+  maintenancePrograms: RepositoryMaintenanceProgram[];
+  actionCeiling: RepositoryAction[];
+  surfaceContractVersion: 1;
+  authorizedAt: string;
+}
+
+export interface RepositoryGitHubReconciliationPayload extends Record<string, JsonValue> {
+  repositoryId: string;
+  coreSnapshotId: string;
+  coreAuthorizationRecordId: string;
+  observationRecordId: string;
+  reconciliationRecordId: string;
+  eventRecordId: string;
+  declaredOwner: string;
+  declaredName: string;
+  declaredRepositoryId: string;
+  fleetState: RepositoryFleetState;
+  observedOwner: string | null;
+  observedName: string | null;
+  observedRepositoryId: string | null;
+  archived: boolean | null;
+  result: RepositoryGitHubResult;
+  effectiveState: RepositoryPreSurfaceState;
+  checkedAt: string;
+  responseDigest: string;
 }
 
 export function assertSubject(kind: string, id: string): asserts kind is SubjectKind {
@@ -845,6 +995,196 @@ function isCoreRollbackActivatedPayload(value: unknown): value is CoreRollbackAc
     isUuidV7(value.operatorPrincipalId) &&
     isBoundedDiagnostic(value.reason) &&
     isUtcInstant(value.activatedAt)
+  );
+}
+
+function isRepositoryCoreAuthorityPayload(value: unknown): value is RepositoryCoreAuthorityPayload {
+  if (
+    !isExactObject(value, [
+      "repositoryId",
+      "coreSnapshotId",
+      "declarationRecordId",
+      "coreAuthorizationRecordId",
+      "eventRecordId",
+      "sourceCommitId",
+      "declarationPath",
+      "declarationDigest",
+      "owner",
+      "name",
+      "accountableOwners",
+      "fleetState",
+      "maintenancePrograms",
+      "actionCeiling",
+      "surfaceContractVersion",
+      "authorizedAt",
+    ]) ||
+    typeof value.repositoryId !== "string" ||
+    !/^github\.com:[1-9][0-9]{0,19}$/.test(value.repositoryId) ||
+    typeof value.coreSnapshotId !== "string" ||
+    !isUuidV7(value.coreSnapshotId) ||
+    typeof value.declarationRecordId !== "string" ||
+    !isUuidV7(value.declarationRecordId) ||
+    typeof value.coreAuthorizationRecordId !== "string" ||
+    !isUuidV7(value.coreAuthorizationRecordId) ||
+    typeof value.eventRecordId !== "string" ||
+    !isUuidV7(value.eventRecordId) ||
+    typeof value.sourceCommitId !== "string" ||
+    !/^[0-9a-f]{40}$/.test(value.sourceCommitId) ||
+    typeof value.owner !== "string" ||
+    !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(value.owner) ||
+    typeof value.name !== "string" ||
+    !/^[A-Za-z0-9._-]{1,100}$/.test(value.name) ||
+    value.declarationPath !== `organization/repositories/${value.owner}/${value.name}.json` ||
+    !isSha256(value.declarationDigest) ||
+    (value.fleetState !== "enabled" && value.fleetState !== "paused" && value.fleetState !== "disabled") ||
+    value.surfaceContractVersion !== 1 ||
+    !isUtcInstant(value.authorizedAt) ||
+    !isRepositoryOwners(value.accountableOwners) ||
+    !isClosedUniqueArray(value.maintenancePrograms, ["quality", "ci", "security", "architecture"], 4) ||
+    !isClosedUniqueArray(
+      value.actionCeiling,
+      ["read", "write", "run-tests", "open-issue", "open-pr", "create-followup"],
+      6,
+    )
+  ) {
+    return false;
+  }
+  const repositoryId = value.repositoryId.slice("github.com:".length);
+  if (value.fleetState === "enabled") {
+    if (value.maintenancePrograms.length === 0 || value.actionCeiling.length === 0) return false;
+  }
+  return repositoryId.length > 0;
+}
+
+function isRepositoryGitHubReconciliationPayload(
+  value: unknown,
+): value is RepositoryGitHubReconciliationPayload {
+  if (
+    !isExactObject(value, [
+      "repositoryId",
+      "coreSnapshotId",
+      "coreAuthorizationRecordId",
+      "observationRecordId",
+      "reconciliationRecordId",
+      "eventRecordId",
+      "declaredOwner",
+      "declaredName",
+      "declaredRepositoryId",
+      "fleetState",
+      "observedOwner",
+      "observedName",
+      "observedRepositoryId",
+      "archived",
+      "result",
+      "effectiveState",
+      "checkedAt",
+      "responseDigest",
+    ]) ||
+    typeof value.repositoryId !== "string" ||
+    !/^github\.com:[1-9][0-9]{0,19}$/.test(value.repositoryId) ||
+    typeof value.coreSnapshotId !== "string" ||
+    !isUuidV7(value.coreSnapshotId) ||
+    typeof value.coreAuthorizationRecordId !== "string" ||
+    !isUuidV7(value.coreAuthorizationRecordId) ||
+    typeof value.observationRecordId !== "string" ||
+    !isUuidV7(value.observationRecordId) ||
+    typeof value.reconciliationRecordId !== "string" ||
+    !isUuidV7(value.reconciliationRecordId) ||
+    typeof value.eventRecordId !== "string" ||
+    !isUuidV7(value.eventRecordId) ||
+    typeof value.declaredOwner !== "string" ||
+    !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(value.declaredOwner) ||
+    typeof value.declaredName !== "string" ||
+    !/^[A-Za-z0-9._-]{1,100}$/.test(value.declaredName) ||
+    typeof value.declaredRepositoryId !== "string" ||
+    !/^[1-9][0-9]{0,19}$/.test(value.declaredRepositoryId) ||
+    value.repositoryId !== `github.com:${value.declaredRepositoryId}` ||
+    (value.fleetState !== "enabled" && value.fleetState !== "paused" && value.fleetState !== "disabled") ||
+    !isUtcInstant(value.checkedAt) ||
+    !isSha256(value.responseDigest) ||
+    !(["matched", "missing", "locator-mismatch", "identity-mismatch", "archived", "unavailable"] as const).includes(
+      value.result as RepositoryGitHubResult,
+    )
+  ) {
+    return false;
+  }
+  const noObservation =
+    value.observedOwner === null &&
+    value.observedName === null &&
+    value.observedRepositoryId === null &&
+    value.archived === null;
+  if (value.result === "missing" || value.result === "unavailable") {
+    if (!noObservation) return false;
+  } else {
+    if (
+      typeof value.observedOwner !== "string" ||
+      !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(value.observedOwner) ||
+      typeof value.observedName !== "string" ||
+      !/^[A-Za-z0-9._-]{1,100}$/.test(value.observedName) ||
+      typeof value.observedRepositoryId !== "string" ||
+      !/^[1-9][0-9]{0,19}$/.test(value.observedRepositoryId) ||
+      typeof value.archived !== "boolean"
+    ) {
+      return false;
+    }
+    const identityMatches = value.observedRepositoryId === value.declaredRepositoryId;
+    const locatorMatches =
+      value.observedOwner.toLowerCase() === value.declaredOwner.toLowerCase() &&
+      value.observedName.toLowerCase() === value.declaredName.toLowerCase();
+    const expectedResult = !identityMatches
+      ? "identity-mismatch"
+      : !locatorMatches
+        ? "locator-mismatch"
+        : value.archived
+          ? "archived"
+          : "matched";
+    if (value.result !== expectedResult) return false;
+  }
+  const expectedState: RepositoryPreSurfaceState =
+    value.fleetState === "disabled"
+      ? "disabled"
+      : value.fleetState === "paused"
+        ? "paused"
+        : value.result === "matched"
+          ? "awaiting-surfaces"
+          : "github-held";
+  return value.effectiveState === expectedState;
+}
+
+function isRepositoryOwners(value: unknown): value is RepositoryAccountableOwner[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 20) return false;
+  const identities = new Set<string>();
+  for (const owner of value) {
+    if (!owner || typeof owner !== "object" || Array.isArray(owner)) return false;
+    if (
+      isExactObject(owner, ["kind", "login"]) &&
+      owner.kind === "github-user" &&
+      typeof owner.login === "string" &&
+      /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(owner.login)
+    ) {
+      identities.add(`github-user:${owner.login.toLowerCase()}`);
+      continue;
+    }
+    if (
+      isExactObject(owner, ["kind", "slug"]) &&
+      owner.kind === "github-team" &&
+      typeof owner.slug === "string" &&
+      /^[a-z0-9](?:[a-z0-9-]{0,99})$/.test(owner.slug)
+    ) {
+      identities.add(`github-team:${owner.slug}`);
+      continue;
+    }
+    return false;
+  }
+  return identities.size === value.length;
+}
+
+function isClosedUniqueArray(value: unknown, allowed: readonly string[], maximum: number): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= maximum &&
+    value.every((entry) => typeof entry === "string" && allowed.includes(entry)) &&
+    new Set(value).size === value.length
   );
 }
 

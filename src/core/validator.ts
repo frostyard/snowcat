@@ -164,6 +164,28 @@ export function validateCoreCatalog(inputEntries: readonly CoreTreeEntry[]): Val
   };
 }
 
+export function assertRepositoryDeclarationRetention(
+  active: Pick<ValidatedCoreCatalog, "repositories">,
+  candidate: Pick<ValidatedCoreCatalog, "repositories">,
+): void {
+  const candidateIds = new Set(
+    candidate.repositories.map((repository) => repository.declaration.repository.repository_id),
+  );
+  const removed = active.repositories
+    .filter((repository) => !candidateIds.has(repository.declaration.repository.repository_id))
+    .map(
+      (repository) =>
+        `${repository.path} (${repository.declaration.repository.repository_id})`,
+    )
+    .sort();
+  if (removed.length > 0) {
+    throw new CoreValidationError(
+      "repository declarations must be retained and changed to disabled rather than removed",
+      removed.map((repository) => `removed ${repository}`),
+    );
+  }
+}
+
 function loadBundledSchemas(entries: Map<string, CoreTreeEntry>): {
   parsed: Record<keyof typeof SCHEMA_PATHS, unknown>;
   digests: Record<keyof typeof SCHEMA_PATHS, string>;

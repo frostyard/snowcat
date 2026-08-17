@@ -39,7 +39,8 @@ The operational state has this exact logical shape:
 
 One run result is exactly one of `claimed`, `not-due`, or `in-flight`. A claimed
 run result also reports its run/lease identity, source result when available,
-check disposition, whether retention pruning ran, and the completed state.
+check disposition, repository reconciliation when the source result is
+eligible, whether retention pruning ran, and the completed state.
 
 ## Rules
 
@@ -70,6 +71,9 @@ check disposition, whether retention pruning ran, and the completed state.
 9. A due retention prune MUST run after source synchronization and before run
    completion. Successful prune advances `nextPruneAt` by exactly 24 hours.
    Failure leaves pruning due and completes the run as `controller-error`.
+   An eligible source result MUST run one repository reconciliation pass before
+   pruning; a persistence/invariant failure in that pass is a controller error,
+   while a bounded GitHub `unavailable` result is an ordinary scoped outcome.
 10. Poll-state mutation MUST use `BEGIN IMMEDIATE`, validate the exact lease
     identity on completion, and leave authority transactions independently
     serialized by their existing optimistic sequence checks.
@@ -79,7 +83,7 @@ check disposition, whether retention pruning ran, and the completed state.
 12. `poll` MUST await one run before another, cap any single sleep at 60
     seconds so shutdown can be observed, and terminate cleanly on SIGINT or
     SIGTERM without starting another run.
-13. Schema version `3` has no in-place migration from the pre-production target;
+13. Schema version `4` has no in-place migration from the pre-production target;
     initialize a fresh database.
 
 ## Derived artifacts
@@ -94,8 +98,11 @@ check disposition, whether retention pruning ran, and the completed state.
 ## References
 
 - Rationale: [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md)
+  and [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md)
 - Context: [Core snapshot ingestion](../design/core-snapshot-ingestion.md)
 - Readiness: [Core source readiness](core-source-readiness.md)
 - Retention: [Core check-detail retention](core-check-detail-retention.md)
 - Substrate: [control-plane kernel](control-plane-kernel.md)
 - Delivery: [Core snapshot ingestion plan](../plans/core-snapshot-ingestion.md)
+- Downstream reconciliation:
+  [repository authority reconciliation](repository-authority-reconciliation.md)

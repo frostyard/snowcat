@@ -80,14 +80,27 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
 
 ## Phase 4 — Materialize repository authority without premature work (large)
 
-- Derive durable repository workstreams only from activated declarations while
-  keeping declaration, enrollment, GitHub observation, hold, and work creation
-  distinct.
+- The implemented first slice materializes each active declaration through one
+  idempotent registered transaction, creates a source-native GitHub repository
+  subject on first sight, and retains declaration definition and
+  `repository.core-authorized` facts without creating work.
+- The implemented bounded GitHub metadata adapter and second registered
+  transaction classify matching identity, missing locator, changed locator,
+  immutable-ID mismatch, archive, and unavailability independently for each
+  enabled declaration. Paused and disabled declarations spend no lookup.
+- Active-candidate validation now rejects removal of a prior repository ID;
+  intentional departure remains an explicit `disabled` declaration, including
+  across operator rollback.
+- The current read derives only `awaiting-authority`, `disabled`, `paused`, `awaiting-github`,
+  `github-held`, or `awaiting-surfaces`. It deliberately cannot claim
+  enrollment before the remaining canonical-surface gate.
 - Reconcile each slug to its immutable GitHub repository ID and required
-  canonical surfaces; local failures create the smallest repository hold and do
-  not invalidate the Core snapshot.
+  canonical surfaces; identity is implemented, while exact-commit canonical
+  surface loading and policy validation remain next. Local failures create the
+  smallest repository result and do not invalidate the Core snapshot.
 - Enforce declaration retention as `disabled`, local suspension as narrowing
-  only, and explicit reconciliation before held work can resume.
+  only, and explicit reconciliation before held work can resume. Declaration
+  retention is implemented; local suspension and held-work disposition remain.
 - **Done when:** an enabled declaration in an activated snapshot plus matching
   GitHub identity and required surfaces creates enrollment without work, while
   disabled, paused, missing, renamed, archived, ID-mismatched, or surface-invalid
@@ -101,8 +114,8 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
 
 ## Open questions
 
-- None for the implemented manual synchronization, polling, readiness, and
-  retention slice.
+- None for the implemented source, declaration-authority, and GitHub-identity
+  slices. Canonical surfaces follow the already accepted v1 Core contract.
 
 ## References
 
@@ -111,7 +124,8 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
   [Core snapshot activation](../specs/core-snapshot-activation.md), and
   [Core source readiness](../specs/core-source-readiness.md), and
   [Core check-detail retention](../specs/core-check-detail-retention.md), and
-  [Core source polling](../specs/core-source-polling.md)
+  [Core source polling](../specs/core-source-polling.md), and
+  [repository authority reconciliation](../specs/repository-authority-reconciliation.md)
 - Rationale:
   [ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md) and
   [ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md), and
@@ -119,5 +133,6 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
   and [ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md)
   and [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md)
   and [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md)
+  and [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md)
 - Parent delivery order: [product foundation roadmap](product-foundation-roadmap.md)
 - Target substrate: [control-plane kernel bootstrap](control-plane-kernel-bootstrap.md)

@@ -16,6 +16,8 @@ import {
   type CoreCandidateRejectionInput,
 } from "../control/store.ts";
 import { uuidV7 } from "../control/encoding.ts";
+import { reconcileRepositories } from "../repository/controller.ts";
+import { CoreValidationError } from "./validator.ts";
 
 const [command, ...args] = process.argv.slice(2);
 
@@ -44,6 +46,7 @@ try {
         }
         throw result.failure;
       }
+      const repositoryReconciliation = await reconcileRepositories(store);
       console.log(
         JSON.stringify(
           {
@@ -52,6 +55,7 @@ try {
             activeSnapshot: store.activeCoreSnapshot(),
             sourceCheck: result.sourceCheck,
             readiness: store.coreAdmissionReadiness(),
+            repositoryReconciliation,
           },
           null,
           2,
@@ -113,6 +117,8 @@ try {
         store,
         coreGitSourceConfig(),
         healthyIntervalSeconds,
+        synchronizeCoreSource,
+        reconcileRepositories,
       );
       console.log(JSON.stringify(result, null, 2));
       if (result.status === "claimed" && result.controllerError !== null) process.exitCode = 1;
@@ -135,6 +141,7 @@ try {
         healthyIntervalSeconds,
         () => stopping,
         (result) => console.log(JSON.stringify(result)),
+        reconcileRepositories,
       );
     } finally {
       process.off("SIGINT", stop);
@@ -185,7 +192,24 @@ try {
           ),
         );
       } catch (error) {
-        if (error instanceof CoreSnapshotPersistenceError) {
+        if (error instanceof CoreValidationError) {
+          recordAndReportRejection(
+            {
+              checkId,
+              operation: "operator-rollback",
+              stage: "validation",
+              code: "candidate-invalid",
+              summary: sanitizeCoreDiagnostic(error.message),
+              details: error.details.slice(0, 8).map(sanitizeCoreDiagnostic),
+              sourceUrl: candidate.sourceUrl,
+              sourceRef: candidate.ref,
+              commitId: candidate.commitId,
+              treeId: candidate.treeId,
+              activeCommitId: active?.sourceCommitId,
+            },
+            store,
+          );
+        } else if (error instanceof CoreSnapshotPersistenceError) {
           recordAndReportRejection(
             {
               checkId,

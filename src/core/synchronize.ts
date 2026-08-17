@@ -17,6 +17,7 @@ import {
   type CoreSourceCheckOutcome,
 } from "../control/store.ts";
 import { uuidV7 } from "../control/encoding.ts";
+import { assertRepositoryDeclarationRetention, CoreValidationError } from "./validator.ts";
 
 interface CoreSynchronizationBase {
   outcome: CoreSourceCheckOutcome;
@@ -85,6 +86,42 @@ export async function synchronizeCoreSource(
   }
 
   const active = store.activeCoreSnapshot();
+  if (active) {
+    const activeCandidate = store.retainedCoreCandidate(active.sourceCommitId);
+    if (!activeCandidate) throw new Error("active Core candidate is not retained");
+    try {
+      assertRepositoryDeclarationRetention(activeCandidate, candidate);
+    } catch (error) {
+      if (!(error instanceof CoreValidationError)) throw error;
+      const inspectionError = new CoreCandidateInspectionError(
+        "validation",
+        "candidate-invalid",
+        error.message,
+        error.details,
+        candidate.sourceUrl,
+        candidate.ref,
+        candidate.commitId,
+        candidate.treeId,
+      );
+      return rejectedResult(
+        store,
+        {
+          checkId,
+          operation: "automatic-source-check",
+          stage: "validation",
+          code: "candidate-invalid",
+          summary: sanitizeCoreDiagnostic(error.message),
+          details: error.details.slice(0, 8).map(sanitizeCoreDiagnostic),
+          sourceUrl: candidate.sourceUrl,
+          sourceRef: candidate.ref,
+          commitId: candidate.commitId,
+          treeId: candidate.treeId,
+        },
+        "candidate-invalid",
+        inspectionError,
+      );
+    }
+  }
   let continuityAncestorCommitId: string | undefined;
   if (active && active.sourceCommitId !== candidate.commitId) {
     try {

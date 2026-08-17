@@ -10,12 +10,16 @@ Retention rationale:
 [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md).
 Polling rationale:
 [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md).
+Repository reconciliation rationale:
+[ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md).
 Contracts: [core snapshot verification](../specs/core-snapshot-verification.md)
 [Core snapshot activation](../specs/core-snapshot-activation.md), and
 [Core source readiness](../specs/core-source-readiness.md).
 Retention contract:
 [Core check-detail retention](../specs/core-check-detail-retention.md).
 Polling contract: [Core source polling](../specs/core-source-polling.md).
+Repository contract:
+[repository authority reconciliation](../specs/repository-authority-reconciliation.md).
 
 ## Overview
 
@@ -25,7 +29,9 @@ exact commit into a bare mirror, reads only its Git tree and blob objects under
 `organization/`, validates the complete supported contract, and emits a
 content-addressed candidate catalog. A separate typed command reruns validation,
 retains the exact catalog in the target database, and atomically selects it as
-current authority. Neither verification nor activation creates enrollment.
+current authority. Verification and the activation transaction do not create
+enrollment; an accepted source check now triggers the separate repository
+authority and GitHub identity reconciliation pass.
 
 ```text
 frostyard/core refs/heads/main
@@ -92,8 +98,8 @@ reported candidate binds source URL, source ref, commit ID, organization tree
 ID, schema digests, fixture counts, and parsed repository declarations.
 Repository declarations remain declarations: the merged `frostyard/core`
 declaration is currently `disabled`, and even a future `enabled` declaration
-will not become enrollment until a later transaction atomically persists and
-activates the whole snapshot and GitHub reconciliation succeeds.
+will not become enrollment until the snapshot is active, its declaration and
+GitHub identity facts reconcile, and the later canonical-surface gate succeeds.
 
 The bare mirror and JSON report are staging artifacts, not facts, projections,
 or active authority. Re-running verification is safe and does not allocate a
@@ -197,8 +203,12 @@ more than once per 24 hours.
 - Run `npm run --silent core -- verify`. Success writes one JSON value to
   stdout; diagnostics and Git/Node warnings use stderr.
 - Run `npm run --silent core -- activate <expected-control-plane-sequence>` to
-  persist and select that fetched candidate. Equivalent retry uses the original
-  expected sequence and returns its original result.
+  persist and select that fetched candidate, record the eligible check, and run
+  one repository reconciliation pass. Equivalent snapshot retry uses the
+  original expected sequence and returns its original result.
+- Run `npm run --silent repository -- status` for the read-only pre-surface
+  repository states, or `repository -- reconcile` to resume one interrupted
+  convergence pass without fetching Core again.
 - Run `npm run --silent core -- rollback <expected-control-plane-sequence>
   <target-commit> <reason>` for the attributed operator transition. Quote a
   reason containing spaces as one shell argument.
@@ -263,10 +273,12 @@ The exact record and read contract is
   and [ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md)
   and [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md)
   and [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md)
+  and [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md)
 - Contracts: [core snapshot verification](../specs/core-snapshot-verification.md)
   [Core snapshot activation](../specs/core-snapshot-activation.md), and
   [Core source readiness](../specs/core-source-readiness.md)
   and [Core check-detail retention](../specs/core-check-detail-retention.md)
   and [Core source polling](../specs/core-source-polling.md)
-- Built in: [Core snapshot ingestion — Phases 1–2](../plans/core-snapshot-ingestion.md)
+  and [repository authority reconciliation](../specs/repository-authority-reconciliation.md)
+- Built in: [Core snapshot ingestion — Phases 1–4](../plans/core-snapshot-ingestion.md)
 - Product: [GitHub organization agent fleet](../prd/agent-fleet.md)
