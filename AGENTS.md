@@ -185,6 +185,15 @@ removed. -->
 
 ## Repository boundary
 
+`policies/agent-governance.json` is this repository's canonical
+agent-governance surface under the frostyard/core repository-surfaces
+contract v1; Fluent reads it (from GitHub, at the observed default-branch
+head) when enrolling this repository in its own fleet. Deny by default; read,
+write, and run-tests allowed; issues, pull requests, and follow-ups
+review-required; workflows, GitHub-facing code, and the MCP/authorization
+boundary are review-required at high risk. Change it only alongside the
+matching ADR or design change.
+
 <!-- What does NOT belong in this repo (secrets, personal data, generated
 files that are actually build outputs, apps that belong elsewhere)? How are
 releases cut? Delete the section if genuinely not applicable. -->
