@@ -392,6 +392,36 @@ either being silently erased.
 [ADR-0023](../adr/0023-base-ci-maintenance-on-observed-runs.md),
 [ADR-0043](../adr/0043-order-records-by-transaction-sequence-not-timestamps.md))
 
+#### GitHub delivery receipt
+
+The durable observation-class account that Fluent authenticated and processed
+one directly received GitHub App webhook delivery, bound to its delivery GUID
+and exact-body digest. It proves ingress handling, not the truth or completeness
+of GitHub state, and cannot be reconstructed from a later delivery-API read.
+
+**Avoid:** GitHub observation; source checkpoint; webhook as authority.
+([ADR-0057](../adr/0057-require-webhook-ingress-for-github-observation.md))
+
+#### Source checkpoint
+
+A durable adapter observation that completely enumerates one declared source
+scope at an exact observation time, including its pagination and source-
+revision proof. It establishes that bounded read, not continuous coverage
+before or after it.
+
+**Avoid:** polling cursor; observation window; proof of no intervening change.
+([ADR-0057](../adr/0057-require-webhook-ingress-for-github-observation.md))
+
+#### Source gap
+
+A registered source scope and lower-bounded interval for which Fluent cannot
+establish required coverage. Its end remains open until exact repair evidence
+bounds it; repair never erases the gap occurrence or what Fluent knew when it
+was recorded.
+
+**Avoid:** source outage; missing expected occurrence; failed verification.
+([ADR-0057](../adr/0057-require-webhook-ingress-for-github-observation.md))
+
 #### Evidence
 
 The bounded set of relevant assertions, observations, artifacts, evaluations,

@@ -13,6 +13,12 @@ configuration that `github-required-checks:v1` will accept. It does not grant
 Fluent permission to edit repository rules, register the still-unimplemented
 source adapter, or open a measurement window.
 
+The deployment must first satisfy the authenticated ingress and reconciliation
+boundary in the
+[GitHub observation design](github-observation.md). Ruleset activation without
+that observer still enforces CI, but it cannot create retrospective Fluent
+coverage.
+
 Enabling this ruleset changes the delivery path: direct pushes to the default
 branch stop working. Operators and workers must submit every change through a
 pull request, and GitHub must receive every named check from the bound GitHub
@@ -276,8 +282,12 @@ new observation window. Historical merges before that baseline do not count.
 
 - Rationale:
   [ADR-0056](../adr/0056-derive-required-checks-from-enforced-github-rules.md)
+  and
+  [ADR-0057](../adr/0057-require-webhook-ingress-for-github-observation.md)
 - Context:
   [success-measure verification](success-measure-verification.md)
+- Ingress and reconciliation:
+  [GitHub observation](github-observation.md)
 - Adjacent contract:
   [conclusive-run-rate evaluator](../specs/conclusive-run-rate-evaluator.md)
 - Built in:

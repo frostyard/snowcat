@@ -6,7 +6,9 @@ Living document. Rationale:
 with evidence-population boundaries from
 [ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md)
 and enforced-check authority from
-[ADR-0056](../adr/0056-derive-required-checks-from-enforced-github-rules.md).
+[ADR-0056](../adr/0056-derive-required-checks-from-enforced-github-rules.md),
+with webhook and reconciliation coverage from
+[ADR-0057](../adr/0057-require-webhook-ingress-for-github-observation.md).
 Current contract:
 [verification-profile ingestion](../specs/verification-profile-ingestion.md),
 [Goal ingestion](../specs/goal-ingestion.md), and the first executable
@@ -158,12 +160,13 @@ unresolved check revisions, conflicting source records, and incomplete
 pagination return `unable`. This is intentionally narrower than GitHub's full
 feature set.
 
-Collection uses a separate read-only GitHub App with repository metadata, pull
-request, checks, commit-status, contents, and Administration read access. The
-last permission is required for ruleset-change webhooks; it grants visibility,
-not repository mutation. Signed webhook deliveries are idempotent observations
-and polling reconciles them. Neither transport alone can hide a gap that makes
-historical coverage incomplete.
+Collection uses the separate read-only GitHub App and the
+[GitHub observation boundary](github-observation.md). Authenticated webhook
+ingress retains transient pre-merge state; fully paginated polling reconciles
+current state and audits recent delivery GUIDs. A GitHub delivery receipt is
+transport provenance rather than an observation or coverage proof. Only source
+checkpoints plus uninterrupted or repaired delivery coverage may close a
+window; a relevant source gap makes the population incomplete.
 
 Each completed mechanism evaluation produces `satisfied`, `failed`, or
 `unable`. A capable worker may propose or critique evidence but cannot write the
@@ -195,7 +198,8 @@ count or elapsed time into outcome success.
   [ADR-0031](../adr/0031-separate-delivery-from-outcome-achievement.md) and
   [ADR-0054](../adr/0054-bind-success-measures-to-versioned-verification-profiles.md),
   with [ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md)
-  and [ADR-0056](../adr/0056-derive-required-checks-from-enforced-github-rules.md)
+  and [ADR-0056](../adr/0056-derive-required-checks-from-enforced-github-rules.md),
+  plus [ADR-0057](../adr/0057-require-webhook-ingress-for-github-observation.md)
 - Contracts:
   [verification-profile ingestion](../specs/verification-profile-ingestion.md),
   [Goal ingestion](../specs/goal-ingestion.md),
@@ -206,6 +210,8 @@ count or elapsed time into outcome success.
 - Product: [agent fleet PRD](../prd/agent-fleet.md)
 - Operations:
   [enforced required-check rulesets](required-check-ruleset-operations.md)
+- Source acquisition:
+  [GitHub observation and reconciliation](github-observation.md)
 - Source constraints:
   [GitHub check-runs API](https://docs.github.com/en/rest/checks/runs) and
   [GitHub protected-branch required checks](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches),

@@ -71,6 +71,7 @@ Docs are split by the question they answer:
 - [0054 — Bind success measures to versioned verification profiles](adr/0054-bind-success-measures-to-versioned-verification-profiles.md)
 - [0055 — Separate evidence population from rate evaluation](adr/0055-separate-evidence-population-from-rate-evaluation.md)
 - [0056 — Derive required checks from enforced GitHub rules](adr/0056-derive-required-checks-from-enforced-github-rules.md)
+- [0057 — Require webhook ingress for GitHub observation](adr/0057-require-webhook-ingress-for-github-observation.md)
 
 ### Domain language
 
@@ -84,6 +85,7 @@ Docs are split by the question they answer:
 - [Repository enrollment](design/repository-enrollment.md)
 - [Success-measure verification](design/success-measure-verification.md)
 - [Operating enforced required checks](design/required-check-ruleset-operations.md)
+- [GitHub observation and reconciliation](design/github-observation.md)
 
 ### Specs
 

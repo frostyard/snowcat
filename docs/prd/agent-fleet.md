@@ -497,10 +497,11 @@ targets are required before this PRD can become Approved.
     operator environment. Fluent MUST NOT receive, mint, refresh, proxy, store,
     or distribute those credentials.
 96. Fluent MUST reconcile artifacts through a separate least-privilege,
-    read-only GitHub identity. V1 SHOULD use a GitHub App installation, with a
-    read-only host-injected token permitted for initial single-operator use;
-    either credential MUST remain a runtime secret outside durable records and
-    logs.
+    read-only GitHub identity. V1 MUST use a GitHub App installation for any
+    repository whose merge or required-check history can affect authority, and
+    MUST combine authenticated inbound App webhooks with bounded read-only
+    polling and delivery audit. App keys, webhook secrets, and tokens MUST
+    remain runtime secrets outside durable records and logs.
 97. Issue and pull-request reconciliation MUST independently verify the
     immutable enrolled repository ID, artifact kind and number, canonical URL,
     actual GitHub actor, exact correlation marker, attempt timing, permitted
@@ -515,8 +516,10 @@ targets are required before this PRD can become Approved.
     MUST remain informational and MUST NOT satisfy an authenticated-actor
     check.
 100. Pending and unavailable reconciliation MUST retry with bounded backoff and
-    retain observations and state transitions. A GitHub outage MUST delay
-    verification rather than turn absence of evidence into a mismatch.
+    retain observations, source checkpoints, source gaps, GitHub delivery
+    receipts, and state transitions. A GitHub outage or unauditable ingress gap
+    MUST delay verification or make an overlapping population `unable` rather
+    than turn absence of evidence into a mismatch.
 101. An expired lease or later claim MUST create a new attempt and nonce. A late
     artifact from a stale attempt MUST remain visible provenance but MUST NOT
     silently satisfy the current attempt; an operator MAY explicitly adopt it
@@ -1931,7 +1934,7 @@ elapsed source freshness from the stricter new-admission gate. Its durable
 | --- | --- |
 | Core contract and migration | Remaining organization JSON Schemas, fixtures, and canonical-surface migrations; verification-profile and Goal import are implemented, while all remaining record kinds, Goal application, source adapters, evidence retention, and fact establishment remain |
 | Control-plane domain model | Execute the [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md): specify exact durable schemas, predicates, reducers, events, projections, invalidation, idempotency, and state machines in a fresh target database shared by RepositoryController, FleetController, ProcessObserver, scheduling, and decisions |
-| GitHub observation | GitHub App permissions, installation and actor mapping, CI/review/merge and artifact reconciliation, polling versus webhooks, forks, outage behavior, and external decision signals |
+| GitHub observation | Implement the accepted webhook-plus-polling boundary, exact registered records and commands, conservative schedules and repair deadline, installation and actor mapping, CI/review/merge and artifact predicates, forks, and external decision signals |
 | Workflow contracts | Versioned role briefs, evidence schemas, skills, attempt budgets, and deterministic gates for maintenance, planning, review, implementation, repair, and verification |
 | Restricted security | Exact forbidden-content detectors, retention, embargo, reviewer roles, declassification profiles, and private disclosure contracts for high and critical findings |
 | Scheduling and routing details | Capability and grant schemas, information-scope and restricted-compartment schemas, WIP defaults, priority mapping, fair-queue credits, cooldowns, capacity reservations, and capacity-gap UX |
@@ -1992,10 +1995,11 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   verification profiles and closed Fluent mechanism versions ship for
   delivery, which named roles satisfy attestation policies, and what evidence
   retention, expiry, and confounding rules apply to each profile?
-- What exact durable observation records, polling bounds, webhook receipts,
-  pagination proofs, and retention implement the enforced-ruleset population
-  fixed by ADR-0056? Merge queues, forks, classic protection, and changing rule
-  sets remain explicit post-v1 adapter work.
+- What exact registered schemas, command outputs, polling and delivery-audit
+  bounds, conservative repair deadline, pagination proof, and retention limits
+  implement the webhook-plus-reconciliation model fixed by ADR-0057? Merge
+  queues, forks, classic protection, and changing rule sets remain explicit
+  post-v1 adapter work.
 - What reviewer capability profile, trigger UX, fingerprint algorithm,
   material-scope lineage reset, and unavailable-CI policy implement bounded
   adversarial review consistently across PRDs, plans, and pull requests?
@@ -2011,8 +2015,9 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   GitHub actors?
 - How do fork-based pull requests fit the actor, repository, head, and duplicate
   checks, and which enrolled repositories permit that contribution route?
-- When are GitHub webhooks justified beyond the implemented Core polling
-  controller, and what explicit signal records maintainer acceptance?
+- Which public TLS or tunnel packaging makes the required GitHub webhook
+  ingress simple to operate without exposing administrative, worker, or MCP
+  surfaces, and what explicit signal records maintainer acceptance?
 - Which narrowly defined proposal classes, if any, may a future approved
   deterministic policy admit without individual operator action? V1 begins
   with explicit operator admission for every worker-created proposal.
@@ -2145,6 +2150,8 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   [ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md),
   with required checks derived only from enforced GitHub rules in
   [ADR-0056](../adr/0056-derive-required-checks-from-enforced-github-rules.md),
+  with authenticated webhook ingress and polling reconciliation required by
+  [ADR-0057](../adr/0057-require-webhook-ingress-for-github-observation.md),
   and the
   [Fluent ubiquitous language](../domain/ubiquitous-language.md)
 - Designs: [queue execution boundary](../design/queue-execution-boundary.md),
@@ -2152,6 +2159,8 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   [core snapshot ingestion](../design/core-snapshot-ingestion.md), plus
   [repository enrollment](../design/repository-enrollment.md) and
   [success-measure verification](../design/success-measure-verification.md),
+  plus
+  [GitHub observation and reconciliation](../design/github-observation.md),
   with the operator-facing
   [required-check ruleset runbook](../design/required-check-ruleset-operations.md)
 - Contracts: [work queue](../specs/work-queue.md),

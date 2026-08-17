@@ -141,17 +141,22 @@ does not itself enroll the repository in the fleet.
   [enforced required-check ruleset runbook](../design/required-check-ruleset-operations.md)
   before opening its first observation window.
 - Author and implement the GitHub observation and reconciliation design/spec
-  required by
-  [ADR-0018](../adr/0018-bind-worker-sessions-and-verify-github-artifacts.md).
+  defined by the
+  [GitHub observation design](../design/github-observation.md), as required by
+  [ADR-0018](../adr/0018-bind-worker-sessions-and-verify-github-artifacts.md)
+  and
+  [ADR-0057](../adr/0057-require-webhook-ingress-for-github-observation.md).
 - Install a least-privilege read-only GitHub App or approved host credential for
   the initial Frostyard scope; map immutable repository IDs, principals, worker
   GitHub actors, and maintainer authority.
 - Reconcile issue, pull-request, commit, CI, review, branch, merge, and closure
   facts with exact revisions, bounded retry, unavailability, and duplicate or
   stale lineage.
-- Define polling and webhook idempotency, outage behavior, fork handling,
-  sensitive metadata, and observation cursors before relying on GitHub state as
-  a gate.
+- Implement authenticated webhook ingress, delivery receipts and audit,
+  allowlisted observations, fully paginated polling, source checkpoints and
+  gaps, repair, retention protection, outage behavior, and observation cursors
+  before relying on GitHub state as a gate. Fork handling remains post-v1 for
+  the required-check adapter.
 - **Done when:** Fluent independently distinguishes a valid worker PR, a wrong-
   repository artifact, a stale-attempt artifact, a GitHub outage, formal
   maintainer changes requested, and the exact reviewed merge on a real enrolled
