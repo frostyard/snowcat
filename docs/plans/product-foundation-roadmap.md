@@ -134,8 +134,9 @@ does not itself enroll the repository in the fleet.
   pull-request observation, and audit event with exact replay, 30-day receipt
   retention metadata, source/causal lineage verification, and source-native
   subject creation. A pure exact-body HMAC verifier and allowlisted payload
-  normalizer now precede the command. This is not yet callable HTTP ingress or
-  coverage reconciliation.
+  normalizer now precede the command, and an injectable POST-only router bounds
+  streaming and failure disclosure. The default app does not mount it pending
+  production listener lifecycle and coverage reconciliation.
 - The source-independent `conclusive-run-rate:v1` arithmetic evaluator is
   implemented under
   [ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md)

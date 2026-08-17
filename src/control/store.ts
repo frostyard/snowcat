@@ -631,6 +631,17 @@ export interface GitHubPullRequestDeliveryResult {
   transactionSequence: number;
 }
 
+export type GitHubDeliveryAcceptanceFailureCode =
+  | "delivery-conflict"
+  | "repository-not-enrolled"
+  | "clock-regression";
+
+export class GitHubDeliveryAcceptanceFailure extends Error {
+  constructor(readonly code: GitHubDeliveryAcceptanceFailureCode) {
+    super(`GitHub delivery acceptance failed: ${code}`);
+  }
+}
+
 export interface ProjectionReadResult<T> {
   generation: ProjectionGeneration;
   stale: boolean;
@@ -1571,7 +1582,7 @@ export class ControlPlaneStore {
         .get(commandScope, idempotencyKey) as Row | undefined;
       if (prior) {
         if (String(prior.payload_digest) !== commandPayloadDigest) {
-          throw new Error("GitHub delivery GUID was reused with different verified content");
+          throw new GitHubDeliveryAcceptanceFailure("delivery-conflict");
         }
         const result = parseGitHubPullRequestDeliveryResult(parseJson(String(prior.result_json)));
         this.db.exec("COMMIT");
@@ -1582,14 +1593,12 @@ export class ControlPlaneStore {
         (status) => status.repositoryId === normalized.repositoryId,
       );
       if (!repository || repository.enrollmentRecordId === null) {
-        throw new Error("GitHub pull-request delivery requires a previously enrolled repository");
+        throw new GitHubDeliveryAcceptanceFailure("repository-not-enrolled");
       }
 
       const receivedAt = this.now();
       if (receivedAt < metadata.controlTimeWatermark) {
-        throw new Error(
-          `control-plane clock moved backwards behind ${metadata.controlTimeWatermark}; refusing a new write transaction`,
-        );
+        throw new GitHubDeliveryAcceptanceFailure("clock-regression");
       }
       const transactionId = uuidV7(new Date(receivedAt));
       const receiptRecordId = uuidV7(new Date(receivedAt));

@@ -168,7 +168,7 @@ test("verified GitHub pull-request deliveries are enrollment-bound, replayable, 
 
   assert.throws(
     () => store.recordVerifiedGitHubPullRequestDelivery(input),
-    /previously enrolled repository/,
+    /repository-not-enrolled/,
   );
   assert.equal(store.metadata().lastTransactionSequence, 1);
 
@@ -219,7 +219,7 @@ test("verified GitHub pull-request deliveries are enrollment-bound, replayable, 
   assert.equal(store.metadata().lastTransactionSequence, result.transactionSequence);
   assert.throws(
     () => store.recordVerifiedGitHubPullRequestDelivery({ ...input, requestBytes: input.requestBytes + 1 }),
-    /reused with different verified content/,
+    /delivery-conflict/,
   );
   assert.equal(store.metadata().lastTransactionSequence, result.transactionSequence);
 

@@ -34,10 +34,11 @@ The initial implementation supports repository identity and enrollment facts
 already present in the target kernel. It now also includes the first internal
 typed source command for an already verified, allowlisted, same-repository
 pull-request delivery and the pure exact-body HMAC verifier/normalizer that
-precedes it. Callable HTTP routing, delivery audit, reconciliation checkpoints,
-truthful gap creation and repair, the other observation families, and retention
-pruning remain. The source adapter stays unregistered until that complete path
-is executable.
+precedes it. A bounded injectable POST-only router now joins them, but remains
+unmounted by default until hosting lifecycle and coverage recovery are ready.
+Delivery audit, reconciliation checkpoints, truthful gap creation and repair,
+the other observation families, and retention pruning remain. The source
+adapter stays unregistered until that complete path is executable.
 
 ## Design
 
@@ -162,7 +163,11 @@ exact delivery/event/content-type/signature headers and raw body. It checks the
 25 MiB bound, authenticates the bytes in constant time before parsing, and maps
 only safe numeric identities, registered action, state, revisions, actor, and
 source times. It retains no raw body or free-form GitHub content. It is a pure
-boundary today; no network route invokes it yet.
+boundary used by an injectable Hono router. The router streams with the same
+body bound, returns closed detail-free status codes, and accepts a
+lifecycle-owned store. The default app deliberately does not mount it: doing so
+before delivery audit and source gaps exist would present partial ingestion as
+a complete observer.
 
 ### Reconciliation cycle
 
@@ -297,11 +302,11 @@ complete coverage.
   for repository identity only. It is not yet webhook ingress, pagination,
   App authentication, delivery audit, or the observation adapter described
   here.
-- `src/github/webhook.ts` and `src/control/store.ts` implement the pure
-  exact-body verifier/normalizer and trusted post-authentication pull-request
-  delivery transaction. They are not callable ingress and must not be treated
-  as proof that delivery audit, source checkpointing, gap repair, or retention
-  enforcement exists.
+- `src/github/webhook.ts`, `src/github/ingress.ts`, and `src/control/store.ts`
+  implement the exact-body verifier/normalizer, injectable bounded router, and
+  trusted post-authentication pull-request transaction. The router remains
+  disabled in the default app and must not be treated as proof that delivery
+  audit, source checkpointing, gap repair, or retention enforcement exists.
 - Follow the
   [required-check ruleset runbook](required-check-ruleset-operations.md) only
   when the adapter is ready for its real-repository acceptance test.

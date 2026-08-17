@@ -51,6 +51,10 @@ removed. -->
 - Keep native coding-agent processes outside Fluent. They consume work through
   the MCP contract in [`src/mcp/server.ts`](src/mcp/server.ts) and own their
   execution isolation, credentials, and tools.
+- Keep GitHub webhook ingress disabled by default until a hosting lifecycle
+  explicitly mounts [`src/github/ingress.ts`](src/github/ingress.ts) with a
+  lifecycle-owned control store, App ID, and host-injected secret. Never route
+  webhook bytes through the Flue agent surface or log rejected source content.
 - Use `npm run --silent control -- …` for host-local target-kernel diagnostics,
   projections, and backup/restore staging. The implementation in
   [`src/control/cli.ts`](src/control/cli.ts) never activates a restore or exposes

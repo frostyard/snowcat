@@ -205,6 +205,19 @@ typed command input; all other GitHub fields are discarded. Configuration,
 headers, authentication, body bounds, unsupported event/action/shape, and
 malformed payloads have closed non-source-derived failure codes.
 
+`createGitHubWebhookIngress(options)` exposes that boundary as an injectable
+Hono router with only `POST /`; other methods return `405` and `Allow: POST`.
+It rejects an invalid or oversized declared length before reading, otherwise
+streams the raw body into bounded chunks and cancels once the 25 MiB limit is
+crossed. Successful authentication, normalization, and durable acceptance
+returns only `202 {"status":"accepted"}`. Authentication is `401`, invalid
+headers or payload are `400`, oversized input is `413`, unsupported registered
+scope is `422`, delivery or enrollment conflict is `409`, and configuration,
+clock, or unknown persistence failure is a detail-free `503`. No response
+contains source payload, database path, record IDs, or internal exception text.
+The router is dependency-injected and not mounted by the default app in this
+slice.
+
 `ControlPlaneStore.recordVerifiedGitHubPullRequestDelivery(input)` is an internal typed
 acceptance boundary for a caller that has already verified an exact GitHub App
 webhook body. It is not an HTTP or signature-verification endpoint. Its input is
@@ -240,11 +253,12 @@ fails closed.
 
 Startup re-derives the selected-observation and command-input digests and checks
 the prior enrollment, subjects, revisions, sources, causal links, output order,
-result, and retention deadline. The pure verifier is implemented, but no HTTP
-route yet connects it to this command. This slice does not implement callable
-ingress, delivery audit, checkpoints, source gaps, repair, or durable-detail
-pruning. In particular it does not fabricate a source gap without an
-established checkpoint lower bound.
+result, and retention deadline. The bounded router can connect the pure
+verifier to this command when explicitly mounted with a lifecycle-owned store,
+but the default app does not mount it. This slice does not implement production
+listener/configuration lifecycle, delivery audit, checkpoints, source gaps,
+repair, or durable-detail pruning. In particular it does not fabricate a source
+gap without an established checkpoint lower bound.
 
 ### Projection interface
 
