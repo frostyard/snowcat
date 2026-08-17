@@ -16,8 +16,8 @@ does not itself enroll the repository in the fleet.
 queue store is the v1 work engine and the
 [recovery plan](recover.md) carries the current delivery order. Phases 2–4
 below are no longer prerequisites for a matched work item; Phase 5's "done
-when" is achieved by the recovery plan's Phase 5 on the queue store, and Phases
-6–10 resume behind it. The phase text below is retained as the accepted
+when" was achieved by the recovery plan's Phase 5 on the queue store on
+2026-08-17 (`frostyard/updex`), and Phases 6–10 resume behind it. The phase text below is retained as the accepted
 long-range direction, not the next work.
 
 ## Phase 0 — Canonical language and documentation integrity (completed)

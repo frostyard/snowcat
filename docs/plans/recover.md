@@ -121,7 +121,7 @@ schema with no upgrade path.
   operator-held transitions are covered by tests through the shared Core
   fixtures.
 
-## Phase 5 — Dogfood on one non-Fluent repository (one calendar week)
+## Phase 5 — Dogfood on one non-Fluent repository (in progress; first day completed 2026-08-17)
 
 - Repository chosen 2026-08-17: `frostyard/updex`. Enrollment changes are
   open as [core#83](https://github.com/frostyard/core/pull/83) (declaration)
@@ -136,7 +136,44 @@ schema with no upgrade path.
 - **Done when:** an operator enrolls a repository, starts an external worker,
   receives one matched item, and sees its lease, report, verified artifact,
   outcome, and every operator decision on one work item and its events — the
-  roadmap Phase 5 outcome, achieved on the queue store.
+  roadmap Phase 5 outcome, achieved on the queue store. **Achieved
+  2026-08-17** on `frostyard/updex`: 7 items completed (4 issue-resolution
+  → PRs #298, #300, #302, #303, all merged and verified; 3 read-only
+  discovery roots → 3 evidence-backed findings, each proposing one child the
+  operator admitted), 0 blocked, 0 refused, 0 lease expiries. Numbers are
+  recorded in the [PRD baseline](../prd/agent-fleet.md#first-dogfood-baseline-2026-08-17-frostyardupdex).
+  The remaining week continues with the three admitted implementation
+  children and the architecture discovery root; a fresh-session run will
+  test whether updex's new `AGENTS.md` rule alone yields conventional PR
+  titles.
+
+## Phase 6 — Operate it like a product (candidates, unscheduled)
+
+Lessons from the first day, to be worked as queued Fluent items rather than
+by hand:
+
+- **Operator-set priority after creation.** Children inherit their parent's
+  priority (0 for discovery roots), so an admitted security fix waits behind
+  any still-queued discovery root. Add an attributed
+  `queue -- prioritize <id> <n>` (operator-only, never a worker tool),
+  keeping priority operator-owned per spec rule 22.
+- **First-class watching.** The operator loop today is a shell loop around
+  `show`. Add `queue -- events [--since <sequence>] [--repository …]` and/or
+  `queue -- watch` that streams new events, so lease renewals, completions,
+  proposals, and verifications are one command.
+- **Deployment story** (held for design discussion): systemd timers for
+  `seed-dogfood`, `verify-artifacts`, and `backup`; where the checkout, the
+  databases, and worker clients live; how upgrades restart MCP servers.
+- **Operator dashboard** (held for design discussion): the CLI is complete
+  but not operator-friendly; the roadmap's Phase 10 operator surface should
+  be brought forward as a read-only view over `list`/`show`/`events` first,
+  with approve/reject/defer as its first mutations. Same authenticated
+  contract as the CLI, per the roadmap.
+- **Enrolling Fluent itself** so its own maintenance items are claimable
+  under `FLUENT_CONTROL_DB` (needs a Core declaration and the governance
+  surface in this repository), or a documented per-worker choice to run
+  without the enrollment gate.
+
 
 ## Later / ideas
 

@@ -1,7 +1,7 @@
 # PRD: GitHub Organization Agent Fleet
 
 - **Status:** Discovery
-- **Last updated:** 2026-08-16
+- **Last updated:** 2026-08-17
 - **Owner:** operator
 
 Fluent gives a GitHub organization operator a self-hosted queue of durable,
@@ -54,6 +54,27 @@ targets are required before this PRD can become Approved.
 | Preserve traceability | Items with source, lease history, evidence, artifacts, and complete lineage | TBD |
 | Preserve operator control | Merge, release, deploy, or non-opted-in repository authorization by Fluent | 0 |
 | Keep authority deterministic | State transitions authorized solely by model output | 0 |
+
+### First dogfood baseline (2026-08-17, `frostyard/updex`)
+
+Recorded from the first operating day under the
+[recovery plan](../plans/recover.md) and the
+[queue operations runbook](../design/queue-operations.md); one operator, one
+worker client, ~1h50m of wall clock. These are baselines, not targets.
+
+| Measure | Observed |
+| --- | --- |
+| Items completed / claimed | 7 / 7 (4 issue-resolution, 3 read-only discovery) |
+| Pull requests opened → merged by maintainer | 4 → 4, all Fluent-verified (`delivery: merged`) |
+| Runs with no useful result | 0; blocked 0; refused completions 0; lease expiries 0 |
+| Wall time claim → complete | issue items 8m27s, 6m00s, 4m27s, 4m42s; discovery 2m01s, 1m23s, 2m19s |
+| Discovery findings → proposed children | 3 → 3, each with file-level evidence; all admitted by the operator |
+| Worker-filed side artifacts | 1 issue (#299), verified |
+| Traceability | every item carries source (`sourceRef` or seed), lease events, evidence, verified artifacts, and lineage; every human decision is an attributed event |
+| Operator-control and authority boundaries | 0 violations: no merge/release/deploy by Fluent, no non-opted-in repository, no transition authorized by model output |
+
+Tokens per accepted outcome were not captured on this day; the client does
+not yet report them to Fluent. That column stays open.
 
 ## Users
 
