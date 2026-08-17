@@ -256,8 +256,12 @@ state with a `work.requeued` event. Cancel stores the operator reason in
     GitHub is unavailable, returns a non-200 answer other than not-found, or
     an unreadable body, the completion MUST be accepted with
     `verification.status = "unverified"` and the reason, never refused for
-    that cause. The MCP artifact schema MUST reject a worker-supplied
-    `verification` as an unknown key rather than strip it.
+    that cause. A not-found answer MUST count as absence only when Fluent
+    presented `FLUENT_GITHUB_TOKEN`; unauthenticated, GitHub answers 404 for
+    private repositories exactly as for missing ones, so the completion MUST
+    be accepted as `unverified` naming the missing token. The MCP artifact
+    schema MUST reject a worker-supplied `verification` as an unknown key
+    rather than strip it.
 34. `verify-artifacts [--repository <owner/repo>] [--limit <1-100>]` MUST
     re-check completed items' issue and pull-request artifacts that are
     `unverified` or verified but still `open`, MUST record each changed

@@ -19,6 +19,8 @@ const REPOSITORY = "frostyard/updex";
 const PR_URL = "https://github.com/frostyard/updex/pull/12";
 const ISSUE_URL = "https://github.com/frostyard/updex/issues/7";
 const clock = () => new Date("2026-08-17T20:00:00.000Z");
+// Verification treats 404 as absence only when a credential was presented.
+process.env.FLUENT_GITHUB_TOKEN ??= "test-token";
 
 function pullRequest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -107,6 +109,17 @@ test("a pull request is verified with its state and head, and mismatches are rej
   const missing = await verifyGitHubArtifact(REPOSITORY, prArtifact, { fetcher: apiFetcher({}).fetcher, clock });
   assert.equal(missing.kind, "rejected");
   assert.match(missing.kind === "rejected" ? missing.reason : "", /does not exist/);
+
+  // Without a credential, 404 is ambiguous (private repository or missing) and must not refuse the completion.
+  const token = process.env.FLUENT_GITHUB_TOKEN;
+  delete process.env.FLUENT_GITHUB_TOKEN;
+  try {
+    const ambiguous = await verifyGitHubArtifact(REPOSITORY, prArtifact, { fetcher: apiFetcher({}).fetcher, clock });
+    assert.equal(ambiguous.kind, "unverified");
+    assert.match(ambiguous.kind === "unverified" ? ambiguous.verification.reason : "", /without FLUENT_GITHUB_TOKEN/);
+  } finally {
+    if (token !== undefined) process.env.FLUENT_GITHUB_TOKEN = token;
+  }
   const wrongRepoUrl = await verifyGitHubArtifact(REPOSITORY, { kind: "pull-request", url: "https://github.com/frostyard/lodge/pull/12" }, { fetcher: apiFetcher({}).fetcher, clock });
   assert.equal(wrongRepoUrl.kind, "rejected");
 });

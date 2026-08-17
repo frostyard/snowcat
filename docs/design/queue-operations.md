@@ -291,6 +291,13 @@ Approved. During the dogfood week keep, per repository:
   artifact: wrong repository, wrong number, an issue reported as a pull
   request, or a URL that does not exist. The item is still leased to that
   worker; it should fix the report and complete again.
+- **A completion on a private repository comes back `unverified` with
+  "without FLUENT_GITHUB_TOKEN"** — the MCP server was started without the
+  token, so GitHub answered 404 for a repository it could not see. Export
+  `FLUENT_GITHUB_TOKEN` in the shell that starts the client (the committed
+  `.mcp.json` passes it through as `${FLUENT_GITHUB_TOKEN:-}`; never write
+  the token into that file), restart the client, and run `verify-artifacts`
+  to record the real state.
 - **`claim_work` returns `null` but `list queued` shows items** — with
   `FLUENT_CONTROL_DB` set, the repository is not `enrolled`; check
   `repository -- status`. Or the items are `proposed` (not admitted), or the

@@ -50,6 +50,15 @@ export async function verifyGitHubArtifact(
     return unverified(now(), "GitHub API unavailable");
   }
   if (response.status === 404 || response.status === 410) {
+    // Unauthenticated, GitHub answers 404 for private repositories exactly as
+    // for missing ones, so "not found" is only evidence of absence when Fluent
+    // asked with a credential.
+    if (!process.env.FLUENT_GITHUB_TOKEN) {
+      return unverified(
+        now(),
+        `GitHub returned ${response.status} without FLUENT_GITHUB_TOKEN; private repositories cannot be verified unauthenticated`,
+      );
+    }
     return { kind: "rejected", reason: `${artifact.kind} ${artifact.url} does not exist on GitHub` };
   }
   if (response.status !== 200) {
