@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import { ControlPlaneStore } from "../src/control/store.ts";
@@ -131,6 +132,168 @@ test("active Core authority materializes separately from GitHub identity and enr
   const reopened = new ControlPlaneStore(join(directory, "control.db"));
   assert.equal(reopened.repositoryStatuses()[0]?.effectiveState, "awaiting-surfaces");
   reopened.close();
+});
+
+test("verified GitHub pull-request deliveries are enrollment-bound, replayable, and projection-safe", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-github-delivery-test-"));
+  const path = join(directory, "control.db");
+  let now = new Date("2026-08-17T12:00:00.000Z");
+  const store = new ControlPlaneStore(path, () => now);
+  const input = {
+    appId: "4567",
+    deliveryGuid: "12345678-1234-4234-8234-123456789abc",
+    bodyDigest: `sha256:${"a".repeat(64)}`,
+    requestBytes: 4096,
+    installationId: "github.com:installation:7654",
+    repositoryId: "github.com:9001",
+    action: "synchronize" as const,
+    pullRequest: {
+      number: 42,
+      actorId: "github.com:user:31415",
+      state: "open" as const,
+      draft: false,
+      merged: false,
+      baseRepositoryId: "github.com:9001",
+      baseRef: "main",
+      baseCommitId: `sha1:${"b".repeat(40)}`,
+      headRepositoryId: "github.com:9001",
+      headRef: "feature/test-gap",
+      headCommitId: `sha1:${"c".repeat(40)}`,
+      observedTestMergeCommitId: `sha1:${"d".repeat(40)}`,
+      mergedAt: null,
+      mergeCommitId: null,
+      sourceUpdatedAt: "2026-08-17T11:59:00.000Z",
+    },
+  };
+
+  assert.throws(
+    () => store.recordGitHubPullRequestDelivery(input),
+    /previously enrolled repository/,
+  );
+  assert.equal(store.metadata().lastTransactionSequence, 1);
+
+  const candidate = await activationCandidate(enabledDeclaration(), "7".repeat(40), "8".repeat(40));
+  const activation = store.activateCoreSnapshot({ candidate, expectedLastTransactionSequence: 1 });
+  store.recordCoreSourceCheckEligible({
+    checkId: "0198b9fd-6200-7000-8000-000000000001",
+    candidate,
+    expectedLastTransactionSequence: activation.transactionSequence,
+  });
+  await reconcileRepositories(
+    store,
+    async () => ({
+      kind: "found",
+      repositoryId: "9001",
+      owner: "frostyard",
+      name: "example",
+      archived: false,
+      defaultBranch: "main",
+    }),
+    async () => validSurfaceProbe(),
+  );
+  assert.equal(store.repositoryStatuses()[0]?.effectiveState, "enrolled");
+
+  now = new Date("2026-08-17T12:10:00.000Z");
+  const before = store.metadata().lastTransactionSequence;
+  const result = store.recordGitHubPullRequestDelivery(input);
+  assert.equal(result.transactionSequence, before + 1);
+  assert.deepEqual(result.transactionPositions, [0, 1, 2]);
+  assert.equal(store.projectionHealth()[0]?.status, "stale");
+  const outputs = store.occurrences().slice(-3);
+  assert.deepEqual(
+    outputs.map((occurrence) => [occurrence.kind, occurrence.recordClass, occurrence.subjectKind]),
+    [
+      ["github.delivery-receipt-observation", "observation", "github-app-hook"],
+      ["github.pull-request-observation", "observation", "github-pull-request"],
+      ["github.delivery-recorded", undefined, "github-app-hook"],
+    ],
+  );
+  assert.equal(outputs[0]?.sourceRevisionValue, input.bodyDigest);
+  const observedPayload = outputs[1]?.payload as Record<string, unknown>;
+  assert.equal(observedPayload.receiptRecordId, result.receiptRecordId);
+  assert.equal("title" in observedPayload, false);
+  assert.equal("body" in observedPayload, false);
+
+  const replay = store.recordGitHubPullRequestDelivery(input);
+  assert.deepEqual(replay, result);
+  assert.equal(store.metadata().lastTransactionSequence, result.transactionSequence);
+  assert.throws(
+    () => store.recordGitHubPullRequestDelivery({ ...input, requestBytes: input.requestBytes + 1 }),
+    /reused with different verified content/,
+  );
+  assert.equal(store.metadata().lastTransactionSequence, result.transactionSequence);
+
+  store.rebuildProjections();
+  const projected = store.projectedSubjects({
+    maximumInformationClass: "organization",
+    deploymentIds: [store.metadata().databaseLineageId],
+  });
+  assert.equal(projected.stale, false);
+  assert.equal(
+    projected.rows.find((subject) => subject.subjectId === "github.com:9001:pull:42")?.creationRecordId,
+    result.observationRecordId,
+  );
+  store.close();
+
+  const reopened = new ControlPlaneStore(path);
+  assert.equal(reopened.metadata().lastTransactionSequence, result.transactionSequence);
+  reopened.close();
+
+  const raw = new DatabaseSync(path);
+  raw.prepare("UPDATE durable_occurrences SET causation_record_id = NULL WHERE record_id = ?").run(
+    result.observationRecordId,
+  );
+  raw.close();
+  assert.throws(() => new ControlPlaneStore(path), /GitHub pull-request delivery lineage mismatch/);
+});
+
+test("GitHub pull-request delivery rejects forks and closed-state test merge identities", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-github-delivery-shape-test-"));
+  const store = new ControlPlaneStore(
+    join(directory, "control.db"),
+    () => new Date("2026-08-17T13:00:00.000Z"),
+  );
+  const base = {
+    appId: "4567",
+    deliveryGuid: "22345678-1234-4234-8234-123456789abc",
+    bodyDigest: `sha256:${"e".repeat(64)}`,
+    requestBytes: 512,
+    installationId: "github.com:installation:7654",
+    repositoryId: "github.com:9001",
+    action: "closed" as const,
+    pullRequest: {
+      number: 7,
+      actorId: "github.com:user:31415",
+      state: "closed" as const,
+      draft: false,
+      merged: true,
+      baseRepositoryId: "github.com:9001",
+      baseRef: "main",
+      baseCommitId: `sha1:${"1".repeat(40)}`,
+      headRepositoryId: "github.com:9001",
+      headRef: "feature/merged",
+      headCommitId: `sha1:${"2".repeat(40)}`,
+      observedTestMergeCommitId: `sha1:${"3".repeat(40)}`,
+      mergedAt: "2026-08-17T12:59:00.000Z",
+      mergeCommitId: `sha1:${"4".repeat(40)}`,
+      sourceUpdatedAt: "2026-08-17T12:59:00.000Z",
+    },
+  };
+  assert.throws(() => store.recordGitHubPullRequestDelivery(base), /inconsistent merge shape/);
+  assert.throws(
+    () =>
+      store.recordGitHubPullRequestDelivery({
+        ...base,
+        pullRequest: {
+          ...base.pullRequest,
+          observedTestMergeCommitId: null,
+          headRepositoryId: "github.com:9002",
+        },
+      }),
+    /invalid identity or state fields/,
+  );
+  assert.equal(store.metadata().lastTransactionSequence, 1);
+  store.close();
 });
 
 test("GitHub reconciliation classifies mismatch precedence and preserves declaration authority", async () => {

@@ -1,8 +1,8 @@
 import { isUuidV7, type JsonValue } from "./encoding.ts";
 
 export const CONTROL_PLANE_APPLICATION_ID = 1_179_405_908; // ASCII "FLNT"
-export const CONTROL_PLANE_SCHEMA_VERSION = 5;
-export const CONTROL_PLANE_REGISTRY_VERSION = 12;
+export const CONTROL_PLANE_SCHEMA_VERSION = 6;
+export const CONTROL_PLANE_REGISTRY_VERSION = 13;
 
 export const informationClasses = ["public", "organization", "restricted"] as const;
 export type InformationClass = (typeof informationClasses)[number];
@@ -308,6 +308,20 @@ export const recordKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isRepositoryOperatorHoldDecisionPayload,
   },
+  "github.delivery-receipt-observation": {
+    schemaVersion: 1,
+    recordClass: "observation",
+    subjectKinds: ["github-app-hook"],
+    minimumInformationClass: "organization",
+    validatePayload: isGitHubDeliveryReceiptPayload,
+  },
+  "github.pull-request-observation": {
+    schemaVersion: 1,
+    recordClass: "observation",
+    subjectKinds: ["github-pull-request"],
+    minimumInformationClass: "organization",
+    validatePayload: isGitHubPullRequestObservationPayload,
+  },
 } as const;
 
 export const eventKindRegistry = {
@@ -395,6 +409,12 @@ export const eventKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isRepositoryOperatorHoldDecisionPayload,
   },
+  "github.delivery-recorded": {
+    schemaVersion: 1,
+    subjectKinds: ["github-app-hook"],
+    minimumInformationClass: "organization",
+    validatePayload: isGitHubDeliveryRecordedPayload,
+  },
 } as const;
 
 export const commandKindRegistry = {
@@ -476,6 +496,14 @@ export const commandKindRegistry = {
     schemaVersion: 1,
     outputKinds: ["repository.operator-hold-decision", "repository.operator-hold-cleared"],
   },
+  "github.record-pull-request-delivery": {
+    schemaVersion: 1,
+    outputKinds: [
+      "github.delivery-receipt-observation",
+      "github.pull-request-observation",
+      "github.delivery-recorded",
+    ],
+  },
 } as const;
 
 export const predicateContractRegistry = {
@@ -531,10 +559,10 @@ export interface ProjectionContract {
 
 export const projectionContractRegistry = {
   "control-plane.subject-lookup": {
-    contractVersion: 1,
-    transformationVersion: 1,
+    contractVersion: 2,
+    transformationVersion: 2,
     informationHandlingVersion: 1,
-    sourceKinds: ["subjects", "definition-records"],
+    sourceKinds: ["subjects", "creation-records"],
     consumers: ["internal-diagnostics"],
   },
   "control-plane.event-cursor": {
@@ -859,6 +887,71 @@ export interface RepositoryOperatorHoldDecisionPayload extends Record<string, Js
   reason: string;
   expectedLastTransactionSequence: number;
   decidedAt: string;
+}
+
+export const githubPullRequestActions = [
+  "opened",
+  "reopened",
+  "synchronize",
+  "edited",
+  "ready_for_review",
+  "converted_to_draft",
+  "closed",
+] as const;
+export type GitHubPullRequestAction = (typeof githubPullRequestActions)[number];
+
+export interface GitHubDeliveryReceiptPayload extends Record<string, JsonValue> {
+  appId: string;
+  hookSubjectId: string;
+  deliveryGuid: string;
+  event: "pull_request";
+  action: GitHubPullRequestAction;
+  installationId: string;
+  repositoryId: string;
+  bodyDigest: string;
+  requestBytes: number;
+  signatureVerification: "sha256-verified";
+  disposition: "pull-request-observation-recorded";
+  receiptRecordId: string;
+  observationRecordId: string;
+  eventRecordId: string;
+  receivedAt: string;
+}
+
+export interface GitHubPullRequestObservationPayload extends Record<string, JsonValue> {
+  repositoryId: string;
+  pullRequestId: string;
+  pullRequestNumber: number;
+  action: GitHubPullRequestAction;
+  installationId: string;
+  actorId: string;
+  state: "open" | "closed";
+  draft: boolean;
+  merged: boolean;
+  baseRepositoryId: string;
+  baseRef: string;
+  baseCommitId: string;
+  headRepositoryId: string;
+  headRef: string;
+  headCommitId: string;
+  observedTestMergeCommitId: string | null;
+  mergedAt: string | null;
+  mergeCommitId: string | null;
+  sourceUpdatedAt: string;
+  deliveryGuid: string;
+  receiptRecordId: string;
+  observationRecordId: string;
+  observationDigest: string;
+  observedAt: string;
+}
+
+export interface GitHubDeliveryRecordedPayload extends Record<string, JsonValue> {
+  deliveryGuid: string;
+  receiptRecordId: string;
+  observationRecordId: string;
+  eventRecordId: string;
+  disposition: "pull-request-observation-recorded";
+  recordedAt: string;
 }
 
 export function assertSubject(kind: string, id: string): asserts kind is SubjectKind {
@@ -1653,6 +1746,147 @@ function isRepositoryOperatorHoldDecisionPayload(
     : value.decisionRecordId !== value.holdDecisionId && value.previousDecisionRecordId === value.holdDecisionId;
 }
 
+function isGitHubDeliveryReceiptPayload(value: unknown): value is GitHubDeliveryReceiptPayload {
+  if (
+    !isExactObject(value, [
+      "appId",
+      "hookSubjectId",
+      "deliveryGuid",
+      "event",
+      "action",
+      "installationId",
+      "repositoryId",
+      "bodyDigest",
+      "requestBytes",
+      "signatureVerification",
+      "disposition",
+      "receiptRecordId",
+      "observationRecordId",
+      "eventRecordId",
+      "receivedAt",
+    ])
+  ) {
+    return false;
+  }
+  return (
+    isGitHubNumericId(value.appId) &&
+    value.hookSubjectId === `github.com:app:${String(value.appId)}:hook` &&
+    isGitHubDeliveryGuid(value.deliveryGuid) &&
+    value.event === "pull_request" &&
+    githubPullRequestActions.includes(value.action as GitHubPullRequestAction) &&
+    isGitHubInstallationId(value.installationId) &&
+    isGitHubRepositoryId(value.repositoryId) &&
+    isSha256(value.bodyDigest) &&
+    isPositiveInteger(value.requestBytes) &&
+    Number(value.requestBytes) <= 25 * 1024 * 1024 &&
+    value.signatureVerification === "sha256-verified" &&
+    value.disposition === "pull-request-observation-recorded" &&
+    isUuid(value.receiptRecordId) &&
+    isUuid(value.observationRecordId) &&
+    isUuid(value.eventRecordId) &&
+    new Set([value.receiptRecordId, value.observationRecordId, value.eventRecordId]).size === 3 &&
+    isUtcInstant(value.receivedAt)
+  );
+}
+
+function isGitHubPullRequestObservationPayload(
+  value: unknown,
+): value is GitHubPullRequestObservationPayload {
+  if (
+    !isExactObject(value, [
+      "repositoryId",
+      "pullRequestId",
+      "pullRequestNumber",
+      "action",
+      "installationId",
+      "actorId",
+      "state",
+      "draft",
+      "merged",
+      "baseRepositoryId",
+      "baseRef",
+      "baseCommitId",
+      "headRepositoryId",
+      "headRef",
+      "headCommitId",
+      "observedTestMergeCommitId",
+      "mergedAt",
+      "mergeCommitId",
+      "sourceUpdatedAt",
+      "deliveryGuid",
+      "receiptRecordId",
+      "observationRecordId",
+      "observationDigest",
+      "observedAt",
+    ])
+  ) {
+    return false;
+  }
+  if (
+    !isGitHubRepositoryId(value.repositoryId) ||
+    !isPositiveInteger(value.pullRequestNumber) ||
+    value.pullRequestId !== `${String(value.repositoryId)}:pull:${String(value.pullRequestNumber)}` ||
+    !githubPullRequestActions.includes(value.action as GitHubPullRequestAction) ||
+    !isGitHubInstallationId(value.installationId) ||
+    !isGitHubUserId(value.actorId) ||
+    (value.state !== "open" && value.state !== "closed") ||
+    typeof value.draft !== "boolean" ||
+    typeof value.merged !== "boolean" ||
+    value.baseRepositoryId !== value.repositoryId ||
+    value.headRepositoryId !== value.repositoryId ||
+    !isRepositoryBranchName(value.baseRef) ||
+    !isGitCommitId(value.baseCommitId) ||
+    !isRepositoryBranchName(value.headRef) ||
+    !isGitCommitId(value.headCommitId) ||
+    !(value.observedTestMergeCommitId === null || isGitCommitId(value.observedTestMergeCommitId)) ||
+    !(value.mergedAt === null || isUtcInstant(value.mergedAt)) ||
+    !(value.mergeCommitId === null || isGitCommitId(value.mergeCommitId)) ||
+    !isUtcInstant(value.sourceUpdatedAt) ||
+    !isGitHubDeliveryGuid(value.deliveryGuid) ||
+    !isUuid(value.receiptRecordId) ||
+    !isUuid(value.observationRecordId) ||
+    !isSha256(value.observationDigest) ||
+    !isUtcInstant(value.observedAt)
+  ) {
+    return false;
+  }
+  if (value.action === "closed" && value.state !== "closed") return false;
+  if (
+    value.action !== "closed" &&
+    value.action !== "edited" &&
+    value.state !== "open"
+  ) {
+    return false;
+  }
+  if (value.state === "open") {
+    return !value.merged && value.mergedAt === null && value.mergeCommitId === null;
+  }
+  if (value.observedTestMergeCommitId !== null) return false;
+  return value.merged
+    ? value.mergedAt !== null && value.mergeCommitId !== null
+    : value.mergedAt === null && value.mergeCommitId === null;
+}
+
+function isGitHubDeliveryRecordedPayload(value: unknown): value is GitHubDeliveryRecordedPayload {
+  return (
+    isExactObject(value, [
+      "deliveryGuid",
+      "receiptRecordId",
+      "observationRecordId",
+      "eventRecordId",
+      "disposition",
+      "recordedAt",
+    ]) &&
+    isGitHubDeliveryGuid(value.deliveryGuid) &&
+    isUuid(value.receiptRecordId) &&
+    isUuid(value.observationRecordId) &&
+    isUuid(value.eventRecordId) &&
+    new Set([value.receiptRecordId, value.observationRecordId, value.eventRecordId]).size === 3 &&
+    value.disposition === "pull-request-observation-recorded" &&
+    isUtcInstant(value.recordedAt)
+  );
+}
+
 function isRepositorySurfaceRequirementResult(value: unknown): value is RepositorySurfaceRequirementResult {
   if (
     !isExactObject(value, ["requirementId", "surfaceId", "result", "evidenceDigest"]) ||
@@ -1751,6 +1985,30 @@ function isRepositoryBranchName(value: unknown): value is string {
 
 function isGitHubAppHookId(value: string): boolean {
   return /^github\.com:app:[1-9][0-9]{0,19}:hook$/.test(value);
+}
+
+function isGitHubNumericId(value: unknown): value is string {
+  return typeof value === "string" && /^[1-9][0-9]{0,19}$/.test(value);
+}
+
+function isGitHubRepositoryId(value: unknown): value is string {
+  return typeof value === "string" && /^github\.com:[1-9][0-9]{0,19}$/.test(value);
+}
+
+function isGitHubInstallationId(value: unknown): value is string {
+  return typeof value === "string" && /^github\.com:installation:[1-9][0-9]{0,19}$/.test(value);
+}
+
+function isGitHubUserId(value: unknown): value is string {
+  return typeof value === "string" && /^github\.com:user:[1-9][0-9]{0,19}$/.test(value);
+}
+
+function isGitHubDeliveryGuid(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+}
+
+function isGitCommitId(value: unknown): value is string {
+  return typeof value === "string" && /^sha1:[0-9a-f]{40}$/.test(value);
 }
 
 function isGitHubPullRequestId(value: string): boolean {

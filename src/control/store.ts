@@ -43,6 +43,7 @@ import {
   assertSubject,
   commandKindRegistry,
   eventKindRegistry,
+  githubPullRequestActions,
   informationClassAtLeast,
   projectionContractRegistry,
   recordClasses,
@@ -56,6 +57,10 @@ import {
   type CoreRollbackDecisionPayload,
   type CoreSourceCheckEligiblePayload,
   type CoreStaleSourceOverrideDecisionPayload,
+  type GitHubDeliveryReceiptPayload,
+  type GitHubDeliveryRecordedPayload,
+  type GitHubPullRequestAction,
+  type GitHubPullRequestObservationPayload,
   type RepositoryCoreAuthorityPayload,
   type RepositoryAccountableOwner,
   type RepositoryGitHubReconciliationPayload,
@@ -568,7 +573,7 @@ export interface ProjectedSubject {
   subjectKind: string;
   subjectId: string;
   createdTransactionSequence: number;
-  definitionRecordId: string;
+  creationRecordId: string;
   informationClass: InformationClass;
   informationScope: JsonValue;
 }
@@ -585,6 +590,45 @@ export interface ProjectedEvent {
   transactionSequence: number;
   transactionPosition: number;
   recordedAt: string;
+}
+
+export interface GitHubPullRequestDeliveryInput {
+  appId: string;
+  deliveryGuid: string;
+  bodyDigest: string;
+  requestBytes: number;
+  installationId: string;
+  repositoryId: string;
+  action: GitHubPullRequestAction;
+  pullRequest: {
+    number: number;
+    actorId: string;
+    state: "open" | "closed";
+    draft: boolean;
+    merged: boolean;
+    baseRepositoryId: string;
+    baseRef: string;
+    baseCommitId: string;
+    headRepositoryId: string;
+    headRef: string;
+    headCommitId: string;
+    observedTestMergeCommitId: string | null;
+    mergedAt: string | null;
+    mergeCommitId: string | null;
+    sourceUpdatedAt: string;
+  };
+}
+
+export interface GitHubPullRequestDeliveryResult {
+  deliveryGuid: string;
+  bodyDigest: string;
+  observationDigest: string;
+  receiptRecordId: string;
+  observationRecordId: string;
+  eventRecordId: string;
+  receivedAt: string;
+  transactionPositions: readonly [0, 1, 2];
+  transactionSequence: number;
 }
 
 export interface ProjectionReadResult<T> {
@@ -1489,6 +1533,258 @@ export class ControlPlaneStore {
       };
       this.insertReceipt(commandScope, "repository.record-github-identity", idempotencyKey, commandPayloadDigest, result, sequence);
       this.advanceControlMetadata(evaluationTime, sequence);
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  recordGitHubPullRequestDelivery(
+    input: GitHubPullRequestDeliveryInput,
+  ): GitHubPullRequestDeliveryResult {
+    const normalized = normalizeGitHubPullRequestDeliveryInput(input);
+    const hookSubjectId = `github.com:app:${normalized.appId}:hook`;
+    const pullRequestId = `${normalized.repositoryId}:pull:${normalized.pullRequest.number}`;
+    const sourceRepresentation = {
+      action: normalized.action,
+      installationId: normalized.installationId,
+      repositoryId: normalized.repositoryId,
+      pullRequest: normalized.pullRequest,
+    } as unknown as JsonValue;
+    const observationDigest = sha256(canonicalJson(sourceRepresentation));
+    const idempotencyKey = `github-delivery:${normalized.appId}:${normalized.deliveryGuid}`;
+    const commandPayloadDigest = sha256(canonicalJson(normalized as unknown as JsonValue));
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.verifyExisting(this.applicationTables());
+      const metadata = this.metadata();
+      const commandScope = `database:${metadata.databaseLineageId}`;
+      const prior = this.db
+        .prepare(
+          `SELECT payload_digest, result_json FROM idempotency_receipts
+           WHERE command_scope = ? AND command_kind = 'github.record-pull-request-delivery'
+             AND command_schema_version = 1 AND idempotency_key = ?`,
+        )
+        .get(commandScope, idempotencyKey) as Row | undefined;
+      if (prior) {
+        if (String(prior.payload_digest) !== commandPayloadDigest) {
+          throw new Error("GitHub delivery GUID was reused with different verified content");
+        }
+        const result = parseGitHubPullRequestDeliveryResult(parseJson(String(prior.result_json)));
+        this.db.exec("COMMIT");
+        return result;
+      }
+
+      const repository = this.repositoryStatuses().find(
+        (status) => status.repositoryId === normalized.repositoryId,
+      );
+      if (!repository || repository.enrollmentRecordId === null) {
+        throw new Error("GitHub pull-request delivery requires a previously enrolled repository");
+      }
+
+      const receivedAt = this.now();
+      if (receivedAt < metadata.controlTimeWatermark) {
+        throw new Error(
+          `control-plane clock moved backwards behind ${metadata.controlTimeWatermark}; refusing a new write transaction`,
+        );
+      }
+      const transactionId = uuidV7(new Date(receivedAt));
+      const receiptRecordId = uuidV7(new Date(receivedAt));
+      const observationRecordId = uuidV7(new Date(receivedAt));
+      const eventRecordId = uuidV7(new Date(receivedAt));
+      const correlationId = uuidV7(new Date(receivedAt));
+      const receiptPayload = {
+        appId: normalized.appId,
+        hookSubjectId,
+        deliveryGuid: normalized.deliveryGuid,
+        event: "pull_request",
+        action: normalized.action,
+        installationId: normalized.installationId,
+        repositoryId: normalized.repositoryId,
+        bodyDigest: normalized.bodyDigest,
+        requestBytes: normalized.requestBytes,
+        signatureVerification: "sha256-verified",
+        disposition: "pull-request-observation-recorded",
+        receiptRecordId,
+        observationRecordId,
+        eventRecordId,
+        receivedAt,
+      } satisfies GitHubDeliveryReceiptPayload;
+      const pullRequestPayload = {
+        repositoryId: normalized.repositoryId,
+        pullRequestId,
+        pullRequestNumber: normalized.pullRequest.number,
+        action: normalized.action,
+        installationId: normalized.installationId,
+        actorId: normalized.pullRequest.actorId,
+        state: normalized.pullRequest.state,
+        draft: normalized.pullRequest.draft,
+        merged: normalized.pullRequest.merged,
+        baseRepositoryId: normalized.pullRequest.baseRepositoryId,
+        baseRef: normalized.pullRequest.baseRef,
+        baseCommitId: normalized.pullRequest.baseCommitId,
+        headRepositoryId: normalized.pullRequest.headRepositoryId,
+        headRef: normalized.pullRequest.headRef,
+        headCommitId: normalized.pullRequest.headCommitId,
+        observedTestMergeCommitId: normalized.pullRequest.observedTestMergeCommitId,
+        mergedAt: normalized.pullRequest.mergedAt,
+        mergeCommitId: normalized.pullRequest.mergeCommitId,
+        sourceUpdatedAt: normalized.pullRequest.sourceUpdatedAt,
+        deliveryGuid: normalized.deliveryGuid,
+        receiptRecordId,
+        observationRecordId,
+        observationDigest,
+        observedAt: receivedAt,
+      } satisfies GitHubPullRequestObservationPayload;
+      const eventPayload = {
+        deliveryGuid: normalized.deliveryGuid,
+        receiptRecordId,
+        observationRecordId,
+        eventRecordId,
+        disposition: "pull-request-observation-recorded",
+        recordedAt: receivedAt,
+      } satisfies GitHubDeliveryRecordedPayload;
+      if (!recordKindRegistry["github.delivery-receipt-observation"].validatePayload(receiptPayload)) {
+        throw new Error("GitHub delivery receipt is outside its record contract");
+      }
+      if (!recordKindRegistry["github.pull-request-observation"].validatePayload(pullRequestPayload)) {
+        throw new Error("GitHub pull-request observation is outside its record contract");
+      }
+      if (!eventKindRegistry["github.delivery-recorded"].validatePayload(eventPayload)) {
+        throw new Error("GitHub delivery event is outside its event contract");
+      }
+
+      const transaction = this.db
+        .prepare(
+          `INSERT INTO control_transactions (
+             transaction_id, command_kind, command_schema_version, principal_kind,
+             principal_id, session_id, idempotency_key, payload_digest,
+             evaluation_time, recorded_at
+           ) VALUES (?, 'github.record-pull-request-delivery', 1, 'github-app-webhook', ?, NULL, ?, ?, ?, ?)`,
+        )
+        .run(
+          transactionId,
+          hookSubjectId,
+          idempotencyKey,
+          commandPayloadDigest,
+          receivedAt,
+          receivedAt,
+        );
+      const sequence = Number(transaction.lastInsertRowid);
+      for (const [subjectKind, subjectId] of [
+        ["github-app-hook", hookSubjectId],
+        ["github-pull-request", pullRequestId],
+      ] as const) {
+        const existing = this.db
+          .prepare("SELECT 1 AS present FROM subjects WHERE subject_kind = ? AND subject_id = ?")
+          .get(subjectKind, subjectId) as Row | undefined;
+        if (!existing) {
+          this.db
+            .prepare(
+              `INSERT INTO subjects (subject_kind, subject_id, created_transaction_sequence)
+               VALUES (?, ?, ?)`,
+            )
+            .run(subjectKind, subjectId, sequence);
+        }
+      }
+      const scope = canonicalJson({ deploymentId: metadata.databaseLineageId });
+      const receiptPayloadJson = canonicalJson(receiptPayload);
+      const pullRequestPayloadJson = canonicalJson(pullRequestPayload);
+      const eventPayloadJson = canonicalJson(eventPayload);
+      this.insertOccurrence({
+        recordId: receiptRecordId,
+        occurrenceType: "record",
+        kind: "github.delivery-receipt-observation",
+        schemaVersion: 1,
+        recordClass: "observation",
+        subjectKind: "github-app-hook",
+        subjectId: hookSubjectId,
+        revisionKind: "github-webhook-body-sha256",
+        revisionValue: normalized.bodyDigest,
+        sourceKind: "github-app-webhook",
+        sourceId: hookSubjectId,
+        sourceRevisionKind: "github-webhook-body-sha256",
+        sourceRevisionValue: normalized.bodyDigest,
+        informationClass: "organization",
+        informationScopeJson: scope,
+        payloadJson: receiptPayloadJson,
+        payloadDigest: sha256(receiptPayloadJson),
+        correlationId,
+        transactionSequence: sequence,
+        transactionPosition: 0,
+        recordedAt: receivedAt,
+      });
+      this.insertOccurrence({
+        recordId: observationRecordId,
+        occurrenceType: "record",
+        kind: "github.pull-request-observation",
+        schemaVersion: 1,
+        recordClass: "observation",
+        subjectKind: "github-pull-request",
+        subjectId: pullRequestId,
+        revisionKind: "github-pull-request-sha256",
+        revisionValue: observationDigest,
+        sourceKind: "github-app-webhook",
+        sourceId: hookSubjectId,
+        sourceRevisionKind: "github-webhook-body-sha256",
+        sourceRevisionValue: normalized.bodyDigest,
+        informationClass: "organization",
+        informationScopeJson: scope,
+        payloadJson: pullRequestPayloadJson,
+        payloadDigest: sha256(pullRequestPayloadJson),
+        correlationId,
+        causationRecordId: receiptRecordId,
+        transactionSequence: sequence,
+        transactionPosition: 1,
+        recordedAt: receivedAt,
+      });
+      this.insertOccurrence({
+        recordId: eventRecordId,
+        occurrenceType: "event",
+        kind: "github.delivery-recorded",
+        schemaVersion: 1,
+        subjectKind: "github-app-hook",
+        subjectId: hookSubjectId,
+        revisionKind: "github-webhook-body-sha256",
+        revisionValue: normalized.bodyDigest,
+        sourceKind: "github-app-webhook",
+        sourceId: hookSubjectId,
+        sourceRevisionKind: "github-webhook-body-sha256",
+        sourceRevisionValue: normalized.bodyDigest,
+        informationClass: "organization",
+        informationScopeJson: scope,
+        payloadJson: eventPayloadJson,
+        payloadDigest: sha256(eventPayloadJson),
+        correlationId,
+        causationRecordId: receiptRecordId,
+        transactionSequence: sequence,
+        transactionPosition: 2,
+        recordedAt: receivedAt,
+      });
+      const result: GitHubPullRequestDeliveryResult = {
+        deliveryGuid: normalized.deliveryGuid,
+        bodyDigest: normalized.bodyDigest,
+        observationDigest,
+        receiptRecordId,
+        observationRecordId,
+        eventRecordId,
+        receivedAt,
+        transactionPositions: [0, 1, 2],
+        transactionSequence: sequence,
+      };
+      this.insertReceipt(
+        commandScope,
+        "github.record-pull-request-delivery",
+        idempotencyKey,
+        commandPayloadDigest,
+        result,
+        sequence,
+        addSeconds(receivedAt, 30 * 24 * 60 * 60),
+      );
+      this.advanceControlMetadata(receivedAt, sequence);
       this.db.exec("COMMIT");
       return result;
     } catch (error) {
@@ -2492,8 +2788,8 @@ export class ControlPlaneStore {
         `SELECT projected.*, source.information_class AS current_information_class,
                 source.information_scope_json AS current_information_scope_json
          FROM projection_subject_lookup projected
-         JOIN durable_occurrences source ON source.record_id = projected.definition_record_id
-         JOIN durable_records record ON record.record_id = source.record_id AND record.record_class = 'definition'
+         JOIN durable_occurrences source ON source.record_id = projected.creation_record_id
+         JOIN durable_records record ON record.record_id = source.record_id
          WHERE projected.generation_id = ?
          ORDER BY projected.subject_kind, projected.subject_id`,
       )
@@ -4524,7 +4820,7 @@ export class ControlPlaneStore {
         subject_kind TEXT NOT NULL,
         subject_id TEXT NOT NULL,
         created_transaction_sequence INTEGER NOT NULL REFERENCES control_transactions(sequence),
-        definition_record_id TEXT NOT NULL REFERENCES durable_occurrences(record_id),
+        creation_record_id TEXT NOT NULL REFERENCES durable_occurrences(record_id),
         information_class TEXT NOT NULL CHECK (information_class IN ('public', 'organization', 'restricted')),
         information_scope_json TEXT NOT NULL,
         PRIMARY KEY (generation_id, subject_kind, subject_id)
@@ -4622,7 +4918,8 @@ export class ControlPlaneStore {
       | "repository.record-canonical-surfaces"
       | "repository.establish-enrollment"
       | "repository.impose-operator-hold"
-      | "repository.clear-operator-hold",
+      | "repository.clear-operator-hold"
+      | "github.record-pull-request-delivery",
     idempotencyKey: string,
     payloadDigest: string,
     result:
@@ -4630,8 +4927,10 @@ export class ControlPlaneStore {
       | RepositoryGitHubReconciliationResult
       | RepositorySurfaceReconciliationResult
       | RepositoryEnrollmentResult
-      | RepositoryOperatorHoldResult,
+      | RepositoryOperatorHoldResult
+      | GitHubPullRequestDeliveryResult,
     transactionSequence: number,
+    retainedUntil = IDEMPOTENCY_RETAINED_UNTIL,
   ): void {
     this.db
       .prepare(
@@ -4647,7 +4946,7 @@ export class ControlPlaneStore {
         payloadDigest,
         canonicalJson(result as unknown as JsonValue),
         transactionSequence,
-        IDEMPOTENCY_RETAINED_UNTIL,
+        retainedUntil,
       );
   }
 
@@ -4682,7 +4981,7 @@ export class ControlPlaneStore {
       );
       const identities = new Set(sources.map((row) => `${String(row.subject_kind)}\u0000${String(row.subject_id)}`));
       if (sources.length !== subjectCount || identities.size !== subjectCount) {
-        throw new Error("subject-lookup projection requires exactly one creation definition per subject");
+        throw new Error("subject-lookup projection requires exactly one creation record per subject");
       }
       sourceMaterial = sources.map(subjectProjectionSourceJson);
       const outputs = sources.map(subjectProjectionOutputJson);
@@ -4704,7 +5003,7 @@ export class ControlPlaneStore {
       const insert = this.db.prepare(
         `INSERT INTO projection_subject_lookup (
            generation_id, subject_kind, subject_id, created_transaction_sequence,
-           definition_record_id, information_class, information_scope_json
+           creation_record_id, information_class, information_scope_json
          ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       );
       for (const output of outputs) {
@@ -4714,7 +5013,7 @@ export class ControlPlaneStore {
           String(row.subjectKind),
           String(row.subjectId),
           Number(row.createdTransactionSequence),
-          String(row.definitionRecordId),
+          String(row.creationRecordId),
           String(row.informationClass),
           canonicalJson(row.informationScope!),
         );
@@ -4872,7 +5171,7 @@ export class ControlPlaneStore {
       outputMaterial = (
         this.db
           .prepare(
-            `SELECT subject_kind, subject_id, created_transaction_sequence, definition_record_id,
+            `SELECT subject_kind, subject_id, created_transaction_sequence, creation_record_id,
                     information_class, information_scope_json
              FROM projection_subject_lookup WHERE generation_id = ?
              ORDER BY subject_kind, subject_id`,
@@ -4923,17 +5222,26 @@ export class ControlPlaneStore {
     return this.db
       .prepare(
         `SELECT subject.subject_kind, subject.subject_id, subject.created_transaction_sequence,
-                occurrence.record_id AS definition_record_id, occurrence.kind AS definition_kind,
-                occurrence.schema_version AS definition_schema_version,
-                occurrence.payload_digest AS definition_payload_digest,
+                occurrence.record_id AS creation_record_id, occurrence.kind AS creation_kind,
+                occurrence.schema_version AS creation_schema_version,
+                record.record_class AS creation_record_class,
+                occurrence.payload_digest AS creation_payload_digest,
                 occurrence.information_class, occurrence.information_scope_json
          FROM subjects subject
          JOIN durable_occurrences occurrence
            ON occurrence.subject_kind = subject.subject_kind
           AND occurrence.subject_id = subject.subject_id
           AND occurrence.transaction_sequence = subject.created_transaction_sequence
+          AND occurrence.transaction_position = (
+            SELECT MIN(candidate.transaction_position)
+            FROM durable_occurrences candidate
+            JOIN durable_records candidate_record ON candidate_record.record_id = candidate.record_id
+            WHERE candidate.subject_kind = subject.subject_kind
+              AND candidate.subject_id = subject.subject_id
+              AND candidate.transaction_sequence = subject.created_transaction_sequence
+          )
          JOIN durable_records record
-           ON record.record_id = occurrence.record_id AND record.record_class = 'definition'
+           ON record.record_id = occurrence.record_id
          WHERE subject.created_transaction_sequence <= ?
          ORDER BY subject.subject_kind, subject.subject_id, occurrence.transaction_position`,
       )
@@ -5222,6 +5530,18 @@ export class ControlPlaneStore {
           !outputs.every((output) => output.payload_digest === outputs[0]!.payload_digest)
         ) {
           throw new Error(`repository enrollment transaction shape is invalid: ${String(row.sequence)}`);
+        }
+      } else if (row.command_kind === "github.record-pull-request-delivery") {
+        if (
+          typeof row.idempotency_key !== "string" ||
+          !/^github-delivery:[1-9][0-9]{0,19}:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+            row.idempotency_key,
+          ) ||
+          row.principal_kind !== "github-app-webhook" ||
+          !/^github\.com:app:[1-9][0-9]{0,19}:hook$/.test(String(row.principal_id)) ||
+          receiptCount !== 1
+        ) {
+          throw new Error(`GitHub pull-request delivery transaction shape is invalid: ${String(row.sequence)}`);
         }
       } else if (
         row.command_kind === "repository.impose-operator-hold" ||
@@ -5579,6 +5899,133 @@ export class ControlPlaneStore {
           authorityPayload.fleetState !== reconciliation.fleetState
         ) {
           throw new Error(`repository GitHub reconciliation lineage mismatch: ${String(row.record_id)}`);
+        }
+      }
+      if (String(row.kind) === "github.delivery-receipt-observation") {
+        const receipt = payload as GitHubDeliveryReceiptPayload;
+        const outputs = this.db
+          .prepare(
+            `SELECT occurrence.*, record.record_class
+             FROM durable_occurrences occurrence
+             LEFT JOIN durable_records record ON record.record_id = occurrence.record_id
+             WHERE occurrence.transaction_sequence = ?
+             ORDER BY occurrence.transaction_position`,
+          )
+          .all(row.transaction_sequence!) as Row[];
+        const observationRow = outputs[1];
+        const eventRow = outputs[2];
+        const observation = observationRow
+          ? parseJson(String(observationRow.payload_json))
+          : undefined;
+        const event = eventRow ? parseJson(String(eventRow.payload_json)) : undefined;
+        const enrollment = this.db
+          .prepare(
+            `SELECT record_id FROM durable_occurrences
+             WHERE kind = 'repository.enrolled' AND subject_kind = 'github-repository'
+               AND subject_id = ? AND transaction_sequence < ?
+             ORDER BY transaction_sequence DESC LIMIT 1`,
+          )
+          .get(receipt.repositoryId, row.transaction_sequence!) as Row | undefined;
+        if (
+          outputs.length !== 3 ||
+          String(row.subject_kind) !== "github-app-hook" ||
+          String(row.subject_id) !== receipt.hookSubjectId ||
+          String(row.record_id) !== receipt.receiptRecordId ||
+          String(row.revision_kind) !== "github-webhook-body-sha256" ||
+          String(row.revision_value) !== receipt.bodyDigest ||
+          String(row.source_kind) !== "github-app-webhook" ||
+          String(row.source_id) !== receipt.hookSubjectId ||
+          String(row.source_revision_kind) !== "github-webhook-body-sha256" ||
+          String(row.source_revision_value) !== receipt.bodyDigest ||
+          row.causation_record_id != null ||
+          String(row.recorded_at) !== receipt.receivedAt ||
+          !observation ||
+          !recordKindRegistry["github.pull-request-observation"].validatePayload(observation) ||
+          !event ||
+          !eventKindRegistry["github.delivery-recorded"].validatePayload(event) ||
+          !enrollment ||
+          String(observationRow!.record_id) !== receipt.observationRecordId ||
+          String(observationRow!.record_class) !== "observation" ||
+          String(observationRow!.subject_kind) !== "github-pull-request" ||
+          String(observationRow!.subject_id) !== observation.pullRequestId ||
+          String(observationRow!.revision_kind) !== "github-pull-request-sha256" ||
+          String(observationRow!.revision_value) !== observation.observationDigest ||
+          String(observationRow!.source_kind) !== "github-app-webhook" ||
+          String(observationRow!.source_id) !== receipt.hookSubjectId ||
+          String(observationRow!.source_revision_kind) !== "github-webhook-body-sha256" ||
+          String(observationRow!.source_revision_value) !== receipt.bodyDigest ||
+          String(observationRow!.causation_record_id) !== receipt.receiptRecordId ||
+          String(observationRow!.correlation_id) !== String(row.correlation_id) ||
+          String(observationRow!.recorded_at) !== receipt.receivedAt ||
+          String(eventRow!.record_id) !== receipt.eventRecordId ||
+          eventRow!.record_class != null ||
+          String(eventRow!.subject_kind) !== "github-app-hook" ||
+          String(eventRow!.subject_id) !== receipt.hookSubjectId ||
+          String(eventRow!.revision_kind) !== "github-webhook-body-sha256" ||
+          String(eventRow!.revision_value) !== receipt.bodyDigest ||
+          String(eventRow!.source_kind) !== "github-app-webhook" ||
+          String(eventRow!.source_id) !== receipt.hookSubjectId ||
+          String(eventRow!.source_revision_kind) !== "github-webhook-body-sha256" ||
+          String(eventRow!.source_revision_value) !== receipt.bodyDigest ||
+          String(eventRow!.causation_record_id) !== receipt.receiptRecordId ||
+          String(eventRow!.correlation_id) !== String(row.correlation_id) ||
+          String(eventRow!.recorded_at) !== receipt.receivedAt ||
+          observation.repositoryId !== receipt.repositoryId ||
+          observation.action !== receipt.action ||
+          observation.installationId !== receipt.installationId ||
+          observation.deliveryGuid !== receipt.deliveryGuid ||
+          observation.receiptRecordId !== receipt.receiptRecordId ||
+          observation.observationRecordId !== receipt.observationRecordId ||
+          observation.observedAt !== receipt.receivedAt ||
+          event.deliveryGuid !== receipt.deliveryGuid ||
+          event.receiptRecordId !== receipt.receiptRecordId ||
+          event.observationRecordId !== receipt.observationRecordId ||
+          event.eventRecordId !== receipt.eventRecordId ||
+          event.recordedAt !== receipt.receivedAt
+        ) {
+          throw new Error(`GitHub pull-request delivery lineage mismatch: ${String(row.record_id)}`);
+        }
+        const pullRequest = {
+          actorId: observation.actorId,
+          state: observation.state,
+          draft: observation.draft,
+          merged: observation.merged,
+          baseRepositoryId: observation.baseRepositoryId,
+          baseRef: observation.baseRef,
+          baseCommitId: observation.baseCommitId,
+          headRepositoryId: observation.headRepositoryId,
+          headRef: observation.headRef,
+          headCommitId: observation.headCommitId,
+          observedTestMergeCommitId: observation.observedTestMergeCommitId,
+          mergedAt: observation.mergedAt,
+          mergeCommitId: observation.mergeCommitId,
+          number: observation.pullRequestNumber,
+          sourceUpdatedAt: observation.sourceUpdatedAt,
+        };
+        const sourceRepresentation = {
+          action: receipt.action,
+          installationId: receipt.installationId,
+          repositoryId: receipt.repositoryId,
+          pullRequest,
+        };
+        const commandInput = {
+          action: receipt.action,
+          appId: receipt.appId,
+          bodyDigest: receipt.bodyDigest,
+          deliveryGuid: receipt.deliveryGuid,
+          installationId: receipt.installationId,
+          pullRequest,
+          repositoryId: receipt.repositoryId,
+          requestBytes: receipt.requestBytes,
+        };
+        const commandRow = this.db
+          .prepare("SELECT payload_digest FROM control_transactions WHERE sequence = ?")
+          .get(row.transaction_sequence!) as Row;
+        if (
+          observation.observationDigest !== sha256(canonicalJson(sourceRepresentation)) ||
+          String(commandRow.payload_digest) !== sha256(canonicalJson(commandInput))
+        ) {
+          throw new Error(`GitHub pull-request delivery digest mismatch: ${String(row.record_id)}`);
         }
       }
       if (
@@ -6089,6 +6536,9 @@ export class ControlPlaneStore {
       if (commandKind === "repository.record-github-identity") parseRepositoryGitHubReconciliationResult(result);
       if (commandKind === "repository.record-canonical-surfaces") parseRepositorySurfaceReconciliationResult(result);
       if (commandKind === "repository.establish-enrollment") parseRepositoryEnrollmentResult(result);
+      if (commandKind === "github.record-pull-request-delivery") {
+        parseGitHubPullRequestDeliveryResult(result);
+      }
       if (
         commandKind === "repository.impose-operator-hold" ||
         commandKind === "repository.clear-operator-hold"
@@ -6113,6 +6563,12 @@ export class ControlPlaneStore {
         String(row.retained_until) !== IDEMPOTENCY_RETAINED_UNTIL
       ) {
         throw new Error(`idempotency receipt retention mismatch: ${String(row.idempotency_key)}`);
+      }
+      if (commandKind === "github.record-pull-request-delivery") {
+        const delivery = parseGitHubPullRequestDeliveryResult(result);
+        if (String(row.retained_until) !== addSeconds(delivery.receivedAt, 30 * 24 * 60 * 60)) {
+          throw new Error(`GitHub delivery receipt retention mismatch: ${String(row.idempotency_key)}`);
+        }
       }
       if (String(row.command_scope) !== `database:${metadata.databaseLineageId}`) {
         throw new Error(`idempotency receipt command scope mismatch: ${String(row.idempotency_key)}`);
@@ -6378,6 +6834,37 @@ export class ControlPlaneStore {
           String(outputs[2]!.record_id) !== authority.eventRecordId
         ) {
           throw new Error(`repository Core authority receipt output mismatch: ${String(row.idempotency_key)}`);
+        }
+      }
+      if (commandKind === "github.record-pull-request-delivery") {
+        const delivery = parseGitHubPullRequestDeliveryResult(result);
+        const outputs = this.db
+          .prepare(
+            `SELECT record_id, payload_json FROM durable_occurrences
+             WHERE transaction_sequence = ? ORDER BY transaction_position`,
+          )
+          .all(row.transaction_sequence!) as Row[];
+        const receiptPayload = outputs[0] ? parseJson(String(outputs[0].payload_json)) : undefined;
+        const observationPayload = outputs[1] ? parseJson(String(outputs[1].payload_json)) : undefined;
+        if (
+          delivery.transactionSequence !== Number(row.transaction_sequence) ||
+          delivery.receivedAt !== String(transaction.evaluation_time) ||
+          delivery.receivedAt !== String(transaction.recorded_at) ||
+          outputs.length !== 3 ||
+          String(outputs[0]!.record_id) !== delivery.receiptRecordId ||
+          String(outputs[1]!.record_id) !== delivery.observationRecordId ||
+          String(outputs[2]!.record_id) !== delivery.eventRecordId ||
+          !receiptPayload ||
+          !recordKindRegistry["github.delivery-receipt-observation"].validatePayload(receiptPayload) ||
+          String(row.idempotency_key) !==
+            `github-delivery:${receiptPayload.appId}:${delivery.deliveryGuid}` ||
+          !observationPayload ||
+          !recordKindRegistry["github.pull-request-observation"].validatePayload(observationPayload) ||
+          receiptPayload.deliveryGuid !== delivery.deliveryGuid ||
+          receiptPayload.bodyDigest !== delivery.bodyDigest ||
+          observationPayload.observationDigest !== delivery.observationDigest
+        ) {
+          throw new Error(`GitHub delivery receipt output mismatch: ${String(row.idempotency_key)}`);
         }
       }
       if (commandKind === "repository.record-github-identity") {
@@ -6999,6 +7486,91 @@ function normalizeRepositoryGitHubInspection(
   };
 }
 
+function normalizeGitHubPullRequestDeliveryInput(
+  input: GitHubPullRequestDeliveryInput,
+): GitHubPullRequestDeliveryInput {
+  if (
+    !input ||
+    typeof input !== "object" ||
+    Array.isArray(input) ||
+    Object.keys(input).sort().join(",") !==
+      "action,appId,bodyDigest,deliveryGuid,installationId,pullRequest,repositoryId,requestBytes"
+  ) {
+    throw new Error("GitHub pull-request delivery must be one exact typed input");
+  }
+  const pullRequest = input.pullRequest;
+  if (
+    !pullRequest ||
+    typeof pullRequest !== "object" ||
+    Array.isArray(pullRequest) ||
+    Object.keys(pullRequest).sort().join(",") !==
+      "actorId,baseCommitId,baseRef,baseRepositoryId,draft,headCommitId,headRef,headRepositoryId,mergeCommitId,merged,mergedAt,number,observedTestMergeCommitId,sourceUpdatedAt,state"
+  ) {
+    throw new Error("GitHub pull-request delivery contains an invalid selected payload");
+  }
+  if (
+    !/^[1-9][0-9]{0,19}$/.test(input.appId) ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(input.deliveryGuid) ||
+    !/^sha256:[0-9a-f]{64}$/.test(input.bodyDigest) ||
+    !Number.isSafeInteger(input.requestBytes) ||
+    input.requestBytes < 1 ||
+    input.requestBytes > 25 * 1024 * 1024 ||
+    !/^github\.com:installation:[1-9][0-9]{0,19}$/.test(input.installationId) ||
+    !/^github\.com:[1-9][0-9]{0,19}$/.test(input.repositoryId) ||
+    !githubPullRequestActions.includes(input.action) ||
+    !Number.isSafeInteger(pullRequest.number) ||
+    pullRequest.number < 1 ||
+    !/^github\.com:user:[1-9][0-9]{0,19}$/.test(pullRequest.actorId) ||
+    (pullRequest.state !== "open" && pullRequest.state !== "closed") ||
+    typeof pullRequest.draft !== "boolean" ||
+    typeof pullRequest.merged !== "boolean" ||
+    pullRequest.baseRepositoryId !== input.repositoryId ||
+    pullRequest.headRepositoryId !== input.repositoryId ||
+    !isGitHubObservationRefName(pullRequest.baseRef) ||
+    !/^sha1:[0-9a-f]{40}$/.test(pullRequest.baseCommitId) ||
+    !isGitHubObservationRefName(pullRequest.headRef) ||
+    !/^sha1:[0-9a-f]{40}$/.test(pullRequest.headCommitId) ||
+    !(pullRequest.observedTestMergeCommitId === null ||
+      /^sha1:[0-9a-f]{40}$/.test(pullRequest.observedTestMergeCommitId)) ||
+    !(pullRequest.mergeCommitId === null || /^sha1:[0-9a-f]{40}$/.test(pullRequest.mergeCommitId))
+  ) {
+    throw new Error("GitHub pull-request delivery contains invalid identity or state fields");
+  }
+  assertUtcInstant(pullRequest.sourceUpdatedAt, "GitHub pull-request source update time");
+  if (pullRequest.mergedAt !== null) {
+    assertUtcInstant(pullRequest.mergedAt, "GitHub pull-request merged time");
+  }
+  if (input.action === "closed" && pullRequest.state !== "closed") {
+    throw new Error("GitHub closed action requires closed pull-request state");
+  }
+  if (input.action !== "closed" && input.action !== "edited" && pullRequest.state !== "open") {
+    throw new Error("GitHub pull-request action requires open state");
+  }
+  if (
+    (pullRequest.state === "open" &&
+      (pullRequest.merged || pullRequest.mergedAt !== null || pullRequest.mergeCommitId !== null)) ||
+    (pullRequest.state === "closed" && pullRequest.observedTestMergeCommitId !== null) ||
+    (pullRequest.state === "closed" && pullRequest.merged &&
+      (pullRequest.mergedAt === null || pullRequest.mergeCommitId === null)) ||
+    (pullRequest.state === "closed" && !pullRequest.merged &&
+      (pullRequest.mergedAt !== null || pullRequest.mergeCommitId !== null))
+  ) {
+    throw new Error("GitHub pull-request delivery has an inconsistent merge shape");
+  }
+  return structuredClone(input);
+}
+
+function isGitHubObservationRefName(value: string): boolean {
+  return (
+    /^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$/.test(value) &&
+    !value.includes("..") &&
+    !value.includes("//") &&
+    !value.includes("@{") &&
+    !value.endsWith(".") &&
+    !value.endsWith("/")
+  );
+}
+
 function isRepositoryBranchName(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -7042,6 +7614,52 @@ function isExactJsonObject(value: JsonValue, keys: readonly string[]): value is 
   const actual = Object.keys(value).sort();
   const expected = [...keys].sort();
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function parseGitHubPullRequestDeliveryResult(value: JsonValue): GitHubPullRequestDeliveryResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("stored GitHub pull-request delivery result is invalid");
+  }
+  const result = value as Record<string, JsonValue>;
+  const keys = [
+    "deliveryGuid",
+    "bodyDigest",
+    "observationDigest",
+    "receiptRecordId",
+    "observationRecordId",
+    "eventRecordId",
+    "receivedAt",
+    "transactionPositions",
+    "transactionSequence",
+  ];
+  if (
+    Object.keys(result).sort().join(",") !== keys.sort().join(",") ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(String(result.deliveryGuid)) ||
+    !/^sha256:[0-9a-f]{64}$/.test(String(result.bodyDigest)) ||
+    !/^sha256:[0-9a-f]{64}$/.test(String(result.observationDigest)) ||
+    !isUuidV7(String(result.receiptRecordId)) ||
+    !isUuidV7(String(result.observationRecordId)) ||
+    !isUuidV7(String(result.eventRecordId)) ||
+    new Set([result.receiptRecordId, result.observationRecordId, result.eventRecordId]).size !== 3 ||
+    !Array.isArray(result.transactionPositions) ||
+    canonicalJson(result.transactionPositions) !== "[0,1,2]" ||
+    !Number.isSafeInteger(result.transactionSequence) ||
+    Number(result.transactionSequence) < 1
+  ) {
+    throw new Error("stored GitHub pull-request delivery result is invalid");
+  }
+  assertUtcInstant(String(result.receivedAt), "GitHub pull-request delivery receipt time");
+  return {
+    deliveryGuid: String(result.deliveryGuid),
+    bodyDigest: String(result.bodyDigest),
+    observationDigest: String(result.observationDigest),
+    receiptRecordId: String(result.receiptRecordId),
+    observationRecordId: String(result.observationRecordId),
+    eventRecordId: String(result.eventRecordId),
+    receivedAt: String(result.receivedAt),
+    transactionPositions: [0, 1, 2],
+    transactionSequence: Number(result.transactionSequence),
+  };
 }
 
 function parseRepositoryCoreAuthorityResult(value: JsonValue): RepositoryCoreAuthorityResult {
@@ -7579,10 +8197,11 @@ function decodeProjectionGeneration(row: Row): ProjectionGeneration {
 function subjectProjectionSourceJson(row: Row): JsonValue {
   return {
     createdTransactionSequence: Number(row.created_transaction_sequence),
-    definitionKind: String(row.definition_kind),
-    definitionPayloadDigest: String(row.definition_payload_digest),
-    definitionRecordId: String(row.definition_record_id),
-    definitionSchemaVersion: Number(row.definition_schema_version),
+    creationKind: String(row.creation_kind),
+    creationPayloadDigest: String(row.creation_payload_digest),
+    creationRecordClass: String(row.creation_record_class),
+    creationRecordId: String(row.creation_record_id),
+    creationSchemaVersion: Number(row.creation_schema_version),
     informationClass: String(row.information_class),
     informationScope: parseJson(String(row.information_scope_json)),
     subjectId: String(row.subject_id),
@@ -7593,7 +8212,7 @@ function subjectProjectionSourceJson(row: Row): JsonValue {
 function subjectProjectionOutputJson(row: Row): JsonValue {
   return {
     createdTransactionSequence: Number(row.created_transaction_sequence),
-    definitionRecordId: String(row.definition_record_id),
+    creationRecordId: String(row.creation_record_id),
     informationClass: String(row.information_class),
     informationScope: parseJson(String(row.information_scope_json)),
     subjectId: String(row.subject_id),
@@ -7604,7 +8223,7 @@ function subjectProjectionOutputJson(row: Row): JsonValue {
 function subjectProjectionStoredOutputJson(row: Row): JsonValue {
   return {
     createdTransactionSequence: Number(row.created_transaction_sequence),
-    definitionRecordId: String(row.definition_record_id),
+    creationRecordId: String(row.creation_record_id),
     informationClass: String(row.information_class),
     informationScope: parseJson(String(row.information_scope_json)),
     subjectId: String(row.subject_id),
@@ -7658,7 +8277,7 @@ function decodeProjectedSubject(row: Row): ProjectedSubject {
     subjectKind: String(row.subject_kind),
     subjectId: String(row.subject_id),
     createdTransactionSequence: Number(row.created_transaction_sequence),
-    definitionRecordId: String(row.definition_record_id),
+    creationRecordId: String(row.creation_record_id),
     informationClass,
     informationScope: parseJson(String(row.current_information_scope_json)),
   };

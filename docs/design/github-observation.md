@@ -31,9 +31,12 @@ GitHub read APIs ───► leased reconciler ─────► checkpoints /
 ```
 
 The initial implementation supports repository identity and enrollment facts
-already present in the target kernel, then adds the records needed for
-artifact, merge, and enforced-required-check reconciliation. The source adapter
-stays unregistered until its complete path is executable.
+already present in the target kernel. It now also includes the first internal
+typed source command for an already verified, allowlisted, same-repository
+pull-request delivery. HTTP HMAC verification, delivery audit, reconciliation
+checkpoints, truthful gap creation and repair, the other observation families,
+and retention pruning remain. The source adapter stays unregistered until that
+complete path is executable.
 
 ## Design
 
@@ -109,7 +112,7 @@ observed subject.
 
 ### Durable observation families
 
-Registry version 12 assigns the source-native subject identities and purpose-
+Registry version 13 assigns the source-native subject identities and purpose-
 specific revision kinds below. The implementing records and commands will
 assign exact registered kinds and payload schemas without changing these
 identity joins:
@@ -127,9 +130,11 @@ identity joins:
 | Source checkpoint | Parent `github-repository`; `github-source-checkpoint-sha256` | Registered query scope, endpoints, observation time, page proof, item count, response validators, normalized digest |
 | Source gap | Parent `github-repository`; `github-source-gap-sha256` | Registered scope and interval, cause, first detection, affected identities/windows, repair observations and disposition |
 
-Every family in this table will use a registered `observation` record kind; the
-design does not introduce another generic record class. Registry version 12
-contains only their subjects, revisions, and sources so far. An observation
+Every family in this table uses or will use a registered `observation` record
+kind; the design does not introduce another generic record class. Registry
+version 13 additionally registers the direct delivery receipt and pull-request
+observation records plus their atomic delivery event and command. Other rows
+remain identity and revision contracts only. An observation
 records source state and provenance; it does not become a merge, required-check
 satisfaction, artifact verification, or outcome fact merely because the GitHub
 App is trusted.
@@ -140,6 +145,16 @@ revision. Checkpoints and gaps use deterministic source
 `fluent-system/github-observer` with no caller-selected source revision: their
 own checkpoint or gap digest binds the repository subject, but is not
 misrepresented as a revision issued by GitHub.
+
+The implemented `recordGitHubPullRequestDelivery` store command begins after
+raw-body authentication. It accepts only an enrolled immutable repository,
+registered pull-request action, request bound of 25 MiB, same-repository base
+and head, typed commit revisions, state/merge fields, actor and source times.
+It excludes free-form content and rejects fork heads, merge queues, malformed
+merge state, and GUID reuse with changed input. Its three occurrences are
+independently verified on database reopen. It deliberately does not create a
+source gap: a checkpointed coverage boundary must exist before a missing
+interval can be stated truthfully.
 
 ### Reconciliation cycle
 
@@ -274,6 +289,10 @@ complete coverage.
   for repository identity only. It is not yet webhook ingress, pagination,
   App authentication, delivery audit, or the observation adapter described
   here.
+- `src/control/store.ts` implements only the trusted post-authentication
+  pull-request delivery transaction. It is not callable ingress and must not be
+  treated as proof that raw-body HMAC verification, delivery audit, source
+  checkpointing, gap repair, or retention enforcement exists.
 - Follow the
   [required-check ruleset runbook](required-check-ruleset-operations.md) only
   when the adapter is ready for its real-repository acceptance test.

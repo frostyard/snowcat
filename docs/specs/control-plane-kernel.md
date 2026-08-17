@@ -14,8 +14,8 @@ no generic record-writing, fact-writing, administrative, or worker interface.
 | Environment variable | `FLUENT_CONTROL_DB` | Optional; target database path |
 | Default path | `./data/control-plane.db` | Distinct from the queue-spike default |
 | SQLite application ID | `1179405908` | Decimal encoding of `FLNT` |
-| Schema version | `5` | Stored in both `PRAGMA user_version` and metadata |
-| Registry version | `12` | Stored in metadata and both initialization payloads |
+| Schema version | `6` | Stored in both `PRAGMA user_version` and metadata |
+| Registry version | `13` | Stored in metadata and both initialization payloads |
 | Node runtime | `>=24.0.0` | Required for the stable `node:sqlite` surface and online backup API |
 | Database lineage ID | UUIDv7 | Generated once by the server; never reused or inferred from path |
 | Operator principal ID | UUIDv7 | Generated once and stored separately from database, session, worker, or provider identity |
@@ -26,7 +26,7 @@ transaction sequence.
 `ControlPlaneStore.occurrences()` returns occurrences ordered by transaction
 sequence and position. Neither method mutates the database or returns a secret.
 
-### Closed registry version 12
+### Closed registry version 13
 
 | Registry | Name | Version or ID rule | Contract |
 | --- | --- | --- | --- |
@@ -73,6 +73,8 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Record | `repository.controller-definition` | Schema 1 | Class `definition`; subject `github-repository`; exact enrollment prerequisites and scope |
 | Record | `repository.enrolled` | Schema 1 | Class `fact`; subject `github-repository`; active-prerequisite precedence |
 | Record | `repository.operator-hold-decision` | Schema 1 | Class `decision`; subject `github-repository`; resolved impose or exact clear |
+| Record | `github.delivery-receipt-observation` | Schema 1 | Class `observation`; subject `github-app-hook`; verified body provenance and bounded disposition |
+| Record | `github.pull-request-observation` | Schema 1 | Class `observation`; subject `github-pull-request`; allowlisted same-repository state and revisions |
 | Event | `control-plane.initialized` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
 | Event | `control-plane.integrity-checked` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
 | Event | `core.snapshot-activated` | Schema 1 | Subject `core-snapshot`; minimum class `organization` |
@@ -86,6 +88,7 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Event | `repository.canonical-surfaces-reconciliation-recorded` | Schema 1 | Subject `github-repository`; bounded surface outcome recorded |
 | Event | `repository.enrollment-established` | Schema 1 | Subject `github-repository`; exact enrollment established |
 | Event | `repository.operator-hold-imposed` / `repository.operator-hold-cleared` | Schema 1 | Subject `github-repository`; attributed local intervention transition |
+| Event | `github.delivery-recorded` | Schema 1 | Subject `github-app-hook`; causally linked receipt disposition |
 | Command | `control-plane.initialize` | Schema 1 | Outputs database definition, principal definition, then initialization event |
 | Command | `control-plane.check-integrity` | Schema 1 | Outputs the integrity observation, then integrity-checked event |
 | Command | `core.activate-snapshot` | Schema 1 | Outputs snapshot definition, active fact, then activation event |
@@ -99,12 +102,13 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Command | `repository.record-canonical-surfaces` | Schema 1 | Outputs observation, policy decision, fact, then event |
 | Command | `repository.establish-enrollment` | Schema 1 | Outputs controller definition, enrollment fact, then event |
 | Command | `repository.impose-operator-hold` / `repository.clear-operator-hold` | Schema 1 | Each outputs one resolved operator decision, then event |
+| Command | `github.record-pull-request-delivery` | Schema 1 | Outputs receipt observation, pull-request observation, then delivery event |
 | Predicate | `core.snapshot-active` | Contract 1 | Established by automatic activation or operator rollback; latest transaction sequence wins |
 | Predicate | `repository.core-authorized` | Contract 1 | Established only from an active retained Core declaration |
 | Predicate | `repository.github-identity-reconciled` | Contract 1 | Established only from bounded GitHub metadata and bound Core authority |
 | Predicate | `repository.canonical-surfaces-reconciled` | Contract 1 | Established only from bounded exact-commit evidence and bound identity |
 | Predicate | `repository.enrolled` | Contract 1 | Established only from current active prerequisite facts |
-| Projection | `control-plane.subject-lookup` | Contract, transformation, and information-handling version 1 | Stable subjects and creation definitions for internal diagnostics |
+| Projection | `control-plane.subject-lookup` | Contract and transformation version 2; information-handling version 1 | Stable subjects and their first durable creation records for internal diagnostics |
 | Projection | `control-plane.event-cursor` | Contract, transformation, and information-handling version 1 | Payload-free event cursor for internal diagnostics and ProcessObserver |
 
 The two registered payloads have the same exact shape; additional keys are
@@ -114,8 +118,8 @@ invalid:
 {
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
   "operatorPrincipalId": "0198b0a6-c200-7abc-8def-0123456789ac",
-  "registryVersion": 12,
-  "schemaVersion": 5
+  "registryVersion": 13,
+  "schemaVersion": 6
 }
 ```
 
@@ -137,9 +141,9 @@ The integrity observation and event payload have this exact shape:
 {
   "checkedThroughSequence": 1,
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
-  "registryVersion": 12,
+  "registryVersion": 13,
   "result": "ok",
-  "schemaVersion": 5
+  "schemaVersion": 6
 }
 ```
 
@@ -185,6 +189,48 @@ active fact, rollback event, receipt, and pointer. `retainedCoreCandidate(commit
 provides independently revalidated retained bytes for outage recovery; a target
 not already retained is materialized through the exact-commit Git source path.
 
+### Verified pull-request delivery command
+
+`ControlPlaneStore.recordGitHubPullRequestDelivery(input)` is an internal typed
+acceptance boundary for a caller that has already verified an exact GitHub App
+webhook body. It is not an HTTP or signature-verification endpoint. Its input is
+an exact object containing App ID, lowercase delivery GUID, `sha256:` body
+digest, positive request-byte count capped at 25 MiB, installation and immutable
+repository IDs, one registered pull-request action, and an exact selected
+pull-request object. The selected object contains only number, actor ID,
+open/closed state, draft/merged flags, same-repository base and head identities,
+branch names, typed commit revisions, optional observed test-merge revision,
+merge identity and time, and source update time. Free-form title, body, review,
+commit-message, diff, log, and annotation content is neither accepted nor
+retained.
+
+The repository MUST already have a retained `repository.enrolled` fact. Paused,
+disabled, and locally held repositories remain observable because those states
+block work gates, not source intake. Fork heads and merge queues are unsupported
+by this first command. An open pull request cannot be merged; a closed merged
+pull request requires merge time and resulting commit and cannot retain a
+pre-merge test revision; a closed unmerged pull request has neither merge field.
+
+An accepted command creates the App-hook and pull-request subjects when absent,
+then atomically emits `github.delivery-receipt-observation` at position `0`,
+`github.pull-request-observation` at position `1`, and
+`github.delivery-recorded` at position `2`. The receipt binds the exact body
+digest; the pull-request observation binds a separately derived digest over the
+allowlisted selected representation and cites the receipt as causation; the
+event cites the same receipt. All use one server time, correlation ID,
+deployment scope, and organization information class. The idempotency key is
+`github-delivery:<app-id>:<delivery-guid>` and its receipt expires exactly 30
+days after acceptance. Exact replay returns the original result before current
+enrollment is reevaluated; reuse of the GUID with different verified content
+fails closed.
+
+Startup re-derives the selected-observation and command-input digests and checks
+the prior enrollment, subjects, revisions, sources, causal links, output order,
+result, and retention deadline. This slice does not implement raw-body HMAC
+verification, HTTP ingress, delivery audit, checkpoints, source gaps, repair,
+or durable-detail pruning. In particular it does not fabricate a source gap
+without an established checkpoint lower bound.
+
 ### Projection interface
 
 Initialization publishes one immutable generation for each registered
@@ -208,8 +254,11 @@ deployment IDs. They filter before returning rows and join each candidate back
 to its current authoritative definition or event. The event cursor is the pair
 `(transactionSequence, transactionPosition)` and `limit` is 1–1000.
 
-Subject rows contain subject kind and ID, creation sequence, creation-definition
-record ID, and current information class/scope. Event rows contain event record
+Subject rows contain subject kind and ID, creation sequence, creation-record
+ID, and current information class/scope. The creation record is the earliest
+durable record for that subject in its creation transaction; source-native
+subjects may therefore be introduced by an observation rather than being
+misclassified as Fluent definitions. Event rows contain event record
 ID, kind/version, subject, correlation ID, current information class/scope,
 transaction coordinates, and recorded time. Event payloads and payload digests
 are deliberately absent from the cursor projection.
@@ -289,7 +338,7 @@ source identity.
 | `core_poll_state` | CoreSourceController operational state | Singleton schedule v1; bounded healthy interval; due/prune times; outage streak; one expiring lease; last completion and monotonic counters |
 | `projection_generations` | Immutable read-model build metadata | Registered versions, source/output digests, source watermark, evaluation/build time, row count, and invariant result |
 | `projection_heads` | Active-generation pointers | One head per registered projection; atomically references one validated generation |
-| `projection_subject_lookup` | Subject lookup rows | Generation-scoped stable subject and creation-definition identity plus information class/scope |
+| `projection_subject_lookup` | Subject lookup rows | Generation-scoped stable subject and first durable creation-record identity plus information class/scope |
 | `projection_event_cursor` | Event cursor rows | Generation-scoped payload-free event metadata ordered by transaction sequence and position |
 
 Record classes are exactly `definition`, `assertion`, `observation`,
@@ -334,7 +383,7 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
    initialization transaction.
 5. Older, newer, incomplete, unexpected, or differently identified schemas
    MUST fail closed. Unregistered indexes, triggers, and views are unexpected.
-   Schema version 5 and registry version 12 define no upgrade path from earlier
+   Schema version 6 and registry version 13 define no upgrade path from earlier
    pre-production target stores.
 6. Subject, record, event, command, source, revision, record-class, and
    information-class names MUST come from the code-owned versioned registries.
@@ -526,7 +575,7 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
 | Core candidate rejection observation, event, and receipt | Bounded fixed outputs of `core.record-candidate-rejection` v1 |
 | Core poll operational state | Validated singleton owned by `CoreSourceController` |
 | Repository effective status | Active Core authorization plus current identity, surface, enrollment, and independent operator-hold decisions |
-| Subject lookup generations | Full deterministic rebuild from subjects and their creation definitions |
+| Subject lookup generations | Full deterministic rebuild from subjects and their first durable creation records |
 | Event cursor generations | Full deterministic rebuild from event occurrences without payload copies |
 | Backup manifest | Verified metadata and canonical authoritative digest of one online SQLite backup artifact |
 | Staged restore | Create-only SQLite copy revalidated against the manifest and caller's lineage/sequence fence |

@@ -128,6 +128,12 @@ does not itself enroll the repository in the fleet.
 
 ## Phase 4 — Observe GitHub without impersonating workers (large)
 
+- Registry v13 and schema v6 implement the first internal, enrollment-bound
+  post-authentication transaction for an allowlisted same-repository
+  pull-request delivery. It writes a distinct receipt observation,
+  pull-request observation, and audit event with exact replay, 30-day receipt
+  retention metadata, source/causal lineage verification, and source-native
+  subject creation. This is not yet HTTP ingress or coverage reconciliation.
 - The source-independent `conclusive-run-rate:v1` arithmetic evaluator is
   implemented under
   [ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md)

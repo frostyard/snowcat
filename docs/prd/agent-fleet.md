@@ -1924,10 +1924,15 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   `github-required-checks:v1` source adapter, evidence retention, fact
   establishment, and Goal application remain unimplemented, so a
   representative live Goal still fails closed.
-  Registry version 12 now fixes source-native App-hook, pull-request,
-  check-run, and commit-status subjects and purpose-specific webhook, API,
-  rules, transition, checkpoint, and gap revisions. No corresponding GitHub
-  observation record or mutation command is registered yet.
+  Registry version 13 fixes source-native App-hook, pull-request, check-run,
+  and commit-status subjects and purpose-specific webhook, API, rules,
+  transition, checkpoint, and gap revisions. It now also implements the first
+  enrollment-bound typed GitHub-source transaction: an already verified,
+  allowlisted, same-repository pull-request delivery atomically creates its
+  receipt observation, pull-request observation, and audit event with exact
+  replay and reopen-time lineage verification. HTTP HMAC ingress, checkpoints,
+  truthful source gaps, repair, remaining observation families, and retention
+  pruning remain unimplemented.
   The kernel does not yet implement target work, general fact mutation, general
   operational state, fleet coordination, or worker mutation and never reads or
   imports the spike database.
@@ -1938,7 +1943,7 @@ elapsed source freshness from the stricter new-admission gate. Its durable
 | --- | --- |
 | Core contract and migration | Remaining organization JSON Schemas, fixtures, and canonical-surface migrations; verification-profile and Goal import are implemented, while all remaining record kinds, Goal application, source adapters, evidence retention, and fact establishment remain |
 | Control-plane domain model | Execute the [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md): specify exact durable schemas, predicates, reducers, events, projections, invalidation, idempotency, and state machines in a fresh target database shared by RepositoryController, FleetController, ProcessObserver, scheduling, and decisions |
-| GitHub observation | Implement the accepted webhook-plus-polling boundary on the registered v12 subjects and revisions and ADR-0058 operating bounds; exact records and commands, pagination and mechanical request/item limits, installation and actor mapping, CI/review/merge and artifact predicates, forks, and external decision signals remain |
+| GitHub observation | Complete the accepted webhook-plus-polling boundary on the registered v13 vocabulary and ADR-0058 operating bounds; post-authentication same-repository pull-request acceptance is implemented, while HMAC ingress, audit, checkpoints/gaps/repair, pagination limits, remaining records and commands, installation and actor mapping, CI/review/merge and artifact predicates, forks, and external decision signals remain |
 | Workflow contracts | Versioned role briefs, evidence schemas, skills, attempt budgets, and deterministic gates for maintenance, planning, review, implementation, repair, and verification |
 | Restricted security | Exact forbidden-content detectors, retention, embargo, reviewer roles, declassification profiles, and private disclosure contracts for high and critical findings |
 | Scheduling and routing details | Capability and grant schemas, information-scope and restricted-compartment schemas, WIP defaults, priority mapping, fair-queue credits, cooldowns, capacity reservations, and capacity-gap UX |
@@ -2001,7 +2006,7 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   retention, expiry, and confounding rules apply to each profile?
 - What exact registered record schemas, command outputs, pagination proof, and
   mechanical request/item limits implement the accepted ADR-0057 acquisition
-  model and ADR-0058 operating bounds on the v12 subject and revision
+  model and ADR-0058 operating bounds on the v13 subject and revision
   identities? Merge queues, forks, classic protection, and changing rule sets
   remain explicit post-v1 adapter work.
 - What reviewer capability profile, trigger UX, fingerprint algorithm,
