@@ -265,9 +265,48 @@ the prior enrollment, subjects, revisions, sources, causal links, output order,
 result, and retention deadline. The bounded router can connect the pure
 verifier to this command when explicitly mounted with a lifecycle-owned store,
 but the default app does not mount it. This slice does not implement production
-listener/configuration lifecycle, GitHub delivery-API acquisition, scheduling,
-or durable-detail pruning. Typed delivery-audit checkpoint, gap, and repair
+listener/configuration lifecycle, delivery-detail acquisition, scheduling, or
+durable-detail pruning. Typed delivery-audit checkpoint, gap, and repair
 commands are specified below; no controller invokes them yet.
+
+### App delivery-list acquisition
+
+`auditGitHubAppDeliveries(input)` performs the implemented read-only,
+transport-side enumeration for the App-wide audit. It uses only
+`GET /app/hook/deliveries?per_page=100`, identifies as the configured App with
+a fresh caller-supplied JWT for every request, and pins the shared GitHub REST
+media type, user agent, origin, and API version `2026-03-10` in one code
+contract. App JWTs and response bodies never enter the returned result or
+durable store.
+
+The acquisition follows only the API's `rel="next"` cursor URL. Every URL MUST
+remain on `api.github.com`, retain the exact delivery-list path and
+`per_page=100`, contain only `cursor` and `per_page` query keys, and occur once
+in a run. The run is serial and bounded to 100 completed pages, 10,000 listed
+deliveries, 1 MiB per response, one same-origin redirect, and 30 seconds per
+request. A continuing cursor at the page bound is incomplete, not success.
+
+One complete result contains a server-captured upper boundary, exact-response
+page-proof digest, completed page and listed-delivery counts, and only
+allowlisted pull-request delivery summaries. Irrelevant event bodies are not
+normalized or returned. A repository selection filters by immutable repository
+and installation IDs and derives its own selected-response digest. A registered
+pull-request action is marked supported; an unknown bounded action remains
+identifiable so the controller can open an `unsupported-relevant-delivery` gap.
+
+Network/authentication/status failure yields `source-unavailable`; malformed
+JSON or relevant fields yields `normalization-failed`; unsafe, repeated, or
+malformed pagination yields `pagination-incomplete`; and a response or page
+budget breach yields `request-budget-exhausted`. The result retains only a
+closed diagnostic code. For a rate-limited response it returns the later valid
+time from `Retry-After` and a zero-remaining `X-RateLimit-Reset`; the future
+controller MUST still compare that with its ordinary retry schedule. No
+incomplete result contains summaries or can establish a checkpoint.
+
+This acquisition does not fetch one delivery's request payload, compare
+delivery GUIDs with durable receipts, retain API-sourced normalized
+observations, create gaps, or schedule itself. Those remain controller and
+typed-command responsibilities.
 
 ### Pull-request-delivery coverage commands
 

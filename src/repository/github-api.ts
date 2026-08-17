@@ -1,5 +1,10 @@
-const GITHUB_API_URL = "https://api.github.com";
-const GITHUB_API_VERSION = "2022-11-28";
+import {
+  GITHUB_API_ACCEPT,
+  GITHUB_API_ORIGIN,
+  GITHUB_API_USER_AGENT,
+  GITHUB_API_VERSION,
+} from "../github/api-contract.ts";
+
 const MAX_RESPONSE_BYTES = 1_048_576;
 
 export type GitHubFetch = typeof fetch;
@@ -15,8 +20,8 @@ export async function githubApiJson(
 ): Promise<GitHubJsonResponse> {
   if (!path.startsWith("/") || path.startsWith("//")) throw new Error("GitHub API path must be root-relative");
   const headers: Record<string, string> = {
-    Accept: "application/vnd.github+json",
-    "User-Agent": "frostyard-fluent",
+    Accept: GITHUB_API_ACCEPT,
+    "User-Agent": GITHUB_API_USER_AGENT,
     "X-GitHub-Api-Version": GITHUB_API_VERSION,
   };
   const token = process.env.FLUENT_GITHUB_TOKEN;
@@ -24,7 +29,7 @@ export async function githubApiJson(
   const request = (url: string) =>
     fetcher(url, { method: "GET", headers, redirect: "manual", signal });
   try {
-    let response = await request(`${GITHUB_API_URL}${path}`);
+    let response = await request(`${GITHUB_API_ORIGIN}${path}`);
     if (isRedirect(response.status)) {
       const redirected = sameOriginUrl(response.headers.get("location"));
       if (!redirected) return { kind: "unavailable" };
@@ -56,8 +61,8 @@ function isRedirect(status: number): boolean {
 function sameOriginUrl(location: string | null): string | null {
   if (!location) return null;
   try {
-    const url = new URL(location, GITHUB_API_URL);
-    return url.origin === GITHUB_API_URL ? url.href : null;
+    const url = new URL(location, GITHUB_API_ORIGIN);
+    return url.origin === GITHUB_API_ORIGIN ? url.href : null;
   } catch {
     return null;
   }

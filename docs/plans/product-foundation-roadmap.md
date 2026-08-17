@@ -139,7 +139,10 @@ does not itself enroll the repository in the fleet.
   production listener lifecycle. The fixed pull-request-delivery audit scope
   now also persists point/continuation checkpoints, one lower-bounded open gap,
   and terminal complete-audit repair with reopen-time chain verification.
-  Delivery-API acquisition, scheduling, and leases remain.
+  The fixture-driven App-JWT delivery-list client now follows bounded opaque
+  cursor pagination, produces exact page proofs, classifies closed failures,
+  and derives per-repository selected summaries. Delivery-detail acquisition,
+  API-sourced repair observations, scheduling, and leases remain.
 - The source-independent `conclusive-run-rate:v1` arithmetic evaluator is
   implemented under
   [ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md)

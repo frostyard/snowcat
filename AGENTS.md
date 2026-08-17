@@ -55,6 +55,11 @@ removed. -->
   explicitly mounts [`src/github/ingress.ts`](src/github/ingress.ts) with a
   lifecycle-owned control store, App ID, and host-injected secret. Never route
   webhook bytes through the Flue agent surface or log rejected source content.
+- Use [`auditGitHubAppDeliveries`](src/github/delivery-api.ts) for App-wide
+  delivery-list acquisition. Supply a fresh App JWT through its per-request
+  provider, follow only its validated cursor links, and treat an incomplete
+  result as non-authoritative. Keep shared GitHub wire constants only in
+  [`src/github/api-contract.ts`](src/github/api-contract.ts).
 - Use `recordGitHubSourceCheckpoint`, `openGitHubSourceGap`, and
   `repairGitHubSourceGap` only for the fixed
   `github.pull-request-deliveries:v1` post-acquisition coverage loop. The first

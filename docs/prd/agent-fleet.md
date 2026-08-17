@@ -1936,9 +1936,12 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   unmounted by default until hosting lifecycle and coverage recovery exist.
   The fixed pull-request-delivery audit scope now has typed point/continuation
   checkpoints, lower-bounded source gaps, complete-audit repair, exact replay,
-  and reopen-time chain verification. GitHub delivery-API acquisition,
-  scheduling and leases, remaining observation families, and retention pruning
-  remain unimplemented.
+  and reopen-time chain verification. Bounded App-JWT delivery-list acquisition
+  now follows opaque cursor links, records exact page proofs in its result, and
+  derives per-repository selected summaries without writing authority.
+  Delivery-detail acquisition, API-sourced repair records, scheduling and
+  leases, remaining observation families, and retention pruning remain
+  unimplemented.
   The kernel does not yet implement target work, general fact mutation, general
   operational state, fleet coordination, or worker mutation and never reads or
   imports the spike database.
@@ -1949,7 +1952,7 @@ elapsed source freshness from the stricter new-admission gate. Its durable
 | --- | --- |
 | Core contract and migration | Remaining organization JSON Schemas, fixtures, and canonical-surface migrations; verification-profile and Goal import are implemented, while all remaining record kinds, Goal application, source adapters, evidence retention, and fact establishment remain |
 | Control-plane domain model | Execute the [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md): specify exact durable schemas, predicates, reducers, events, projections, invalidation, idempotency, and state machines in a fresh target database shared by RepositoryController, FleetController, ProcessObserver, scheduling, and decisions |
-| GitHub observation | Complete the accepted webhook-plus-polling boundary on the registered v14 vocabulary and ADR-0058 operating bounds; exact-body HMAC verification, allowlisted same-repository normalization, an unmounted bounded router, durable acceptance, and the typed pull-request-delivery checkpoint/gap/repair persistence loop are implemented, while production listener lifecycle, GitHub delivery-API acquisition, scheduled leases, remaining records and commands, installation and actor mapping, CI/review/merge and artifact predicates, forks, and external decision signals remain |
+| GitHub observation | Complete the accepted webhook-plus-polling boundary on the registered v14 vocabulary and ADR-0058 operating bounds; exact-body HMAC verification, allowlisted same-repository normalization, an unmounted bounded router, durable acceptance, typed pull-request-delivery checkpoint/gap/repair persistence, and bounded App delivery-list acquisition are implemented, while production listener lifecycle, delivery-detail repair, scheduled leases, remaining records and commands, installation and actor mapping, CI/review/merge and artifact predicates, forks, and external decision signals remain |
 | Workflow contracts | Versioned role briefs, evidence schemas, skills, attempt budgets, and deterministic gates for maintenance, planning, review, implementation, repair, and verification |
 | Restricted security | Exact forbidden-content detectors, retention, embargo, reviewer roles, declassification profiles, and private disclosure contracts for high and critical findings |
 | Scheduling and routing details | Capability and grant schemas, information-scope and restricted-compartment schemas, WIP defaults, priority mapping, fair-queue credits, cooldowns, capacity reservations, and capacity-gap UX |

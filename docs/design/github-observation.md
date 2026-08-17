@@ -37,10 +37,12 @@ pull-request delivery and the pure exact-body HMAC verifier/normalizer that
 precedes it. A bounded injectable POST-only router now joins them, but remains
 unmounted by default until hosting lifecycle and coverage recovery are ready.
 The first typed checkpoint/gap/repair persistence loop now exists for
-pull-request delivery audit, but no GitHub delivery-API controller invokes it.
-Delivery acquisition, scheduled reconciliation, the other observation
-families, and retention pruning remain. The source adapter stays unregistered
-until that complete path is executable.
+pull-request delivery audit. A bounded fixture-tested client can completely
+enumerate the App delivery list and derive per-repository selected summaries,
+but no leased controller invokes it and delivery-detail repair is not yet
+implemented. Scheduled reconciliation, the other observation families, and
+retention pruning remain. The source adapter stays unregistered until that
+complete path is executable.
 
 ## Design
 
@@ -217,6 +219,15 @@ that changes incompatibly during enumeration prevents a checkpoint. Ordinary
 unchanged polls may reuse ETags or response validators only when the endpoint's
 contract proves the same scoped representation.
 
+The implemented delivery-list client follows GitHub's opaque cursor links
+serially instead of constructing cursors. It accepts a fresh App JWT for each
+request, permits only the fixed GitHub origin and endpoint, and bounds a run to
+100 pages, 10,000 deliveries, 1 MiB per page, and 30 seconds per request. Its
+complete result is still only acquired input: it performs no control-plane
+write, and an incomplete result contains no summaries that could accidentally
+be checkpointed. Delivery-detail retrieval, receipt comparison, API repair
+normalization, and the lease owner remain unimplemented.
+
 ADR-0058 fixes healthy repository reconciliation at a 15-minute default and App
 delivery audit at a 5-minute default. Both are completion-relative
 leased schedules; webhook triggers only make the affected repository due.
@@ -317,14 +328,15 @@ complete coverage.
   boundary reduces availability. It never changes an absent source record into
   a negative observation.
 - Existing `src/repository/github-api.ts` implements a bounded read-only helper
-  for repository identity only. It is not yet webhook ingress, pagination,
-  App authentication, delivery audit, or the observation adapter described
-  here.
+  for repository identity only. The separate `src/github/delivery-api.ts`
+  implements App-JWT, cursor-paginated delivery-list acquisition and safe
+  per-repository selection. Neither is the scheduled controller, delivery-
+  detail repair path, or observation adapter described here.
 - `src/github/webhook.ts`, `src/github/ingress.ts`, and `src/control/store.ts`
   implement the exact-body verifier/normalizer, injectable bounded router, and
   trusted post-authentication pull-request transaction. The router remains
   disabled in the default app and must not be treated as proof that delivery
-  acquisition, scheduled audit, or retention enforcement exists. The target
+  detail repair, scheduled audit, or retention enforcement exists. The target
   store does implement typed checkpoint, gap, and repair persistence after a
   deterministic controller has completed acquisition.
 - Follow the

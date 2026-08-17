@@ -1,0 +1,485 @@
+import { createHash } from "node:crypto";
+
+import { canonicalJson, sha256, type JsonValue } from "../control/encoding.ts";
+import {
+  githubPullRequestActions,
+  type GitHubPullRequestAction,
+} from "../control/registry.ts";
+import {
+  GITHUB_API_ACCEPT,
+  GITHUB_API_ORIGIN,
+  GITHUB_API_USER_AGENT,
+  GITHUB_API_VERSION,
+} from "./api-contract.ts";
+
+const DELIVERY_PATH = "/app/hook/deliveries";
+
+export const GITHUB_DELIVERY_AUDIT_MAXIMUM_PAGES = 100;
+export const GITHUB_DELIVERY_AUDIT_MAXIMUM_DELIVERIES = 10_000;
+export const GITHUB_DELIVERY_AUDIT_MAXIMUM_PAGE_BYTES = 1_048_576;
+export const GITHUB_DELIVERY_AUDIT_REQUEST_TIMEOUT_MS = 30_000;
+
+export type GitHubDeliveryFetch = typeof fetch;
+export type GitHubAppJwtProvider = () => Promise<string> | string;
+
+export interface GitHubPullRequestDeliverySummary extends Record<string, JsonValue> {
+  deliveryId: string;
+  deliveryGuid: string;
+  deliveredAt: string;
+  redelivery: boolean;
+  statusCode: number;
+  event: "pull_request";
+  action: string;
+  actionSupported: boolean;
+  installationId: string;
+  repositoryId: string;
+}
+
+export interface GitHubRepositoryDeliverySelection {
+  repositoryId: string;
+  installationId: string;
+  deliveryCount: number;
+  selectedResponseDigest: string;
+  deliveries: readonly GitHubPullRequestDeliverySummary[];
+  unsupportedDeliveryIds: readonly string[];
+}
+
+export type GitHubDeliveryAuditResult =
+  | {
+      kind: "complete";
+      appId: string;
+      coveredThrough: string;
+      pageCount: number;
+      deliveryCount: number;
+      pageProofDigest: string;
+      deliveries: readonly GitHubPullRequestDeliverySummary[];
+    }
+  | {
+      kind: "incomplete";
+      appId: string;
+      attemptedAt: string;
+      cause:
+        | "source-unavailable"
+        | "pagination-incomplete"
+        | "request-budget-exhausted"
+        | "normalization-failed";
+      pageCount: number;
+      deliveryCount: number;
+      retryAt: string | null;
+      diagnostic:
+        | "authorization-unavailable"
+        | "request-failed"
+        | "response-status"
+        | "rate-limited"
+        | "response-too-large"
+        | "invalid-json"
+        | "invalid-page"
+        | "invalid-pagination"
+        | "page-limit";
+    };
+
+export interface GitHubDeliveryAuditInput {
+  appId: string;
+  getAppJwt: GitHubAppJwtProvider;
+  fetcher?: GitHubDeliveryFetch;
+  signal?: AbortSignal;
+  now?: () => Date;
+}
+
+interface PageProof extends Record<string, JsonValue> {
+  requestUrl: string;
+  responseDigest: string;
+  itemCount: number;
+  nextUrl: string | null;
+}
+
+interface PageResult {
+  response: Response;
+  bytes: Uint8Array;
+}
+
+class AuditFailure extends Error {
+  constructor(
+    readonly cause: Extract<GitHubDeliveryAuditResult, { kind: "incomplete" }>["cause"],
+    readonly diagnostic: Extract<GitHubDeliveryAuditResult, { kind: "incomplete" }>["diagnostic"],
+    readonly retryAt: string | null = null,
+  ) {
+    super(diagnostic);
+  }
+}
+
+export async function auditGitHubAppDeliveries(
+  input: GitHubDeliveryAuditInput,
+): Promise<GitHubDeliveryAuditResult> {
+  assertAuditConfiguration(input);
+  const attemptedAt = canonicalInstant((input.now ?? (() => new Date()))());
+  const fetcher = input.fetcher ?? fetch;
+  const deliveries: GitHubPullRequestDeliverySummary[] = [];
+  const pageProofs: PageProof[] = [];
+  const deliveryIds = new Set<string>();
+  const visitedUrls = new Set<string>();
+  let nextUrl: string | null = `${GITHUB_API_ORIGIN}${DELIVERY_PATH}?per_page=100`;
+
+  try {
+    while (nextUrl !== null) {
+      if (pageProofs.length >= GITHUB_DELIVERY_AUDIT_MAXIMUM_PAGES) {
+        throw new AuditFailure("request-budget-exhausted", "page-limit");
+      }
+      if (visitedUrls.has(nextUrl)) {
+        throw new AuditFailure("pagination-incomplete", "invalid-pagination");
+      }
+      visitedUrls.add(nextUrl);
+
+      const page = await fetchPage(nextUrl, input.getAppJwt, fetcher, input.signal, attemptedAt);
+      if (page.response.status !== 200) {
+        const retryAt = safeRetryAt(page.response.headers, attemptedAt);
+        throw new AuditFailure(
+          "source-unavailable",
+          retryAt === null ? "response-status" : "rate-limited",
+          retryAt,
+        );
+      }
+
+      const value = parseJson(page.bytes);
+      if (!Array.isArray(value) || value.length > 100) {
+        throw new AuditFailure("normalization-failed", "invalid-page");
+      }
+      if (pageProofs.length * 100 + value.length > GITHUB_DELIVERY_AUDIT_MAXIMUM_DELIVERIES) {
+        throw new AuditFailure("request-budget-exhausted", "page-limit");
+      }
+
+      for (const raw of value) {
+        const normalized = normalizeDeliverySummary(raw);
+        if (deliveryIds.has(normalized.deliveryId)) {
+          throw new AuditFailure("pagination-incomplete", "invalid-pagination");
+        }
+        deliveryIds.add(normalized.deliveryId);
+        if (normalized.pullRequest !== null) deliveries.push(normalized.pullRequest);
+      }
+
+      const parsedNextUrl = nextDeliveryLink(page.response.headers.get("link"));
+      pageProofs.push({
+        requestUrl: nextUrl,
+        responseDigest: `sha256:${createHash("sha256").update(page.bytes).digest("hex")}`,
+        itemCount: value.length,
+        nextUrl: parsedNextUrl,
+      });
+      nextUrl = parsedNextUrl;
+    }
+  } catch (error) {
+    const failure = error instanceof AuditFailure
+      ? error
+      : new AuditFailure("source-unavailable", "request-failed");
+    return {
+      kind: "incomplete",
+      appId: input.appId,
+      attemptedAt,
+      cause: failure.cause,
+      pageCount: pageProofs.length,
+      deliveryCount: deliveryIds.size,
+      retryAt: failure.retryAt,
+      diagnostic: failure.diagnostic,
+    };
+  }
+
+  return {
+    kind: "complete",
+    appId: input.appId,
+    coveredThrough: attemptedAt,
+    pageCount: pageProofs.length,
+    deliveryCount: deliveryIds.size,
+    pageProofDigest: sha256(canonicalJson(pageProofs)),
+    deliveries,
+  };
+}
+
+export function selectGitHubRepositoryPullRequestDeliveries(
+  audit: Extract<GitHubDeliveryAuditResult, { kind: "complete" }>,
+  repositoryId: string,
+  installationId: string,
+): GitHubRepositoryDeliverySelection {
+  if (!/^github\.com:[1-9][0-9]{0,19}$/.test(repositoryId)) {
+    throw new Error("GitHub repository selection requires a source-native repository ID");
+  }
+  if (!/^github\.com:installation:[1-9][0-9]{0,19}$/.test(installationId)) {
+    throw new Error("GitHub repository selection requires a source-native installation ID");
+  }
+  const deliveries = audit.deliveries.filter(
+    (delivery) => delivery.repositoryId === repositoryId && delivery.installationId === installationId,
+  );
+  return {
+    repositoryId,
+    installationId,
+    deliveryCount: deliveries.length,
+    selectedResponseDigest: sha256(canonicalJson(deliveries)),
+    deliveries,
+    unsupportedDeliveryIds: deliveries
+      .filter((delivery) => !delivery.actionSupported)
+      .map((delivery) => delivery.deliveryId),
+  };
+}
+
+async function fetchPage(
+  url: string,
+  getAppJwt: GitHubAppJwtProvider,
+  fetcher: GitHubDeliveryFetch,
+  callerSignal: AbortSignal | undefined,
+  attemptedAt: string,
+): Promise<PageResult> {
+  let currentUrl = url;
+  for (let redirectCount = 0; redirectCount <= 1; redirectCount += 1) {
+    let jwt: string;
+    try {
+      jwt = await getAppJwt();
+    } catch {
+      throw new AuditFailure("source-unavailable", "authorization-unavailable");
+    }
+    if (!isAppJwt(jwt)) {
+      throw new AuditFailure("source-unavailable", "authorization-unavailable");
+    }
+    let response: Response;
+    try {
+      const timeout = AbortSignal.timeout(GITHUB_DELIVERY_AUDIT_REQUEST_TIMEOUT_MS);
+      const signal = callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout;
+      response = await fetcher(currentUrl, {
+        method: "GET",
+        redirect: "manual",
+        signal,
+        headers: {
+          Accept: GITHUB_API_ACCEPT,
+          Authorization: `Bearer ${jwt}`,
+          "User-Agent": GITHUB_API_USER_AGENT,
+          "X-GitHub-Api-Version": GITHUB_API_VERSION,
+        },
+      });
+    } catch {
+      throw new AuditFailure("source-unavailable", "request-failed");
+    }
+    if (isRedirect(response.status)) {
+      if (redirectCount === 1) {
+        throw new AuditFailure("source-unavailable", "response-status", safeRetryAt(response.headers, attemptedAt));
+      }
+      currentUrl = validatedDeliveryUrl(response.headers.get("location"), currentUrl);
+      continue;
+    }
+    if (response.status !== 200) return { response, bytes: new Uint8Array() };
+    const declaredLength = response.headers.get("content-length");
+    if (declaredLength !== null && !validDeclaredLength(declaredLength)) {
+      throw new AuditFailure("request-budget-exhausted", "response-too-large");
+    }
+    let bytes: Uint8Array;
+    try {
+      bytes = new Uint8Array(await response.arrayBuffer());
+    } catch {
+      throw new AuditFailure("source-unavailable", "request-failed");
+    }
+    if (bytes.byteLength > GITHUB_DELIVERY_AUDIT_MAXIMUM_PAGE_BYTES) {
+      throw new AuditFailure("request-budget-exhausted", "response-too-large");
+    }
+    return { response, bytes };
+  }
+  throw new AuditFailure("source-unavailable", "request-failed");
+}
+
+function normalizeDeliverySummary(value: unknown): {
+  deliveryId: string;
+  pullRequest: GitHubPullRequestDeliverySummary | null;
+} {
+  const item = objectValue(value);
+  if (!item || typeof item.event !== "string" || item.event.length < 1 || item.event.length > 100) {
+    throw new AuditFailure("normalization-failed", "invalid-page");
+  }
+  const deliveryId = githubId(item.id);
+  if (item.event !== "pull_request") {
+    return {
+      deliveryId,
+      pullRequest: null,
+    };
+  }
+  const action = boundedAction(item.action);
+  return {
+    deliveryId,
+    pullRequest: {
+      deliveryId,
+      deliveryGuid: deliveryGuid(item.guid),
+      deliveredAt: sourceInstant(item.delivered_at),
+      redelivery: booleanValue(item.redelivery),
+      statusCode: statusCode(item.status_code),
+      event: "pull_request",
+      action,
+      actionSupported: githubPullRequestActions.includes(action as GitHubPullRequestAction),
+      installationId: `github.com:installation:${githubId(item.installation_id)}`,
+      repositoryId: `github.com:${githubId(item.repository_id)}`,
+    },
+  };
+}
+
+function nextDeliveryLink(value: string | null): string | null {
+  if (value === null) return null;
+  let nextUrl: string | null = null;
+  for (const part of splitLinkHeader(value)) {
+    const match = /^<([^>]+)>\s*;\s*rel="([^"]+)"(?:\s*;.*)?$/i.exec(part.trim());
+    if (!match) throw new AuditFailure("pagination-incomplete", "invalid-pagination");
+    const relations = match[2]!.trim().toLowerCase().split(/\s+/);
+    if (!relations.includes("next")) continue;
+    if (nextUrl !== null) throw new AuditFailure("pagination-incomplete", "invalid-pagination");
+    nextUrl = validatedDeliveryUrl(match[1]!, `${GITHUB_API_ORIGIN}${DELIVERY_PATH}`);
+  }
+  return nextUrl;
+}
+
+function validatedDeliveryUrl(value: string | null, base: string): string {
+  if (value === null || value.length > 4096) {
+    throw new AuditFailure("pagination-incomplete", "invalid-pagination");
+  }
+  let url: URL;
+  try {
+    url = new URL(value, base);
+  } catch {
+    throw new AuditFailure("pagination-incomplete", "invalid-pagination");
+  }
+  if (
+    url.origin !== GITHUB_API_ORIGIN ||
+    url.pathname !== DELIVERY_PATH ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.hash !== "" ||
+    [...url.searchParams.keys()].some((key) => key !== "cursor" && key !== "per_page") ||
+    url.searchParams.getAll("per_page").length !== 1 ||
+    url.searchParams.getAll("cursor").length > 1 ||
+    url.searchParams.get("per_page") !== "100" ||
+    (url.searchParams.has("cursor") && !validCursor(url.searchParams.get("cursor") ?? ""))
+  ) {
+    throw new AuditFailure("pagination-incomplete", "invalid-pagination");
+  }
+  return url.href;
+}
+
+function splitLinkHeader(value: string): string[] {
+  const parts: string[] = [];
+  let start = 0;
+  let insideUrl = false;
+  let insideQuote = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index]!;
+    if (character === "<" && !insideQuote) insideUrl = true;
+    else if (character === ">" && !insideQuote) insideUrl = false;
+    else if (character === '"' && !insideUrl) insideQuote = !insideQuote;
+    else if (character === "," && !insideUrl && !insideQuote) {
+      parts.push(value.slice(start, index));
+      start = index + 1;
+    }
+  }
+  if (insideUrl || insideQuote) throw new AuditFailure("pagination-incomplete", "invalid-pagination");
+  parts.push(value.slice(start));
+  return parts;
+}
+
+function parseJson(bytes: Uint8Array): unknown {
+  try {
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    throw new AuditFailure("normalization-failed", "invalid-json");
+  }
+}
+
+function safeRetryAt(headers: Headers, attemptedAt: string): string | null {
+  const candidates: number[] = [];
+  const retryAfter = headers.get("retry-after");
+  if (retryAfter !== null && /^[0-9]{1,8}$/.test(retryAfter)) {
+    candidates.push(new Date(attemptedAt).getTime() + Number(retryAfter) * 1000);
+  }
+  if (headers.get("x-ratelimit-remaining") === "0") {
+    const reset = headers.get("x-ratelimit-reset");
+    if (reset !== null && /^[0-9]{1,12}$/.test(reset)) candidates.push(Number(reset) * 1000);
+  }
+  return candidates.length === 0 ? null : new Date(Math.max(...candidates)).toISOString();
+}
+
+function assertAuditConfiguration(input: GitHubDeliveryAuditInput): void {
+  if (
+    !input ||
+    typeof input !== "object" ||
+    !/^[1-9][0-9]{0,19}$/.test(input.appId) ||
+    typeof input.getAppJwt !== "function" ||
+    (input.fetcher !== undefined && typeof input.fetcher !== "function") ||
+    (input.now !== undefined && typeof input.now !== "function")
+  ) {
+    throw new Error("invalid GitHub delivery-audit configuration");
+  }
+}
+
+function isAppJwt(value: string): boolean {
+  return (
+    typeof value === "string" &&
+    value.length >= 32 &&
+    value.length <= 4096 &&
+    /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value)
+  );
+}
+
+function validCursor(value: string): boolean {
+  return value.length >= 1 && value.length <= 2048 && !/[\u0000-\u0020\u007f]/.test(value);
+}
+
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function githubId(value: unknown): string {
+  if (!Number.isSafeInteger(value) || Number(value) < 1) throw new AuditFailure("normalization-failed", "invalid-page");
+  return String(value);
+}
+
+function deliveryGuid(value: unknown): string {
+  if (typeof value !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
+    throw new AuditFailure("normalization-failed", "invalid-page");
+  }
+  return value.toLowerCase();
+}
+
+function sourceInstant(value: unknown): string {
+  if (typeof value !== "string" || !/(?:Z|[+-][0-9]{2}:[0-9]{2})$/.test(value)) {
+    throw new AuditFailure("normalization-failed", "invalid-page");
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) throw new AuditFailure("normalization-failed", "invalid-page");
+  return parsed.toISOString();
+}
+
+function canonicalInstant(value: Date): string {
+  if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
+    throw new Error("GitHub delivery-audit clock returned an invalid time");
+  }
+  return value.toISOString();
+}
+
+function booleanValue(value: unknown): boolean {
+  if (typeof value !== "boolean") throw new AuditFailure("normalization-failed", "invalid-page");
+  return value;
+}
+
+function statusCode(value: unknown): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 0 || Number(value) > 599) {
+    throw new AuditFailure("normalization-failed", "invalid-page");
+  }
+  return Number(value);
+}
+
+function boundedAction(value: unknown): string {
+  if (typeof value !== "string" || !/^[a-z][a-z0-9_]{0,99}$/.test(value)) {
+    throw new AuditFailure("normalization-failed", "invalid-page");
+  }
+  return value;
+}
+
+function validDeclaredLength(value: string): boolean {
+  if (!/^(?:0|[1-9][0-9]{0,9})$/.test(value)) return false;
+  return Number(value) <= GITHUB_DELIVERY_AUDIT_MAXIMUM_PAGE_BYTES;
+}
+
+function isRedirect(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
