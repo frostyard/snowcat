@@ -92,7 +92,7 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
   const directory = await mkdtemp(join(tmpdir(), "fluent-ladder-test-"));
   const path = join(directory, "queue.db");
   const { itemId } = createVersionOneDatabase(path);
-  assert.equal(SCHEMA_VERSION, 3, "this test pins the ladder at rung 3; extend it when a rung is added");
+  assert.equal(SCHEMA_VERSION, 4, "this test pins the ladder at rung 4; extend it when a rung is added");
 
   const queue = new QueueStore(path);
   test.after(() => queue.close());
@@ -129,10 +129,66 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
   assert.equal(imported.created[0]?.status, "proposed");
   assert.equal(imported.created[0]?.sourceRef, "https://github.com/frostyard/updex/issues/7");
 
+  // Rung 4 arrived too: legacy items read as note-free, and operator notes can be appended.
+  assert.deepEqual(queue.get(itemId)?.operatorNotes, []);
+  assert.deepEqual(queue.get(itemId)?.previousResults, []);
+  const noted = queue.note(itemId, "operator:ladder-test", "Carried across the upgrade.");
+  assert.equal(noted.operatorNotes.length, 1);
+  assert.equal(noted.operatorNotes[0]?.action, "note");
+
   // Re-opening runs no rungs and preserves the identity assigned during upgrade.
   const again = new QueueStore(path);
   assert.equal(again.metadata().databaseId, metadata.databaseId);
   again.close();
+});
+
+test("a version-3 database upgrades in place through rung 4 and keeps a blocked item's history", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-ladder-v3-test-"));
+  const path = join(directory, "queue.db");
+  const { itemId } = createVersionOneDatabase(path);
+  // Bring the hand-built database to exactly version 3 with rungs 2 and 3's
+  // objects, then park the item as blocked the way pre-rung-4 code left it.
+  const raw = new DatabaseSync(path);
+  raw.exec(`
+    CREATE TABLE queue_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    INSERT INTO queue_metadata (key, value) VALUES ('database_id', '22222222-2222-4222-8222-222222222222');
+    INSERT INTO queue_metadata (key, value) VALUES ('created_at', '2026-08-15T00:00:00.000Z');
+    ALTER TABLE work_items ADD COLUMN source_ref TEXT;
+    CREATE UNIQUE INDEX work_items_source_ref ON work_items(repository, source_ref) WHERE source_ref IS NOT NULL;
+    UPDATE work_items SET status = 'blocked', result_json = '{"summary":"Needs a credential.","evidence":[],"artifacts":[]}'
+      WHERE id = '${itemId}';
+    INSERT INTO work_events (work_item_id, event_type, actor, payload_json, occurred_at)
+      VALUES ('${itemId}', 'work.blocked', 'claude:legacy', '{"reason":"Needs a credential."}', '2026-08-15T01:00:00.000Z');
+    PRAGMA user_version = 3;
+  `);
+  raw.close();
+
+  const queue = new QueueStore(path);
+  test.after(() => queue.close());
+  assert.equal(queue.schemaVersion(), SCHEMA_VERSION);
+  assert.equal(queue.metadata().databaseId, "22222222-2222-4222-8222-222222222222");
+  const inspect = new DatabaseSync(path, { readOnly: true });
+  const columns = new Set((inspect.prepare("PRAGMA table_info(work_items)").all() as Row[]).map((column) => String(column.name)));
+  inspect.close();
+  assert.ok(columns.has("operator_notes_json"));
+  assert.ok(columns.has("previous_results_json"));
+
+  const blocked = queue.get(itemId)!;
+  assert.equal(blocked.status, "blocked");
+  assert.deepEqual(blocked.operatorNotes, []);
+  assert.deepEqual(blocked.previousResults, []);
+
+  const requeued = queue.requeue(itemId, "operator:ladder-test", "Credential supplied; resume.");
+  assert.equal(requeued.status, "queued");
+  assert.equal(requeued.result, undefined);
+  assert.deepEqual(requeued.previousResults, [{ summary: "Needs a credential.", evidence: [], artifacts: [] }]);
+  assert.deepEqual(
+    requeued.operatorNotes.map((note) => [note.actor, note.action, note.reason]),
+    [["operator:ladder-test", "requeue", "Credential supplied; resume."]],
+  );
+  const claimed = queue.claim({ worker: "claude:ladder-test" });
+  assert.equal(claimed?.id, itemId);
+  assert.equal(claimed?.operatorNotes[0]?.reason, "Credential supplied; resume.");
 });
 
 test("re-running the ladder from an unversioned database converges without changing the identity", async () => {

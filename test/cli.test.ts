@@ -124,6 +124,25 @@ test("operator CLI exposes blocked requeue and cancellation without lease tokens
   assert.equal(requeued.status, 0);
   assert.equal(JSON.parse(requeued.stdout).status, "queued");
   assert.equal(requeued.stdout.includes("leaseToken"), false);
+  assert.deepEqual(
+    JSON.parse(requeued.stdout).operatorNotes.map((note: Record<string, unknown>) => [note.actor, note.action, note.reason]),
+    [["operator:cli", "requeue", "Operator supplied input."]],
+  );
+  assert.deepEqual(JSON.parse(requeued.stdout).previousResults, [{ summary: "Needs input.", evidence: [], artifacts: [] }]);
+
+  const noted = run("note", first.id, "PR #5 already exists; re-report it.");
+  assert.equal(noted.status, 0, noted.stderr);
+  const notedItem = JSON.parse(noted.stdout);
+  assert.equal(notedItem.status, "queued");
+  assert.equal(notedItem.operatorNotes.length, 2);
+  assert.deepEqual(
+    [notedItem.operatorNotes[1].actor, notedItem.operatorNotes[1].action, notedItem.operatorNotes[1].reason],
+    ["operator:cli", "note", "PR #5 already exists; re-report it."],
+  );
+  assert.equal(noted.stdout.includes("leaseToken"), false);
+  const missingText = run("note", first.id);
+  assert.notEqual(missingText.status, 0);
+  assert.match(missingText.stderr, /note text is required/);
   const cancelled = run("cancel", second.id, "No longer needed.");
   assert.equal(cancelled.status, 0);
   assert.equal(JSON.parse(cancelled.stdout).status, "cancelled");
@@ -133,6 +152,7 @@ test("operator CLI exposes blocked requeue and cancellation without lease tokens
   assert.notEqual(usage.status, 0);
   assert.match(usage.stderr, /requeue <work-item-id> <reason>/);
   assert.match(usage.stderr, /cancel <work-item-id> <reason>/);
+  assert.match(usage.stderr, /note <work-item-id> <text>/);
 });
 
 test("operator CLI can defer admitted work and approve it later", async () => {

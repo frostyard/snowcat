@@ -20,7 +20,14 @@ its sandbox; Fluent only owns queue authorization and bookkeeping.
 4. Inspect the returned objective, instructions, acceptance criteria,
    `allowedActions`, and `delegableActions`. Call `release_work` immediately if
    the repository or required capability does not match the current client.
-5. Keep the lease token private. Never write it into repository files, logs,
+5. Read `operatorNotes` and `previousResults` before starting. They override
+   nothing in the definition, but they tell you what happened on earlier
+   leases: each note is an operator or policy `requeue`, `defer`, or `note`
+   with its reason, and each previous result is the block reason an operator
+   requeued past. If a note says the work already exists (for example a pull
+   request is already open), verify it on GitHub and report it rather than
+   redoing the work; if a note conflicts with the definition, block and say so.
+6. Keep the lease token private. Never write it into repository files, logs,
    issues, pull requests, or attempt-report evidence.
 
 ## Do the work

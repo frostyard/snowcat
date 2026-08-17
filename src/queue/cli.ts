@@ -61,6 +61,10 @@ try {
     const id = required(args[0], "work item id");
     const reason = required(args.slice(1).join(" "), "cancellation reason");
     print(withoutLeaseToken(queue.cancel(id, "operator:cli", reason)));
+  } else if (command === "note") {
+    const id = required(args[0], "work item id");
+    const text = required(args.slice(1).join(" "), "note text");
+    print(withoutLeaseToken(queue.note(id, "operator:cli", text)));
   } else if (command === "list") {
     const status = args[0] !== undefined && !args[0].startsWith("--") ? args[0] : undefined;
     const flags = parseFlags(status === undefined ? args : args.slice(1), ["repository", "kind", "limit"]);
@@ -112,6 +116,7 @@ try {
     console.error("       npm run queue -- defer <work-item-id> <reason>");
     console.error("       npm run queue -- requeue <work-item-id> <reason>");
     console.error("       npm run queue -- cancel <work-item-id> <reason>");
+    console.error("       npm run queue -- note <work-item-id> <text>");
     console.error("       npm run queue -- list [proposed|queued|claimed|completed|blocked|cancelled] [--repository <owner/repo>] [--kind <kind>] [--limit <1-100>]");
     console.error("       npm run queue -- show <work-item-id>");
     console.error("       npm run queue -- events [--since <sequence>] [--repository <owner/repo>] [--limit <1-500>]");
