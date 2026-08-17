@@ -200,7 +200,7 @@ count or elapsed time into outcome success.
   with [ADR-0055](../adr/0055-separate-evidence-population-from-rate-evaluation.md)
   and [ADR-0056](../adr/0056-derive-required-checks-from-enforced-github-rules.md),
   plus [ADR-0057](../adr/0057-require-webhook-ingress-for-github-observation.md)
-- Proposed GitHub observation operations:
+- GitHub observation operations:
   [ADR-0058](../adr/0058-bound-github-observation-recovery-and-retention.md)
 - Contracts:
   [verification-profile ingestion](../specs/verification-profile-ingestion.md),

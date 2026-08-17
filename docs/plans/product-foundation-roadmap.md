@@ -147,8 +147,7 @@ does not itself enroll the repository in the fleet.
   and
   [ADR-0057](../adr/0057-require-webhook-ingress-for-github-observation.md).
   Recovery cadence and retention follow
-  [proposed ADR-0058](../adr/0058-bound-github-observation-recovery-and-retention.md)
-  if accepted.
+  [ADR-0058](../adr/0058-bound-github-observation-recovery-and-retention.md).
 - Install a least-privilege read-only GitHub App or approved host credential for
   the initial Frostyard scope; map immutable repository IDs, principals, worker
   GitHub actors, and maintainer authority.

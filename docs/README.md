@@ -72,7 +72,7 @@ Docs are split by the question they answer:
 - [0055 — Separate evidence population from rate evaluation](adr/0055-separate-evidence-population-from-rate-evaluation.md)
 - [0056 — Derive required checks from enforced GitHub rules](adr/0056-derive-required-checks-from-enforced-github-rules.md)
 - [0057 — Require webhook ingress for GitHub observation](adr/0057-require-webhook-ingress-for-github-observation.md)
-- [0058 — Bound GitHub observation recovery and retention](adr/0058-bound-github-observation-recovery-and-retention.md) *(Proposed)*
+- [0058 — Bound GitHub observation recovery and retention](adr/0058-bound-github-observation-recovery-and-retention.md)
 
 ### Domain language
 

@@ -1,6 +1,6 @@
 # 0058 — Bound GitHub observation recovery and retention
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-17
 
 ## Context
