@@ -1924,6 +1924,10 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   `github-required-checks:v1` source adapter, evidence retention, fact
   establishment, and Goal application remain unimplemented, so a
   representative live Goal still fails closed.
+  Registry version 12 now fixes source-native App-hook, pull-request,
+  check-run, and commit-status subjects and purpose-specific webhook, API,
+  rules, transition, checkpoint, and gap revisions. No corresponding GitHub
+  observation record or mutation command is registered yet.
   The kernel does not yet implement target work, general fact mutation, general
   operational state, fleet coordination, or worker mutation and never reads or
   imports the spike database.
@@ -1934,7 +1938,7 @@ elapsed source freshness from the stricter new-admission gate. Its durable
 | --- | --- |
 | Core contract and migration | Remaining organization JSON Schemas, fixtures, and canonical-surface migrations; verification-profile and Goal import are implemented, while all remaining record kinds, Goal application, source adapters, evidence retention, and fact establishment remain |
 | Control-plane domain model | Execute the [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md): specify exact durable schemas, predicates, reducers, events, projections, invalidation, idempotency, and state machines in a fresh target database shared by RepositoryController, FleetController, ProcessObserver, scheduling, and decisions |
-| GitHub observation | Implement the accepted webhook-plus-polling boundary, exact registered records and commands, conservative schedules and repair deadline, installation and actor mapping, CI/review/merge and artifact predicates, forks, and external decision signals |
+| GitHub observation | Implement the accepted webhook-plus-polling boundary on the registered v12 subjects and revisions; exact records and commands, conservative schedules and repair deadline, installation and actor mapping, CI/review/merge and artifact predicates, forks, and external decision signals remain |
 | Workflow contracts | Versioned role briefs, evidence schemas, skills, attempt budgets, and deterministic gates for maintenance, planning, review, implementation, repair, and verification |
 | Restricted security | Exact forbidden-content detectors, retention, embargo, reviewer roles, declassification profiles, and private disclosure contracts for high and critical findings |
 | Scheduling and routing details | Capability and grant schemas, information-scope and restricted-compartment schemas, WIP defaults, priority mapping, fair-queue credits, cooldowns, capacity reservations, and capacity-gap UX |
@@ -1995,11 +1999,12 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   verification profiles and closed Fluent mechanism versions ship for
   delivery, which named roles satisfy attestation policies, and what evidence
   retention, expiry, and confounding rules apply to each profile?
-- What exact registered schemas, command outputs, polling and delivery-audit
-  bounds, conservative repair deadline, pagination proof, and retention limits
-  implement the webhook-plus-reconciliation model fixed by ADR-0057? Merge
-  queues, forks, classic protection, and changing rule sets remain explicit
-  post-v1 adapter work.
+- What exact registered record schemas, command outputs, polling and delivery-
+  audit bounds, conservative repair deadline, pagination proof, and retention
+  limits complete the webhook-plus-reconciliation model fixed by ADR-0057 on
+  the implemented v12 subject and revision identities? Merge queues, forks,
+  classic protection, and changing rule sets remain explicit post-v1 adapter
+  work.
 - What reviewer capability profile, trigger UX, fingerprint algorithm,
   material-scope lineage reset, and unavailable-CI policy implement bounded
   adversarial review consistently across PRDs, plans, and pull requests?

@@ -15,7 +15,7 @@ no generic record-writing, fact-writing, administrative, or worker interface.
 | Default path | `./data/control-plane.db` | Distinct from the queue-spike default |
 | SQLite application ID | `1179405908` | Decimal encoding of `FLNT` |
 | Schema version | `5` | Stored in both `PRAGMA user_version` and metadata |
-| Registry version | `11` | Stored in metadata and both initialization payloads |
+| Registry version | `12` | Stored in metadata and both initialization payloads |
 | Node runtime | `>=24.0.0` | Required for the stable `node:sqlite` surface and online backup API |
 | Database lineage ID | UUIDv7 | Generated once by the server; never reused or inferred from path |
 | Operator principal ID | UUIDv7 | Generated once and stored separately from database, session, worker, or provider identity |
@@ -26,14 +26,18 @@ transaction sequence.
 `ControlPlaneStore.occurrences()` returns occurrences ordered by transaction
 sequence and position. Neither method mutates the database or returns a secret.
 
-### Closed registry version 11
+### Closed registry version 12
 
 | Registry | Name | Version or ID rule | Contract |
 | --- | --- | --- | --- |
 | Subject | `control-plane-database` | UUIDv7 | Fluent authority; accepts `sha256` and `transaction-sequence` revisions |
 | Subject | `operator-principal` | UUIDv7 | Fluent authority; accepts `sha256` revision |
 | Subject | `core-snapshot` | UUIDv7 | Fluent authority; accepts `core-catalog-sha256` revision |
-| Subject | `github-repository` | `github.com:` plus immutable positive numeric repository ID | GitHub authority; accepts exact Core-declaration, GitHub-metadata, surface, and Git-commit revisions |
+| Subject | `github-repository` | `github.com:<repository-id>` | GitHub authority; accepts exact Core-declaration, metadata, surface, Git-commit, rules, branch-transition, checkpoint, and source-gap revisions |
+| Subject | `github-app-hook` | `github.com:app:<app-id>:hook` | GitHub authority; one App webhook bound to direct-delivery and delivery-audit revisions |
+| Subject | `github-pull-request` | `github.com:<repository-id>:pull:<number>` | GitHub authority; immutable repository identity plus positive pull-request number |
+| Subject | `github-check-run` | `github.com:<repository-id>:check-run:<check-run-id>` | GitHub authority; immutable repository identity plus positive check-run ID |
+| Subject | `github-commit-status` | `github.com:<repository-id>:commit-status:<status-id>` | GitHub authority; immutable repository identity plus positive commit-status ID |
 | Revision | `sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact payload digest |
 | Revision | `transaction-sequence` | Positive safe integer encoded as canonical decimal | Exact database state checked through that sequence |
 | Revision | `core-catalog-sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact retained Core catalog |
@@ -41,10 +45,14 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Revision | `core-declaration-sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact active repository declaration bytes |
 | Revision | `github-metadata-sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact bounded selected GitHub metadata result |
 | Revision | `repository-surfaces-sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact bounded canonical-surface probe |
-| Source | `fluent-system` | Only source ID `kernel` | Internal deterministic bootstrap source |
+| Revisions | `github-webhook-body-sha256`, `github-delivery-audit-sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact direct-delivery bytes or canonical selected delivery-API response; the acquisition paths are not interchangeable |
+| Revisions | `github-rules-sha256`, `github-pull-request-sha256`, `github-branch-transition-sha256`, `github-check-run-sha256`, `github-commit-status-sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact canonical allowlisted source representation for the named GitHub subject or repository transition |
+| Revisions | `github-source-checkpoint-sha256`, `github-source-gap-sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact canonical checkpoint or gap observation contract input |
+| Source | `fluent-system` | Source ID `kernel` or `github-observer` | Internal deterministic bootstrap or GitHub reconciliation source; accepts no caller-selected source revision |
 | Source | `github-repository` | `github.com:` plus immutable positive numeric repository ID | Source revision must be `git-commit-sha1` |
 | Source | `operator-principal` | UUIDv7 matching a stored operator subject | Human authority source; accepts no source revision |
-| Source | `github-api` | Only source ID `api.github.com` | Bounded GitHub metadata adapter; source revision is `github-metadata-sha256` |
+| Source | `github-api` | Only source ID `api.github.com` | Bounded selected GitHub API acquisition; accepts only registered API-obtainable metadata, delivery-audit, rules, pull-request, transition, check-run, and commit-status revisions—not controller checkpoint or gap digests |
+| Source | `github-app-webhook` | Exact `github-app-hook` subject ID | Direct authenticated delivery acquisition; accepts only `github-webhook-body-sha256` |
 | Record | `control-plane.database-definition` | Schema 1 | Class `definition`; subject `control-plane-database`; minimum class `organization` |
 | Record | `principal.definition` | Schema 1 | Class `definition`; subject `operator-principal`; minimum class `organization` |
 | Record | `control-plane.integrity-observation` | Schema 1 | Class `observation`; subject `control-plane-database`; minimum class `organization` |
@@ -106,7 +114,7 @@ invalid:
 {
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
   "operatorPrincipalId": "0198b0a6-c200-7abc-8def-0123456789ac",
-  "registryVersion": 11,
+  "registryVersion": 12,
   "schemaVersion": 5
 }
 ```
@@ -129,7 +137,7 @@ The integrity observation and event payload have this exact shape:
 {
   "checkedThroughSequence": 1,
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
-  "registryVersion": 11,
+  "registryVersion": 12,
   "result": "ok",
   "schemaVersion": 5
 }
@@ -326,7 +334,7 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
    initialization transaction.
 5. Older, newer, incomplete, unexpected, or differently identified schemas
    MUST fail closed. Unregistered indexes, triggers, and views are unexpected.
-   Schema version 5 and registry version 11 define no upgrade path from earlier
+   Schema version 5 and registry version 12 define no upgrade path from earlier
    pre-production target stores.
 6. Subject, record, event, command, source, revision, record-class, and
    information-class names MUST come from the code-owned versioned registries.
@@ -522,7 +530,7 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
 | Event cursor generations | Full deterministic rebuild from event occurrences without payload copies |
 | Backup manifest | Verified metadata and canonical authoritative digest of one online SQLite backup artifact |
 | Staged restore | Create-only SQLite copy revalidated against the manifest and caller's lineage/sequence fence |
-| Focused conformance fixtures | `test/control-store.test.ts` |
+| Focused conformance fixtures | `test/control-store.test.ts` and `test/github-observation-registry.test.ts` |
 
 ## References
 
@@ -537,9 +545,11 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
   [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md), and
   [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md), and
   [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md), and
-  [ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md), and
-  [ADR-0052](../adr/0052-bind-local-repository-holds-to-explicit-operator-decisions.md)
-- Context: [control-plane kernel](../design/control-plane-kernel.md)
+  [ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md),
+  [ADR-0052](../adr/0052-bind-local-repository-holds-to-explicit-operator-decisions.md), and
+  [ADR-0057](../adr/0057-require-webhook-ingress-for-github-observation.md)
+- Context: [control-plane kernel](../design/control-plane-kernel.md) and
+  [GitHub observation](../design/github-observation.md)
 - Core authority contract: [Core snapshot activation](core-snapshot-activation.md)
 - Core diagnostic retention: [Core check-detail retention](core-check-detail-retention.md)
 - Core polling: [Core source polling](core-source-polling.md)

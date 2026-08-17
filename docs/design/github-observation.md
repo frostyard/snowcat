@@ -107,27 +107,37 @@ observed subject.
 
 ### Durable observation families
 
-The implementing spec will assign exact registered kinds and schemas. The
-design requires these semantic families:
+Registry version 12 assigns the source-native subject identities and purpose-
+specific revision kinds below. The implementing records and commands will
+assign exact registered kinds and payload schemas without changing these
+identity joins:
 
 | Family | Stable subject and revision | Selected content |
 | --- | --- | --- |
-| Delivery receipt | GitHub App hook plus delivery GUID | Event/action, installation and repository IDs, body digest, received time, disposition, normalized-record references |
-| Delivery-audit observation | GitHub App hook plus GitHub delivery ID/GUID and API response revision | Delivery outcome, repository and installation IDs, canonical response digest, missing-receipt relationship, repair disposition |
-| Repository observation | GitHub repository ID plus source update marker and normalized digest | Owner/name locator, archive/access state, default branch |
-| Effective-rules observation | Repository ID, exact branch, normalized applicable-rules digest | Ruleset IDs and source types, enforcement, selectors, integration IDs, bypass shape, unsupported classic/queue shape |
-| Pull-request observation | Repository ID plus PR number, source update marker, and normalized digest | State, actor IDs, base repository/branch/SHA, head repository/branch/SHA, pre-merge test SHA when present, merged time and resulting SHA |
-| Branch-transition observation | Repository ID, ref, before SHA, after SHA | Forced/deleted flags, source actor, delivery and ancestry bindings |
-| Check-run observation | Repository ID plus check-run ID and update revision | Candidate SHA, name, App integration ID, suite/run attempt, status, conclusion, source times, PR associations |
-| Commit-status observation | Repository ID plus status ID | Candidate SHA, context, creator identity, state, source times |
-| Source checkpoint | Repository plus registered query scope and checkpoint revision | Endpoints/scopes, observation time, page proof, item count, response validators, normalized digest |
-| Source gap | Repository plus registered scope and interval | Cause, first detection, affected identities/windows, repair observations and disposition |
+| Delivery receipt | `github-app-hook` / `github.com:app:<app-id>:hook`; `github-webhook-body-sha256` | Delivery GUID stays transport provenance rather than becoming subject identity; content includes event/action, installation and repository IDs, received time, disposition, and normalized-record references |
+| Delivery-audit observation | Same `github-app-hook`; `github-delivery-audit-sha256` | GitHub delivery ID/GUID, outcome, repository and installation IDs, canonical response digest, missing-receipt relationship, repair disposition |
+| Repository observation | `github-repository` / `github.com:<repository-id>`; `github-metadata-sha256` | Owner/name locator, archive/access state, default branch |
+| Effective-rules observation | Same `github-repository`; `github-rules-sha256` | Exact branch, ruleset IDs and source types, enforcement, selectors, integration IDs, bypass shape, unsupported classic/queue shape |
+| Pull-request observation | `github-pull-request` / `github.com:<repository-id>:pull:<number>`; `github-pull-request-sha256` | State, actor IDs, base repository/branch/SHA, head repository/branch/SHA, pre-merge test SHA when present, merged time and resulting SHA |
+| Branch-transition observation | Parent `github-repository`; `github-branch-transition-sha256` | Ref locator, before/after SHA, forced/deleted flags, source actor, delivery and ancestry bindings; a mutable ref name is not promoted to stable subject identity |
+| Check-run observation | `github-check-run` / `github.com:<repository-id>:check-run:<check-run-id>`; `github-check-run-sha256` | Candidate SHA, name, App integration ID, suite/run attempt, status, conclusion, source times, PR associations |
+| Commit-status observation | `github-commit-status` / `github.com:<repository-id>:commit-status:<status-id>`; `github-commit-status-sha256` | Candidate SHA, context, creator identity, state, source times |
+| Source checkpoint | Parent `github-repository`; `github-source-checkpoint-sha256` | Registered query scope, endpoints, observation time, page proof, item count, response validators, normalized digest |
+| Source gap | Parent `github-repository`; `github-source-gap-sha256` | Registered scope and interval, cause, first detection, affected identities/windows, repair observations and disposition |
 
-Every family in this table is a registered `observation` record kind; the design
-does not introduce another generic record class. An observation records source
-state and provenance; it does not become a merge, required-check satisfaction,
-artifact verification, or outcome fact merely because the GitHub App is
-trusted.
+Every family in this table will use a registered `observation` record kind; the
+design does not introduce another generic record class. Registry version 12
+contains only their subjects, revisions, and sources so far. An observation
+records source state and provenance; it does not become a merge, required-check
+satisfaction, artifact verification, or outcome fact merely because the GitHub
+App is trusted.
+
+Direct deliveries use source `github-app-webhook` and an exact body revision;
+API acquisitions use `github-api` and the applicable canonical response
+revision. Checkpoints and gaps use deterministic source
+`fluent-system/github-observer` with no caller-selected source revision: their
+own checkpoint or gap digest binds the repository subject, but is not
+misrepresented as a revision issued by GitHub.
 
 ### Reconciliation cycle
 

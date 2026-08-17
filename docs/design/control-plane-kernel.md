@@ -72,9 +72,9 @@ schemas fail rather than being guessed or upgraded by this slice.
 ### Closed registries
 
 [`registry.ts`](../../src/control/registry.ts) is the only owner of the current
-kernel vocabulary. Registry version 11 contains the bootstrap, Core snapshot,
-source-check, rollback, repository-reconciliation, enrollment, and local
-repository-hold contracts:
+kernel vocabulary. Registry version 12 contains the bootstrap, Core snapshot,
+source-check, rollback, repository-reconciliation, enrollment, local
+repository-hold, and initial GitHub-observation identity contracts:
 
 | Registry | Initial member | Meaning |
 | --- | --- | --- |
@@ -82,11 +82,13 @@ repository-hold contracts:
 | Subject kind | `operator-principal` | The stable human-authority identity implicitly bound by local stdio |
 | Subject kind | `core-snapshot` | One Fluent-native retained catalog identity with UUIDv7 identity |
 | Subject kind | `github-repository` | One immutable source-native GitHub repository identity |
+| Subject kinds | `github-app-hook`, `github-pull-request`, `github-check-run`, `github-commit-status` | Exact source-native GitHub observation identities qualified by App or immutable repository identity |
 | Revision kind | `sha256`, `transaction-sequence`, `core-catalog-sha256`, `git-commit-sha1` | Exact payload, database-state, catalog, or source-commit identity |
-| Source kind | `fluent-system` / `kernel` | The deterministic kernel bootstrap source |
+| Source kind | `fluent-system` / `kernel` or `github-observer` | The deterministic kernel bootstrap or GitHub reconciliation source; neither impersonates GitHub acquisition |
 | Source kind | `github-repository` | Immutable GitHub repository ID plus typed Git commit revision |
 | Source kind | `operator-principal` | Stored UUIDv7 human authority with no caller-selected revision |
 | Source kind | `github-api` | Bounded selected metadata from `api.github.com` |
+| Source kind | `github-app-webhook` | Direct authenticated App-hook delivery bytes, mechanically separate from API repair |
 | Record kind | `control-plane.database-definition` v1 | An `organization`-class definition of the database lineage and schema/registry versions |
 | Record kind | `principal.definition` v1 | The `organization`-class definition of the implicit local operator |
 | Record kind | `control-plane.integrity-observation` v1 | The system's SQLite quick-check observation bound to the checked sequence |
@@ -403,8 +405,9 @@ work lineage are later slices in the
   [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md), and
   [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md), and
   [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md), and
-  [ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md), and
-  [ADR-0052](../adr/0052-bind-local-repository-holds-to-explicit-operator-decisions.md)
+  [ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md),
+  [ADR-0052](../adr/0052-bind-local-repository-holds-to-explicit-operator-decisions.md), and
+  [ADR-0057](../adr/0057-require-webhook-ingress-for-github-observation.md)
 - Contracts: [control-plane kernel](../specs/control-plane-kernel.md) and
   [Core snapshot activation](../specs/core-snapshot-activation.md), and
   [Core source readiness](../specs/core-source-readiness.md), and
@@ -412,6 +415,7 @@ work lineage are later slices in the
   [Core source polling](../specs/core-source-polling.md), and
   [repository authority reconciliation](../specs/repository-authority-reconciliation.md), and
   [repository surface reconciliation](../specs/repository-surface-reconciliation.md), and
-  [local repository holds](../specs/repository-local-holds.md)
+  [local repository holds](../specs/repository-local-holds.md), and
+  [GitHub observation registry](../specs/control-plane-kernel.md#closed-registry-version-12)
 - Built in: [control-plane kernel bootstrap — Phases 1–3](../plans/control-plane-kernel-bootstrap.md)
 - Product: [GitHub organization agent fleet](../prd/agent-fleet.md)

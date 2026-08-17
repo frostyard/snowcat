@@ -74,7 +74,7 @@ observed locator and ID or null, archive flag or null, one closed result,
 10. No command in this contract may create work, admission, a claim, a lease, a
     worker session, a local hold, or canonical-surface authority.
 11. This prior gate now participates in schema version `5` and registry version
-    `11`; there is no in-place migration from the pre-production target.
+    `12`; there is no in-place migration from the pre-production target.
 
 ## Derived artifacts
 

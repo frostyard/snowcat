@@ -2,7 +2,7 @@ import { isUuidV7, type JsonValue } from "./encoding.ts";
 
 export const CONTROL_PLANE_APPLICATION_ID = 1_179_405_908; // ASCII "FLNT"
 export const CONTROL_PLANE_SCHEMA_VERSION = 5;
-export const CONTROL_PLANE_REGISTRY_VERSION = 11;
+export const CONTROL_PLANE_REGISTRY_VERSION = 12;
 
 export const informationClasses = ["public", "organization", "restricted"] as const;
 export type InformationClass = (typeof informationClasses)[number];
@@ -51,8 +51,36 @@ export const subjectKindRegistry = {
       "github-metadata-sha256",
       "git-commit-sha1",
       "repository-surfaces-sha256",
+      "github-rules-sha256",
+      "github-branch-transition-sha256",
+      "github-source-checkpoint-sha256",
+      "github-source-gap-sha256",
     ],
     validateId: (value: string) => /^github\.com:[1-9][0-9]{0,19}$/.test(value),
+  },
+  "github-app-hook": {
+    authoritySystem: "github",
+    idScheme: "github-qualified-numeric-id",
+    revisionKinds: ["github-webhook-body-sha256", "github-delivery-audit-sha256"],
+    validateId: isGitHubAppHookId,
+  },
+  "github-pull-request": {
+    authoritySystem: "github",
+    idScheme: "github-qualified-numeric-id",
+    revisionKinds: ["github-pull-request-sha256"],
+    validateId: isGitHubPullRequestId,
+  },
+  "github-check-run": {
+    authoritySystem: "github",
+    idScheme: "github-qualified-numeric-id",
+    revisionKinds: ["github-check-run-sha256"],
+    validateId: isGitHubCheckRunId,
+  },
+  "github-commit-status": {
+    authoritySystem: "github",
+    idScheme: "github-qualified-numeric-id",
+    revisionKinds: ["github-commit-status-sha256"],
+    validateId: isGitHubCommitStatusId,
   },
 } as const satisfies Record<string, SubjectKindContract>;
 
@@ -78,11 +106,38 @@ export const revisionKindRegistry = {
   "repository-surfaces-sha256": {
     validate: (value: string) => /^sha256:[0-9a-f]{64}$/.test(value),
   },
+  "github-webhook-body-sha256": {
+    validate: (value: string) => /^sha256:[0-9a-f]{64}$/.test(value),
+  },
+  "github-delivery-audit-sha256": {
+    validate: (value: string) => /^sha256:[0-9a-f]{64}$/.test(value),
+  },
+  "github-rules-sha256": {
+    validate: (value: string) => /^sha256:[0-9a-f]{64}$/.test(value),
+  },
+  "github-pull-request-sha256": {
+    validate: (value: string) => /^sha256:[0-9a-f]{64}$/.test(value),
+  },
+  "github-branch-transition-sha256": {
+    validate: (value: string) => /^sha256:[0-9a-f]{64}$/.test(value),
+  },
+  "github-check-run-sha256": {
+    validate: (value: string) => /^sha256:[0-9a-f]{64}$/.test(value),
+  },
+  "github-commit-status-sha256": {
+    validate: (value: string) => /^sha256:[0-9a-f]{64}$/.test(value),
+  },
+  "github-source-checkpoint-sha256": {
+    validate: (value: string) => /^sha256:[0-9a-f]{64}$/.test(value),
+  },
+  "github-source-gap-sha256": {
+    validate: (value: string) => /^sha256:[0-9a-f]{64}$/.test(value),
+  },
 } as const;
 
 export const sourceKindRegistry = {
   "fluent-system": {
-    validateId: (value: string) => value === "kernel",
+    validateId: (value: string) => value === "kernel" || value === "github-observer",
     revisionKinds: [] as const,
   },
   "github-repository": {
@@ -91,7 +146,20 @@ export const sourceKindRegistry = {
   },
   "github-api": {
     validateId: (value: string) => value === "api.github.com",
-    revisionKinds: ["github-metadata-sha256", "git-commit-sha1"],
+    revisionKinds: [
+      "github-metadata-sha256",
+      "git-commit-sha1",
+      "github-delivery-audit-sha256",
+      "github-rules-sha256",
+      "github-pull-request-sha256",
+      "github-branch-transition-sha256",
+      "github-check-run-sha256",
+      "github-commit-status-sha256",
+    ],
+  },
+  "github-app-webhook": {
+    validateId: isGitHubAppHookId,
+    revisionKinds: ["github-webhook-body-sha256"],
   },
   "operator-principal": {
     validateId: isUuidV7,
@@ -1679,6 +1747,22 @@ function isRepositoryBranchName(value: unknown): value is string {
     !value.endsWith("/") &&
     !value.endsWith(".lock")
   );
+}
+
+function isGitHubAppHookId(value: string): boolean {
+  return /^github\.com:app:[1-9][0-9]{0,19}:hook$/.test(value);
+}
+
+function isGitHubPullRequestId(value: string): boolean {
+  return /^github\.com:[1-9][0-9]{0,19}:pull:[1-9][0-9]{0,19}$/.test(value);
+}
+
+function isGitHubCheckRunId(value: string): boolean {
+  return /^github\.com:[1-9][0-9]{0,19}:check-run:[1-9][0-9]{0,19}$/.test(value);
+}
+
+function isGitHubCommitStatusId(value: string): boolean {
+  return /^github\.com:[1-9][0-9]{0,19}:commit-status:[1-9][0-9]{0,19}$/.test(value);
 }
 
 function isUuid(value: unknown): value is string {
