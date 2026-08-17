@@ -20,10 +20,47 @@ try {
     } finally {
       store.close();
     }
+  } else if (command === "hold" && args.length === 3) {
+    const store = new ControlPlaneStore(controlPlaneDatabasePath());
+    try {
+      console.log(
+        JSON.stringify(
+          store.imposeRepositoryOperatorHold({
+            expectedLastTransactionSequence: Number(args[0]),
+            repositoryId: args[1]!,
+            reason: args[2]!,
+          }),
+          null,
+          2,
+        ),
+      );
+    } finally {
+      store.close();
+    }
+  } else if (command === "clear-hold" && args.length === 4) {
+    const store = new ControlPlaneStore(controlPlaneDatabasePath());
+    try {
+      console.log(
+        JSON.stringify(
+          store.clearRepositoryOperatorHold({
+            expectedLastTransactionSequence: Number(args[0]),
+            repositoryId: args[1]!,
+            holdDecisionId: args[2]!,
+            reason: args[3]!,
+          }),
+          null,
+          2,
+        ),
+      );
+    } finally {
+      store.close();
+    }
   } else {
     throw new Error(
       "Usage: npm run --silent repository -- status\n" +
-        "       npm run --silent repository -- reconcile",
+        "       npm run --silent repository -- reconcile\n" +
+        "       npm run --silent repository -- hold <expected-sequence> <github.com:id> <reason>\n" +
+        "       npm run --silent repository -- clear-hold <expected-sequence> <github.com:id> <hold-decision-id> <reason>",
     );
   }
 } catch (error) {

@@ -83,8 +83,8 @@ eligible, whether retention pruning ran, and the completed state.
 12. `poll` MUST await one run before another, cap any single sleep at 60
     seconds so shutdown can be observed, and terminate cleanly on SIGINT or
     SIGTERM without starting another run.
-13. Schema version `4` has no in-place migration from the pre-production target;
-    initialize a fresh database.
+13. Schema version `5` and registry version `11` have no in-place migration
+    from the pre-production target; initialize a fresh database.
 
 ## Derived artifacts
 

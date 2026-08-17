@@ -67,6 +67,7 @@ test("active Core authority materializes separately from GitHub identity and enr
       surfaceResult: null,
       repositoryCommitId: null,
       enrollmentRecordId: null,
+      operatorHold: null,
       effectiveState: "awaiting-github",
     },
   ]);
@@ -359,6 +360,129 @@ test("enabled repository reconciliation converges across store handles without d
     firstStore.occurrences().filter((occurrence) => occurrence.kind === "repository.enrolled").length,
     3,
   );
+  const hold = firstStore.imposeRepositoryOperatorHold({
+    expectedLastTransactionSequence: 17,
+    repositoryId: "github.com:9001",
+    reason: "Stop new repository activity during incident review",
+  });
+  assert.equal(hold.transactionSequence, 18);
+  assert.equal(hold.choice, "impose");
+  assert.deepEqual(
+    firstStore.imposeRepositoryOperatorHold({
+      expectedLastTransactionSequence: 17,
+      repositoryId: "github.com:9001",
+      reason: "Stop new repository activity during incident review",
+    }),
+    hold,
+  );
+  assert.equal(firstStore.repositoryStatuses()[0]?.effectiveState, "operator-held");
+  assert.deepEqual(firstStore.repositoryStatuses()[0]?.operatorHold?.affectedGates, [
+    "discovery",
+    "admission",
+    "claim",
+    "lease-renewal",
+  ]);
+  const heldPass = await reconcileRepositories(
+    firstStore,
+    async () => {
+      throw new Error("identity inspection must not run under an operator hold");
+    },
+    async () => {
+      throw new Error("surface inspection must not run under an operator hold");
+    },
+  );
+  assert.equal(heldPass.github.length, 0);
+  assert.equal(heldPass.surfaces.length, 0);
+  assert.equal(heldPass.enrollments.length, 0);
+  assert.equal(firstStore.metadata().lastTransactionSequence, 18);
+  assert.throws(
+    () =>
+      firstStore.imposeRepositoryOperatorHold({
+        expectedLastTransactionSequence: 18,
+        repositoryId: "github.com:9001",
+        reason: "Replace the existing incident hold",
+      }),
+    /already has active operator hold/,
+  );
+
+  const nextCandidate = await activationCandidate(enabledDeclaration(), "1".repeat(40), "2".repeat(40));
+  const nextActivation = firstStore.rollbackCoreSnapshot({
+    candidate: nextCandidate,
+    expectedLastTransactionSequence: 18,
+    reason: "Exercise hold continuity across a Core authority transition",
+  });
+  firstStore.recordCoreSourceCheckEligible({
+    checkId: "0198b5cb-9c40-7000-8000-000000000002",
+    candidate: nextCandidate,
+    expectedLastTransactionSequence: 19,
+  });
+  assert.equal(firstStore.repositoryStatuses()[0]?.effectiveState, "awaiting-authority");
+  assert.equal(firstStore.repositoryStatuses()[0]?.operatorHold?.holdDecisionId, hold.holdDecisionId);
+  const heldAfterCoreChange = await reconcileRepositories(
+    firstStore,
+    async () => {
+      throw new Error("identity inspection must remain stopped after a Core change");
+    },
+    async () => {
+      throw new Error("surface inspection must remain stopped after a Core change");
+    },
+  );
+  assert.equal(heldAfterCoreChange.materialized.length, 1);
+  assert.equal(heldAfterCoreChange.statuses[0]?.effectiveState, "operator-held");
+  assert.equal(firstStore.metadata().lastTransactionSequence, 21);
+
+  const heldAuthority = firstStore.repositoryStatuses()[0]?.coreAuthorizationRecordId;
+  assert.ok(heldAuthority);
+  const heldIdentity = firstStore.recordRepositoryGitHubIdentity({
+    expectedLastTransactionSequence: 21,
+    coreAuthorizationRecordId: heldAuthority,
+    inspection: await inspect(),
+  });
+  const heldSurface = firstStore.recordRepositoryCanonicalSurfaces({
+    expectedLastTransactionSequence: 22,
+    githubReconciliationRecordId: heldIdentity.reconciliationRecordId,
+    probe: validSurfaceProbe(),
+  });
+  assert.throws(
+    () =>
+      firstStore.establishRepositoryEnrollment({
+        expectedLastTransactionSequence: 23,
+        surfaceReconciliationRecordId: heldSurface.reconciliationRecordId,
+      }),
+    /prerequisites are not current/,
+  );
+  const cleared = firstStore.clearRepositoryOperatorHold({
+    expectedLastTransactionSequence: 23,
+    repositoryId: "github.com:9001",
+    holdDecisionId: hold.holdDecisionId,
+    reason: "Incident review completed",
+  });
+  assert.equal(cleared.choice, "clear");
+  assert.deepEqual(
+    firstStore.clearRepositoryOperatorHold({
+      expectedLastTransactionSequence: 23,
+      repositoryId: "github.com:9001",
+      holdDecisionId: hold.holdDecisionId,
+      reason: "Incident review completed",
+    }),
+    cleared,
+  );
+  assert.equal(firstStore.repositoryStatuses()[0]?.operatorHold, null);
+  assert.equal(firstStore.repositoryStatuses()[0]?.effectiveState, "awaiting-enrollment");
+  assert.throws(
+    () =>
+      firstStore.clearRepositoryOperatorHold({
+        expectedLastTransactionSequence: 24,
+        repositoryId: "github.com:9001",
+        holdDecisionId: hold.holdDecisionId,
+        reason: "Clear the same hold again",
+      }),
+    /does not name the exact active hold/,
+  );
+  const afterClear = await reconcileRepositories(firstStore, inspect, inspectSurfaces);
+  assert.equal(afterClear.statuses[0]?.effectiveState, "enrolled");
+  assert.equal(afterClear.statuses[0]?.coreSnapshotId, nextActivation.snapshotId);
+  assert.equal(firstStore.metadata().lastTransactionSequence, 25);
   secondStore.close();
   firstStore.close();
   const reopened = new ControlPlaneStore(path);

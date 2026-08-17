@@ -1894,7 +1894,9 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   changed, mismatched, archived, and unavailable results remain scoped to that
   repository. Matched identities now receive exact-commit canonical-surface
   decisions and a separate enrollment transaction that creates the
-  RepositoryController definition without work.
+  RepositoryController definition without work. Attributed non-expiring local
+  operator holds now block four fixed repository gates across Core revisions
+  until the exact hold is cleared, without changing enrollment history.
   The kernel does not yet implement target work, general fact mutation, general
   operational state, fleet coordination, or worker mutation and never reads or
   imports the spike database.
@@ -1903,7 +1905,7 @@ elapsed source freshness from the stricter new-admission gate. Its durable
 
 | Track | What remains before implementation is well specified |
 | --- | --- |
-| Core contract and migration | Remaining organization JSON Schemas and fixtures, canonical-surface migrations, local holds, and held-work reconciliation |
+| Core contract and migration | Remaining organization JSON Schemas and fixtures, canonical-surface migrations, and held-work reconciliation |
 | Control-plane domain model | Execute the [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md): specify exact durable schemas, predicates, reducers, events, projections, invalidation, idempotency, and state machines in a fresh target database shared by RepositoryController, FleetController, ProcessObserver, scheduling, and decisions |
 | GitHub observation | GitHub App permissions, installation and actor mapping, CI/review/merge and artifact reconciliation, polling versus webhooks, forks, outage behavior, and external decision signals |
 | Workflow contracts | Versioned role briefs, evidence schemas, skills, attempt budgets, and deterministic gates for maintenance, planning, review, implementation, repair, and verification |
@@ -2103,7 +2105,9 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   repository reconciliation split across exact authority facts by
   [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md),
   with exact-commit surface selection and enrollment separation in
-  [ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md), and the
+  [ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md),
+  with explicit local operator holds in
+  [ADR-0052](../adr/0052-bind-local-repository-holds-to-explicit-operator-decisions.md), and the
   [Fluent ubiquitous language](../domain/ubiquitous-language.md)
 - Designs: [queue execution boundary](../design/queue-execution-boundary.md),
   [control-plane kernel](../design/control-plane-kernel.md), and
@@ -2117,7 +2121,8 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   [Core check-detail retention](../specs/core-check-detail-retention.md) and
   [Core source polling](../specs/core-source-polling.md), plus
   [repository authority reconciliation](../specs/repository-authority-reconciliation.md)
-  and [repository surface reconciliation](../specs/repository-surface-reconciliation.md)
+  and [repository surface reconciliation](../specs/repository-surface-reconciliation.md),
+  and [local repository holds](../specs/repository-local-holds.md)
 - Delivery: [queue vertical spike](../plans/queue-vertical-spike.md),
   [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md),
   [core snapshot ingestion](../plans/core-snapshot-ingestion.md), and

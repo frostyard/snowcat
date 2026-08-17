@@ -66,6 +66,7 @@ Docs are split by the question they answer:
 - [0049 — Poll Core through one leased controller](adr/0049-poll-core-through-one-leased-controller.md)
 - [0050 — Reconcile repository enrollment as separate facts](adr/0050-reconcile-repository-enrollment-as-separate-facts.md)
 - [0051 — Pin surfaces to the observed default-branch head](adr/0051-pin-surfaces-to-the-observed-default-branch-head.md)
+- [0052 — Bind local repository holds to explicit operator decisions](adr/0052-bind-local-repository-holds-to-explicit-operator-decisions.md)
 
 ### Domain language
 
@@ -89,6 +90,7 @@ Docs are split by the question they answer:
 - [Core source polling](specs/core-source-polling.md)
 - [Repository authority reconciliation](specs/repository-authority-reconciliation.md)
 - [Repository surface reconciliation](specs/repository-surface-reconciliation.md)
+- [Local repository holds](specs/repository-local-holds.md)
 
 ### Plans
 

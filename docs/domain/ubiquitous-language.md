@@ -1065,6 +1065,16 @@ independently.
 ([ADR-0033](../adr/0033-observe-processes-and-pull-scoped-andons.md),
 [ADR-0038](../adr/0038-separate-lifecycle-pause-from-runtime-interventions.md))
 
+#### Operator repository hold
+
+The non-expiring, host-local typed decision that narrows one declared GitHub
+repository by blocking discovery, admission, claims, and lease renewal. It is
+active until the stored operator clears that exact hold decision; it is not a
+Core pause, external reconciliation failure, drain, or held-work disposition.
+
+**Avoid:** suspension; local pause; repository toggle; automatic expiry.
+([ADR-0052](../adr/0052-bind-local-repository-holds-to-explicit-operator-decisions.md))
+
 #### Andon
 
 A ProcessObserver intervention created from a versioned detector and evidence

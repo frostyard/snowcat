@@ -14,8 +14,8 @@ no generic record-writing, fact-writing, administrative, or worker interface.
 | Environment variable | `FLUENT_CONTROL_DB` | Optional; target database path |
 | Default path | `./data/control-plane.db` | Distinct from the queue-spike default |
 | SQLite application ID | `1179405908` | Decimal encoding of `FLNT` |
-| Schema version | `4` | Stored in both `PRAGMA user_version` and metadata |
-| Registry version | `9` | Stored in metadata and both initialization payloads |
+| Schema version | `5` | Stored in both `PRAGMA user_version` and metadata |
+| Registry version | `11` | Stored in metadata and both initialization payloads |
 | Node runtime | `>=24.0.0` | Required for the stable `node:sqlite` surface and online backup API |
 | Database lineage ID | UUIDv7 | Generated once by the server; never reused or inferred from path |
 | Operator principal ID | UUIDv7 | Generated once and stored separately from database, session, worker, or provider identity |
@@ -26,7 +26,7 @@ transaction sequence.
 `ControlPlaneStore.occurrences()` returns occurrences ordered by transaction
 sequence and position. Neither method mutates the database or returns a secret.
 
-### Closed registry version 10
+### Closed registry version 11
 
 | Registry | Name | Version or ID rule | Contract |
 | --- | --- | --- | --- |
@@ -59,6 +59,12 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Record | `repository.core-authorized` | Schema 1 | Class `fact`; subject `github-repository`; active-snapshot precedence |
 | Record | `repository.github-identity-observation` | Schema 1 | Class `observation`; subject `github-repository`; bounded selected GitHub result |
 | Record | `repository.github-identity-reconciled` | Schema 1 | Class `fact`; subject `github-repository`; bound to one Core authorization fact |
+| Record | `repository.canonical-surface-observation` | Schema 1 | Class `observation`; subject `github-repository`; bounded exact-commit surface result |
+| Record | `repository.enrollment-checkpoint-policy-decision` | Schema 1 | Class `decision`; subject `github-repository`; explicit permit or deny with requirement results |
+| Record | `repository.canonical-surfaces-reconciled` | Schema 1 | Class `fact`; subject `github-repository`; bound to one identity fact |
+| Record | `repository.controller-definition` | Schema 1 | Class `definition`; subject `github-repository`; exact enrollment prerequisites and scope |
+| Record | `repository.enrolled` | Schema 1 | Class `fact`; subject `github-repository`; active-prerequisite precedence |
+| Record | `repository.operator-hold-decision` | Schema 1 | Class `decision`; subject `github-repository`; resolved impose or exact clear |
 | Event | `control-plane.initialized` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
 | Event | `control-plane.integrity-checked` | Schema 1 | Subject `control-plane-database`; minimum class `organization` |
 | Event | `core.snapshot-activated` | Schema 1 | Subject `core-snapshot`; minimum class `organization` |
@@ -69,6 +75,9 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Event | `core.snapshot-rollback-activated` | Schema 1 | Subject `core-snapshot`; minimum class `organization` |
 | Event | `repository.core-authority-reconciled` | Schema 1 | Subject `github-repository`; declaration authority materialized |
 | Event | `repository.github-identity-reconciliation-recorded` | Schema 1 | Subject `github-repository`; bounded identity outcome recorded |
+| Event | `repository.canonical-surfaces-reconciliation-recorded` | Schema 1 | Subject `github-repository`; bounded surface outcome recorded |
+| Event | `repository.enrollment-established` | Schema 1 | Subject `github-repository`; exact enrollment established |
+| Event | `repository.operator-hold-imposed` / `repository.operator-hold-cleared` | Schema 1 | Subject `github-repository`; attributed local intervention transition |
 | Command | `control-plane.initialize` | Schema 1 | Outputs database definition, principal definition, then initialization event |
 | Command | `control-plane.check-integrity` | Schema 1 | Outputs the integrity observation, then integrity-checked event |
 | Command | `core.activate-snapshot` | Schema 1 | Outputs snapshot definition, active fact, then activation event |
@@ -79,9 +88,14 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Command | `core.rollback-snapshot` | Schema 1 | Outputs resolved decision, snapshot definition, active fact, then rollback event |
 | Command | `repository.materialize-core-authority` | Schema 1 | Outputs declaration definition, Core authorization fact, then event |
 | Command | `repository.record-github-identity` | Schema 1 | Outputs GitHub observation, identity-reconciliation fact, then event |
+| Command | `repository.record-canonical-surfaces` | Schema 1 | Outputs observation, policy decision, fact, then event |
+| Command | `repository.establish-enrollment` | Schema 1 | Outputs controller definition, enrollment fact, then event |
+| Command | `repository.impose-operator-hold` / `repository.clear-operator-hold` | Schema 1 | Each outputs one resolved operator decision, then event |
 | Predicate | `core.snapshot-active` | Contract 1 | Established by automatic activation or operator rollback; latest transaction sequence wins |
 | Predicate | `repository.core-authorized` | Contract 1 | Established only from an active retained Core declaration |
 | Predicate | `repository.github-identity-reconciled` | Contract 1 | Established only from bounded GitHub metadata and bound Core authority |
+| Predicate | `repository.canonical-surfaces-reconciled` | Contract 1 | Established only from bounded exact-commit evidence and bound identity |
+| Predicate | `repository.enrolled` | Contract 1 | Established only from current active prerequisite facts |
 | Projection | `control-plane.subject-lookup` | Contract, transformation, and information-handling version 1 | Stable subjects and creation definitions for internal diagnostics |
 | Projection | `control-plane.event-cursor` | Contract, transformation, and information-handling version 1 | Payload-free event cursor for internal diagnostics and ProcessObserver |
 
@@ -92,8 +106,8 @@ invalid:
 {
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
   "operatorPrincipalId": "0198b0a6-c200-7abc-8def-0123456789ac",
-  "registryVersion": 9,
-  "schemaVersion": 4
+  "registryVersion": 11,
+  "schemaVersion": 5
 }
 ```
 
@@ -115,9 +129,9 @@ The integrity observation and event payload have this exact shape:
 {
   "checkedThroughSequence": 1,
   "databaseLineageId": "0198b0a6-c200-7abc-8def-0123456789ab",
-  "registryVersion": 9,
+  "registryVersion": 11,
   "result": "ok",
-  "schemaVersion": 4
+  "schemaVersion": 5
 }
 ```
 
@@ -312,7 +326,7 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
    initialization transaction.
 5. Older, newer, incomplete, unexpected, or differently identified schemas
    MUST fail closed. Unregistered indexes, triggers, and views are unexpected.
-   Schema version 5 and registry version 10 define no upgrade path from earlier
+   Schema version 5 and registry version 11 define no upgrade path from earlier
    pre-production target stores.
 6. Subject, record, event, command, source, revision, record-class, and
    information-class names MUST come from the code-owned versioned registries.
@@ -476,7 +490,8 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
 53. Repository authority, GitHub identity, canonical surfaces, and enrollment
     MUST use only their registered commands and predicates. Authority and
     identity emit three outputs, surfaces emit four, and enrollment emits three;
-    each write retains one idempotency receipt indefinitely.
+    each write retains one idempotency receipt indefinitely. Local hold impose
+    and clear each emit a decision and event under the stored operator.
 54. Startup MUST verify repository subject identity, active-snapshot declaration
     bytes and digest, source revisions, authority and reconciliation record IDs,
     causation, payload lineage, transaction result, and receipt output linkage.
@@ -484,6 +499,11 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
     applicable authority, identity, surface, and enrollment facts. It MUST
     expose `enrolled` only when the enrollment fact binds all current
     prerequisites.
+56. Startup MUST verify each local-hold decision chain, exact Core authority,
+    declaration digest, operator, affected gates, recovery rule, causation,
+    ordered output, transaction result, and receipt. Status and direct
+    enrollment MUST treat an active operator hold as an independent narrowing
+    input under the [local hold contract](repository-local-holds.md).
 
 ## Derived artifacts
 
@@ -497,7 +517,7 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
 | Core snapshot definition, fact, event, retained files, and receipt | Fixed outputs and source material of `core.activate-snapshot` v1 |
 | Core candidate rejection observation, event, and receipt | Bounded fixed outputs of `core.record-candidate-rejection` v1 |
 | Core poll operational state | Validated singleton owned by `CoreSourceController` |
-| Repository effective status | Active Core authorization plus current identity, surface, and enrollment facts |
+| Repository effective status | Active Core authorization plus current identity, surface, enrollment, and independent operator-hold decisions |
 | Subject lookup generations | Full deterministic rebuild from subjects and their creation definitions |
 | Event cursor generations | Full deterministic rebuild from event occurrences without payload copies |
 | Backup manifest | Verified metadata and canonical authoritative digest of one online SQLite backup artifact |
@@ -517,12 +537,14 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
   [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md), and
   [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md), and
   [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md), and
-  [ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md)
+  [ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md), and
+  [ADR-0052](../adr/0052-bind-local-repository-holds-to-explicit-operator-decisions.md)
 - Context: [control-plane kernel](../design/control-plane-kernel.md)
 - Core authority contract: [Core snapshot activation](core-snapshot-activation.md)
 - Core diagnostic retention: [Core check-detail retention](core-check-detail-retention.md)
 - Core polling: [Core source polling](core-source-polling.md)
 - Repository reconciliation: [repository authority reconciliation](repository-authority-reconciliation.md)
-  and [repository surface reconciliation](repository-surface-reconciliation.md)
+  and [repository surface reconciliation](repository-surface-reconciliation.md),
+  and [local repository holds](repository-local-holds.md)
 - Delivery: [control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md)
 - Product: [GitHub organization agent fleet](../prd/agent-fleet.md)

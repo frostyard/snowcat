@@ -64,7 +64,7 @@ export async function reconcileRepositories(
         throw new Error(`repository authority did not materialize for ${repositoryId}`);
       }
     }
-    if (status.fleetState !== "enabled") continue;
+    if (status.fleetState !== "enabled" || status.operatorHold !== null) continue;
     const inspection = await inspect({ owner: status.owner, name: status.name });
     const identity = store.recordRepositoryGitHubIdentity({
       expectedLastTransactionSequence: store.metadata().lastTransactionSequence,

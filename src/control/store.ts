@@ -58,6 +58,7 @@ import {
   type RepositoryGitHubReconciliationPayload,
   type RepositoryGitHubResult,
   type RepositoryEnrollmentPayload,
+  type RepositoryOperatorHoldDecisionPayload,
   type RepositoryState,
   type RepositorySurfaceReconciliationPayload,
   type RepositorySurfaceRequirementResult,
@@ -66,6 +67,7 @@ import {
   type ProjectionName,
   type RecordClass,
   type SubjectKind,
+  repositoryHoldGates,
 } from "./registry.ts";
 import {
   repositoryGitBlobObjectId,
@@ -479,6 +481,31 @@ export interface RepositoryEnrollmentResult {
   transactionSequence: number;
 }
 
+export interface RepositoryOperatorHoldInput {
+  expectedLastTransactionSequence: number;
+  repositoryId: string;
+  reason: string;
+}
+
+export interface RepositoryOperatorHoldClearInput extends RepositoryOperatorHoldInput {
+  holdDecisionId: string;
+}
+
+export interface RepositoryOperatorHoldResult {
+  decisionRecordId: string;
+  eventRecordId: string;
+  repositoryId: string;
+  coreSnapshotId: string;
+  coreAuthorizationRecordId: string;
+  operatorPrincipalId: string;
+  holdDecisionId: string;
+  choice: "impose" | "clear";
+  reason: string;
+  decidedAt: string;
+  transactionPositions: readonly [0, 1];
+  transactionSequence: number;
+}
+
 export interface RepositoryStatus {
   repositoryId: string;
   owner: string;
@@ -498,6 +525,7 @@ export interface RepositoryStatus {
   surfaceResult: RepositorySurfaceResult | null;
   repositoryCommitId: string | null;
   enrollmentRecordId: string | null;
+  operatorHold: RepositoryOperatorHoldDecisionPayload | null;
   effectiveState: RepositoryState;
 }
 
@@ -923,6 +951,31 @@ export class ControlPlaneStore {
     };
   }
 
+  private activeRepositoryOperatorHolds(): Map<string, RepositoryOperatorHoldDecisionPayload> {
+    const rows = this.db
+      .prepare(
+        `SELECT occurrence.record_id, occurrence.payload_json
+         FROM durable_occurrences occurrence
+         JOIN durable_records record ON record.record_id = occurrence.record_id
+         WHERE occurrence.kind = 'repository.operator-hold-decision'
+           AND record.record_class = 'decision'
+         ORDER BY occurrence.transaction_sequence DESC`,
+      )
+      .all() as Row[];
+    const resolved = new Map<string, RepositoryOperatorHoldDecisionPayload>();
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const payload = parseJson(String(row.payload_json));
+      if (!recordKindRegistry["repository.operator-hold-decision"].validatePayload(payload)) {
+        throw new Error(`invalid repository operator hold decision: ${String(row.record_id)}`);
+      }
+      if (seen.has(payload.repositoryId)) continue;
+      seen.add(payload.repositoryId);
+      if (payload.choice === "impose") resolved.set(payload.repositoryId, payload);
+    }
+    return resolved;
+  }
+
   repositoryStatuses(): RepositoryStatus[] {
     const catalog = this.activeCoreRepositoryCatalog();
     if (!catalog) return [];
@@ -1025,10 +1078,12 @@ export class ControlPlaneStore {
         });
       }
     }
+    const operatorHoldByRepository = this.activeRepositoryOperatorHolds();
     const statuses: RepositoryStatus[] = [];
     for (const repository of catalog.repositories) {
       const repositoryId = `github.com:${repository.declaration.repository.repository_id}`;
       const authority = authorityByRepository.get(repositoryId);
+      const operatorHold = operatorHoldByRepository.get(repositoryId) ?? null;
       if (!authority) {
         statuses.push({
           repositoryId,
@@ -1049,6 +1104,7 @@ export class ControlPlaneStore {
           surfaceResult: null,
           repositoryCommitId: null,
           enrollmentRecordId: null,
+          operatorHold,
           effectiveState: "awaiting-authority",
         });
         continue;
@@ -1061,17 +1117,19 @@ export class ControlPlaneStore {
           ? "disabled"
           : authority.payload.fleetState === "paused"
             ? "paused"
-            : github === undefined
-              ? "awaiting-github"
-              : github.payload.result === "matched"
-                ? surface === undefined
-                  ? "awaiting-surfaces"
-                  : surface.payload.result !== "valid"
-                    ? "surface-held"
-                    : enrollment === undefined
-                      ? "awaiting-enrollment"
-                      : "enrolled"
-                : "github-held";
+            : operatorHold !== null
+              ? "operator-held"
+              : github === undefined
+                ? "awaiting-github"
+                : github.payload.result === "matched"
+                  ? surface === undefined
+                    ? "awaiting-surfaces"
+                    : surface.payload.result !== "valid"
+                      ? "surface-held"
+                      : enrollment === undefined
+                        ? "awaiting-enrollment"
+                        : "enrolled"
+                  : "github-held";
       statuses.push({
         repositoryId,
         owner: authority.payload.owner,
@@ -1093,6 +1151,7 @@ export class ControlPlaneStore {
         surfaceResult: surface?.payload.result ?? null,
         repositoryCommitId: surface?.payload.repositoryCommitId ?? null,
         enrollmentRecordId: enrollment?.recordId ?? null,
+        operatorHold,
         effectiveState,
       });
     }
@@ -1707,6 +1766,7 @@ export class ControlPlaneStore {
         current.coreAuthorizationRecordId !== surfacePayload.coreAuthorizationRecordId ||
         current.githubReconciliationRecordId !== surfacePayload.githubReconciliationRecordId ||
         current.surfaceReconciliationRecordId !== input.surfaceReconciliationRecordId ||
+        current.operatorHold !== null ||
         current.fleetState !== "enabled" ||
         current.githubResult !== "matched" ||
         current.surfaceResult !== "valid"
@@ -1803,6 +1863,191 @@ export class ControlPlaneStore {
       };
       this.insertReceipt(commandScope, "repository.establish-enrollment", idempotencyKey, commandPayloadDigest, result, sequence);
       this.advanceControlMetadata(enrolledAt, sequence);
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  imposeRepositoryOperatorHold(input: RepositoryOperatorHoldInput): RepositoryOperatorHoldResult {
+    return this.recordRepositoryOperatorHoldDecision("impose", input);
+  }
+
+  clearRepositoryOperatorHold(input: RepositoryOperatorHoldClearInput): RepositoryOperatorHoldResult {
+    if (!isUuidV7(input.holdDecisionId)) {
+      throw new Error("repository operator hold clearance requires a UUIDv7 active hold decision");
+    }
+    return this.recordRepositoryOperatorHoldDecision("clear", input);
+  }
+
+  private recordRepositoryOperatorHoldDecision(
+    choice: "impose" | "clear",
+    input: RepositoryOperatorHoldInput | RepositoryOperatorHoldClearInput,
+  ): RepositoryOperatorHoldResult {
+    assertExpectedSequence(input.expectedLastTransactionSequence);
+    assertSubject("github-repository", input.repositoryId);
+    assertBoundedReason(input.reason, `repository operator hold ${choice} reason`);
+    const requestedHoldDecisionId = choice === "clear"
+      ? (input as RepositoryOperatorHoldClearInput).holdDecisionId
+      : null;
+    const idempotencyKey = choice === "impose"
+      ? `repo-hold-impose:${input.expectedLastTransactionSequence}:${input.repositoryId.slice("github.com:".length)}`
+      : `repo-hold-clear:${input.expectedLastTransactionSequence}:${requestedHoldDecisionId}`;
+    const commandKind = choice === "impose"
+      ? "repository.impose-operator-hold"
+      : "repository.clear-operator-hold";
+    const commandPayloadJson = canonicalJson({
+      expectedLastTransactionSequence: input.expectedLastTransactionSequence,
+      holdDecisionId: requestedHoldDecisionId,
+      reason: input.reason,
+      repositoryId: input.repositoryId,
+    });
+    const commandPayloadDigest = sha256(commandPayloadJson);
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.verifyExisting(this.applicationTables());
+      const metadata = this.metadata();
+      const commandScope = `database:${metadata.databaseLineageId}`;
+      const prior = this.db
+        .prepare(
+          `SELECT payload_digest, result_json FROM idempotency_receipts
+           WHERE command_scope = ? AND command_kind = ?
+             AND command_schema_version = 1 AND idempotency_key = ?`,
+        )
+        .get(commandScope, commandKind, idempotencyKey) as Row | undefined;
+      if (prior) {
+        if (String(prior.payload_digest) !== commandPayloadDigest) {
+          throw new Error(`repository operator hold ${choice} idempotency payload changed`);
+        }
+        const result = parseRepositoryOperatorHoldResult(parseJson(String(prior.result_json)));
+        this.db.exec("COMMIT");
+        return result;
+      }
+
+      const decidedAt = this.now();
+      assertCommandTimeAndSequence(metadata, decidedAt, input.expectedLastTransactionSequence);
+      const current = this.repositoryStatuses().find((status) => status.repositoryId === input.repositoryId);
+      if (!current || current.coreAuthorizationRecordId === null) {
+        throw new Error("repository operator hold requires materialized authority from the active Core snapshot");
+      }
+      if (choice === "impose" && current.operatorHold !== null) {
+        throw new Error(`repository already has active operator hold ${current.operatorHold.holdDecisionId}`);
+      }
+      if (
+        choice === "clear" &&
+        (current.operatorHold === null || current.operatorHold.holdDecisionId !== requestedHoldDecisionId)
+      ) {
+        throw new Error("repository operator hold clearance does not name the exact active hold");
+      }
+      const authorityRow = this.db
+        .prepare(
+          `SELECT payload_json FROM durable_occurrences
+           WHERE record_id = ? AND kind = 'repository.core-authorized'`,
+        )
+        .get(current.coreAuthorizationRecordId) as Row | undefined;
+      const authorityPayload = authorityRow ? parseJson(String(authorityRow.payload_json)) : null;
+      if (!recordKindRegistry["repository.core-authorized"].validatePayload(authorityPayload)) {
+        throw new Error("repository operator hold Core authority is invalid");
+      }
+
+      const decisionRecordId = uuidV7(new Date(decidedAt));
+      const eventRecordId = uuidV7(new Date(decidedAt));
+      const transactionId = uuidV7(new Date(decidedAt));
+      const holdDecisionId = choice === "impose" ? decisionRecordId : requestedHoldDecisionId!;
+      const payload = {
+        decisionRecordId,
+        eventRecordId,
+        decisionType: "repository-local-hold",
+        state: "resolved",
+        choice,
+        repositoryId: input.repositoryId,
+        coreSnapshotId: current.coreSnapshotId,
+        coreAuthorizationRecordId: current.coreAuthorizationRecordId,
+        declarationDigest: authorityPayload.declarationDigest,
+        operatorPrincipalId: metadata.operatorPrincipalId,
+        holdDecisionId,
+        previousDecisionRecordId: choice === "impose" ? null : holdDecisionId,
+        affectedGates: [...repositoryHoldGates],
+        recoveryRule: "operator-clear",
+        reason: input.reason,
+        expectedLastTransactionSequence: input.expectedLastTransactionSequence,
+        decidedAt,
+      } satisfies RepositoryOperatorHoldDecisionPayload;
+      if (!recordKindRegistry["repository.operator-hold-decision"].validatePayload(payload)) {
+        throw new Error("repository operator hold is outside the registered decision contract");
+      }
+      const payloadJson = canonicalJson(payload);
+      const payloadDigest = sha256(payloadJson);
+      const transaction = this.db
+        .prepare(
+          `INSERT INTO control_transactions (
+             transaction_id, command_kind, command_schema_version, principal_kind,
+             principal_id, session_id, idempotency_key, payload_digest,
+             evaluation_time, recorded_at
+           ) VALUES (?, ?, 1, 'operator-principal', ?, NULL, ?, ?, ?, ?)`,
+        )
+        .run(
+          transactionId,
+          commandKind,
+          metadata.operatorPrincipalId,
+          idempotencyKey,
+          commandPayloadDigest,
+          decidedAt,
+          decidedAt,
+        );
+      const sequence = Number(transaction.lastInsertRowid);
+      const common = {
+        schemaVersion: 1,
+        subjectKind: "github-repository" as const,
+        subjectId: input.repositoryId,
+        revisionKind: "core-declaration-sha256",
+        revisionValue: authorityPayload.declarationDigest,
+        sourceKind: "operator-principal",
+        sourceId: metadata.operatorPrincipalId,
+        informationClass: "organization" as const,
+        informationScopeJson: canonicalJson({ deploymentId: metadata.databaseLineageId }),
+        payloadJson,
+        payloadDigest,
+        correlationId: holdDecisionId,
+        transactionSequence: sequence,
+        recordedAt: decidedAt,
+      };
+      this.insertOccurrence({
+        ...common,
+        recordId: decisionRecordId,
+        occurrenceType: "record",
+        kind: "repository.operator-hold-decision",
+        recordClass: "decision",
+        causationRecordId: choice === "impose" ? current.coreAuthorizationRecordId : holdDecisionId,
+        transactionPosition: 0,
+      });
+      this.insertOccurrence({
+        ...common,
+        recordId: eventRecordId,
+        occurrenceType: "event",
+        kind: choice === "impose" ? "repository.operator-hold-imposed" : "repository.operator-hold-cleared",
+        causationRecordId: decisionRecordId,
+        transactionPosition: 1,
+      });
+      const result: RepositoryOperatorHoldResult = {
+        decisionRecordId,
+        eventRecordId,
+        repositoryId: input.repositoryId,
+        coreSnapshotId: current.coreSnapshotId,
+        coreAuthorizationRecordId: current.coreAuthorizationRecordId,
+        operatorPrincipalId: metadata.operatorPrincipalId,
+        holdDecisionId,
+        choice,
+        reason: input.reason,
+        decidedAt,
+        transactionPositions: [0, 1],
+        transactionSequence: sequence,
+      };
+      this.insertReceipt(commandScope, commandKind, idempotencyKey, commandPayloadDigest, result, sequence);
+      this.advanceControlMetadata(decidedAt, sequence);
       this.db.exec("COMMIT");
       return result;
     } catch (error) {
@@ -4289,14 +4534,17 @@ export class ControlPlaneStore {
       | "repository.materialize-core-authority"
       | "repository.record-github-identity"
       | "repository.record-canonical-surfaces"
-      | "repository.establish-enrollment",
+      | "repository.establish-enrollment"
+      | "repository.impose-operator-hold"
+      | "repository.clear-operator-hold",
     idempotencyKey: string,
     payloadDigest: string,
     result:
       | RepositoryCoreAuthorityResult
       | RepositoryGitHubReconciliationResult
       | RepositorySurfaceReconciliationResult
-      | RepositoryEnrollmentResult,
+      | RepositoryEnrollmentResult
+      | RepositoryOperatorHoldResult,
     transactionSequence: number,
   ): void {
     this.db
@@ -4889,6 +5137,22 @@ export class ControlPlaneStore {
         ) {
           throw new Error(`repository enrollment transaction shape is invalid: ${String(row.sequence)}`);
         }
+      } else if (
+        row.command_kind === "repository.impose-operator-hold" ||
+        row.command_kind === "repository.clear-operator-hold"
+      ) {
+        const validKey = row.command_kind === "repository.impose-operator-hold"
+          ? /^repo-hold-impose:[1-9][0-9]*:[1-9][0-9]{0,19}$/.test(String(row.idempotency_key))
+          : /^repo-hold-clear:[1-9][0-9]*:[0-9a-f-]{36}$/.test(String(row.idempotency_key));
+        if (
+          !validKey ||
+          row.principal_kind !== "operator-principal" ||
+          row.principal_id !== this.metadata().operatorPrincipalId ||
+          receiptCount !== 1 ||
+          !outputs.every((output) => output.payload_digest === outputs[0]!.payload_digest)
+        ) {
+          throw new Error(`repository operator hold transaction shape is invalid: ${String(row.sequence)}`);
+        }
       }
     }
 
@@ -5208,6 +5472,7 @@ export class ControlPlaneStore {
               ? reconciliation.reconciliationRecordId
               : reconciliation.eventRecordId;
         if (
+          !authority ||
           !authorityPayload ||
           !recordKindRegistry["repository.core-authorized"].validatePayload(authorityPayload) ||
           String(row.subject_kind) !== "github-repository" ||
@@ -5328,6 +5593,84 @@ export class ControlPlaneStore {
           surfacePayload.repositoryCommitId !== enrollment.repositoryCommitId
         ) {
           throw new Error(`repository enrollment lineage mismatch: ${String(row.record_id)}`);
+        }
+      }
+      if (
+        String(row.kind) === "repository.operator-hold-decision" ||
+        String(row.kind) === "repository.operator-hold-imposed" ||
+        String(row.kind) === "repository.operator-hold-cleared"
+      ) {
+        const hold = payload as RepositoryOperatorHoldDecisionPayload;
+        const authority = this.db
+          .prepare(
+            `SELECT payload_json, transaction_sequence FROM durable_occurrences
+             WHERE record_id = ? AND kind = 'repository.core-authorized'`,
+          )
+          .get(hold.coreAuthorizationRecordId) as Row | undefined;
+        const authorityPayload = authority ? parseJson(String(authority.payload_json)) : undefined;
+        const activeSnapshotAtDecision = this.db
+          .prepare(
+            `SELECT snapshot_id FROM core_snapshots
+             WHERE activated_transaction_sequence <= ?
+             ORDER BY activated_transaction_sequence DESC LIMIT 1`,
+          )
+          .get(hold.expectedLastTransactionSequence) as Row | undefined;
+        const prior = this.db
+          .prepare(
+            `SELECT occurrence.record_id, occurrence.payload_json
+             FROM durable_occurrences occurrence
+             JOIN durable_records record ON record.record_id = occurrence.record_id
+             WHERE occurrence.kind = 'repository.operator-hold-decision'
+               AND record.record_class = 'decision'
+               AND occurrence.subject_id = ?
+               AND occurrence.transaction_sequence < ?
+             ORDER BY occurrence.transaction_sequence DESC LIMIT 1`,
+          )
+          .get(hold.repositoryId, row.transaction_sequence!) as Row | undefined;
+        const priorPayload = prior ? parseJson(String(prior.payload_json)) : undefined;
+        const decisionOccurrence = String(row.kind) === "repository.operator-hold-decision";
+        const expectedEventKind = hold.choice === "impose"
+          ? "repository.operator-hold-imposed"
+          : "repository.operator-hold-cleared";
+        const expectedCausation = decisionOccurrence
+          ? hold.choice === "impose"
+            ? hold.coreAuthorizationRecordId
+            : hold.holdDecisionId
+          : hold.decisionRecordId;
+        const priorChainValid = hold.choice === "impose"
+          ? prior === undefined ||
+            (recordKindRegistry["repository.operator-hold-decision"].validatePayload(priorPayload) &&
+              priorPayload.choice === "clear")
+          : prior !== undefined &&
+            String(prior.record_id) === hold.holdDecisionId &&
+            recordKindRegistry["repository.operator-hold-decision"].validatePayload(priorPayload) &&
+            priorPayload.choice === "impose";
+        if (
+          !authorityPayload ||
+          !recordKindRegistry["repository.core-authorized"].validatePayload(authorityPayload) ||
+          String(row.subject_kind) !== "github-repository" ||
+          String(row.subject_id) !== hold.repositoryId ||
+          String(row.record_id) !== (decisionOccurrence ? hold.decisionRecordId : hold.eventRecordId) ||
+          (!decisionOccurrence && String(row.kind) !== expectedEventKind) ||
+          String(row.revision_kind) !== "core-declaration-sha256" ||
+          String(row.revision_value) !== hold.declarationDigest ||
+          String(row.source_kind) !== "operator-principal" ||
+          String(row.source_id) !== this.metadata().operatorPrincipalId ||
+          row.source_revision_kind != null ||
+          row.source_revision_value != null ||
+          String(row.correlation_id) !== hold.holdDecisionId ||
+          String(row.causation_record_id) !== expectedCausation ||
+          String(row.recorded_at) !== hold.decidedAt ||
+          hold.operatorPrincipalId !== this.metadata().operatorPrincipalId ||
+          Number(row.transaction_sequence) !== hold.expectedLastTransactionSequence + 1 ||
+          authorityPayload.repositoryId !== hold.repositoryId ||
+          authorityPayload.coreSnapshotId !== hold.coreSnapshotId ||
+          authorityPayload.declarationDigest !== hold.declarationDigest ||
+          Number(authority?.transaction_sequence) > hold.expectedLastTransactionSequence ||
+          String(activeSnapshotAtDecision?.snapshot_id) !== hold.coreSnapshotId ||
+          !priorChainValid
+        ) {
+          throw new Error(`repository operator hold lineage mismatch: ${String(row.record_id)}`);
         }
       }
       if (row.revision_kind === "sha256" && String(row.revision_value) !== String(row.payload_digest)) {
@@ -5607,6 +5950,12 @@ export class ControlPlaneStore {
       if (commandKind === "repository.record-github-identity") parseRepositoryGitHubReconciliationResult(result);
       if (commandKind === "repository.record-canonical-surfaces") parseRepositorySurfaceReconciliationResult(result);
       if (commandKind === "repository.establish-enrollment") parseRepositoryEnrollmentResult(result);
+      if (
+        commandKind === "repository.impose-operator-hold" ||
+        commandKind === "repository.clear-operator-hold"
+      ) {
+        parseRepositoryOperatorHoldResult(result);
+      }
       assertUtcInstant(String(row.retained_until), `idempotency receipt ${String(row.idempotency_key)} retention time`);
       if (
         (commandKind === "control-plane.check-integrity" ||
@@ -5619,7 +5968,9 @@ export class ControlPlaneStore {
           commandKind === "repository.materialize-core-authority" ||
           commandKind === "repository.record-github-identity" ||
           commandKind === "repository.record-canonical-surfaces" ||
-          commandKind === "repository.establish-enrollment") &&
+          commandKind === "repository.establish-enrollment" ||
+          commandKind === "repository.impose-operator-hold" ||
+          commandKind === "repository.clear-operator-hold") &&
         String(row.retained_until) !== IDEMPOTENCY_RETAINED_UNTIL
       ) {
         throw new Error(`idempotency receipt retention mismatch: ${String(row.idempotency_key)}`);
@@ -6015,6 +6366,44 @@ export class ControlPlaneStore {
           factPayload.enrolledAt !== enrollment.enrolledAt
         ) {
           throw new Error(`repository enrollment receipt output mismatch: ${String(row.idempotency_key)}`);
+        }
+      }
+      if (
+        commandKind === "repository.impose-operator-hold" ||
+        commandKind === "repository.clear-operator-hold"
+      ) {
+        const hold = parseRepositoryOperatorHoldResult(result);
+        const outputs = this.db
+          .prepare(
+            `SELECT record_id, payload_json FROM durable_occurrences
+             WHERE transaction_sequence = ? ORDER BY transaction_position`,
+          )
+          .all(row.transaction_sequence!) as Row[];
+        const decisionPayload = outputs[0] ? parseJson(String(outputs[0].payload_json)) : undefined;
+        const expectedKey = hold.choice === "impose"
+          ? `repo-hold-impose:${hold.transactionSequence - 1}:${hold.repositoryId.slice("github.com:".length)}`
+          : `repo-hold-clear:${hold.transactionSequence - 1}:${hold.holdDecisionId}`;
+        if (
+          hold.transactionSequence !== Number(row.transaction_sequence) ||
+          hold.decidedAt !== String(transaction.evaluation_time) ||
+          hold.decidedAt !== String(transaction.recorded_at) ||
+          String(row.idempotency_key) !== expectedKey ||
+          (commandKind === "repository.impose-operator-hold") !== (hold.choice === "impose") ||
+          outputs.length !== 2 ||
+          String(outputs[0]!.record_id) !== hold.decisionRecordId ||
+          String(outputs[1]!.record_id) !== hold.eventRecordId ||
+          !decisionPayload ||
+          !recordKindRegistry["repository.operator-hold-decision"].validatePayload(decisionPayload) ||
+          decisionPayload.repositoryId !== hold.repositoryId ||
+          decisionPayload.coreSnapshotId !== hold.coreSnapshotId ||
+          decisionPayload.coreAuthorizationRecordId !== hold.coreAuthorizationRecordId ||
+          decisionPayload.operatorPrincipalId !== hold.operatorPrincipalId ||
+          decisionPayload.holdDecisionId !== hold.holdDecisionId ||
+          decisionPayload.choice !== hold.choice ||
+          decisionPayload.reason !== hold.reason ||
+          decisionPayload.decidedAt !== hold.decidedAt
+        ) {
+          throw new Error(`repository operator hold receipt output mismatch: ${String(row.idempotency_key)}`);
         }
       }
     }
@@ -6738,6 +7127,51 @@ function parseRepositoryEnrollmentResult(value: JsonValue): RepositoryEnrollment
   }
   assertUtcInstant(value.enrolledAt, "repository enrollment time");
   return value as unknown as RepositoryEnrollmentResult;
+}
+
+function parseRepositoryOperatorHoldResult(value: JsonValue): RepositoryOperatorHoldResult {
+  if (
+    !isExactJsonObject(value, [
+      "decisionRecordId",
+      "eventRecordId",
+      "repositoryId",
+      "coreSnapshotId",
+      "coreAuthorizationRecordId",
+      "operatorPrincipalId",
+      "holdDecisionId",
+      "choice",
+      "reason",
+      "decidedAt",
+      "transactionPositions",
+      "transactionSequence",
+    ]) ||
+    typeof value.decisionRecordId !== "string" ||
+    !isUuidV7(value.decisionRecordId) ||
+    typeof value.eventRecordId !== "string" ||
+    !isUuidV7(value.eventRecordId) ||
+    typeof value.repositoryId !== "string" ||
+    !/^github\.com:[1-9][0-9]{0,19}$/.test(value.repositoryId) ||
+    typeof value.coreSnapshotId !== "string" ||
+    !isUuidV7(value.coreSnapshotId) ||
+    typeof value.coreAuthorizationRecordId !== "string" ||
+    !isUuidV7(value.coreAuthorizationRecordId) ||
+    typeof value.operatorPrincipalId !== "string" ||
+    !isUuidV7(value.operatorPrincipalId) ||
+    typeof value.holdDecisionId !== "string" ||
+    !isUuidV7(value.holdDecisionId) ||
+    (value.choice !== "impose" && value.choice !== "clear") ||
+    typeof value.reason !== "string" ||
+    typeof value.decidedAt !== "string" ||
+    !Array.isArray(value.transactionPositions) ||
+    canonicalJson(value.transactionPositions) !== "[0,1]" ||
+    !Number.isSafeInteger(value.transactionSequence) ||
+    Number(value.transactionSequence) < 1
+  ) {
+    throw new Error("invalid repository operator hold receipt result");
+  }
+  assertBoundedReason(value.reason, "repository operator hold result reason");
+  assertUtcInstant(value.decidedAt, "repository operator hold decision time");
+  return value as unknown as RepositoryOperatorHoldResult;
 }
 
 function assertCorePollInterval(value: number): void {

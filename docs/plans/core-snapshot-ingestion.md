@@ -99,9 +99,10 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
   surface loading, policy validation, and separate enrollment establishment are
   implemented. Local failures create the smallest repository result and do not
   invalidate the Core snapshot.
-- Enforce declaration retention as `disabled`, local suspension as narrowing
+- Enforce declaration retention as `disabled`, local operator hold as narrowing
   only, and explicit reconciliation before held work can resume. Declaration
-  retention is implemented; local suspension and held-work disposition remain.
+  retention and the non-expiring attributed local hold are implemented;
+  held-work disposition remains.
 - **Done when:** an enabled declaration in an activated snapshot plus matching
   GitHub identity and required surfaces creates enrollment without work, while
   disabled, paused, missing, renamed, archived, ID-mismatched, or surface-invalid
@@ -127,7 +128,8 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
   [Core check-detail retention](../specs/core-check-detail-retention.md), and
   [Core source polling](../specs/core-source-polling.md), and
   [repository authority reconciliation](../specs/repository-authority-reconciliation.md), and
-  [repository surface reconciliation](../specs/repository-surface-reconciliation.md)
+  [repository surface reconciliation](../specs/repository-surface-reconciliation.md), and
+  [local repository holds](../specs/repository-local-holds.md)
 - Rationale:
   [ADR-0014](../adr/0014-import-core-as-atomic-validated-snapshots.md) and
   [ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md), and
@@ -137,5 +139,6 @@ phases of the [product foundation roadmap](product-foundation-roadmap.md).
   and [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md)
   and [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md)
   and [ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md)
+  and [ADR-0052](../adr/0052-bind-local-repository-holds-to-explicit-operator-decisions.md)
 - Parent delivery order: [product foundation roadmap](product-foundation-roadmap.md)
 - Target substrate: [control-plane kernel bootstrap](control-plane-kernel-bootstrap.md)

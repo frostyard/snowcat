@@ -2,7 +2,7 @@ import { isUuidV7, type JsonValue } from "./encoding.ts";
 
 export const CONTROL_PLANE_APPLICATION_ID = 1_179_405_908; // ASCII "FLNT"
 export const CONTROL_PLANE_SCHEMA_VERSION = 5;
-export const CONTROL_PLANE_REGISTRY_VERSION = 10;
+export const CONTROL_PLANE_REGISTRY_VERSION = 11;
 
 export const informationClasses = ["public", "organization", "restricted"] as const;
 export type InformationClass = (typeof informationClasses)[number];
@@ -233,6 +233,13 @@ export const recordKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isRepositoryEnrollmentPayload,
   },
+  "repository.operator-hold-decision": {
+    schemaVersion: 1,
+    recordClass: "decision",
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isRepositoryOperatorHoldDecisionPayload,
+  },
 } as const;
 
 export const eventKindRegistry = {
@@ -308,6 +315,18 @@ export const eventKindRegistry = {
     minimumInformationClass: "organization",
     validatePayload: isRepositoryEnrollmentPayload,
   },
+  "repository.operator-hold-imposed": {
+    schemaVersion: 1,
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isRepositoryOperatorHoldDecisionPayload,
+  },
+  "repository.operator-hold-cleared": {
+    schemaVersion: 1,
+    subjectKinds: ["github-repository"],
+    minimumInformationClass: "organization",
+    validatePayload: isRepositoryOperatorHoldDecisionPayload,
+  },
 } as const;
 
 export const commandKindRegistry = {
@@ -380,6 +399,14 @@ export const commandKindRegistry = {
       "repository.enrolled",
       "repository.enrollment-established",
     ],
+  },
+  "repository.impose-operator-hold": {
+    schemaVersion: 1,
+    outputKinds: ["repository.operator-hold-decision", "repository.operator-hold-imposed"],
+  },
+  "repository.clear-operator-hold": {
+    schemaVersion: 1,
+    outputKinds: ["repository.operator-hold-decision", "repository.operator-hold-cleared"],
   },
 } as const;
 
@@ -611,6 +638,8 @@ export interface CoreRollbackActivatedPayload extends Record<string, JsonValue> 
 export type RepositoryFleetState = "enabled" | "paused" | "disabled";
 export type RepositoryMaintenanceProgram = "quality" | "ci" | "security" | "architecture";
 export type RepositoryAction = "read" | "write" | "run-tests" | "open-issue" | "open-pr" | "create-followup";
+export const repositoryHoldGates = ["discovery", "admission", "claim", "lease-renewal"] as const;
+export type RepositoryHoldGate = (typeof repositoryHoldGates)[number];
 export type RepositoryGitHubResult =
   | "matched"
   | "missing"
@@ -626,6 +655,7 @@ export type RepositoryState =
   | "github-held"
   | "awaiting-surfaces"
   | "surface-held"
+  | "operator-held"
   | "awaiting-enrollment"
   | "enrolled";
 
@@ -741,6 +771,26 @@ export interface RepositoryEnrollmentPayload extends Record<string, JsonValue> {
   maintenancePrograms: RepositoryMaintenanceProgram[];
   actionCeiling: RepositoryAction[];
   enrolledAt: string;
+}
+
+export interface RepositoryOperatorHoldDecisionPayload extends Record<string, JsonValue> {
+  decisionRecordId: string;
+  eventRecordId: string;
+  decisionType: "repository-local-hold";
+  state: "resolved";
+  choice: "impose" | "clear";
+  repositoryId: string;
+  coreSnapshotId: string;
+  coreAuthorizationRecordId: string;
+  declarationDigest: string;
+  operatorPrincipalId: string;
+  holdDecisionId: string;
+  previousDecisionRecordId: string | null;
+  affectedGates: RepositoryHoldGate[];
+  recoveryRule: "operator-clear";
+  reason: string;
+  expectedLastTransactionSequence: number;
+  decidedAt: string;
 }
 
 export function assertSubject(kind: string, id: string): asserts kind is SubjectKind {
@@ -1459,6 +1509,60 @@ function isRepositorySurfaceReconciliationPayload(
       return requirement.result === "unknown" && requirement.evidenceDigest === null;
     })
   );
+}
+
+function isRepositoryOperatorHoldDecisionPayload(
+  value: unknown,
+): value is RepositoryOperatorHoldDecisionPayload {
+  if (
+    !isExactObject(value, [
+      "decisionRecordId",
+      "eventRecordId",
+      "decisionType",
+      "state",
+      "choice",
+      "repositoryId",
+      "coreSnapshotId",
+      "coreAuthorizationRecordId",
+      "declarationDigest",
+      "operatorPrincipalId",
+      "holdDecisionId",
+      "previousDecisionRecordId",
+      "affectedGates",
+      "recoveryRule",
+      "reason",
+      "expectedLastTransactionSequence",
+      "decidedAt",
+    ]) ||
+    !isUuid(value.decisionRecordId) ||
+    !isUuid(value.eventRecordId) ||
+    value.decisionType !== "repository-local-hold" ||
+    value.state !== "resolved" ||
+    (value.choice !== "impose" && value.choice !== "clear") ||
+    typeof value.repositoryId !== "string" ||
+    !/^github\.com:[1-9][0-9]{0,19}$/.test(value.repositoryId) ||
+    !isUuid(value.coreSnapshotId) ||
+    !isUuid(value.coreAuthorizationRecordId) ||
+    !isSha256(value.declarationDigest) ||
+    !isUuid(value.operatorPrincipalId) ||
+    !isUuid(value.holdDecisionId) ||
+    !(value.previousDecisionRecordId === null || isUuid(value.previousDecisionRecordId)) ||
+    !Array.isArray(value.affectedGates) ||
+    value.affectedGates.length !== repositoryHoldGates.length ||
+    value.affectedGates.some((gate, index) => gate !== repositoryHoldGates[index]) ||
+    value.recoveryRule !== "operator-clear" ||
+    !isBoundedDiagnostic(value.reason) ||
+    value.reason !== value.reason.trim() ||
+    /[\u0000-\u001f\u007f]/.test(value.reason) ||
+    !Number.isSafeInteger(value.expectedLastTransactionSequence) ||
+    Number(value.expectedLastTransactionSequence) < 1 ||
+    !isUtcInstant(value.decidedAt)
+  ) {
+    return false;
+  }
+  return value.choice === "impose"
+    ? value.decisionRecordId === value.holdDecisionId && value.previousDecisionRecordId === null
+    : value.decisionRecordId !== value.holdDecisionId && value.previousDecisionRecordId === value.holdDecisionId;
 }
 
 function isRepositorySurfaceRequirementResult(value: unknown): value is RepositorySurfaceRequirementResult {

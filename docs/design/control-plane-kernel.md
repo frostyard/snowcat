@@ -7,12 +7,16 @@ Living document. Rationale:
 [ADR-0047](../adr/0047-cap-stale-source-overrides-at-24-hours.md), and
 [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md), plus
 [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md), and
-[ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md).
+[ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md),
+[ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md),
+and [ADR-0052](../adr/0052-bind-local-repository-holds-to-explicit-operator-decisions.md).
 Contracts: [control-plane kernel](../specs/control-plane-kernel.md) and
 [Core source readiness](../specs/core-source-readiness.md), plus
 [Core check-detail retention](../specs/core-check-detail-retention.md) and
 [Core source polling](../specs/core-source-polling.md), plus
-[repository authority reconciliation](../specs/repository-authority-reconciliation.md).
+[repository authority reconciliation](../specs/repository-authority-reconciliation.md),
+[repository surface reconciliation](../specs/repository-surface-reconciliation.md),
+and [local repository holds](../specs/repository-local-holds.md).
 
 ## Overview
 
@@ -65,8 +69,9 @@ schemas fail rather than being guessed or upgraded by this slice.
 ### Closed registries
 
 [`registry.ts`](../../src/control/registry.ts) is the only owner of the current
-kernel vocabulary. Registry version 10 contains the bootstrap, Core snapshot,
-source-check, rollback, repository-reconciliation, and enrollment contracts:
+kernel vocabulary. Registry version 11 contains the bootstrap, Core snapshot,
+source-check, rollback, repository-reconciliation, enrollment, and local
+repository-hold contracts:
 
 | Registry | Initial member | Meaning |
 | --- | --- | --- |
@@ -88,7 +93,7 @@ source-check, rollback, repository-reconciliation, and enrollment contracts:
 | Record kind | `core.source-check-eligible-observation` v1 | Configured-ref check that exactly matches active authority |
 | Record kind | `core.stale-source-override-decision` v1 | Resolved operator choice bound to stale evidence, active snapshot, and expiry |
 | Record kind | `core.rollback-decision` v1 | Resolved operator choice bound to exact prior Core authority, target commit, and reason |
-| Record kinds | `repository.*` v1 | Exact declaration definition, Core authorization, GitHub observation, and identity-reconciliation fact |
+| Record kinds | `repository.*` v1 | Exact authority, identity, surface, enrollment, and operator-hold records |
 | Event kind | `control-plane.initialized` v1 | The past-tense account of successful initialization |
 | Event kind | `control-plane.integrity-checked` v1 | The past-tense account of the accepted integrity observation |
 | Event kind | `core.snapshot-activated` v1 | The past-tense account of selecting one snapshot |
@@ -96,11 +101,11 @@ source-check, rollback, repository-reconciliation, and enrollment contracts:
 | Event kind | `core.source-check-eligible` v1 | The past-tense audit account of one eligible configured-ref check |
 | Event kind | `core.stale-source-override-issued` v1 | The past-tense account causally linked to the override decision |
 | Event kind | `core.snapshot-rollback-activated` v1 | The past-tense account linking an operator decision, prior authority, and new snapshot |
-| Event kinds | `repository.*reconciled` v1 | Past-tense Core-authority and GitHub-identity outcomes |
+| Event kinds | `repository.*` v1 | Past-tense repository reconciliation, enrollment, and local-hold outcomes |
 | Command kind | `control-plane.initialize` v1 | The fixed bootstrap transaction and its ordered outputs |
 | Command kind | `control-plane.check-integrity` v1 | An optimistic, idempotent system integrity check |
 | Command kind | `core.activate-snapshot` v1 | Atomic retention and activation of one independently revalidated candidate |
-| Command kinds | `repository.materialize-core-authority`, `repository.record-github-identity` v1 | Per-repository optimistic and idempotent reconciliation transactions |
+| Command kinds | `repository.*` v1 | Per-repository optimistic authority, reconciliation, enrollment, and operator-hold transactions |
 | Command kind | `core.record-candidate-rejection` v1 | Idempotent bounded rejection observation and event |
 | Command kind | `core.record-source-check-eligible` v1 | Idempotent eligible-check observation and event |
 | Command kind | `core.issue-stale-source-override` v1 | Optimistic attributed decision capped at 24 hours |
@@ -342,7 +347,7 @@ that connection, so repair mode is not a general fail-open switch.
 
 ### Validation boundary
 
-Startup checks schema identity, the exact v2 table set and absence of
+Startup checks schema identity, the exact target table set and absence of
 unregistered indexes, triggers, or views, metadata versions,
 UUIDv7 lineage, transaction maximum and SQLite allocation watermark, control
 time, subject and revision kinds, source, information class, payload digest,
@@ -395,13 +400,15 @@ work lineage are later slices in the
   [ADR-0048](../adr/0048-retain-core-check-detail-for-30-days.md), and
   [ADR-0049](../adr/0049-poll-core-through-one-leased-controller.md), and
   [ADR-0050](../adr/0050-reconcile-repository-enrollment-as-separate-facts.md), and
-  [ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md)
+  [ADR-0051](../adr/0051-pin-surfaces-to-the-observed-default-branch-head.md), and
+  [ADR-0052](../adr/0052-bind-local-repository-holds-to-explicit-operator-decisions.md)
 - Contracts: [control-plane kernel](../specs/control-plane-kernel.md) and
   [Core snapshot activation](../specs/core-snapshot-activation.md), and
   [Core source readiness](../specs/core-source-readiness.md), and
   [Core check-detail retention](../specs/core-check-detail-retention.md), and
   [Core source polling](../specs/core-source-polling.md), and
   [repository authority reconciliation](../specs/repository-authority-reconciliation.md), and
-  [repository surface reconciliation](../specs/repository-surface-reconciliation.md)
+  [repository surface reconciliation](../specs/repository-surface-reconciliation.md), and
+  [local repository holds](../specs/repository-local-holds.md)
 - Built in: [control-plane kernel bootstrap — Phases 1–3](../plans/control-plane-kernel-bootstrap.md)
 - Product: [GitHub organization agent fleet](../prd/agent-fleet.md)
