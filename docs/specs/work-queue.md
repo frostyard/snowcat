@@ -88,7 +88,8 @@ a follow-up. It does not call a model.
 
 `seed-dogfood` deterministically creates at most one active read-only root for
 each maintenance program in the catalog (`src/queue/programs.ts`: quality, CI,
-security, and architecture, each with its own no-finding cooldown).
+security, architecture, conformance, and triage, each with its own no-finding
+cooldown).
 `seed-dogfood --enrolled` offers a repository only the programs
 its Core declaration lists in `maintenance_programs` and reports the rest as
 `undeclaredKinds`; `seed-dogfood <owner/repo>` offers the whole catalog.
@@ -304,8 +305,8 @@ MCP (rule 41).
     instructions quote the issue body as untrusted GitHub-authored context
     (bounded to 16,000 characters), and whose priority is operator-supplied.
 32. The dogfood feeder MUST apply a no-finding cooldown per program: by
-    default each program's catalog cadence (quality, CI, and security 24
-    hours; architecture 7 days), or one `--cooldown-hours <n>` value for every
+    default each program's catalog cadence (quality, CI, security, and triage
+    24 hours; architecture and conformance 7 days), or one `--cooldown-hours <n>` value for every
     program in that run (`0` disables it). A kind whose most recent root in
     the repository is `completed` within its window and proposed no child MUST
     be skipped and reported as cooled; a kind whose latest root proposed a

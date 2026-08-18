@@ -8,13 +8,16 @@ test("every catalog entry is a Core program with a distinct discovery kind; Core
   const ids = maintenancePrograms.map((program) => program.id);
   assert.equal(new Set(ids).size, ids.length);
   for (const id of ids) assert.ok((REPOSITORY_MAINTENANCE_PROGRAMS as readonly string[]).includes(id), id);
-  assert.deepEqual(ids.sort(), ["architecture", "ci", "quality", "security"]);
+  assert.deepEqual(ids.sort(), ["architecture", "ci", "conformance", "quality", "security", "triage"]);
   const kinds = maintenancePrograms.map((program) => program.discovery.kind);
   assert.equal(new Set(kinds).size, kinds.length);
   for (const id of ids) assert.equal(maintenanceProgram(id).id, id);
   // Declared in Core (ADR-0039) but not yet in the catalog: known to the registry, unknown to the catalog.
   assert.deepEqual([...REPOSITORY_MAINTENANCE_PROGRAMS], ["quality", "ci", "security", "architecture", "conformance", "triage", "dependencies", "docs", "release"]);
   assert.throws(() => maintenanceProgram("dependencies"), /unknown maintenance program/);
+  // Triage children are proposals with issue-mutation authority at most, never a pull request (ADR-0062).
+  assert.deepEqual(maintenanceProgram("triage").childCeiling, ["read", "open-issue"]);
+  assert.equal(maintenanceProgram("triage").childAdmission, "proposed");
 });
 
 test("every program is a read-only discovery root with a positive cooldown, a bounded child ceiling, and proposed children", () => {
@@ -23,12 +26,13 @@ test("every program is a read-only discovery root with a positive cooldown, a bo
     assert.ok(Number.isSafeInteger(program.cooldownSeconds) && program.cooldownSeconds > 0, program.id);
     assert.equal(program.childAdmission, "proposed", program.id);
     assert.ok(program.childCeiling.length > 0 && program.childCeiling.every((action) => ["read", "write", "run-tests", "open-issue", "open-pr", "create-followup"].includes(action)), program.id);
+    assert.ok(program.discovery.kind.endsWith("-discovery"), program.id);
     assert.equal(program.discovery.priority, 0, program.id);
     assert.match(program.discovery.instructions, /Do not edit files or open a GitHub artifact/, program.id);
   }
   // Cadence defaults recorded in the maintenance programs plan.
   const cadence = Object.fromEntries(maintenancePrograms.map((program) => [program.id, program.cooldownSeconds]));
-  assert.deepEqual(cadence, { quality: 86_400, ci: 86_400, security: 86_400, architecture: 604_800 });
+  assert.deepEqual(cadence, { quality: 86_400, ci: 86_400, security: 86_400, architecture: 604_800, conformance: 604_800, triage: 86_400 });
 });
 
 test("discoveryRootFor authors the program's root for a repository with the child ceiling as delegableActions", () => {

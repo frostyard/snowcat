@@ -1001,13 +1001,13 @@ test("board actions import labeled issues, seed dogfood, verify artifacts, and i
   assert.equal(seeded.status, 303);
   assert.equal(
     seeded.headers.get("Location"),
-    "/repositories/frostyard/example?done=work.queued&detail=2+created+%28quality-gap-discovery%2C+ci-gap-discovery%29%2C+0+active%2C+0+cooling%2C+2+not+declared",
+    "/repositories/frostyard/example?done=work.queued&detail=2+created+%28quality-gap-discovery%2C+ci-gap-discovery%29%2C+0+active%2C+0+cooling%2C+4+not+declared",
   );
   const roots = queue.list({ status: "queued", repository: "frostyard/example" });
   assert.equal(roots.length, 2);
   assert.deepEqual(roots.map((item) => item.kind).sort(), ["ci-gap-discovery", "quality-gap-discovery"]);
   const reseed = await post("seed-dogfood");
-  assert.equal(reseed.headers.get("Location"), "/repositories/frostyard/example?done=seed.unchanged&detail=0+created%2C+2+active%2C+0+cooling%2C+2+not+declared");
+  assert.equal(reseed.headers.get("Location"), "/repositories/frostyard/example?done=seed.unchanged&detail=0+created%2C+2+active%2C+0+cooling%2C+4+not+declared");
 
   // Verify artifacts: a completed item with an open PR becomes merged and records artifact.verified by operator:web.
   const done = queue.enqueueSeed({

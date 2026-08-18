@@ -203,8 +203,8 @@ hands on the host.
 2. **A week of steady state on updex and fluent** — feeder and import on
    timers, admission from the browser, workers started by the operator or
    on a loop; record accepted-per-attempt, blocked, and time-to-merge daily
-   into the PRD baseline. Decide the Hive/Fluent boundary (skip `fluent`-
-   labeled issues in Hive) before running both again.
+   into the PRD baseline. (The Hive/Fluent boundary was decided 2026-08-18:
+   Hive retired, ADR-0062.)
 3. **Second repository** — enroll one more Frostyard Go repository (the
    `frostyard-go-repo` skill makes it uniform: `policies/agent-governance.json`
    plus the core declaration) and confirm the surface, timers, and gate work
@@ -239,9 +239,9 @@ hands on the host.
 - **Second dogfood repository:** the operator chooses in Phase 7 step 3;
   a Go repository already carrying the `frostyard-go-repo` skill is the
   default.
-- **Hive boundary:** whether Hive skips `fluent`-labeled issues or Fluent
-  imports only issues Hive will not take; decided before both run on one
-  repository again.
+- **Hive boundary:** resolved 2026-08-18 by
+  [ADR-0062](../adr/0062-retire-hive-fluent-owns-conformance.md) — Hive is
+  retired; Fluent's `conformance` and `triage` programs own what it did.
 
 ## References
 

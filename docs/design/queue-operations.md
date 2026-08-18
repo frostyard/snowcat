@@ -190,8 +190,10 @@ child. Each entry names its Core `maintenance_programs` id, its discovery
 template, the widest child ceiling, how children enter (`proposed`), and its
 own no-finding cooldown — the cadence at which a repository is asked again
 after a program answered "nothing": **quality daily, CI daily, security daily,
-architecture weekly**. Adding a program is one catalog entry plus its Core enum
-value.
+architecture weekly, conformance weekly, triage daily** (conformance and
+triage per [ADR-0062](../adr/0062-retire-hive-fluent-owns-conformance.md);
+triage children are proposals with at most `read, open-issue`). Adding a
+program is one catalog entry plus its Core enum value.
 
 ```bash
 npm run --silent queue -- seed-dogfood frostyard/updex                    # each program's own cooldown

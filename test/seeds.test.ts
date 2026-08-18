@@ -23,7 +23,7 @@ test("the dogfood feeder creates one bounded read-only root per specialty withou
   const first = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY);
   assert.deepEqual(
     first.created.map((item) => item.kind),
-    ["quality-gap-discovery", "ci-gap-discovery", "security-gap-discovery", "architecture-gap-discovery"],
+    ["quality-gap-discovery", "ci-gap-discovery", "security-gap-discovery", "architecture-gap-discovery", "conformance-gap-discovery", "triage-discovery"],
   );
   assert.deepEqual(first.skippedKinds, []);
   for (const item of first.created) {
@@ -84,7 +84,7 @@ test("the dogfood feeder detects active lineages beyond the 100-row listing cap"
   assert.equal(queue.list({ repository: DOGFOOD_REPOSITORY, limit: 100 }).length, 100);
 
   const first = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY);
-  assert.equal(first.created.length, 4);
+  assert.equal(first.created.length, 6);
   const quality = queue.claim({ worker: "claude:fluent:dogfood", kinds: ["quality-gap-discovery"] })!;
   const completion = queue.complete({
     id: quality.id,
@@ -118,7 +118,7 @@ test("the dogfood feeder detects active lineages beyond the 100-row listing cap"
     third.created.map((item) => item.kind),
     ["quality-gap-discovery"],
   );
-  assert.deepEqual(third.skippedKinds, ["ci-gap-discovery", "security-gap-discovery", "architecture-gap-discovery"]);
+  assert.deepEqual(third.skippedKinds, ["ci-gap-discovery", "security-gap-discovery", "architecture-gap-discovery", "conformance-gap-discovery", "triage-discovery"]);
 });
 
 test("an invalid later batch candidate rolls back roots inserted earlier in the transaction", async () => {
@@ -232,18 +232,20 @@ test("concurrent dogfood feeders create exactly one active root per specialty", 
   const expected = [
     "architecture-gap-discovery",
     "ci-gap-discovery",
+    "conformance-gap-discovery",
     "quality-gap-discovery",
     "security-gap-discovery",
+    "triage-discovery",
   ];
   assert.deepEqual(created, expected);
   assert.deepEqual(skipped, expected);
   assert.deepEqual(
     settled.map((result) => result.createdKinds.length).sort((left, right) => left - right),
-    [0, 4],
+    [0, 6],
   );
 
   const verify = new QueueStore(path);
-  assert.equal(verify.list({ repository: DOGFOOD_REPOSITORY, limit: 100 }).length, 4);
+  assert.equal(verify.list({ repository: DOGFOOD_REPOSITORY, limit: 100 }).length, 6);
   verify.close();
 });
 
@@ -255,7 +257,7 @@ test("a no-finding assessment cools its kind for the window, while a finding doe
   queue.setRepositoryEnabled(DOGFOOD_REPOSITORY, true);
 
   const first = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY);
-  assert.equal(first.created.length, 4);
+  assert.equal(first.created.length, 6);
   assert.deepEqual(first.cooledKinds, []);
 
   // Quality finds nothing; CI finds something and proposes a child.
@@ -291,7 +293,7 @@ test("a no-finding assessment cools its kind for the window, while a finding doe
   const second = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY);
   assert.deepEqual(second.created.map((item) => item.kind), ["ci-gap-discovery"]);
   assert.deepEqual(second.cooledKinds, ["quality-gap-discovery"]);
-  assert.deepEqual(second.skippedKinds, ["security-gap-discovery", "architecture-gap-discovery"]);
+  assert.deepEqual(second.skippedKinds, ["security-gap-discovery", "architecture-gap-discovery", "conformance-gap-discovery", "triage-discovery"]);
 
   // Cooldown zero disables the suppression; a shorter window that has elapsed also re-offers.
   const uncooled = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { cooldownSeconds: 0 });
@@ -359,28 +361,28 @@ test("an explicit program list narrows the batch to those programs and reports t
 
   const narrowed = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { programs: ["architecture"] });
   assert.deepEqual(narrowed.created.map((item) => item.kind), ["architecture-gap-discovery"]);
-  assert.deepEqual(narrowed.undeclaredKinds, ["quality-gap-discovery", "ci-gap-discovery", "security-gap-discovery"]);
+  assert.deepEqual(narrowed.undeclaredKinds, ["quality-gap-discovery", "ci-gap-discovery", "security-gap-discovery", "conformance-gap-discovery", "triage-discovery"]);
   assert.deepEqual(narrowed.skippedKinds, []);
 
   // No programs declared: nothing is offered, and nothing is reported active or cooling.
   const none = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { programs: [] });
   assert.deepEqual(none.created, []);
-  assert.deepEqual(none.undeclaredKinds.length, 4);
+  assert.deepEqual(none.undeclaredKinds.length, 6);
   assert.deepEqual(none.skippedKinds, []);
 
   // A declared program the catalog does not implement yet is reported, not refused, and seeds nothing.
-  const wider = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { programs: ["triage", "conformance", "architecture"] });
+  const wider = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { programs: ["dependencies", "release", "architecture"] });
   assert.deepEqual(wider.created, []);
   assert.deepEqual(wider.skippedKinds, ["architecture-gap-discovery"]);
-  assert.deepEqual(wider.unsupportedPrograms, ["triage", "conformance"]);
+  assert.deepEqual(wider.unsupportedPrograms, ["dependencies", "release"]);
   assert.deepEqual(narrowed.unsupportedPrograms, []);
 
   // Omitting the list is the whole catalog: the architecture lineage is active, the other three are created.
   const whole = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY);
-  assert.deepEqual(whole.created.map((item) => item.kind).sort(), ["ci-gap-discovery", "quality-gap-discovery", "security-gap-discovery"]);
+  assert.deepEqual(whole.created.map((item) => item.kind).sort(), ["ci-gap-discovery", "conformance-gap-discovery", "quality-gap-discovery", "security-gap-discovery", "triage-discovery"]);
   assert.deepEqual(whole.skippedKinds, ["architecture-gap-discovery"]);
   assert.deepEqual(whole.undeclaredKinds, []);
-  assert.equal(queue.list({ repository: DOGFOOD_REPOSITORY }).length, 4);
+  assert.equal(queue.list({ repository: DOGFOOD_REPOSITORY }).length, 6);
 });
 
 test("the enrolled feeder seeds only repositories that are opted in and enrolled, one transaction each", async () => {
@@ -411,7 +413,7 @@ test("the enrolled feeder seeds only repositories that are opted in and enrolled
   assert.deepEqual(first.notOptedIn, []);
   assert.deepEqual(
     first.seeded.map((entry) => [entry.repository, entry.programs, entry.created.map((item) => item.kind), entry.skippedKinds, entry.cooledKinds, entry.undeclaredKinds]),
-    [["FrostYard/Example", ["quality", "ci"], ["quality-gap-discovery", "ci-gap-discovery"], [], [], ["security-gap-discovery", "architecture-gap-discovery"]]],
+    [["FrostYard/Example", ["quality", "ci"], ["quality-gap-discovery", "ci-gap-discovery"], [], [], ["security-gap-discovery", "architecture-gap-discovery", "conformance-gap-discovery", "triage-discovery"]]],
   );
   assert.deepEqual(queue.list({ repository: "frostyard/retired" }), []);
   assert.deepEqual(queue.list({ repository: "frostyard/other" }), []);
@@ -425,7 +427,7 @@ test("the enrolled feeder seeds only repositories that are opted in and enrolled
   queue.setRepositoryEnabled("FrostYard/Example", true);
   const third = enqueueDogfoodBatchForEnrolled(queue, controlPath);
   assert.deepEqual(third.seeded.map((entry) => [entry.repository, entry.created.length, entry.skippedKinds.length, entry.undeclaredKinds.length]), [
-    ["FrostYard/Example", 0, 2, 2],
+    ["FrostYard/Example", 0, 2, 4],
   ]);
 
   // A missing control-plane database throws instead of seeding anything.
