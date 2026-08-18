@@ -11,13 +11,15 @@ import type { AllowedAction, PullRequestCure, PullRequestDecay, SeedWorkInput, W
  * admitted `pr-cure` root per decayed head. A `pr-cure` completion is refused
  * when the patch identity changed, so "mechanical" is a fact Fluent computes,
  * not a claim the worker makes. Merge, approval, and review dismissal stay
- * human; foreign pull requests (ones no Fluent item reported) are out of scope
- * until a repository opts in.
+ * human; foreign pull requests (ones no Fluent item reported) are inspected
+ * only for repositories whose `cure_foreign` setting is on.
  */
 
 const GITHUB_TIMEOUT_MS = 30_000;
 /** `/pulls/N/files` pages read before the patch identity is called unavailable (100 files each). */
 const MAX_FILE_PAGES = 3;
+/** `/pulls?state=open` pages read per foreign-cure repository before the listing is reported truncated (100 pull requests each). */
+const MAX_LISTING_PAGES = 3;
 const FAILING_CONCLUSIONS = new Set(["failure", "timed_out", "startup_failure", "action_required"]);
 
 export const CURE_KIND = "pr-cure";
@@ -198,8 +200,10 @@ async function readPatchDigest(
 }
 
 export interface CureSweepResult {
-  /** Open pull requests inspected (deduplicated by URL). */
+  /** Open pull requests inspected (deduplicated by URL), reported and foreign together. */
   inspected: number;
+  /** Foreign pull requests (ones no completed item reported) in repositories with `cureForeign` on: `listed` from GitHub, `inspected` after drafts and reported duplicates were dropped. */
+  foreign: { listed: number; inspected: number };
   enqueued: Array<{ id: string; url: string; headSha: string; decay: PullRequestDecay[] }>;
   healthy: string[];
   /** Decayed heads already known (any status), drafts, closed, or uncomputable patches: nothing enqueued. */
@@ -209,9 +213,10 @@ export interface CureSweepResult {
 
 /**
  * The cure sweep: for every open pull request that a completed item reported
- * (verified, state `open`), read its health and enqueue one admitted `pr-cure`
- * root per decayed head that Fluent has not seen. Runs after
- * `refreshArtifactVerifications` on the same timer.
+ * (verified, state `open`), and for every open non-draft pull request GitHub
+ * lists in a repository whose `cureForeign` setting is on, read its health
+ * and enqueue one admitted `pr-cure` root per decayed head that Fluent has
+ * not seen. Runs after `refreshArtifactVerifications` on the same timer.
  */
 export async function curePullRequests(
   queue: QueueStore,
@@ -228,55 +233,126 @@ export async function curePullRequests(
       else if (item.priority > existing.priority) candidates.set(artifact.url, { repository: item.repository, priority: item.priority, originItemId: item.id });
     }
   }
-  const result: CureSweepResult = { inspected: 0, enqueued: [], healthy: [], skipped: [], unavailable: [] };
+  const result: CureSweepResult = { inspected: 0, foreign: { listed: 0, inspected: 0 }, enqueued: [], healthy: [], skipped: [], unavailable: [] };
   for (const [url, origin] of candidates) {
     result.inspected += 1;
-    const check = await inspectPullRequestHealth(origin.repository, url, options);
-    if (check.kind === "unavailable") {
-      result.unavailable.push({ url, reason: check.reason });
+    await inspectCandidate(queue, result, url, origin, actor, options);
+  }
+
+  // Foreign pull requests: only repositories that opted in, only what GitHub
+  // lists as open, drafts and already-reported URLs dropped, priority 0 and
+  // no originating item.
+  const reported = new Set([...candidates.keys()].map((url) => url.toLowerCase()));
+  const foreignRepositories = queue
+    .repositoryCureSettings()
+    .filter((setting) => setting.cureForeign)
+    .filter((setting) => options.repository === undefined || setting.repository.toLowerCase() === options.repository.toLowerCase());
+  for (const { repository } of foreignRepositories) {
+    const listing = await listOpenPullRequests(repository, options.fetcher ?? fetch);
+    if (listing.kind === "unavailable") {
+      result.unavailable.push({ url: `https://github.com/${repository}/pulls`, reason: listing.reason });
       continue;
     }
-    if (check.kind === "rejected") {
-      result.skipped.push({ url, reason: check.reason });
-      continue;
+    result.foreign.listed += listing.pulls.length;
+    if (listing.truncated) {
+      result.skipped.push({ url: `https://github.com/${repository}/pulls`, reason: `more than ${MAX_LISTING_PAGES * 100} open pull requests; the rest were not listed` });
     }
-    const { health } = check;
-    if (health.state !== "open") {
-      result.skipped.push({ url, reason: `pull request is ${health.state}` });
-      continue;
+    for (const pull of listing.pulls) {
+      if (reported.has(pull.url.toLowerCase())) continue;
+      reported.add(pull.url.toLowerCase());
+      if (pull.draft) {
+        result.skipped.push({ url: pull.url, reason: "draft pull requests are not cured" });
+        continue;
+      }
+      result.inspected += 1;
+      result.foreign.inspected += 1;
+      await inspectCandidate(queue, result, pull.url, { repository, priority: 0 }, actor, options);
     }
-    if (health.draft) {
-      result.skipped.push({ url, reason: "draft pull requests are not cured" });
-      continue;
-    }
-    if (health.decay.length === 0) {
-      result.healthy.push(url);
-      continue;
-    }
-    if (!health.patchDigest) {
-      result.skipped.push({ url, reason: `patch identity uncomputable: ${health.patchUnavailableReason ?? "unknown"}` });
-      continue;
-    }
-    const cure: PullRequestCure = {
-      pullRequestUrl: url,
-      headSha: health.headSha,
-      patchDigest: health.patchDigest,
-      decay: health.decay,
-      originItemId: origin.originItemId,
-    };
-    const created = queue.enqueueCureRoot(origin.repository, {
-      ...cureRootDefinition(origin.repository, health, actor),
-      priority: origin.priority,
-      sourceRef: `${url}@${health.headSha}`,
-      cure,
-    });
-    if (!created) {
-      result.skipped.push({ url, reason: `head ${health.headSha.slice(0, 7)} already has a cure item` });
-      continue;
-    }
-    result.enqueued.push({ id: created.id, url, headSha: health.headSha, decay: health.decay });
   }
   return result;
+}
+
+/** Reads one candidate's health and enqueues a `pr-cure` root when its head has decayed and is new. */
+async function inspectCandidate(
+  queue: QueueStore,
+  result: CureSweepResult,
+  url: string,
+  origin: { repository: string; priority: number; originItemId?: string },
+  actor: string,
+  options: CureOptions,
+): Promise<void> {
+  const check = await inspectPullRequestHealth(origin.repository, url, options);
+  if (check.kind === "unavailable") {
+    result.unavailable.push({ url, reason: check.reason });
+    return;
+  }
+  if (check.kind === "rejected") {
+    result.skipped.push({ url, reason: check.reason });
+    return;
+  }
+  const { health } = check;
+  if (health.state !== "open") {
+    result.skipped.push({ url, reason: `pull request is ${health.state}` });
+    return;
+  }
+  if (health.draft) {
+    result.skipped.push({ url, reason: "draft pull requests are not cured" });
+    return;
+  }
+  if (health.decay.length === 0) {
+    result.healthy.push(url);
+    return;
+  }
+  if (!health.patchDigest) {
+    result.skipped.push({ url, reason: `patch identity uncomputable: ${health.patchUnavailableReason ?? "unknown"}` });
+    return;
+  }
+  const foreign = origin.originItemId === undefined;
+  const cure: PullRequestCure = {
+    pullRequestUrl: url,
+    headSha: health.headSha,
+    patchDigest: health.patchDigest,
+    decay: health.decay,
+    ...(foreign ? {} : { originItemId: origin.originItemId }),
+  };
+  const created = queue.enqueueCureRoot(origin.repository, {
+    ...cureRootDefinition(origin.repository, health, actor, foreign),
+    priority: origin.priority,
+    sourceRef: `${url}@${health.headSha}`,
+    cure,
+  });
+  if (!created) {
+    result.skipped.push({ url, reason: `head ${health.headSha.slice(0, 7)} already has a cure item` });
+    return;
+  }
+  result.enqueued.push({ id: created.id, url, headSha: health.headSha, decay: health.decay });
+}
+
+/**
+ * Lists a repository's open pull requests (`GET /repos/{owner}/{name}/pulls?state=open`),
+ * up to `MAX_LISTING_PAGES` pages of 100; a full last page marks the listing
+ * truncated. Each entry is its canonical URL and draft flag.
+ */
+async function listOpenPullRequests(
+  repository: string,
+  fetcher: GitHubFetch,
+): Promise<{ kind: "listed"; pulls: Array<{ url: string; draft: boolean }>; truncated: boolean } | { kind: "unavailable"; reason: string }> {
+  const [owner, name] = repository.split("/") as [string, string];
+  const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`;
+  const pulls: Array<{ url: string; draft: boolean }> = [];
+  for (let page = 1; page <= MAX_LISTING_PAGES; page += 1) {
+    const response = await githubApiJson(`${base}/pulls?state=open&per_page=100&page=${page}`, AbortSignal.timeout(GITHUB_TIMEOUT_MS), fetcher);
+    if (response.kind === "unavailable" || response.status !== 200) return { kind: "unavailable", reason: `GitHub open pull-request listing unavailable for ${repository}` };
+    if (!Array.isArray(response.value)) return { kind: "unavailable", reason: `GitHub open pull-request listing for ${repository} was not a list` };
+    for (const raw of response.value) {
+      const entry = asObject(raw);
+      const number = Number(entry?.number);
+      if (!entry || !Number.isInteger(number) || number < 1) return { kind: "unavailable", reason: `GitHub open pull-request listing entry for ${repository} was malformed` };
+      pulls.push({ url: `https://github.com/${owner}/${name}/pull/${number}`, draft: entry.draft === true });
+    }
+    if (response.value.length < 100) return { kind: "listed", pulls, truncated: false };
+  }
+  return { kind: "listed", pulls, truncated: true };
 }
 
 /** The `pr-cure` root definition for one decayed head: mechanical cure only, substantive change proposed. */
@@ -284,6 +360,7 @@ export function cureRootDefinition(
   repository: string,
   health: Pick<PullRequestHealth, "url" | "number" | "headSha" | "decay" | "failingChecks" | "mergeableState" | "title">,
   createdBy: string,
+  foreign = false,
 ): Omit<SeedWorkInput, "repository" | "priority"> {
   const short = health.headSha.slice(0, 7);
   const reasons = health.decay.map((reason) => describeDecay(reason, health)).join("; ");
@@ -292,6 +369,9 @@ export function cureRootDefinition(
     objective: `Cure ${repository}#${health.number} (head ${short}): ${health.decay.join(", ")}`,
     instructions: [
       `Pull request ${health.url} at head ${health.headSha} has decayed: ${reasons}.`,
+      ...(foreign
+        ? ["This pull request was NOT opened by a Fluent worker (the repository opted in to curing foreign pull requests): read its description and its author's intent on GitHub before acting."]
+        : []),
       "Perform only a MECHANICAL cure — one that leaves the pull request's patch identical: rebase or merge the base branch when that resolves cleanly, retitle to satisfy the repository's title lint, re-run or re-trigger checks, reply to review comments, fix labels or the body.",
       "Fluent recomputes the digest of the pull request's patch (its added and removed lines per file) when you complete this item and REFUSES the completion if it changed, so do not edit code, resolve conflicts by hand, change tests, or squash in fixes.",
       `If curing this head requires changing the patch (a conflict that needs edits, a failing check that needs a code or test change, a review that asks for a change), do NOT push: create exactly one follow-up of kind ${CURE_CHANGE_KIND} that names the exact change and how it will be verified, or block this item if the change is the maintainer's to make.`,

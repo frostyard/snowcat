@@ -99,10 +99,15 @@ their children may be admitted on creation.
   confirm; `pr-cure-change` proposals carry substantive fixes. Spec rules
   42–44, runbook, AGENTS.md, and the `work-fluent-queue` skill describe the
   kind.
-- Deliberately deferred: foreign pull requests (per-repository opt-in), title
-  lint as its own signal (on updex it is a check run), age threshold,
-  unresolved review threads (GraphQL). Each is a follow-up issue when a week
-  of curing Fluent's own pull requests says it matters.
+- Foreign pull requests (ones no item reported) are cured per repository
+  opt-in since 2026-08-18: `queue -- cure-foreign <owner/repo> on` (schema
+  rung 6's `repositories.cure_foreign`, off by default) makes the sweep list
+  the repository's open pull requests, skip drafts, and inspect the rest
+  through the same path (priority 0, no `originItemId`).
+- Deliberately deferred: title lint as its own signal (on updex it is a
+  check run), age threshold, unresolved review threads (GraphQL). Each is a
+  follow-up issue when a week of curing Fluent's own pull requests says it
+  matters.
 - **Done when:** a fixture pull request that falls behind its base yields one
   admitted `pr-cure` item, a mechanical rebase completes with an unchanged
   digest, a conflicting one is refused and yields a `pr-cure-change`
@@ -189,7 +194,8 @@ Hive is retired and Fluent owns conformance and triage.
 ## Open questions
 
 - **Cure for foreign pull requests by default?** Off by default, per
-  repository; revisit after a week of curing Fluent's own.
+  repository (`cure-foreign`, Phase 4); revisit after a week of curing
+  Fluent's own.
 - **Cadence source of truth:** catalog default in Fluent now; per-repository
   override in the Core declaration later — decide with Phase 3's schema
   change.

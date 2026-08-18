@@ -45,7 +45,7 @@ const MAX_OPERATOR_NOTE_LENGTH = 4000;
  * that newer code has already migrated; newer code upgrades an older database
  * in place, forward only, inside one write transaction.
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 /**
  * Backup manifest emitted by `QueueStore.backup` and re-derived by
@@ -296,6 +296,26 @@ export class QueueStore {
            ON CONFLICT(slug) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at`,
         )
         .run(repository, enabled ? 1 : 0, now, now);
+    });
+  }
+
+  /**
+   * The pull-request cure setting of every opted-in repository, in slug order:
+   * `cureForeign` says whether the cure sweep also lists and inspects open
+   * pull requests no Fluent item reported (ADR-0061's per-repository opt-in).
+   */
+  repositoryCureSettings(): Array<{ repository: string; cureForeign: boolean }> {
+    const rows = this.db.prepare("SELECT slug, cure_foreign FROM repositories WHERE enabled = 1 ORDER BY slug").all() as Row[];
+    return rows.map((row) => ({ repository: String(row.slug), cureForeign: Number(row.cure_foreign) === 1 }));
+  }
+
+  /** Turns foreign pull-request cure on or off for one opted-in repository. */
+  setRepositoryCureForeign(repository: string, enabled: boolean): void {
+    this.transaction(() => {
+      this.assertRepositoryEnabled(repository);
+      this.db
+        .prepare("UPDATE repositories SET cure_foreign = ?, updated_at = ? WHERE slug = ?")
+        .run(enabled ? 1 : 0, this.now(), repository);
     });
   }
 
@@ -1524,6 +1544,16 @@ const MIGRATIONS: readonly Migration[] = [
     );
     if (!columns.has("cure_json")) {
       db.exec("ALTER TABLE work_items ADD COLUMN cure_json TEXT");
+    }
+  },
+  // Rung 6: per-repository opt-in to curing foreign pull requests — ones no
+  // Fluent item reported (ADR-0061). Off for every existing row.
+  (db) => {
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(repositories)").all() as Row[]).map((column) => String(column.name)),
+    );
+    if (!columns.has("cure_foreign")) {
+      db.exec("ALTER TABLE repositories ADD COLUMN cure_foreign INTEGER NOT NULL DEFAULT 0 CHECK (cure_foreign IN (0, 1))");
     }
   },
 ];

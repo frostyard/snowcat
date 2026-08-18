@@ -29,6 +29,14 @@ try {
     const repository = required(args[0], "repository");
     queue.setRepositoryEnabled(repository, false);
     print({ repository, enabled: false });
+  } else if (command === "cure-foreign") {
+    // Repository-level setting like opt-in: whether the cure sweep also lists
+    // and inspects open pull requests no Fluent item reported (ADR-0061).
+    const repository = required(args[0], "repository");
+    const value = required(args[1], "on|off");
+    if (value !== "on" && value !== "off") throw new Error(`cure-foreign expects on or off, got ${value}`);
+    queue.setRepositoryCureForeign(repository, value === "on");
+    print({ repository, cureForeign: value === "on" });
   } else if (command === "seed-testing-gap") {
     const repository = required(args[0], "repository");
     print(enqueueTestingGap(queue, repository));
@@ -181,6 +189,7 @@ try {
   } else {
     console.error("Usage: npm run queue -- opt-in <owner/repo>");
     console.error("       npm run queue -- opt-out <owner/repo>");
+    console.error("       npm run queue -- cure-foreign <owner/repo> on|off");
     console.error("       npm run queue -- seed-testing-gap <owner/repo>");
     console.error("       npm run queue -- seed-dogfood <owner/repo> [--cooldown-hours <n>]");
     console.error("       npm run queue -- seed-dogfood --enrolled [--cooldown-hours <n>]   (requires FLUENT_CONTROL_DB)");

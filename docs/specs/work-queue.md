@@ -214,7 +214,8 @@ MCP (rule 41).
     is the baseline schema with admission triggers; rung 2 adds
     `queue_metadata` carrying an immutable per-database `database_id` and
     `created_at`; rung 3 adds `source_ref`; rung 4 adds `operator_notes_json`
-    and `previous_results_json` (rule 37). Processes running code from before
+    and `previous_results_json` (rule 37); rung 5 adds `cure_json` (rule 44);
+    rung 6 adds `repositories.cure_foreign` (rule 42). Processes running code from before
     the version guard existed are stopped by rule 20's database constraint,
     not by this check.
 22. Scheduling priority is operator-owned. Only operator-authored or
@@ -461,8 +462,20 @@ MCP (rule 41).
     `sourceRef` MUST never be enqueued twice, whatever the earlier item's
     status; a pushed head is a new `sourceRef`. A pull request whose patch
     identity cannot be computed (a text file GitHub serves without a patch,
-    more than 300 files) MUST be reported as skipped, not enqueued. Foreign
-    pull requests (ones no completed item reported) are out of scope in v1.
+    more than 300 files) MUST be reported as skipped, not enqueued. **Foreign
+    pull requests** (ones no completed item reported) are eligible only for
+    a repository whose `cure_foreign` setting is on (schema rung 6, off by
+    default; `cure-foreign <owner/repo> on|off` sets it for an opted-in
+    repository and is a repository-level command like `opt-in`, not an item
+    mutation under rule 40). For each such repository (only the named one
+    when `--repository` is given) the pass MUST list open pull requests with
+    `GET /repos/{owner}/{name}/pulls?state=open&per_page=100`, reading at
+    most 3 pages and reporting a full third page as skipped (truncated),
+    drop drafts (skipped with a reason) and URLs already among the reported
+    candidates, and inspect the rest through the same health read and
+    enqueue path with priority 0, no `originItemId`, and one added
+    instruction sentence saying the pull request was not opened by a Fluent
+    worker. The result's `foreign` counter reports `listed` and `inspected`.
 43. The **patch identity** of a pull request is `sha256:` over the
     canonical JSON of its changed files sorted by path, each as its path,
     status, rename source when present, and the sequence of its added and

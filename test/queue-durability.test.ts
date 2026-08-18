@@ -92,7 +92,7 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
   const directory = await mkdtemp(join(tmpdir(), "fluent-ladder-test-"));
   const path = join(directory, "queue.db");
   const { itemId } = createVersionOneDatabase(path);
-  assert.equal(SCHEMA_VERSION, 5, "this test pins the ladder at rung 5; extend it when a rung is added");
+  assert.equal(SCHEMA_VERSION, 6, "this test pins the ladder at rung 6; extend it when a rung is added");
 
   const queue = new QueueStore(path);
   test.after(() => queue.close());
@@ -203,6 +203,48 @@ test("a version-3 database upgrades in place through rung 4 and keeps a blocked 
   const claimed = queue.claim({ worker: "claude:ladder-test" });
   assert.equal(claimed?.id, itemId);
   assert.equal(claimed?.operatorNotes[0]?.reason, "Credential supplied; resume.");
+});
+
+test("a version-5 database gains rung 6's cure_foreign column, off for every existing repository", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-ladder-v5-test-"));
+  const path = join(directory, "queue.db");
+  createVersionOneDatabase(path);
+  // Bring the hand-built database to exactly version 5 with rungs 2–5's objects.
+  const raw = new DatabaseSync(path);
+  raw.exec(`
+    CREATE TABLE queue_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    INSERT INTO queue_metadata (key, value) VALUES ('database_id', '55555555-5555-4555-8555-555555555555');
+    INSERT INTO queue_metadata (key, value) VALUES ('created_at', '2026-08-15T00:00:00.000Z');
+    ALTER TABLE work_items ADD COLUMN source_ref TEXT;
+    CREATE UNIQUE INDEX work_items_source_ref ON work_items(repository, source_ref) WHERE source_ref IS NOT NULL;
+    ALTER TABLE work_items ADD COLUMN operator_notes_json TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE work_items ADD COLUMN previous_results_json TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE work_items ADD COLUMN cure_json TEXT;
+    PRAGMA user_version = 5;
+  `);
+  const before = new Set((raw.prepare("PRAGMA table_info(repositories)").all() as Row[]).map((column) => String(column.name)));
+  assert.ok(!before.has("cure_foreign"));
+  raw.close();
+
+  const queue = new QueueStore(path);
+  test.after(() => queue.close());
+  assert.equal(queue.schemaVersion(), 6);
+  assert.equal(queue.metadata().databaseId, "55555555-5555-4555-8555-555555555555");
+  const inspect = new DatabaseSync(path, { readOnly: true });
+  const column = (inspect.prepare("PRAGMA table_info(repositories)").all() as Row[]).find((entry) => String(entry.name) === "cure_foreign");
+  const stored = inspect.prepare("SELECT cure_foreign FROM repositories WHERE slug = 'frostyard/updex'").get() as Row;
+  inspect.close();
+  assert.ok(column, "rung 6 adds repositories.cure_foreign");
+  assert.equal(Number(column!.notnull), 1);
+  assert.equal(String(column!.dflt_value), "0");
+  assert.equal(Number(stored.cure_foreign), 0, "existing rows default to off");
+  assert.deepEqual(queue.repositoryCureSettings(), [{ repository: "frostyard/updex", cureForeign: false }]);
+
+  queue.setRepositoryCureForeign("frostyard/updex", true);
+  assert.deepEqual(queue.repositoryCureSettings(), [{ repository: "frostyard/updex", cureForeign: true }]);
+  assert.throws(() => queue.setRepositoryCureForeign("frostyard/lodge", true), /not opted in/);
+  queue.setRepositoryEnabled("frostyard/updex", false);
+  assert.deepEqual(queue.repositoryCureSettings(), [], "only opted-in repositories carry a cure setting");
 });
 
 test("re-running the ladder from an unversioned database converges without changing the identity", async () => {
