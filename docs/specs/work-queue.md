@@ -86,8 +86,11 @@ npm run queue -- watch [--repository <owner/repo>] [--interval <seconds>]
 a follow-up. It does not call a model.
 
 `seed-dogfood` deterministically creates at most one active read-only root for
-each initial maintenance specialty: quality, CI, security, and architecture.
-Re-running it skips a specialty while any non-terminal item remains in that
+each maintenance program in the catalog: quality, CI, security, and
+architecture. `seed-dogfood --enrolled` offers a repository only the programs
+its Core declaration lists in `maintenance_programs` and reports the rest as
+`undeclaredKinds`; `seed-dogfood <owner/repo>` offers the whole catalog.
+Re-running either skips a program while any non-terminal item remains in that
 root lineage. It does not call a model.
 
 `approve` changes one worker-created `proposed` item to claimable `queued` work
@@ -177,8 +180,10 @@ command is not exposed through MCP.
     created more than four parent-child edges below its root. Violations MUST
     roll back the entire completion.
 19. The dogfood feeder MUST create only read-only discovery roots, MUST create
-    at most four roots per invocation, and MUST NOT duplicate a specialty while
-    that specialty has a non-terminal root or descendant in the repository.
+    at most one root per catalog program per invocation, MUST NOT duplicate a
+    program while that program has a non-terminal root or descendant in the
+    repository, and, when run for enrolled repositories, MUST offer a
+    repository only the programs its Core declaration lists.
 20. The database MUST enforce admission independently of application code:
     any statement that moves a work item to `claimed` while its `admitted`
     flag is `0` before or after the statement MUST fail, and any insert of a

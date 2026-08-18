@@ -356,7 +356,7 @@ test("the repository board shows queued, leased, and completed columns with the 
   assert.match(body, new RegExp(`<span class="fl-facts">Core ${coreCommit.slice(0, 7)} · surfaces [0-9a-f]{7} · id github\\.com:9001</span>`));
   assert.match(body, /<form class="fl-action" method="post" action="\/repositories\/frostyard\/example\/hold"><input type="hidden" name="return" value="\/repositories\/frostyard\/example">.*?<button class="ph-button reject" type="submit">Hold repository<\/button><\/form>/s);
   assert.match(body, /<form class="fl-action" method="post" action="\/repositories\/frostyard\/example\/import-issues">/);
-  assert.match(body, /<form class="fl-action" method="post" action="\/repositories\/frostyard\/example\/seed-dogfood">/);
+  assert.match(body, /<form class="fl-action" method="post" action="\/repositories\/frostyard\/example\/seed-dogfood">.*?Read-only discovery roots for the declared programs \(quality, ci\); 24 h no-finding cooldown\./s);
   assert.match(body, /<form class="fl-inline" method="post" action="\/repositories\/frostyard\/example\/verify-artifacts">/);
   assert.match(body, /<span>Queued<\/span><strong>2<\/strong><small>next: #304 \(p5\)<\/small>/);
   assert.match(body, /<span>Leased<\/span><strong>1<\/strong><small>copilot-cli · \d+m left<\/small>/);
@@ -890,15 +890,18 @@ test("board actions import labeled issues, seed dogfood, verify artifacts, and i
   const inboxProposals = await (await app.request("/", { headers: { Cookie: cookie } })).text();
   assert.match(inboxProposals, /Resolve frostyard\/example#1: <span>First labeled issue<\/span>/);
 
-  // Seed dogfood: the four roots, then a second seed is all "active".
+  // Seed dogfood honors the Core declaration (`quality`, `ci`): two roots, then a second seed is all "active".
   const seeded = await post("seed-dogfood");
   assert.equal(seeded.status, 303);
-  assert.match(seeded.headers.get("Location")!, /^\/repositories\/frostyard\/example\?done=work\.queued&detail=4\+created\+%28/);
+  assert.equal(
+    seeded.headers.get("Location"),
+    "/repositories/frostyard/example?done=work.queued&detail=2+created+%28quality-gap-discovery%2C+ci-gap-discovery%29%2C+0+active%2C+0+cooling%2C+2+not+declared",
+  );
   const roots = queue.list({ status: "queued", repository: "frostyard/example" });
-  assert.equal(roots.length, 4);
-  assert.deepEqual(roots.map((item) => item.kind).sort(), ["architecture-gap-discovery", "ci-gap-discovery", "quality-gap-discovery", "security-gap-discovery"]);
+  assert.equal(roots.length, 2);
+  assert.deepEqual(roots.map((item) => item.kind).sort(), ["ci-gap-discovery", "quality-gap-discovery"]);
   const reseed = await post("seed-dogfood");
-  assert.equal(reseed.headers.get("Location"), "/repositories/frostyard/example?done=seed.unchanged&detail=0+created%2C+4+active%2C+0+cooling");
+  assert.equal(reseed.headers.get("Location"), "/repositories/frostyard/example?done=seed.unchanged&detail=0+created%2C+2+active%2C+0+cooling%2C+2+not+declared");
 
   // Verify artifacts: a completed item with an open PR becomes merged and records artifact.verified by operator:web.
   const done = queue.enqueueSeed({

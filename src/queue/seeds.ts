@@ -1,4 +1,5 @@
-import { enrolledRepositories } from "./eligibility.ts";
+import type { RepositoryMaintenanceProgram } from "../control/registry.ts";
+import { enrolledRepositoryPrograms } from "./eligibility.ts";
 import { QueueStore } from "./store.ts";
 import type { AllowedAction, SeedWorkInput, WorkItem } from "./types.ts";
 
@@ -12,8 +13,16 @@ const implementationCeiling: AllowedAction[] = [
   "create-followup",
 ];
 
-const dogfoodTemplates: Array<Omit<SeedWorkInput, "repository" | "createdBy">> = [
+/**
+ * One discovery root template per maintenance program. `program` is the Core
+ * `maintenance_programs` value the template serves; a repository under the
+ * enrollment gate is seeded only for the programs its declaration lists.
+ */
+type DogfoodTemplate = Omit<SeedWorkInput, "repository" | "createdBy"> & { program: RepositoryMaintenanceProgram };
+
+const dogfoodTemplates: DogfoodTemplate[] = [
   {
+    program: "quality",
     kind: "quality-gap-discovery",
     objective: "Identify one evidence-backed software quality gap without proposing a new product feature.",
     instructions:
@@ -28,6 +37,7 @@ const dogfoodTemplates: Array<Omit<SeedWorkInput, "repository" | "createdBy">> =
     priority: 0,
   },
   {
+    program: "ci",
     kind: "ci-gap-discovery",
     objective: "Identify one evidence-backed gap in CI or test signal quality.",
     instructions:
@@ -42,6 +52,7 @@ const dogfoodTemplates: Array<Omit<SeedWorkInput, "repository" | "createdBy">> =
     priority: 0,
   },
   {
+    program: "security",
     kind: "security-gap-discovery",
     objective: "Identify one evidence-backed security hardening gap.",
     instructions:
@@ -56,6 +67,7 @@ const dogfoodTemplates: Array<Omit<SeedWorkInput, "repository" | "createdBy">> =
     priority: 0,
   },
   {
+    program: "architecture",
     kind: "architecture-gap-discovery",
     objective: "Identify one evidence-backed mismatch between this repository and its documented current contracts.",
     instructions:
@@ -97,21 +109,43 @@ export function enqueueTestingGap(queue: QueueStore, repository: string, created
 /** Default no-finding cooldown for the repeating dogfood feeder: one day. */
 export const DEFAULT_DOGFOOD_COOLDOWN_SECONDS = 24 * 60 * 60;
 
-export function enqueueDogfoodBatch(
-  queue: QueueStore,
-  repository: string,
-  options: { cooldownSeconds?: number } = {},
-): { created: WorkItem[]; skippedKinds: string[]; cooledKinds: string[] } {
-  return queue.enqueueInactiveRootBatch(
+export interface DogfoodBatchOptions {
+  cooldownSeconds?: number;
+  /**
+   * The maintenance programs to seed. Omitted means every program in the
+   * catalog (explicit `seed-dogfood <owner/repo>` for a repository outside the
+   * enrollment gate); a Core declaration's `maintenance_programs` narrows the
+   * batch to exactly those programs.
+   */
+  programs?: readonly RepositoryMaintenanceProgram[];
+}
+
+export interface DogfoodBatchResult {
+  created: WorkItem[];
+  skippedKinds: string[];
+  cooledKinds: string[];
+  /** Catalog kinds not offered because `programs` did not list their program. */
+  undeclaredKinds: string[];
+}
+
+export function enqueueDogfoodBatch(queue: QueueStore, repository: string, options: DogfoodBatchOptions = {}): DogfoodBatchResult {
+  const declared = options.programs === undefined ? undefined : new Set(options.programs);
+  const offered = dogfoodTemplates.filter((template) => declared === undefined || declared.has(template.program));
+  const undeclaredKinds = dogfoodTemplates.filter((template) => !offered.includes(template)).map((template) => template.kind);
+  const batch = queue.enqueueInactiveRootBatch(
     repository,
-    dogfoodTemplates.map((template) => ({ ...template, createdBy: "operator:dogfood" })),
+    offered.map(({ program: _program, ...template }) => ({ ...template, createdBy: "operator:dogfood" })),
     { cooldownSeconds: options.cooldownSeconds ?? DEFAULT_DOGFOOD_COOLDOWN_SECONDS },
   );
+  return { ...batch, undeclaredKinds };
 }
 
 export interface EnrolledDogfoodResult {
-  /** One feeder result per repository that is both opted in and `enrolled`, in queue slug order. */
-  seeded: Array<{ repository: string; created: WorkItem[]; skippedKinds: string[]; cooledKinds: string[] }>;
+  /**
+   * One feeder result per repository that is both opted in and `enrolled`, in
+   * queue slug order, with the programs its Core declaration lists.
+   */
+  seeded: Array<{ repository: string; programs: RepositoryMaintenanceProgram[] } & DogfoodBatchResult>;
   /** Enrolled repositories that are not opted in to the queue, so nothing was seeded for them. */
   notOptedIn: string[];
 }
@@ -120,25 +154,31 @@ export interface EnrolledDogfoodResult {
  * Runs the dogfood feeder for every repository that is opted in to the queue
  * and `enrolled` in the control-plane store at `controlPlanePath`, one
  * transaction per repository, so a failure in one repository leaves the others'
- * roots intact. Slugs are matched case-insensitively and seeded under the
- * queue's opt-in spelling. `seed-dogfood <owner/repo>` is unchanged by this.
+ * roots intact. Each repository is seeded only for the programs its Core
+ * declaration lists in `maintenance_programs`. Slugs are matched
+ * case-insensitively and seeded under the queue's opt-in spelling.
+ * `seed-dogfood <owner/repo>` is unchanged by this.
  */
 export function enqueueDogfoodBatchForEnrolled(
   queue: QueueStore,
   controlPlanePath: string,
   options: { cooldownSeconds?: number } = {},
 ): EnrolledDogfoodResult {
-  const enrolled = enrolledRepositories(controlPlanePath);
+  const enrolled = enrolledRepositoryPrograms(controlPlanePath);
   const optedIn = new Map(queue.enabledRepositories().map((slug) => [slug.toLowerCase(), slug]));
   const seeded: EnrolledDogfoodResult["seeded"] = [];
   const notOptedIn: string[] = [];
-  for (const slug of [...enrolled].sort()) {
+  for (const { slug, maintenancePrograms } of [...enrolled].sort((left, right) => (left.slug < right.slug ? -1 : left.slug > right.slug ? 1 : 0))) {
     const repository = optedIn.get(slug.toLowerCase());
     if (repository === undefined) {
       notOptedIn.push(slug);
       continue;
     }
-    seeded.push({ repository, ...enqueueDogfoodBatch(queue, repository, options) });
+    seeded.push({
+      repository,
+      programs: [...maintenancePrograms],
+      ...enqueueDogfoodBatch(queue, repository, { cooldownSeconds: options.cooldownSeconds, programs: maintenancePrograms }),
+    });
   }
   return { seeded, notOptedIn };
 }

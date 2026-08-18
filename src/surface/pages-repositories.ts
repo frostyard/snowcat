@@ -108,10 +108,18 @@ function repositoryActions(data: BoardData, controlPlaneConfigured: boolean): Sa
         : html`<form class="fl-action" method="post" action="${base}/hold"><input type="hidden" name="return" value="${here}"><span class="fl-action-label">Hold</span><input class="fl-input" name="reason" placeholder="Reason for the hold" maxlength="4000" required><button class="ph-button reject" type="submit">Hold repository</button></form>`;
   return html`<section class="fl-group fl-repo-actions" id="repository-actions"><div class="fl-group-head"><h2>Repository actions</h2><span>as operator:web · same as the CLI</span></div><div class="fl-action-grid">
     <form class="fl-action" method="post" action="${base}/import-issues"><input type="hidden" name="return" value="${here}"><span class="fl-action-label">Import issues</span><div class="fl-action-fields"><input class="fl-input" name="label" value="fluent" placeholder="label" maxlength="100"><input class="fl-input fl-input-num" type="number" name="priority" placeholder="priority" step="1"></div><button class="ph-button secondary" type="submit"${data.optedIn ? "" : " disabled"}>Import issues</button></form>
-    <form class="fl-action" method="post" action="${base}/seed-dogfood"><input type="hidden" name="return" value="${here}"><span class="fl-action-label">Seed dogfood</span><small class="fl-sub">Four read-only discovery roots; 24 h no-finding cooldown.</small><button class="ph-button secondary" type="submit"${data.optedIn ? "" : " disabled"}>Seed dogfood</button></form>
+    <form class="fl-action" method="post" action="${base}/seed-dogfood"><input type="hidden" name="return" value="${here}"><span class="fl-action-label">Seed dogfood</span><small class="fl-sub">${seedDogfoodNote(data)}</small><button class="ph-button secondary" type="submit"${data.optedIn ? "" : " disabled"}>Seed dogfood</button></form>
     <div class="fl-action"><span class="fl-action-label">Verify artifacts</span><small class="fl-sub">Re-check pending issue and pull-request artifacts against GitHub.</small>${verifyForm(data.repository, here, { label: "Verify artifacts" })}</div>
     ${holdForm}
   </div>${disabledNote}</section>`;
+}
+
+/** What Seed dogfood will offer: the declared programs when Core declares the repository, else the whole catalog. */
+function seedDogfoodNote(data: BoardData): string {
+  const programs = data.enrollment?.maintenancePrograms;
+  if (programs === undefined) return "Read-only discovery roots for every program; 24 h no-finding cooldown.";
+  if (programs.length === 0) return "No maintenance programs declared, so nothing to seed.";
+  return `Read-only discovery roots for the declared programs (${programs.join(", ")}); 24 h no-finding cooldown.`;
 }
 
 function column(title: string, caption: string, rows: SafeHtml[], empty: string, id: string): SafeHtml {

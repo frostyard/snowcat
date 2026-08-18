@@ -654,18 +654,19 @@ test("operator CLI seed-dogfood --enrolled requires FLUENT_CONTROL_DB and seeds 
   const seeded = run({ ...baseEnvironment, FLUENT_CONTROL_DB: controlPath }, "seed-dogfood", "--enrolled", "--cooldown-hours", "0");
   assert.equal(seeded.status, 0, seeded.stderr);
   const result = JSON.parse(seeded.stdout) as {
-    seeded: Array<{ repository: string; created: Array<{ kind: string; status: string }>; skippedKinds: string[]; cooledKinds: string[] }>;
+    seeded: Array<{ repository: string; programs: string[]; created: Array<{ kind: string; status: string }>; skippedKinds: string[]; cooledKinds: string[]; undeclaredKinds: string[] }>;
     notOptedIn: string[];
   };
   assert.deepEqual(result.notOptedIn, []);
+  // The example declaration lists `quality` and `ci`; the feeder honors it and names what it left out.
   assert.deepEqual(
-    result.seeded.map((entry) => [entry.repository, entry.created.length, entry.skippedKinds, entry.cooledKinds]),
-    [["frostyard/example", 4, [], []]],
+    result.seeded.map((entry) => [entry.repository, entry.programs, entry.created.map((item) => item.kind), entry.skippedKinds, entry.cooledKinds, entry.undeclaredKinds]),
+    [["frostyard/example", ["quality", "ci"], ["quality-gap-discovery", "ci-gap-discovery"], [], [], ["security-gap-discovery", "architecture-gap-discovery"]]],
   );
   assert.equal(seeded.stdout.includes("leaseToken"), false);
 
   const verify = new QueueStore(path);
   assert.deepEqual(verify.list({ repository: "frostyard/retired" }), []);
-  assert.equal(verify.list({ repository: "frostyard/example", status: "queued" }).length, 4);
+  assert.equal(verify.list({ repository: "frostyard/example", status: "queued" }).length, 2);
   verify.close();
 });

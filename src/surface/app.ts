@@ -327,11 +327,12 @@ export function createSurfaceApp(options: SurfaceOptions): Hono {
         }
         if (action === "seed-dogfood") {
           if (!board.optedIn) throw new MutationInputError(`${slug} is not opted in to the queue; opt it in first.`);
-          const outcome = applySeedDogfood(stores.queue, slug);
+          const outcome = applySeedDogfood(stores.queue, slug, board.enrollment);
           const detail = [
             `${outcome.created.length} created${outcome.created.length > 0 ? ` (${outcome.created.join(", ")})` : ""}`,
             `${outcome.skippedKinds.length} active`,
             `${outcome.cooledKinds.length} cooling`,
+            ...(outcome.undeclaredKinds.length > 0 ? [`${outcome.undeclaredKinds.length} not declared`] : []),
           ].join(", ");
           return redirectWithBanner(back, outcome.eventType, detail);
         }
