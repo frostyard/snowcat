@@ -183,6 +183,33 @@ or was unavailable — reported and skipped while the others still run), and
 works for a repository that is opted in but not enrolled, or for a different
 label.
 
+**Internal dependency chain** — a mechanical sweep, no model, over the
+enrolled repositories' Go manifests
+([`src/queue/internal-dependencies.ts`](../../src/queue/internal-dependencies.ts)):
+
+```bash
+npm run --silent queue -- sweep-dependencies --enrolled      # every opted-in + enrolled repository
+npm run --silent queue -- sweep-dependencies frostyard/updex # one repository
+```
+
+For each swept repository it reads the default branch head, the release tags,
+the tag→branch comparison, and `go.mod`, then creates proposals only: a
+**`release-needed`** root when the branch is ahead of the latest `vX.Y.Z`
+tag (objective names the commit count and an svu-style suggested next
+version — breaking → major unless v0, `feat` → minor, else patch; the child
+prepares changelog/version references in one pull request and never tags;
+`make bump` stays yours), and a **`dependency-bump`** root when the
+repository requires a `github.com/frostyard/*` module at a version behind
+that module's latest release (one per module and target tag; `go get
+module@tag`, one pull request, nothing else bumped). A bump is never proposed
+before the upstream release exists, so the chain orders itself. Bounds: at
+most one non-terminal `release-needed` per repository; a `release-needed`
+you rejected is not re-asked for the same tag for seven days; a repository
+with no release tag is reported, not asked. `fluent-feed.timer` runs the
+sweep hourly after the import; it needs `FLUENT_GITHUB_TOKEN` for private
+repositories and reports `swept`, `releaseNeeded`, `dependencyBumps`,
+`skipped`, `failed`, and `notOptedIn`.
+
 **Standing maintenance** — the maintenance program catalog in
 [`src/queue/programs.ts`](../../src/queue/programs.ts): one bounded, read-only
 discovery root per program, each of which may propose one implementation
@@ -542,7 +569,7 @@ Fluent v1 runs on **one operator host** and stays there deliberately:
 
   | Timer | Cadence | Runs |
   | --- | --- | --- |
-  | `fluent-feed.timer` | hourly (`OnCalendar=hourly`, `RandomizedDelaySec=300`) | `queue -- seed-dogfood --enrolled`, then `queue -- import-issues --enrolled --label fluent` (two `ExecStart=` lines; the import runs only if the feeder exits 0) |
+  | `fluent-feed.timer` | hourly (`OnCalendar=hourly`, `RandomizedDelaySec=300`) | `queue -- seed-dogfood --enrolled`, then `queue -- import-issues --enrolled --label fluent`, then `queue -- sweep-dependencies --enrolled` (three `ExecStart=` lines; each runs only if the previous exited 0) |
   | `fluent-verify.timer` | every 15 minutes (`OnCalendar=*:0/15`) | `queue -- verify-artifacts` (default limit) |
   | `fluent-backup.timer` | daily (`OnCalendar=daily`, `Persistent=true`) | [`deploy/bin/fluent-backup`](../../deploy/bin/fluent-backup) |
 

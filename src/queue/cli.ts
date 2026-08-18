@@ -4,6 +4,7 @@ import { attachVerifiedArtifact, refreshArtifactVerifications, type AttachableAr
 import { queueStoreOptionsFromEnvironment } from "./eligibility.ts";
 import { curePullRequests } from "./pull-request-cure.ts";
 import { importLabeledIssues, importLabeledIssuesForEnrolled } from "./github-issues.ts";
+import { sweepInternalDependencies } from "./internal-dependencies.ts";
 import { QueueStore, queueDatabasePath, type MutationPrecondition } from "./store.ts";
 import {
   enqueueDogfoodBatch,
@@ -148,6 +149,17 @@ try {
     if (requested < 1) throw new Error("interval must be at least 1 second");
     const intervalSeconds = Math.max(requested, MIN_WATCH_INTERVAL_SECONDS);
     await watchEvents(queue, { repository: flags.repository, intervalSeconds });
+  } else if (command === "sweep-dependencies") {
+    // The internal dependency chain: release-needed on enrolled repositories
+    // ahead of their latest tag, dependency-bump on ones behind a frostyard
+    // module's latest release. Proposals only; the operator admits.
+    const enrolled = args[0] === "--enrolled";
+    const repository = enrolled ? undefined : required(args[0], "repository");
+    const controlPlanePath = process.env.FLUENT_CONTROL_DB;
+    if (enrolled && (!controlPlanePath || controlPlanePath === ":memory:")) {
+      throw new Error("sweep-dependencies --enrolled requires FLUENT_CONTROL_DB to name the control-plane database");
+    }
+    print(await sweepInternalDependencies(queue, controlPlanePath, repository ? { repository } : {}));
   } else if (command === "verify-artifacts") {
     const noCure = args.includes("--no-cure");
     const flags = parseFlags(args.filter((argument) => argument !== "--no-cure"), ["repository", "limit"]);
@@ -186,6 +198,8 @@ try {
     console.error("       npm run queue -- show <work-item-id>");
     console.error("       npm run queue -- events [--since <sequence>] [--repository <owner/repo>] [--limit <1-500>]");
     console.error("       npm run queue -- watch [--repository <owner/repo>] [--interval <seconds>]");
+    console.error("       npm run queue -- sweep-dependencies <owner/repo>");
+    console.error("       npm run queue -- sweep-dependencies --enrolled   (requires FLUENT_CONTROL_DB; FLUENT_GITHUB_TOKEN in practice)");
     console.error("       npm run queue -- verify-artifacts [--repository <owner/repo>] [--limit <1-100>] [--no-cure]");
     console.error("       npm run queue -- metadata");
     console.error("       npm run queue -- backup <new-file-path>");

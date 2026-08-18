@@ -150,16 +150,20 @@ Hive is retired and Fluent owns conformance and triage.
   contracts versus code; conformance covers whether the canonical surfaces
   exist; this covers what a reader runs). The `frostyard-repo-docs` skill is
   the procedure.
-- **Internal dependency chain (decided 2026-08-18, next):** a mechanical
-  sweep — no model — over enrolled repositories' manifests: for each
-  frostyard-owned upstream whose default branch is ahead of its latest tag,
-  one `release-needed` proposal on the upstream; for each downstream
-  `require` behind the upstream's latest *release*, one `dependency-bump`
-  proposal on the downstream, deduplicated by `sourceRef`. The bump never
-  appears before the release exists, so the chain orders itself. Requires
-  the libraries (`frostyard/clix`, `frostyard/std`) to be enrolled, which
-  requires their ACMM conformance pass, governance surface, and release
-  setup (GoReleaser Pro on tag push, `make bump` via svu) — in flight.
+- **Internal dependency chain (landed 2026-08-18):** `sweep-dependencies`
+  (`src/queue/internal-dependencies.ts`, third step of `fluent-feed`) — a
+  mechanical sweep, no model, over enrolled repositories' `go.mod`, tags,
+  and tag→branch comparison: one `release-needed` proposal on a repository
+  whose default branch is ahead of its latest `vX.Y.Z` tag (svu-style
+  suggested version; the child prepares, the operator tags with `make bump`,
+  GoReleaser publishes on the tag push), one `dependency-bump` proposal per
+  frostyard module a repository requires behind that module's latest
+  release. The bump never appears before the release exists, so the chain
+  orders itself. clix and std were enrolled the same day (ACMM conformance,
+  governance surface, GoReleaser Pro setup: clix#31, std#21; core#90); on
+  day one the sweep proposes releases for clix (+8 since v0.3.1), std (+15
+  since v0.2.0), and updex (+30 since v1.5.0), and no bumps. Spec rule 45.
+  npm manifests are not read yet (no frostyard npm dependency exists).
 - **Done when:** each program produces a valid no-finding or one admitted
   child on two enrolled repositories. — Catalog entries, tests, and docs are
   in; the operational half and the internal-chain sweep follow.

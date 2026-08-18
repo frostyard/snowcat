@@ -483,6 +483,24 @@ MCP (rule 41).
     like any proposal, carrying no digest constraint) or block; cure MUST
     never merge, approve, or dismiss a review. `cure` is stored in one
     nullable column added by schema rung 5.
+45. **Internal dependency chain.** `sweep-dependencies <owner/repo>` and
+    `sweep-dependencies --enrolled` MUST read, from GitHub, each swept
+    repository's default-branch head, its release tags, the comparison of
+    its latest `vX.Y.Z` tag with the branch, and its root `go.mod`, and MUST
+    create only `proposed` roots: one `release-needed` (`sourceRef =
+    release-needed:<owner/repo>@<latest tag>+<head SHA>`) when the branch is
+    ahead of the latest tag, unless a non-terminal `release-needed` exists
+    for the repository or one for the same tag was cancelled within seven
+    days; and one `dependency-bump` (`sourceRef =
+    dependency-bump:<owner/repo>:<module>@<target tag>`) per
+    `github.com/frostyard/*` requirement whose version is behind that
+    module's latest release tag. A repository with no release tag MUST be
+    reported, not asked. Both kinds carry `read, write, run-tests, open-pr`
+    and empty `delegableActions`; a `release-needed` child MUST NOT create a
+    tag, run `make bump`, publish a release, or push the default branch, and
+    a `dependency-bump` MUST NOT target an unreleased commit. Failures MUST
+    be reported per repository, never abort the sweep. `--enrolled` requires
+    `FLUENT_CONTROL_DB` and skips enrolled repositories not opted in.
 
 ## Derived artifacts
 
@@ -493,6 +511,7 @@ MCP (rule 41).
 | Issue import | `import-issues` maps labeled open GitHub issues to proposed `issue-resolution` roots per rules 30–31 |
 | Artifact verification | Completion-time, `attach-artifact`, and `verify-artifacts` observations per rules 33–35 and 41; `delivery` derived per rule 35 |
 | Pull-request cure | `verify-artifacts` enqueues `pr-cure` roots per decayed head per rules 42–43; `complete_work` enforces patch identity per rule 44 |
+| Internal dependency chain | `sweep-dependencies` maps tags, branch comparison, and `go.mod` to `release-needed` and `dependency-bump` proposals per rule 45 |
 | MCP worker behavior | Portable `work-fluent-queue` skill constrained by this contract |
 | Testing-gap seed | Deterministic CLI instance of this contract |
 

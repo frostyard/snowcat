@@ -192,8 +192,11 @@ removed. -->
   schema versions that no recovery-plan phase consumes.
 - Keep host scheduling in [`deploy/`](deploy/): three systemd timer/service
   pairs plus `deploy/bin/fluent-backup` call the existing idempotent `queue`
-  and `control` commands (`seed-dogfood --enrolled` then `import-issues
-  --enrolled --label fluent`, `verify-artifacts`, `backup`); never add a
+  and `control` commands (`seed-dogfood --enrolled`, `import-issues
+  --enrolled --label fluent`, then `sweep-dependencies --enrolled` — the
+  mechanical release-needed / dependency-bump proposals in
+  [`src/queue/internal-dependencies.ts`](src/queue/internal-dependencies.ts);
+  `verify-artifacts`; `backup`); never add a
   scheduler, daemon, or MCP tool inside Fluent for
   them. `npm run check:deploy` (part of `check`; needs `shellcheck` and
   `systemd-analyze` locally) runs `systemd-analyze verify` against a stub
