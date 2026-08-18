@@ -216,7 +216,8 @@ DROPIN
 write_dropin fluent-feed.service \
   "$state_dir -$fluent_home/data" \
   "$npm_path --prefix $fluent_home run --silent queue -- seed-dogfood --enrolled" \
-  "$npm_path --prefix $fluent_home run --silent queue -- import-issues --enrolled --label fluent"
+  "$npm_path --prefix $fluent_home run --silent queue -- import-issues --enrolled --label fluent" \
+  "$npm_path --prefix $fluent_home run --silent queue -- sweep-dependencies --enrolled"
 write_dropin fluent-verify.service \
   "$state_dir -$fluent_home/data" \
   "$npm_path --prefix $fluent_home run --silent queue -- verify-artifacts"
