@@ -209,11 +209,17 @@ hands on the host.
    `frostyard-go-repo` skill makes it uniform: `policies/agent-governance.json`
    plus the core declaration) and confirm the surface, timers, and gate work
    for two repositories at once.
-4. **Surface follow-ups** — decision-record view once ADR-0035 typed
+4. **Maintenance programs** — honor Core's `maintenance_programs`, move the
+   discovery kinds into a catalog with per-program cadence, cure pull
+   requests per head under
+   [ADR-0061](../adr/0061-cure-pull-requests-as-bounded-per-head-work.md),
+   then add conformance and triage; the full list and order live in the
+   [maintenance programs plan](maintenance-programs.md).
+5. **Surface follow-ups** — decision-record view once ADR-0035 typed
    decisions exist beyond admission; per-repository event filter on the rail;
    keyboard-first inbox review. Small queue items, only after (2) shows they
    matter.
-5. **Runbook and PRD** — fold the week's numbers into targets and change the
+6. **Runbook and PRD** — fold the week's numbers into targets and change the
    PRD status from Discovery only through its review path.
 
 ## Later / ideas

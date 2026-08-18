@@ -75,6 +75,7 @@ Docs are split by the question they answer:
 - [0058 — Bound GitHub observation recovery and retention](adr/0058-bound-github-observation-recovery-and-retention.md)
 - [0059 — Adopt the queue store as the v1 work engine](adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md)
 - [0060 — Bring the operator surface forward as a read-first inbox](adr/0060-bring-the-operator-surface-forward-as-a-read-first-inbox.md)
+- [0061 — Cure pull requests as bounded per-head work](adr/0061-cure-pull-requests-as-bounded-per-head-work.md)
 
 ### Domain language
 
@@ -116,6 +117,7 @@ Docs are split by the question they answer:
 - [Control-plane kernel bootstrap](plans/control-plane-kernel-bootstrap.md)
 - [Core snapshot ingestion](plans/core-snapshot-ingestion.md)
 - [Recover a working engine](plans/recover.md)
+- [Maintenance programs](plans/maintenance-programs.md)
 
 ### Product requirements
 

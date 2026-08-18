@@ -25,7 +25,7 @@ Phases 0–6 are complete. What that means for the phases below:
 | 3 durable control-plane store | completed for what the sidecar needs; the queue store's own migration ladder is the durable work store |
 | 4 GitHub observation | parked at registry v18 / schema v8; on-demand artifact verification serves v1 |
 | 5 coordinate one repository end to end | **achieved 2026-08-17** on the queue store — enrollment gate, matched items, leases, verified artifacts, decisions, all on one item and its events |
-| 6 dogfood maintenance programs | running: quality, CI, security, and architecture discovery roots on updex, each finding admitted and landed; no restricted-finding storage yet |
+| 6 dogfood maintenance programs | running: quality, CI, security, and architecture discovery roots on updex, each finding admitted and landed; next steps (honor Core's declaration, program catalog with cadence, pull-request cure, conformance, triage, dependencies, docs) are the [maintenance programs plan](maintenance-programs.md); no restricted-finding storage yet |
 | 7 measure and stop failing processes | not started; the event ledger and `events --since` are its inputs |
 | 8 repository relationships | not started |
 | 9 feature initiative | not started |
