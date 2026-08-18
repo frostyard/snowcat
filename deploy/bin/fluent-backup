@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Daily Fluent backup, run by fluent-backup.service (see deploy/systemd/).
+#
+# Writes one verified copy of the queue database and one of the control-plane
+# database, each with its manifest beside it, into FLUENT_BACKUP_DIR (default
+# /var/backups/fluent), then deletes backup files there older than
+# FLUENT_BACKUP_RETAIN_DAYS (default 14). Both copies go through the existing
+# `queue -- backup` and `control -- backup` commands, which refuse to
+# overwrite anything and verify the copy before returning its manifest; this
+# script never opens, moves, or deletes the live databases.
+#
+# Required environment (from /etc/fluent/env under systemd):
+#   FLUENT_HOME        checkout with node_modules installed
+#   FLUENT_QUEUE_DB    live queue database path
+#   FLUENT_CONTROL_DB  live control-plane database path
+# Optional:
+#   FLUENT_BACKUP_DIR          backup directory (default /var/backups/fluent)
+#   FLUENT_BACKUP_RETAIN_DAYS  keep backups newer than this many days (default 14)
+set -euo pipefail
+
+: "${FLUENT_HOME:?FLUENT_HOME must name the Fluent checkout}"
+: "${FLUENT_QUEUE_DB:?FLUENT_QUEUE_DB must name the live queue database}"
+: "${FLUENT_CONTROL_DB:?FLUENT_CONTROL_DB must name the live control-plane database}"
+backup_dir="${FLUENT_BACKUP_DIR:-/var/backups/fluent}"
+retain_days="${FLUENT_BACKUP_RETAIN_DAYS:-14}"
+if ! [[ "$retain_days" =~ ^[0-9]+$ ]]; then
+  echo "fluent-backup: FLUENT_BACKUP_RETAIN_DAYS must be a non-negative integer, got '$retain_days'" >&2
+  exit 2
+fi
+
+stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$backup_dir"
+chmod 0700 "$backup_dir"
+
+# Live database identities, so pruning can never touch them even if the
+# operator points the backup directory at the database directory.
+live_queue="$(realpath -m "$FLUENT_QUEUE_DB")"
+live_control="$(realpath -m "$FLUENT_CONTROL_DB")"
+
+# Runs one backup command, writing its manifest to <db>.manifest.json only when
+# the command succeeds; a failed run leaves no partial manifest behind.
+back_up() {
+  local script="$1" target="$2"
+  local manifest="${target%.db}.manifest.json"
+  local partial="${manifest}.partial"
+  if npm --prefix "$FLUENT_HOME" run --silent "$script" -- backup "$target" > "$partial"; then
+    mv "$partial" "$manifest"
+    chmod 0600 "$manifest"
+    echo "fluent-backup: wrote $target and $manifest"
+  else
+    rm -f "$partial"
+    echo "fluent-backup: $script backup to $target failed" >&2
+    return 1
+  fi
+}
+
+back_up queue "$backup_dir/queue-$stamp.db"
+back_up control "$backup_dir/control-plane-$stamp.db"
+
+# Prune: only files this script names, only in the backup directory, only
+# older than the retention window, and never a live database.
+retain_minutes=$((retain_days * 24 * 60))
+pruned=0
+while IFS= read -r -d '' candidate; do
+  resolved="$(realpath -m "$candidate")"
+  if [[ "$resolved" == "$live_queue" || "$resolved" == "$live_control" ]]; then
+    echo "fluent-backup: refusing to prune live database $candidate" >&2
+    continue
+  fi
+  rm -f -- "$candidate"
+  pruned=$((pruned + 1))
+done < <(find "$backup_dir" -maxdepth 1 -type f \
+  \( -name 'queue-*.db' -o -name 'queue-*.manifest.json' \
+     -o -name 'control-plane-*.db' -o -name 'control-plane-*.manifest.json' \) \
+  -mmin +"$retain_minutes" -print0)
+echo "fluent-backup: pruned $pruned file(s) older than $retain_days day(s) from $backup_dir"

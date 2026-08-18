@@ -1,0 +1,19 @@
+# Fluent daily backup: copies the queue and control-plane databases to
+# /var/backups/fluent (or FLUENT_BACKUP_DIR) with their manifests through the
+# existing `queue -- backup` and `control -- backup` commands, then prunes
+# backups older than FLUENT_BACKUP_RETAIN_DAYS (default 14). Never writes to
+# the live databases. Configure `User=` and, when FLUENT_HOME is not
+# /opt/fluent, `ReadWritePaths=` in a drop-in.
+[Unit]
+Description=Fluent: back up the queue and control-plane databases
+Documentation=https://github.com/frostyard/fluent/blob/main/docs/design/queue-operations.md
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/fluent/env
+ExecStart=/bin/bash ${FLUENT_HOME}/deploy/bin/fluent-backup
+NoNewPrivileges=yes
+# PrivateTmp gives tsx a writable compile cache under a private /tmp.
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/fluent /var/backups/fluent -/opt/fluent/data

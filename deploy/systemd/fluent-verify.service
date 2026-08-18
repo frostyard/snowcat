@@ -1,0 +1,19 @@
+# Fluent artifact verification: re-checks reported issues and pull requests
+# against GitHub and derives `delivery`. Idempotent and safe while GitHub is
+# unavailable; run from fluent-verify.timer. Configure `User=` and, when
+# FLUENT_HOME is not /opt/fluent, `ReadWritePaths=` in a drop-in.
+[Unit]
+Description=Fluent: refresh queue artifact verification
+Documentation=https://github.com/frostyard/fluent/blob/main/docs/design/queue-operations.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/fluent/env
+ExecStart=npm --prefix ${FLUENT_HOME} run --silent queue -- verify-artifacts
+NoNewPrivileges=yes
+# PrivateTmp gives tsx a writable compile cache under a private /tmp.
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/fluent -/opt/fluent/data

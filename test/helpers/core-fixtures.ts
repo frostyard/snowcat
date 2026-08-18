@@ -35,8 +35,9 @@ export async function activationCandidate(
   declaration: RepositoryDeclaration,
   commitId: string,
   treeId: string,
+  additionalDeclarations: RepositoryDeclaration[] = [],
 ): Promise<InspectedCoreCandidate> {
-  const files = await validCoreEntries(declaration, true);
+  const files = await validCoreEntries(declaration, true, additionalDeclarations);
   return {
     sourceUrl: "https://github.com/frostyard/core.git",
     ref: "refs/heads/main",
@@ -51,6 +52,7 @@ export async function activationCandidate(
 export async function validCoreEntries(
   declaration: RepositoryDeclaration,
   includeLiveRepository: boolean,
+  additionalDeclarations: RepositoryDeclaration[] = [],
 ): Promise<CoreTreeEntry[]> {
   const fixtureRepository: RepositoryDeclaration = {
     ...declaration,
@@ -86,6 +88,14 @@ export async function validCoreEntries(
       entryFor(
         `organization/repositories/${declaration.repository.owner}/${declaration.repository.name}.json`,
         json(declaration),
+      ),
+    );
+  }
+  for (const additional of additionalDeclarations) {
+    entries.push(
+      entryFor(
+        `organization/repositories/${additional.repository.owner}/${additional.repository.name}.json`,
+        json(additional),
       ),
     );
   }
@@ -214,17 +224,39 @@ export function json(value: unknown): Buffer {
 
 export const EXAMPLE_REPOSITORY_ID = "9001";
 
+/** A second fixture declaration, `frostyard/retired` (GitHub id 9002), disabled in Core. */
+export function disabledDeclaration(): RepositoryDeclaration {
+  return {
+    ...enabledDeclaration(),
+    repository: { owner: "frostyard", name: "retired", repository_id: "9002" },
+    fleet_state: "disabled",
+    maintenance_programs: [],
+    action_ceiling: [],
+  };
+}
+
 /**
  * Activates the fixture Core slice at snapshot commit `7…`/tree `8…`, records
  * source eligibility, and reconciles identity and surfaces with the fake
- * probes so `frostyard/example` reaches `enrolled`. Returns the activation
- * transaction sequence.
+ * probes so `frostyard/example` reaches `enrolled`. `additionalDeclarations`
+ * are declared in the same snapshot (a disabled one stays `disabled` because
+ * reconciliation never probes it). Returns the activation transaction
+ * sequence.
  */
 export async function enrollExampleRepository(
   store: ControlPlaneStore,
-  options: { declaration?: RepositoryDeclaration; expectedLastTransactionSequence?: number } = {},
+  options: {
+    declaration?: RepositoryDeclaration;
+    expectedLastTransactionSequence?: number;
+    additionalDeclarations?: RepositoryDeclaration[];
+  } = {},
 ): Promise<number> {
-  const candidate = await activationCandidate(options.declaration ?? enabledDeclaration(), "7".repeat(40), "8".repeat(40));
+  const candidate = await activationCandidate(
+    options.declaration ?? enabledDeclaration(),
+    "7".repeat(40),
+    "8".repeat(40),
+    options.additionalDeclarations ?? [],
+  );
   const activation = store.activateCoreSnapshot({
     candidate,
     expectedLastTransactionSequence: options.expectedLastTransactionSequence ?? store.metadata().lastTransactionSequence,

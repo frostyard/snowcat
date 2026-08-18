@@ -5,29 +5,38 @@ import { ControlPlaneStore } from "../control/store.ts";
 import type { ClaimEligibility, QueueStoreOptions } from "./store.ts";
 
 /**
+ * The `owner/name` slugs whose effective control-plane state is `enrolled`,
+ * which already excludes disabled and paused declarations, unresolved GitHub
+ * identity or surfaces, and operator holds. The store is opened fresh per call
+ * so a long-lived process always sees the current facts. A missing or
+ * unreadable database throws rather than opening or creating anything.
+ */
+export function enrolledRepositories(controlPlanePath: string): string[] {
+  const path = resolve(controlPlanePath);
+  if (!existsSync(path)) {
+    throw new Error(`control-plane database does not exist: ${path} (FLUENT_CONTROL_DB); unset it to run on queue opt-in alone`);
+  }
+  const store = new ControlPlaneStore(path);
+  try {
+    return store
+      .repositoryStatuses()
+      .filter((status) => status.effectiveState === "enrolled")
+      .map((status) => `${status.owner}/${status.name}`);
+  } finally {
+    store.close();
+  }
+}
+
+/**
  * Claim eligibility backed by the control-plane store: a repository's work is
- * claimable only while its effective state is `enrolled`, which already
- * excludes disabled and paused declarations, unresolved GitHub identity or
- * surfaces, and operator holds. The store is opened read-only per decision so
- * a long-lived MCP server always sees the current facts. A missing or
- * unreadable database fails the claim closed rather than opening or creating
- * anything.
+ * claimable only while its effective state is `enrolled`. Each decision reads
+ * the store fresh through `enrolledRepositories`, so a missing database fails
+ * the claim closed.
  */
 export function controlPlaneClaimEligibility(controlPlanePath: string): ClaimEligibility {
-  const path = resolve(controlPlanePath);
   return (repository) => {
-    if (!existsSync(path)) {
-      throw new Error(`control-plane database does not exist: ${path}; unset FLUENT_CONTROL_DB to claim on queue opt-in alone`);
-    }
-    const store = new ControlPlaneStore(path);
-    try {
-      const slug = repository.toLowerCase();
-      return store
-        .repositoryStatuses()
-        .some((status) => `${status.owner}/${status.name}`.toLowerCase() === slug && status.effectiveState === "enrolled");
-    } finally {
-      store.close();
-    }
+    const slug = repository.toLowerCase();
+    return enrolledRepositories(controlPlanePath).some((enrolled) => enrolled.toLowerCase() === slug);
   };
 }
 

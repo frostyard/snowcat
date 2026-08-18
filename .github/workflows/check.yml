@@ -1,5 +1,5 @@
 # Runs the same gate as the local recipe documented in AGENTS.md:
-# `npm run check` (docs, typecheck, tests, build). A local pass must be a CI pass,
+# `npm run check` (docs, deploy units, typecheck, tests, build). A local pass must be a CI pass,
 # so this workflow adds no other check commands.
 name: check
 

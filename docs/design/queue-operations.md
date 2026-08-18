@@ -112,12 +112,18 @@ implementation child:
 ```bash
 npm run --silent queue -- seed-dogfood frostyard/updex                    # cooldown 24 h
 npm run --silent queue -- seed-dogfood frostyard/updex --cooldown-hours 0 # ignore cooldown
+npm run --silent queue -- seed-dogfood --enrolled                         # every opted-in + enrolled repository
 ```
 
-Run it on a timer (hourly is fine): a specialty with active lineage is skipped,
-and one that just completed with no finding is reported as `cooledKinds`
-rather than re-asked. These roots are admitted immediately (they are read-only);
-their children are not.
+The feeder is idempotent: a specialty with active lineage is skipped, and one
+that just completed with no finding is reported as `cooledKinds` rather than
+re-asked. `--enrolled` requires `FLUENT_CONTROL_DB` (it exits non-zero naming
+the variable otherwise), reads the control-plane store once, and runs the
+feeder in one transaction per repository that is both opted in and `enrolled`,
+printing each repository's result plus any enrolled repository that is not
+opted in (`notOptedIn`). It is what `fluent-feed.timer` runs hourly (see
+[Deployment](#deployment-v1-decided-2026-08-17)). These roots are admitted
+immediately (they are read-only); their children are not.
 
 **One-off** — `seed-testing-gap frostyard/updex` seeds a single read-only
 testing-gap discovery.
@@ -255,8 +261,9 @@ and the worker is told to fix it. To refresh state after review and merges:
 npm run --silent queue -- verify-artifacts --repository frostyard/updex
 ```
 
-Run this on the same timer as the feeder. It records `artifact.verified`
-events and leaves anything alone while GitHub is unavailable.
+`fluent-verify.timer` runs this every 15 minutes with the default limit. It
+records `artifact.verified` events and leaves anything alone while GitHub is
+unavailable.
 
 **Blocked items** need an operator exit:
 
@@ -293,8 +300,34 @@ Fluent v1 runs on **one operator host** and stays there deliberately:
 - Anything with a listener — the operator surface, the Flue app — binds to
   loopback and is reached over SSH or a private mesh (Tailscale or
   equivalent), never exposed directly.
-- Feeder, `verify-artifacts`, and `backup` run from timers on the host
-  (units to follow; until then, run them by hand as above).
+- Feeder, `verify-artifacts`, and `backup` run from three systemd timers on
+  the host, shipped in [`deploy/systemd/`](../../deploy/systemd/) and linted
+  by `npm run check:deploy`:
+
+  | Timer | Cadence | Runs |
+  | --- | --- | --- |
+  | `fluent-feed.timer` | hourly (`OnCalendar=hourly`, `RandomizedDelaySec=300`) | `queue -- seed-dogfood --enrolled` |
+  | `fluent-verify.timer` | every 15 minutes (`OnCalendar=*:0/15`) | `queue -- verify-artifacts` (default limit) |
+  | `fluent-backup.timer` | daily (`OnCalendar=daily`, `Persistent=true`) | [`deploy/bin/fluent-backup`](../../deploy/bin/fluent-backup) |
+
+  Each service is `Type=oneshot`, reads `EnvironmentFile=/etc/fluent/env`
+  (`FLUENT_HOME`, `FLUENT_QUEUE_DB`, `FLUENT_CONTROL_DB`,
+  `FLUENT_GITHUB_TOKEN`; the deployment step creates the file), and runs
+  `npm --prefix ${FLUENT_HOME} run --silent …` with `NoNewPrivileges=yes`,
+  `PrivateTmp=yes`, and `ProtectSystem=strict`, writable only under
+  `/var/lib/fluent`, `/var/backups/fluent` (backup only), and the checkout's
+  `data/`. The install step supplies `User=` (the operator user that owns the
+  databases) through a drop-in, and overrides `ReadWritePaths=` there when
+  `FLUENT_HOME` is not `/opt/fluent`. `npm` must resolve on systemd's fixed
+  search path (`/usr/local/bin` or `/usr/bin`); symlink it there when it comes
+  from a version manager. Copy the six units to `/etc/systemd/system/`, then
+  `systemctl daemon-reload && systemctl enable --now fluent-feed.timer
+  fluent-verify.timer fluent-backup.timer`. Until they are installed, run the
+  three commands by hand as above.
+- The timers do not reach worker clients: an MCP client still gets its
+  environment from the shell that launches it (`.mcp.json` `env` or the
+  operator's login shell), never from `/etc/fluent/env`, because systemd's
+  `EnvironmentFile=` applies only to the units it starts.
 
 **What is knowingly deferred, and what un-defers it.** Workers off the
 operator host need a network MCP transport (Streamable HTTP over TLS),
@@ -316,7 +349,13 @@ npm run --silent queue -- backup /var/backups/fluent/queue-$(date -u +%Y%m%dT%H%
 npm run --silent queue -- verify-backup /var/backups/fluent/queue-<stamp>.db
 ```
 
-Back up before upgrading and daily. The backup contains lease tokens and is
+Back up before upgrading and daily. `fluent-backup.timer` does the daily run
+through `deploy/bin/fluent-backup`: one queue and one control-plane copy under
+`/var/backups/fluent` (or `FLUENT_BACKUP_DIR`) as `queue-<UTC stamp>.db` and
+`control-plane-<UTC stamp>.db`, each with its manifest as
+`<name>.manifest.json` beside it, then it deletes only those backup files older
+than `FLUENT_BACKUP_RETAIN_DAYS` (default 14) and never touches the live
+databases. The backup contains lease tokens and is
 created mode `0600`; keep it as private as the live file. Restore is a file
 copy to a new path after `verify-backup`, then point `FLUENT_QUEUE_DB` at it
 and restart clients; no command overwrites a live database. Do not open a
@@ -374,9 +413,9 @@ Approved. During the dogfood week keep, per repository:
 - One host, one queue database, any number of clients: every CLI invocation and
   MCP server opens its own connection; SQLite WAL and a busy timeout serialize
   writes.
-- Feeder, `verify-artifacts`, and `backup` are idempotent and cheap; a
-  systemd timer or cron running them hourly and daily respectively is the
-  intended cadence.
+- Feeder, `verify-artifacts`, and `backup` are idempotent and cheap; the
+  three timers in `deploy/systemd/` (hourly, every 15 minutes, daily) are the
+  intended cadence, and running any of them by hand in between is harmless.
 - `FLUENT_CONTROL_DB` is the only coupling between the queue and the control
   plane. Leave it unset until `repository -- status` shows the repositories you
   care about as `enrolled`, or workers will find nothing to claim.

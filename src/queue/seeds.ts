@@ -1,3 +1,4 @@
+import { enrolledRepositories } from "./eligibility.ts";
 import { QueueStore } from "./store.ts";
 import type { AllowedAction, SeedWorkInput, WorkItem } from "./types.ts";
 
@@ -106,4 +107,38 @@ export function enqueueDogfoodBatch(
     dogfoodTemplates.map((template) => ({ ...template, createdBy: "operator:dogfood" })),
     { cooldownSeconds: options.cooldownSeconds ?? DEFAULT_DOGFOOD_COOLDOWN_SECONDS },
   );
+}
+
+export interface EnrolledDogfoodResult {
+  /** One feeder result per repository that is both opted in and `enrolled`, in queue slug order. */
+  seeded: Array<{ repository: string; created: WorkItem[]; skippedKinds: string[]; cooledKinds: string[] }>;
+  /** Enrolled repositories that are not opted in to the queue, so nothing was seeded for them. */
+  notOptedIn: string[];
+}
+
+/**
+ * Runs the dogfood feeder for every repository that is opted in to the queue
+ * and `enrolled` in the control-plane store at `controlPlanePath`, one
+ * transaction per repository, so a failure in one repository leaves the others'
+ * roots intact. Slugs are matched case-insensitively and seeded under the
+ * queue's opt-in spelling. `seed-dogfood <owner/repo>` is unchanged by this.
+ */
+export function enqueueDogfoodBatchForEnrolled(
+  queue: QueueStore,
+  controlPlanePath: string,
+  options: { cooldownSeconds?: number } = {},
+): EnrolledDogfoodResult {
+  const enrolled = enrolledRepositories(controlPlanePath);
+  const optedIn = new Map(queue.enabledRepositories().map((slug) => [slug.toLowerCase(), slug]));
+  const seeded: EnrolledDogfoodResult["seeded"] = [];
+  const notOptedIn: string[] = [];
+  for (const slug of [...enrolled].sort()) {
+    const repository = optedIn.get(slug.toLowerCase());
+    if (repository === undefined) {
+      notOptedIn.push(slug);
+      continue;
+    }
+    seeded.push({ repository, ...enqueueDogfoodBatch(queue, repository, options) });
+  }
+  return { seeded, notOptedIn };
 }

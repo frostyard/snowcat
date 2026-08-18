@@ -5,8 +5,11 @@ import { join } from "node:path";
 import test from "node:test";
 import { Worker } from "node:worker_threads";
 
-import { enqueueDogfoodBatch } from "../src/queue/seeds.ts";
+import { ControlPlaneStore } from "../src/control/store.ts";
+import { enrolledRepositories } from "../src/queue/eligibility.ts";
+import { enqueueDogfoodBatch, enqueueDogfoodBatchForEnrolled } from "../src/queue/seeds.ts";
 import { QueueStore } from "../src/queue/store.ts";
+import { disabledDeclaration, enrollExampleRepository } from "./helpers/core-fixtures.ts";
 
 const DOGFOOD_REPOSITORY = "frostyard/fluent";
 
@@ -308,4 +311,52 @@ test("a no-finding assessment cools its kind for the window, while a finding doe
   assert.deepEqual(later.created.map((item) => item.kind), ["quality-gap-discovery"]);
 
   assert.throws(() => enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { cooldownSeconds: -1 }), /non-negative/);
+});
+
+test("the enrolled feeder seeds only repositories that are opted in and enrolled, one transaction each", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-dogfood-enrolled-test-"));
+  const controlPath = join(directory, "control-plane.db");
+  const store = new ControlPlaneStore(controlPath, () => new Date("2026-08-17T12:00:00.000Z"));
+  test.after(() => store.close());
+  await enrollExampleRepository(store, { additionalDeclarations: [disabledDeclaration()] });
+  assert.deepEqual(
+    store.repositoryStatuses().map((status) => [`${status.owner}/${status.name}`, status.effectiveState]),
+    [
+      ["frostyard/example", "enrolled"],
+      ["frostyard/retired", "disabled"],
+    ],
+  );
+  assert.deepEqual(enrolledRepositories(controlPath), ["frostyard/example"]);
+
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  // Opted in under a different case than Core declares it, plus a disabled and an undeclared opt-in.
+  queue.setRepositoryEnabled("FrostYard/Example", true);
+  queue.setRepositoryEnabled("frostyard/retired", true);
+  queue.setRepositoryEnabled("frostyard/other", true);
+  assert.deepEqual(queue.enabledRepositories(), ["FrostYard/Example", "frostyard/other", "frostyard/retired"]);
+
+  const first = enqueueDogfoodBatchForEnrolled(queue, controlPath);
+  assert.deepEqual(first.notOptedIn, []);
+  assert.deepEqual(
+    first.seeded.map((entry) => [entry.repository, entry.created.length, entry.skippedKinds, entry.cooledKinds]),
+    [["FrostYard/Example", 4, [], []]],
+  );
+  assert.deepEqual(queue.list({ repository: "frostyard/retired" }), []);
+  assert.deepEqual(queue.list({ repository: "frostyard/other" }), []);
+  assert.equal(queue.list({ repository: "FrostYard/Example" }).length, 4);
+
+  // Re-running skips the active lineages; an enrolled repository that is not opted in is reported, not seeded.
+  queue.setRepositoryEnabled("FrostYard/Example", false);
+  const second = enqueueDogfoodBatchForEnrolled(queue, controlPath);
+  assert.deepEqual(second.seeded, []);
+  assert.deepEqual(second.notOptedIn, ["frostyard/example"]);
+  queue.setRepositoryEnabled("FrostYard/Example", true);
+  const third = enqueueDogfoodBatchForEnrolled(queue, controlPath);
+  assert.deepEqual(third.seeded.map((entry) => [entry.repository, entry.created.length, entry.skippedKinds.length]), [
+    ["FrostYard/Example", 0, 4],
+  ]);
+
+  // A missing control-plane database throws instead of seeding anything.
+  assert.throws(() => enqueueDogfoodBatchForEnrolled(queue, join(directory, "nope.db")), /does not exist/);
 });
