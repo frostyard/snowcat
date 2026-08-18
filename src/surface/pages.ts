@@ -1,6 +1,7 @@
 import type { ObservableWorkItem, ObservedWorkEvent } from "../queue/types.ts";
 import { html, raw, type SafeHtml } from "./html.ts";
 import type { BlockedRow, InboxData, ProposalRow, SidebarRepository, UnverifiedRow } from "./inbox.ts";
+import { admissionForm, exitForm, verifyForm } from "./forms.ts";
 import { surfaceStylesheet } from "./styles.ts";
 
 const REFRESH_SECONDS = 30;
@@ -12,6 +13,8 @@ export interface PageContext {
   schemaVersion: number;
   lastEventSequence: number;
   repositories: SidebarRepository[];
+  /** One-line result or error banner shown under the header. */
+  banner?: { tone: "ok" | "error"; text: string };
 }
 
 interface View {
@@ -126,6 +129,7 @@ export function shell(context: PageContext, view: View, main: SafeHtml): SafeHtm
           <form class="fl-logout" method="post" action="/logout"><button class="ph-button secondary" type="submit">Sign out</button></form>
         </div>
       </div>
+      ${context.banner ? html`<div class="${context.banner.tone === "ok" ? "fl-banner" : "fl-error"}" role="status">${context.banner.text}</div>` : ""}
       ${main}
       <footer class="fl-footer"><span>queue ${context.queuePath}</span><span>control-plane ${context.controlPlanePath ?? "not configured"}</span><span>times UTC</span></footer>
     </main>
@@ -174,7 +178,7 @@ function proposalsGroup(rows: ProposalRow[]): SafeHtml {
         <td><div class="fl-badges">${row.item.allowedActions.map((action) => html`<span class="ph-badge">${action}</span>`)}</div><small class="fl-sub">${
           row.parent ? "inside parent ceiling" : `delegable: ${row.item.delegableActions.length}`
         }</small></td>
-        <td class="right"><div class="fl-actions"><button class="ph-button" disabled title="Mutations land in the next slice">Approve</button><button class="ph-button reject" disabled title="Mutations land in the next slice">Reject</button><a class="ph-button secondary" href="${itemPath(row.item.id)}">Open</a></div><small class="fl-sub">Approve will carry status=proposed · updatedAt ${clock(row.item.updatedAt, true)} — refused if the item moved</small></td>
+        <td class="right">${admissionForm(row.item, "/", { open: true })}</td>
       </tr>`,
     )}</tbody></table>`,
     "Nothing is waiting for admission.",
@@ -192,7 +196,7 @@ function blockedGroup(rows: BlockedRow[]): SafeHtml {
           row.blockedAt ? ` · blocked ${clock(row.blockedAt)}` : ""
         }${row.blockedBy ? ` by ${row.blockedBy}` : ""}</small></div><small class="fl-sub">${row.item.objective}</small></td>
         <td class="fl-reason">${row.reason}</td>
-        <td class="right"><div class="fl-exit"><div class="fl-actions"><button class="ph-button" disabled title="Mutations land in the next slice">Requeue with note</button><button class="ph-button reject" disabled title="Mutations land in the next slice">Cancel</button><a class="ph-button secondary" href="${itemPath(row.item.id)}">Open</a></div><textarea class="fl-note" disabled placeholder="Note for the next lease (carried on the item)"></textarea></div></td>
+        <td class="right">${exitForm(row.item, "/", { open: true })}</td>
       </tr>`,
     )}</tbody></table>`,
     "No blocked work.",
@@ -209,7 +213,7 @@ function unverifiedGroup(rows: UnverifiedRow[]): SafeHtml {
         <td><div class="fl-name">${objective(row.item)}<small>${row.item.kind} · completed ${clock(row.item.updatedAt)}${row.completedBy ? ` · ${row.completedBy}` : ""}</small></div></td>
         <td><span class="ph-version">${artifactLabel(row.artifact.kind, row.artifact.url)}</span><small class="fl-sub"><a href="${row.artifact.url}" rel="noreferrer noopener">${row.artifact.url}</a></small></td>
         <td class="fl-reason"><span class="ph-badge warn">unverified</span> ${row.artifact.verification.reason}<small class="fl-sub">attempted ${clock(row.artifact.verification.attemptedAt, true)}</small></td>
-        <td class="right"><div class="fl-actions"><button class="ph-button secondary" disabled title="Re-verify lands in the next slice">Re-verify</button><a class="ph-button secondary" href="${itemPath(row.item.id)}">Open</a></div></td>
+        <td class="right"><div class="fl-actions">${verifyForm(row.item.repository, "/")}<a class="ph-button secondary" href="${itemPath(row.item.id)}">Open</a></div></td>
       </tr>`,
     )}</tbody></table>`,
     "Every issue and pull-request artifact has been verified against GitHub.",

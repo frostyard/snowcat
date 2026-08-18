@@ -382,6 +382,18 @@ command is not exposed through MCP.
     `updatedAt` alone carries the check; a mismatch MUST exit non-zero with
     the store's message. No MCP tool MAY carry a precondition and no schema
     change is required.
+40. The operator surface's mutations MUST be exactly the CLI's operator
+    commands — `approve`, `reject`, `defer`, `requeue`, `cancel`,
+    `prioritize`, `note`, and `verify-artifacts` — invoked through the same
+    `QueueStore` methods and `refreshArtifactVerifications`, attributed to
+    the actor `operator:web`, and MUST NOT introduce a state transition,
+    batch action, or worker-facing endpoint. Every surface mutation MUST be
+    a same-origin `POST` behind the session cookie, MUST carry the item's
+    rendered `status` and `updatedAt` as the rule 39 precondition, and on a
+    mismatch MUST change nothing and show the item's current state with the
+    message that it changed since it was read. Its events MUST be
+    indistinguishable in shape from the CLI's, differing only in actor, so
+    `show`, `events`, and `watch` report browser and CLI decisions alike.
 
 ## Derived artifacts
 

@@ -69,7 +69,8 @@ and inline on the inbox, all attributed `operator:web`:
 | Requeue | `requeue(id, actor, reason, precondition)` | `blocked` |
 | Cancel | `cancel(id, actor, reason, precondition)` | `blocked` |
 | Prioritize | `prioritize(id, actor, priority, reason, precondition)` ([frostyard/fluent#1](https://github.com/frostyard/fluent/issues/1)) | `proposed`, `queued`, `blocked` |
-| Re-verify | `refreshArtifactVerifications({repository})` | completed with unverified or open artifacts |
+| Note | `note(id, actor, reason, precondition)` | any state |
+| Re-verify | `refreshArtifactVerifications({repository, actor})` | completed with unverified or open artifacts |
 
 Every mutation form carries the item's `status` and `updatedAt` as rendered;
 the store methods take an optional `precondition: { status, updatedAt }`
@@ -140,9 +141,19 @@ Phase 10 and later.
   `eventsSince`, newest first). The repositories index, repository board,
   and item page shipped read-only with
   [#18](https://github.com/frostyard/fluent/issues/18); inbox rows,
-  board rows, and event-rail entries link to `/items/:id`. Mutation
-  controls render disabled until the mutations slice
-  ([#19](https://github.com/frostyard/fluent/issues/19)). The inbox and
+  board rows, and event-rail entries link to `/items/:id`. The mutations
+  shipped with [#19](https://github.com/frostyard/fluent/issues/19): `POST
+  /items/:id/{approve,reject,defer,requeue,cancel,prioritize,note}` and
+  `POST /repositories/:owner/:name/verify-artifacts`, same-origin forms
+  (SameSite=Strict cookie plus a `Sec-Fetch-Site`/`Origin` check) attributed
+  `operator:web`, each carrying the rendered `status`/`updatedAt`
+  precondition ([spec rule 40](../specs/work-queue.md)); a mismatch renders
+  the item's current state with "this item changed since you read it" (409)
+  and no mutation; success redirects back with a `?done=<event type>`
+  banner. Inline on the inbox: approve/reject, requeue-with-note/cancel,
+  re-verify; the item page's *Decide* card offers every action its state
+  allows. The board's Hold / Import issues / Seed dogfood remain disabled
+  until [#24](https://github.com/frostyard/fluent/issues/24). The inbox and
   board refresh with `<meta http-equiv="refresh" content="30">` until the
   event stream lands. Pages inline their stylesheet (Frostyard tokens and the
   Pilothouse shell copied into [`src/surface/styles.ts`](../../src/surface/styles.ts));
