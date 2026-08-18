@@ -157,6 +157,44 @@ export const maintenancePrograms: readonly MaintenanceProgram[] = [
       priority: 0,
     },
   },
+  {
+    id: "dependencies",
+    cooldownSeconds: WEEK,
+    childCeiling: implementationCeiling,
+    childAdmission: "proposed",
+    discovery: {
+      kind: "dependencies-gap-discovery",
+      objective: "Identify one evidence-backed dependency gap: an outdated or vulnerable module, Dependabot noise worth consolidating, or license drift.",
+      instructions:
+        "Read the repository's dependency manifests and lockfiles and run its toolchain's read-only reports (for Go: `go list -m -u all`, `govulncheck ./...`; for npm: `npm outdated`, `npm audit`; for others, the equivalent). Identify exactly one gap: a module with a released newer version worth taking (name why — a fix the repository needs, a security advisory, an unsupported major), a known vulnerability in the resolved graph, a stream of Dependabot pull requests that one bump would replace, or a license that drifted from what the repository allows. Prefer frostyard-owned modules (`github.com/frostyard/*`) that are behind their latest release. Do not edit files or open a GitHub artifact. Propose one bounded child only when justified: one bump (or one consolidated bump) with the exact target versions and the checks that prove it; the supply-chain boundary is review-required, so the child is a proposal the operator admits and its pull request is human-merged.",
+      acceptanceCriteria: [
+        "The result identifies exactly one dependency gap with the module, the resolved version, the target version or advisory, and why it matters to this repository.",
+        "Evidence cites the manifest or lockfile path and the report output (`go list -m -u`, `govulncheck`, `npm outdated`, `npm audit`, or equivalent) observed on the default branch.",
+        "Any follow-up names the exact modules and target versions, keeps to one bump or one consolidated bump, and requires the repository's own checks to pass on the change.",
+      ],
+      allowedActions: discoveryActions,
+      priority: 0,
+    },
+  },
+  {
+    id: "docs",
+    cooldownSeconds: WEEK,
+    childCeiling: implementationCeiling,
+    childAdmission: "proposed",
+    discovery: {
+      kind: "docs-drift-discovery",
+      objective: "Identify one place where the reader-facing documentation no longer matches what the code does.",
+      instructions:
+        "Read the README, runbooks, examples, CLI help, and other documentation a user or operator runs from, and compare each claim, command, flag, path, and example with the current code and its tests (the frostyard-repo-docs skill is the procedure). Identify exactly one drift: a command or flag that no longer exists or behaves as documented, an example that no longer runs, a path or file that moved, a described default that changed. This program covers what a reader runs; the architecture program covers contracts versus code and the conformance program covers whether the canonical surfaces exist — do not report those here. Do not edit files or open a GitHub artifact. Propose one bounded child only when justified: the exact doc change (or the code fix, when the code is what drifted) and how a reader would verify it.",
+      acceptanceCriteria: [
+        "The result identifies exactly one reader-facing documentation drift, quoting the documented claim and the current behavior it contradicts.",
+        "Evidence cites the document path and the code, test, or command output that shows the current behavior.",
+        "Any follow-up names the exact document (or code) change and a mechanically verifiable check — the example runs, the flag exists, the path resolves — that a docs gate or test can pin.",
+      ],
+      allowedActions: discoveryActions,
+      priority: 0,
+    },
+  },
 ];
 
 /** The catalog entry for a Core program id. */
