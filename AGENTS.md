@@ -31,6 +31,8 @@ Start from .agents/skills/TEMPLATE/SKILL.md. -->
 
 - **Claim and resolve one queued repository work item** →
   [.agents/skills/work-fluent-queue/SKILL.md](.agents/skills/work-fluent-queue/SKILL.md).
+- **Write or review a GitHub issue destined for the Fluent queue** →
+  [.agents/skills/write-fluent-issues/SKILL.md](.agents/skills/write-fluent-issues/SKILL.md).
 - **Resolve or review Fluent domain terminology** →
   [.agents/skills/model-fluent-domain/SKILL.md](.agents/skills/model-fluent-domain/SKILL.md).
 

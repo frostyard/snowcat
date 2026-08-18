@@ -89,8 +89,11 @@ Opt the repository into the queue (this is separate from Core enrollment):
 npm run --silent queue -- opt-in frostyard/updex
 ```
 
-**From GitHub issues** — label the issues you want done (any label; `fluent`
-is a good convention), then:
+**From GitHub issues** — write them per the
+[`write-fluent-issues` skill](../../.agents/skills/write-fluent-issues/SKILL.md)
+(conventional title, evidence, bounded scope, at least one acceptance
+criterion observable on the PR itself), label them (any label; `fluent` is a
+good convention), then:
 
 ```bash
 npm run --silent queue -- import-issues frostyard/updex --label fluent --priority 10
