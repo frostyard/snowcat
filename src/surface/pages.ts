@@ -58,8 +58,8 @@ export interface LiveOptions {
 
 /**
  * The only script the surface ships: subscribe to `/events/stream`, prepend
- * ledger events to the rail (cap 30), and after a `work.*` or
- * `artifact.verified` event refetch this page's groups as HTML fragments and
+ * ledger events to the rail (cap 30), and after a `work.*`,
+ * `artifact.verified`, or `artifact.attached` event refetch this page's groups as HTML fragments and
  * swap them in. No framework, nothing loaded from anywhere else. Without
  * `EventSource` it re-inserts the 30-second meta refresh and stops.
  */
@@ -124,7 +124,7 @@ const LIVE_SCRIPT = String.raw`(function () {
     try { ev = JSON.parse(message.data); } catch (e) { return; }
     if (cfg.repository && ev.repository !== cfg.repository) return;
     prepend(ev);
-    if (/^work\./.test(ev.type) || ev.type === "artifact.verified") scheduleRefetch();
+    if (/^work\./.test(ev.type) || /^artifact\.(verified|attached)$/.test(ev.type)) scheduleRefetch();
   });
   source.onerror = function () { setPill("Live · reconnecting", false); };
 })();`;

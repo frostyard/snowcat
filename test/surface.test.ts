@@ -679,6 +679,112 @@ test("re-verify from the browser refreshes a repository's pending artifacts as o
   assert.equal(missing.status, 404);
 });
 
+test("attach artifact from the item page verifies against GitHub and attaches as operator:web, refuses cross-site, and shows the precondition banner when the item moved", async () => {
+  const seeded = await seededQueue();
+  test.after(() => seeded.queue.close());
+  const queue = seeded.queue;
+  const completed = queue.get(seeded.parent.id)!; // completed discovery root with no artifacts
+  assert.equal(completed.status, "completed");
+  assert.deepEqual(completed.result!.artifacts, []);
+  const requests: string[] = [];
+  const answers = new Map<string, Response | (() => Response)>();
+  const fetcher = (async (input: RequestInfo | URL) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    requests.push(url.pathname);
+    const answer = answers.get(url.pathname);
+    if (!answer) return new Response("{}", { status: 404 });
+    return typeof answer === "function" ? answer() : answer;
+  }) as typeof fetch;
+  const merged = () =>
+    new Response(
+      JSON.stringify({ number: 326, html_url: "https://github.com/frostyard/updex/pull/326", state: "closed", merged: true, merged_at: "2026-08-18T13:00:00Z", closed_at: "2026-08-18T13:00:00Z", head: { sha: "0123456789abcdef0123456789abcdef01234567" }, base: { repo: { full_name: "frostyard/updex" } } }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  answers.set("/repos/frostyard/updex/pulls/326", merged);
+  const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue, verifier: { fetcher, clock: () => new Date("2026-08-18T14:00:00.000Z") } }) });
+  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const post = (fields: Record<string, string>, headers: Record<string, string> = { Cookie: cookie }) =>
+    app.request(`/items/${completed.id}/attach-artifact`, { method: "POST", body: new URLSearchParams(fields), headers });
+  const fresh = () => ({ status: "completed", updatedAt: queue.get(completed.id)!.updatedAt, return: `/items/${completed.id}` });
+
+  // The item page offers the form only because the item is completed; the queued/proposed pages do not.
+  const page = await (await app.request(`/items/${completed.id}`, { headers: { Cookie: cookie } })).text();
+  assert.match(section(page, "actions"), new RegExp(`<form class="fl-decide" method="post" action="/items/${completed.id}/attach-artifact"><input type="hidden" name="status" value="completed"><input type="hidden" name="updatedAt" value="${completed.updatedAt}">`));
+  assert.match(section(page, "actions"), /<input class="fl-input" type="url" name="url" placeholder="https:\/\/github\.com\/frostyard\/updex\/pull\/N or …\/issues\/N" maxlength="512" required>/);
+  const proposedId = queue.list({ status: "proposed" })[0]!.id;
+  const proposedPage = await (await app.request(`/items/${proposedId}`, { headers: { Cookie: cookie } })).text();
+  assert.equal(proposedPage.includes("/attach-artifact"), false);
+
+  // No session and cross-site are refused before GitHub or the store is touched.
+  const anonymous = await post({ ...fresh(), url: "https://github.com/frostyard/updex/pull/326" }, {});
+  assert.equal(anonymous.status, 303);
+  assert.equal(anonymous.headers.get("Location"), "/login");
+  const crossSite = await post({ ...fresh(), url: "https://github.com/frostyard/updex/pull/326" }, { Cookie: cookie, "Sec-Fetch-Site": "cross-site" });
+  assert.equal(crossSite.status, 403);
+  const foreignOrigin = await post({ ...fresh(), url: "https://github.com/frostyard/updex/pull/326" }, { Cookie: cookie, Origin: "https://evil.example", Host: "127.0.0.1:3000" });
+  assert.equal(foreignOrigin.status, 403);
+  assert.deepEqual(requests, []);
+  assert.deepEqual(queue.get(completed.id)!.result!.artifacts, []);
+
+  // Missing URL, a URL outside the repository, and a 404 re-render the item page with a banner and write nothing.
+  const noUrl = await post(fresh());
+  assert.equal(noUrl.status, 400);
+  assert.match(await noUrl.text(), /Attach artifact was not applied: url is required/);
+  const foreign = await post({ ...fresh(), url: "https://github.com/frostyard/lodge/pull/1" });
+  assert.equal(foreign.status, 409);
+  assert.match(await foreign.text(), /Attach artifact was not applied: artifact rejected: artifact pull-request URL is not a frostyard\/updex pull-request URL/);
+  // GitHub answers with a different pull request than the URL names (a redirect or renumbering): rejected, nothing written.
+  answers.set("/repos/frostyard/updex/pulls/999", () => new Response(JSON.stringify({ number: 998, html_url: "https://github.com/frostyard/updex/pull/998", state: "open", base: { repo: { full_name: "frostyard/updex" } } }), { status: 200 }));
+  const mismatch = await post({ ...fresh(), url: "https://github.com/frostyard/updex/pull/999" });
+  assert.equal(mismatch.status, 409);
+  assert.match(await mismatch.text(), /Attach artifact was not applied: artifact rejected: pull-request number does not match https:\/\/github\.com\/frostyard\/updex\/pull\/999/);
+  assert.deepEqual(queue.get(completed.id)!.result!.artifacts, []);
+  assert.equal(queue.events(completed.id).some((event) => event.type === "artifact.attached"), false);
+
+  // A stale precondition (the item moved after render) is refused with the "changed since you read it" banner, even though GitHub confirmed the URL.
+  const rendered = fresh();
+  queue.note(completed.id, "operator:cli", "PR #326 opened by hand.");
+  const moved = queue.get(completed.id)!;
+  assert.notEqual(moved.updatedAt, rendered.updatedAt);
+  const stale = await post({ ...rendered, url: "https://github.com/frostyard/updex/pull/326" });
+  assert.equal(stale.status, 409);
+  const staleBody = await stale.text();
+  assert.match(staleBody, new RegExp(`This item changed since you read it: it is now completed \\(updated ${moved.updatedAt}\\)\\. Nothing was changed`));
+  assert.deepEqual(queue.get(completed.id)!.result!.artifacts, []);
+  assert.equal(staleBody.includes(seeded.leaseToken), false);
+
+  // The current render attaches: verified · merged, delivery merged, artifact.attached by operator:web, redirect with a banner.
+  const attached = await post({ ...fresh(), url: "https://github.com/frostyard/updex/pull/326", description: "Opened by the operator from the local branch" }, { Cookie: cookie, "Sec-Fetch-Site": "same-origin" });
+  assert.equal(attached.status, 303);
+  assert.equal(attached.headers.get("Location"), `/items/${completed.id}?done=artifact.attached&detail=https%3A%2F%2Fgithub.com%2Ffrostyard%2Fupdex%2Fpull%2F326+merged`);
+  const after = queue.get(completed.id)!;
+  assert.equal(after.delivery, "merged");
+  assert.deepEqual(after.result!.artifacts.map((artifact) => [artifact.kind, artifact.url, artifact.description, artifact.verification?.status]), [["pull-request", "https://github.com/frostyard/updex/pull/326", "Opened by the operator from the local branch", "verified"]]);
+  const event = queue.events(completed.id).at(-1)!;
+  assert.equal(event.type, "artifact.attached");
+  assert.equal(event.actor, "operator:web");
+  assert.deepEqual(event.payload, { url: "https://github.com/frostyard/updex/pull/326", kind: "pull-request", status: "verified", state: "merged" });
+  const landed = await (await app.request(attached.headers.get("Location")!, { headers: { Cookie: cookie } })).text();
+  assert.match(landed, /Recorded artifact\.attached — https:\/\/github\.com\/frostyard\/updex\/pull\/326 merged\./);
+  assert.match(landed, /<span class="ph-badge ok">verified · merged<\/span><small class="fl-sub">PR #326 · head 01234567 · merged 13:00:00 · verified 14:00:00 by operator:web<\/small>/);
+  assert.match(landed, /<b>artifact\.attached<\/b><span>operator:web<em class="fl-muted"> · PR #326 merged<\/em><\/span>/);
+  assert.equal(landed.includes(seeded.leaseToken), false);
+  assert.equal(landed.includes("leaseToken"), false);
+
+  // The same URL again is refused; GitHub outage attaches unverified and the inbox lists it for re-verify.
+  const twice = await post({ ...fresh(), url: "https://github.com/frostyard/updex/pull/326" });
+  assert.equal(twice.status, 409);
+  assert.match(await twice.text(), /Attach artifact was not applied: artifact already reported: https:\/\/github\.com\/frostyard\/updex\/pull\/326/);
+  answers.set("/repos/frostyard/updex/issues/300", () => new Response("", { status: 503 }));
+  const outage = await post({ ...fresh(), url: "https://github.com/frostyard/updex/issues/300", kind: "issue" });
+  assert.equal(outage.status, 303);
+  assert.equal(outage.headers.get("Location"), `/items/${completed.id}?done=artifact.attached&detail=https%3A%2F%2Fgithub.com%2Ffrostyard%2Fupdex%2Fissues%2F300+unverified`);
+  const issue = queue.get(completed.id)!.result!.artifacts.at(-1)!;
+  assert.equal(issue.kind, "issue");
+  assert.deepEqual(issue.verification, { status: "unverified", attemptedAt: "2026-08-18T14:00:00.000Z", reason: "GitHub API returned HTTP 503" });
+  assert.equal(queue.get(completed.id)!.delivery, "merged", "an unverified issue does not change delivery");
+});
+
 test("the event stream is session-guarded, starts with the cursor, and delivers new ledger events with identifying fields and no lease token", async () => {
   const seeded = await seededQueue();
   test.after(() => seeded.queue.close());

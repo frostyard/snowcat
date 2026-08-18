@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { createInterface } from "node:readline";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -431,6 +431,127 @@ test("operator CLI verify-artifacts validates its flags and reports an empty pas
   const empty = run("verify-artifacts");
   assert.equal(empty.status, 0, empty.stderr);
   assert.deepEqual(JSON.parse(empty.stdout), { checked: 0, updated: [], unavailable: [], rejected: [] });
+});
+
+test("operator CLI attach-artifact verifies against GitHub first: refuses another repository and a 404, attaches unverified on 5xx, and verify-artifacts later promotes it", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-attach-test-"));
+  const path = join(directory, "queue.db");
+  const queue = new QueueStore(path);
+  queue.setRepositoryEnabled("frostyard/updex", true);
+  // A local-only follow-up (no open-pr) completed with no artifacts; the operator opened the PR by hand.
+  const seed = queue.enqueueSeed({
+    repository: "frostyard/updex",
+    kind: "quality-implementation",
+    objective: "Make the merged-state signal instance-scoped.",
+    instructions: "Implement on a local branch; do not open a pull request.",
+    acceptanceCriteria: ["Tests pass."],
+    allowedActions: ["read", "write", "run-tests"],
+    delegableActions: [],
+    createdBy: "operator:test",
+  });
+  const lease = queue.claim({ worker: "claude:updex:local", repository: "frostyard/updex" })!;
+  queue.complete({
+    id: seed.id,
+    leaseToken: lease.leaseToken!,
+    worker: "claude:updex:local",
+    result: { summary: "Left on branch fix/instance-scoped.", evidence: ["make check green"], artifacts: [] },
+    followUps: [],
+  });
+  const leaseToken = lease.leaseToken!;
+  queue.close();
+
+  const fixturePath = join(directory, "github.json");
+  const logPath = join(directory, "requests.log");
+  const setGitHub = (answers: Record<string, { status: number; body?: unknown }>) => writeFile(fixturePath, JSON.stringify(answers));
+  const requests = async () => (await readFile(logPath, "utf8").catch(() => "")).split("\n").filter(Boolean);
+  const env = stringEnvironment({
+    ...process.env,
+    FLUENT_QUEUE_DB: path,
+    FLUENT_GITHUB_TOKEN: "test-token", // so a 404 counts as absence, exactly as complete_work treats it
+    FLUENT_TEST_FAKE_GITHUB: fixturePath,
+    FLUENT_TEST_FAKE_GITHUB_LOG: logPath,
+  });
+  const run = (...args: string[]) =>
+    spawnSync(process.execPath, ["--import", "tsx", "--import", "./test/helpers/fake-github-fetch.ts", "src/queue/cli.ts", ...args], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env,
+    });
+  const show = () => {
+    const shown = run("show", seed.id);
+    assert.equal(shown.status, 0, shown.stderr);
+    return JSON.parse(shown.stdout) as { item: { delivery?: string; result: { artifacts: Array<Record<string, unknown>> } }; events: Array<{ type: string }> };
+  };
+
+  // Usage names the command; a malformed kind or a non-GitHub URL is refused before GitHub is asked.
+  await setGitHub({});
+  const usage = run();
+  assert.match(usage.stderr, /attach-artifact <work-item-id> <url> \[--kind pull-request\|issue\] \[--description <text>\] \[--if-updated-at <iso>\]/);
+  const badKind = run("attach-artifact", seed.id, "https://github.com/frostyard/updex/pull/326", "--kind", "commit");
+  assert.notEqual(badKind.status, 0);
+  assert.match(badKind.stderr, /--kind must be pull-request or issue/);
+  const notGitHub = run("attach-artifact", seed.id, "https://example.com/frostyard/updex/pull/326");
+  assert.notEqual(notGitHub.status, 0);
+  assert.match(notGitHub.stderr, /artifact pull-request URL is not a frostyard\/updex pull-request URL/);
+  assert.deepEqual(await requests(), [], "nothing is asked of GitHub for a URL outside the repository");
+
+  // Another repository's pull request is refused with the reason and nothing is written.
+  const foreign = run("attach-artifact", seed.id, "https://github.com/frostyard/lodge/pull/1");
+  assert.notEqual(foreign.status, 0);
+  assert.match(foreign.stderr, /artifact rejected: artifact pull-request URL is not a frostyard\/updex pull-request URL/);
+  assert.deepEqual(await requests(), []);
+  assert.deepEqual(show().item.result.artifacts, []);
+
+  // GitHub says 404 (with a token): refused, nothing written.
+  const missing = run("attach-artifact", seed.id, "https://github.com/frostyard/updex/pull/999");
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /artifact rejected: pull-request https:\/\/github\.com\/frostyard\/updex\/pull\/999 does not exist on GitHub/);
+  assert.deepEqual(await requests(), ["/repos/frostyard/updex/pulls/999"]);
+  assert.deepEqual(show().item.result.artifacts, []);
+  assert.equal(show().events.some((event) => event.type === "artifact.attached"), false);
+
+  // GitHub answers 5xx: attached as unverified with the reason, delivery reads unverified.
+  await setGitHub({ "/repos/frostyard/updex/pulls/326": { status: 503 } });
+  const outage = run("attach-artifact", seed.id, "https://github.com/frostyard/updex/pull/326", "--description", "Opened by the operator from the local branch");
+  assert.equal(outage.status, 0, outage.stderr);
+  const attached = JSON.parse(outage.stdout) as { item: Record<string, unknown> & { delivery?: string; result: { artifacts: Array<Record<string, unknown>> } }; verification: Record<string, unknown> };
+  assert.equal(attached.item.delivery, "unverified");
+  assert.deepEqual(attached.verification, { status: "unverified", attemptedAt: attached.verification.attemptedAt, reason: "GitHub API returned HTTP 503" });
+  assert.equal(attached.item.result.artifacts.length, 1);
+  assert.equal(attached.item.result.artifacts[0]!.kind, "pull-request", "kind defaulted from the /pull/ path");
+  assert.equal(attached.item.result.artifacts[0]!.description, "Opened by the operator from the local branch");
+  assert.equal(outage.stdout.includes("leaseToken"), false);
+  assert.equal(outage.stdout.includes(leaseToken), false);
+  assert.deepEqual(show().events.filter((event) => event.type === "artifact.attached").length, 1);
+
+  // The same URL a second time is refused; a stale --if-updated-at is refused per rule 39.
+  const twice = run("attach-artifact", seed.id, "https://github.com/frostyard/updex/pull/326");
+  assert.notEqual(twice.status, 0);
+  assert.match(twice.stderr, /artifact already reported: https:\/\/github\.com\/frostyard\/updex\/pull\/326/);
+  await setGitHub({
+    "/repos/frostyard/updex/pulls/326": { status: 503 },
+    "/repos/frostyard/updex/issues/300": { status: 200, body: { number: 300, html_url: "https://github.com/frostyard/updex/issues/300", state: "closed", repository_url: "https://api.github.com/repos/frostyard/updex" } },
+  });
+  const stale = run("attach-artifact", seed.id, "https://github.com/frostyard/updex/issues/300", "--if-updated-at", "2020-01-01T00:00:00.000Z");
+  assert.notEqual(stale.status, 0);
+  assert.match(stale.stderr, new RegExp(`item changed since it was read: ${seed.id} is now completed`));
+  assert.equal(show().item.result.artifacts.length, 1);
+
+  // A later verify-artifacts pass promotes the unverified attachment to verified · merged.
+  await setGitHub({
+    "/repos/frostyard/updex/pulls/326": {
+      status: 200,
+      body: { number: 326, html_url: "https://github.com/frostyard/updex/pull/326", state: "closed", merged: true, merged_at: "2026-08-18T13:00:00Z", closed_at: "2026-08-18T13:00:00Z", head: { sha: "0123456789abcdef0123456789abcdef01234567" }, base: { repo: { full_name: "frostyard/updex" } } },
+    },
+  });
+  const verified = run("verify-artifacts", "--repository", "frostyard/updex");
+  assert.equal(verified.status, 0, verified.stderr);
+  assert.deepEqual(JSON.parse(verified.stdout).updated, [{ id: seed.id, url: "https://github.com/frostyard/updex/pull/326", status: "verified", state: "merged" }]);
+  const final = show();
+  assert.equal(final.item.delivery, "merged");
+  assert.equal(final.item.result.artifacts[0]!.verification && (final.item.result.artifacts[0]!.verification as { status: string }).status, "verified");
+  assert.deepEqual(final.events.map((event) => event.type).slice(-2), ["artifact.attached", "artifact.verified"]);
+  assert.equal(JSON.stringify(final).includes(leaseToken), false);
 });
 
 test("operator CLI list filters by repository and kind, and show prints an item with its events but no lease token", async () => {

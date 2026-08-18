@@ -295,7 +295,9 @@ inline on each proposal, **Requeue with note** / **Cancel** on each blocked
 item (the textarea is the note carried to the next lease, or the cancellation
 reason), and **Re-verify** on each unverified artifact (re-checks that
 repository's pending artifacts). The item page's *Decide* card offers every
-action its state allows, plus **Prioritize** and **Note**. Each is a
+action its state allows, plus **Prioritize**, **Note**, and, on a completed
+item, **Attach artifact** (`attach-artifact`: a pull request or issue URL in
+the item's repository, checked against GitHub before it is written). Each is a
 same-origin form attributed `operator:web` that carries the item's `status`
 and `updatedAt` as rendered; if a worker or another shell moved the item
 first, the surface refuses with *this item changed since you read it*, shows
@@ -452,6 +454,27 @@ npm run --silent queue -- verify-artifacts --repository frostyard/updex
 `fluent-verify.timer` runs this every 15 minutes with the default limit. It
 records `artifact.verified` events and leaves anything alone while GitHub is
 unavailable.
+
+When you carried a change the last mile yourself — a follow-up whose proposal
+said "leave the change on a local branch; do not open a pull request", so the
+worker completed it with no artifacts and you opened the pull request by
+hand — the item's `delivery` reads `none` for work that shipped. Record the
+pull request (or an issue) against the completed item with:
+
+```bash
+npm run --silent queue -- attach-artifact <id> https://github.com/frostyard/updex/pull/326 --description "opened by the operator from the local branch"
+```
+
+Fluent checks the URL against GitHub first exactly as it checks a worker's
+report: another repository, a wrong number, or a missing pull request is
+refused and nothing is written; a GitHub outage attaches it `unverified` and
+the next `verify-artifacts` pass promotes it. The kind follows the URL path
+(`/pull/` or `/issues/`; `--kind` overrides), the same URL is attached only
+once, only `completed` items accept one, and the item's ledger gains one
+`artifact.attached` event. Add `--if-updated-at <iso>` to refuse the attach if
+the item moved since you read it. The item page's *Decide* card offers the
+same form. Workers never attach: `complete_work` is their only way to report,
+and this command is not an MCP tool.
 
 **Blocked items** need an operator exit:
 

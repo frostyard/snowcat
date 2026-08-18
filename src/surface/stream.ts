@@ -46,5 +46,5 @@ export function toStreamedEvent(event: ObservedWorkEvent): StreamedEvent {
 
 /** Event types after which a page's queue-derived groups can have changed. */
 export function affectsQueueView(type: string): boolean {
-  return type.startsWith("work.") || type === "artifact.verified";
+  return type.startsWith("work.") || type === "artifact.verified" || type === "artifact.attached";
 }

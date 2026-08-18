@@ -3,7 +3,7 @@ import { withoutLeaseToken, type ObservableWorkItem, type WorkEvent } from "../q
 import type { RepositoryEnrollment } from "./repositories.ts";
 
 export interface ArtifactProvenance {
-  /** Actor of the latest `artifact.verified` event for this URL, when a refresh pass re-verified it. */
+  /** Actor of the latest `artifact.verified` or `artifact.attached` event for this URL: who re-verified or attached it. */
   verifiedBy?: string;
 }
 
@@ -36,7 +36,7 @@ export function readItem(queue: QueueStore, id: string, enrollments: Map<string,
     .at(-1);
   const provenance = new Map<string, ArtifactProvenance>();
   for (const event of events) {
-    if (event.type !== "artifact.verified") continue;
+    if (event.type !== "artifact.verified" && event.type !== "artifact.attached") continue;
     const url = event.payload.url;
     if (typeof url === "string") provenance.set(url, { verifiedBy: event.actor });
   }

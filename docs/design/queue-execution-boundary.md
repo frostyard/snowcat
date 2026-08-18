@@ -257,7 +257,11 @@ operator step the guard cannot perform.
   unavailable → the completion is accepted as `unverified` with the reason;
   `npm run queue -- verify-artifacts` re-checks unverified and still-open
   artifacts later and records `artifact.verified` events, so a GitHub outage
-  costs a delayed observation, not a lost completion. Completed items expose a
+  costs a delayed observation, not a lost completion. `npm run queue --
+  attach-artifact` lets the operator (never a worker, never through MCP)
+  record a pull request or issue the worker did not report against a
+  completed item, through the same GitHub check, with an `artifact.attached`
+  event ([spec rule 41](../specs/work-queue.md)). Completed items expose a
   derived `delivery` (`none`, `unverified`, `open`, `closed`, `merged`) — the
   merge of the reported pull request, kept distinct from outcome achievement
   ([ADR-0031](../adr/0031-separate-delivery-from-outcome-achievement.md)).
