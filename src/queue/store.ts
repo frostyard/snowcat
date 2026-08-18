@@ -403,6 +403,12 @@ export class QueueStore {
     return row ? withDelivery(decodeWorkItem(row)) : undefined;
   }
 
+  /** Direct children of one item, oldest first; empty for a leaf or an unknown id. */
+  children(id: string): WorkItem[] {
+    const rows = this.db.prepare("SELECT * FROM work_items WHERE parent_id = ? ORDER BY created_at ASC, id ASC").all(id) as Row[];
+    return rows.map((row) => withDelivery(decodeWorkItem(row)));
+  }
+
   list(options: { status?: WorkStatus; repository?: string; kind?: string; limit?: number } = {}): WorkItem[] {
     const clauses: string[] = [];
     const params: SQLInputValue[] = [];
@@ -480,16 +486,19 @@ export class QueueStore {
     return row !== undefined;
   }
 
-  counts(): Record<WorkStatus, number> {
+  /** Items per logical status, across the queue or for one repository. */
+  counts(repository?: string): Record<WorkStatus, number> {
     const result = Object.fromEntries(workStatuses.map((status) => [status, 0])) as Record<WorkStatus, number>;
+    if (repository !== undefined) validateRepository(repository);
     const rows = this.db
       .prepare(
         `SELECT CASE WHEN status = 'queued' AND admitted = 0 THEN 'proposed' ELSE status END AS logical_status,
                 COUNT(*) AS count
          FROM work_items
+         ${repository === undefined ? "" : "WHERE repository = ?"}
          GROUP BY logical_status`,
       )
-      .all() as Row[];
+      .all(...(repository === undefined ? [] : [repository])) as Row[];
     for (const row of rows) result[String(row.logical_status) as WorkStatus] = Number(row.count);
     return result;
   }
