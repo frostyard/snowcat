@@ -3,6 +3,7 @@ import { html, raw, type SafeHtml } from "./html.ts";
 import { clock, document, itemPath, objective, repositoryPath, shell, type PageContext } from "./pages.ts";
 import type { BoardData, CompletedRow, LeasedRow, RepositoryEnrollment, RepositoryIndexData } from "./repositories.ts";
 import { shortLabel, workerFamily } from "./repositories.ts";
+import { verifyForm } from "./forms.ts";
 
 export function repositoriesPage(context: PageContext, data: RepositoryIndexData): string {
   return document(
@@ -64,13 +65,14 @@ export function boardPage(context: PageContext, data: BoardData): string {
     : [];
   const actions = html`${enrollmentBadge(enrollment, context.controlPlanePath !== undefined)}${enrollment?.held ? html` <span class="ph-badge danger">held</span>` : ""}${
     facts.length > 0 ? html`<span class="fl-facts">${facts.join(" · ")}</span>` : ""
-  }<button class="ph-button reject" disabled title="Repository actions land in a later slice">Hold repository</button><button class="ph-button secondary" disabled title="Repository actions land in a later slice">Import issues</button><button class="ph-button secondary" disabled title="Repository actions land in a later slice">Seed dogfood</button>`;
+  }`;
   return document(
     `${data.repository} · Fluent`,
     shell(
       context,
       { title: data.repository, eyebrow: "repository · board", heading: data.repository, active: "repositories", actions, refresh: true, repository: data.repository },
-      html`${boardStats(data)}
+      html`${repositoryActions(data, context.controlPlanePath !== undefined)}
+      ${boardStats(data)}
       ${data.truncated.length > 0 ? html`<div class="fl-error">Showing the first 100 rows of: ${data.truncated.join(", ")}. Use the CLI for the full list.</div>` : ""}
       ${
         !data.optedIn
@@ -85,6 +87,31 @@ export function boardPage(context: PageContext, data: BoardData): string {
     ),
     { refresh: true, live: { page: repositoryPath(data.repository), partials: boardPartials, repository: data.repository } },
   );
+}
+
+/**
+ * The board's repository-level actions — the CLI's `import-issues`,
+ * `seed-dogfood`, `verify-artifacts`, and `repository -- hold | clear-hold`
+ * — as same-origin forms under the header. Hold and clear appear only when a
+ * control plane is configured and the repository is declared there.
+ */
+function repositoryActions(data: BoardData, controlPlaneConfigured: boolean): SafeHtml {
+  const here = repositoryPath(data.repository);
+  const base = repositoryPath(data.repository);
+  const disabledNote = data.optedIn ? "" : html`<small class="fl-sub">Not opted in to the queue: import and seed are unavailable until <code>queue -- opt-in ${data.repository}</code>.</small>`;
+  const holdForm = !controlPlaneConfigured
+    ? html`<div class="fl-action"><span class="fl-action-label">Hold</span><small class="fl-sub">Needs FLUENT_CONTROL_DB.</small></div>`
+    : !data.enrollment
+      ? html`<div class="fl-action"><span class="fl-action-label">Hold</span><small class="fl-sub">Not declared in the active Core snapshot.</small></div>`
+      : data.enrollment.held
+        ? html`<form class="fl-action" method="post" action="${base}/clear-hold"><input type="hidden" name="return" value="${here}"><span class="fl-action-label">Hold <span class="ph-badge danger">held</span></span><input class="fl-input" name="reason" placeholder="Reason to clear the hold" maxlength="4000" required><button class="ph-button secondary" type="submit">Clear hold</button></form>`
+        : html`<form class="fl-action" method="post" action="${base}/hold"><input type="hidden" name="return" value="${here}"><span class="fl-action-label">Hold</span><input class="fl-input" name="reason" placeholder="Reason for the hold" maxlength="4000" required><button class="ph-button reject" type="submit">Hold repository</button></form>`;
+  return html`<section class="fl-group fl-repo-actions" id="repository-actions"><div class="fl-group-head"><h2>Repository actions</h2><span>as operator:web · same as the CLI</span></div><div class="fl-action-grid">
+    <form class="fl-action" method="post" action="${base}/import-issues"><input type="hidden" name="return" value="${here}"><span class="fl-action-label">Import issues</span><div class="fl-action-fields"><input class="fl-input" name="label" value="fluent" placeholder="label" maxlength="100"><input class="fl-input fl-input-num" type="number" name="priority" placeholder="priority" step="1"></div><button class="ph-button secondary" type="submit"${data.optedIn ? "" : " disabled"}>Import issues</button></form>
+    <form class="fl-action" method="post" action="${base}/seed-dogfood"><input type="hidden" name="return" value="${here}"><span class="fl-action-label">Seed dogfood</span><small class="fl-sub">Four read-only discovery roots; 24 h no-finding cooldown.</small><button class="ph-button secondary" type="submit"${data.optedIn ? "" : " disabled"}>Seed dogfood</button></form>
+    <div class="fl-action"><span class="fl-action-label">Verify artifacts</span><small class="fl-sub">Re-check pending issue and pull-request artifacts against GitHub.</small>${verifyForm(data.repository, here, { label: "Verify artifacts" })}</div>
+    ${holdForm}
+  </div>${disabledNote}</section>`;
 }
 
 function column(title: string, caption: string, rows: SafeHtml[], empty: string, id: string): SafeHtml {
