@@ -67,18 +67,36 @@ if [[ $install_user == root ]]; then
   echo "install: warning: units will run as root; pass --user OPERATOR to use the operator account" >&2
 fi
 
-# resolve_tool <name> <override-variable>: the override, else the tool as the
-# operator user's login shell sees it (sudo resets PATH, and version managers
-# such as Homebrew or nvm live in the user's profile), else our own PATH.
+# resolve_tool <name> <override-variable>: the override, else the first
+# executable absolute path among: the tool as the operator user's login shell
+# sees it (sudo resets PATH, and version managers such as Homebrew or nvm live
+# in the user's profile); the same through an interactive login shell (Homebrew's
+# `brew shellenv` commonly sits in ~/.bashrc behind an "if not interactive,
+# return" guard, so a plain login shell never sees it); our own PATH; and the
+# well-known Homebrew prefixes.
 resolve_tool() {
-  local name="$1" override="${2:-}" found=""
+  local name="$1" override="${2:-}" candidate found="" home prefix
+  local -a candidates=()
   if [[ -n $override ]]; then
-    found="$override"
-  elif [[ $install_user != "$(id -un)" ]]; then
-    found="$(sudo -u "$install_user" -i sh -c "command -v $name" 2> /dev/null | tail -n 1 || true)"
+    candidates+=("$override")
+  else
+    if [[ $install_user != "$(id -un)" ]]; then
+      candidates+=("$(sudo -u "$install_user" -i sh -c "command -v $name" 2> /dev/null | tail -n 1 || true)")
+      candidates+=("$(sudo -u "$install_user" -i bash -lic "command -v $name" 2> /dev/null | tail -n 1 || true)")
+    fi
+    candidates+=("$(command -v "$name" || true)")
+    home="$(getent passwd "$install_user" | cut -d: -f6)"
+    for prefix in /home/linuxbrew/.linuxbrew "${home:-/nonexistent}/.linuxbrew" /opt/homebrew /usr/local; do
+      candidates+=("$prefix/bin/$name")
+    done
   fi
-  if [[ -z $found ]]; then found="$(command -v "$name" || true)"; fi
-  if [[ -z $found || $found != /* || ! -x $found ]]; then
+  for candidate in "${candidates[@]}"; do
+    if [[ -n $candidate && $candidate == /* && -x $candidate ]]; then
+      found="$candidate"
+      break
+    fi
+  done
+  if [[ -z $found ]]; then
     echo "install: cannot find an executable $name for user $install_user; install Node 24+ or set FLUENT_${name^^}=/path/to/$name" >&2
     exit 1
   fi
