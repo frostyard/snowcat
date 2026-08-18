@@ -183,19 +183,26 @@ or was unavailable — reported and skipped while the others still run), and
 works for a repository that is opted in but not enrolled, or for a different
 label.
 
-**Standing maintenance** — one bounded, read-only discovery root per
-maintenance program (quality, CI, security, architecture), each of which may
-propose one implementation child:
+**Standing maintenance** — the maintenance program catalog in
+[`src/queue/programs.ts`](../../src/queue/programs.ts): one bounded, read-only
+discovery root per program, each of which may propose one implementation
+child. Each entry names its Core `maintenance_programs` id, its discovery
+template, the widest child ceiling, how children enter (`proposed`), and its
+own no-finding cooldown — the cadence at which a repository is asked again
+after a program answered "nothing": **quality daily, CI daily, security daily,
+architecture weekly**. Adding a program is one catalog entry plus its Core enum
+value.
 
 ```bash
-npm run --silent queue -- seed-dogfood frostyard/updex                    # cooldown 24 h
-npm run --silent queue -- seed-dogfood frostyard/updex --cooldown-hours 0 # ignore cooldown
+npm run --silent queue -- seed-dogfood frostyard/updex                    # each program's own cooldown
+npm run --silent queue -- seed-dogfood frostyard/updex --cooldown-hours 0 # ignore every cooldown
 npm run --silent queue -- seed-dogfood --enrolled                         # every opted-in + enrolled repository
 ```
 
 The feeder is idempotent: a program with active lineage is skipped, and one
 that just completed with no finding is reported as `cooledKinds` rather than
-re-asked. `--enrolled` requires `FLUENT_CONTROL_DB` (it exits non-zero naming
+re-asked until its cadence elapses (`--cooldown-hours <n>` overrides every
+program's cadence for that run). `--enrolled` requires `FLUENT_CONTROL_DB` (it exits non-zero naming
 the variable otherwise), reads the control-plane store once, and runs the
 feeder in one transaction per repository that is both opted in and `enrolled`,
 printing each repository's result plus any enrolled repository that is not
@@ -312,9 +319,10 @@ Three more views sit behind the same session:
   *Repository actions* strip under the header runs the CLI's repository-level
   commands as `operator:web`: **Import issues** (label, default `fluent`, and
   optional priority — the same import as `queue -- import-issues`, so a second
-  run creates nothing), **Seed dogfood** (the discovery roots for the programs
-  the Core declaration lists — the whole catalog only for an undeclared
-  opt-in — with the 24-hour cooldown), **Verify artifacts** (`verify-artifacts` for that
+  run creates nothing), **Seed dogfood** (the catalog's discovery roots for
+  the programs the Core declaration lists — the whole catalog only for an
+  undeclared opt-in — each with its program's cadence, which the button's
+  note spells out), **Verify artifacts** (`verify-artifacts` for that
   repository), and, when `FLUENT_CONTROL_DB` is set and the repository is
   declared, **Hold repository** / **Clear hold** with a reason — the same
   attributed local-operator decision as `repository -- hold | clear-hold`,

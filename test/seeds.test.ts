@@ -7,6 +7,7 @@ import { Worker } from "node:worker_threads";
 
 import { ControlPlaneStore } from "../src/control/store.ts";
 import { enrolledRepositories } from "../src/queue/eligibility.ts";
+import { maintenancePrograms } from "../src/queue/programs.ts";
 import { enqueueDogfoodBatch, enqueueDogfoodBatchForEnrolled } from "../src/queue/seeds.ts";
 import { QueueStore } from "../src/queue/store.ts";
 import { disabledDeclaration, enrollExampleRepository } from "./helpers/core-fixtures.ts";
@@ -311,6 +312,43 @@ test("a no-finding assessment cools its kind for the window, while a finding doe
   assert.deepEqual(later.created.map((item) => item.kind), ["quality-gap-discovery"]);
 
   assert.throws(() => enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { cooldownSeconds: -1 }), /non-negative/);
+});
+
+test("each program cools on its own cadence: a daily program is re-offered before a weekly one", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-dogfood-cadence-test-"));
+  let now = new Date("2026-08-17T12:00:00.000Z");
+  const queue = new QueueStore(join(directory, "queue.db"), () => now);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled(DOGFOOD_REPOSITORY, true);
+  const cadence = Object.fromEntries(maintenancePrograms.map((program) => [program.id, program.cooldownSeconds]));
+  assert.equal(cadence.quality, 24 * 3600);
+  assert.equal(cadence.architecture, 7 * 24 * 3600);
+
+  // Quality (daily) and architecture (weekly) both answer "nothing".
+  enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { programs: ["quality", "architecture"] });
+  for (const kind of ["quality-gap-discovery", "architecture-gap-discovery"]) {
+    const item = queue.claim({ worker: "claude:fluent:dogfood", kinds: [kind] })!;
+    queue.complete({
+      id: item.id,
+      leaseToken: item.leaseToken!,
+      worker: "claude:fluent:dogfood",
+      result: { summary: "Nothing found.", evidence: ["src/"], artifacts: [] },
+      followUps: [],
+    });
+  }
+
+  // Two days later only the daily program is asked again; the weekly one is still cooling.
+  now = new Date("2026-08-19T12:00:00.000Z");
+  const later = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { programs: ["quality", "architecture"] });
+  assert.deepEqual(later.created.map((item) => item.kind), ["quality-gap-discovery"]);
+  assert.deepEqual(later.cooledKinds, ["architecture-gap-discovery"]);
+
+  // Eight days later the weekly one is offered again (quality is now active from the day-two root).
+  now = new Date("2026-08-25T12:00:00.000Z");
+  const week = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { programs: ["quality", "architecture"] });
+  assert.deepEqual(week.created.map((item) => item.kind), ["architecture-gap-discovery"]);
+  assert.deepEqual(week.skippedKinds, ["quality-gap-discovery"]);
+  assert.deepEqual(week.cooledKinds, []);
 });
 
 test("an explicit program list narrows the batch to those programs and reports the rest as undeclared", async () => {

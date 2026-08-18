@@ -68,8 +68,8 @@ export async function applyImportIssues(
 }
 
 /**
- * Board "Seed dogfood": the standing discovery roots with the default 24-hour
- * no-finding cooldown. A repository declared in the control plane is seeded
+ * Board "Seed dogfood": the maintenance program catalog's discovery roots,
+ * each with its program's own no-finding cooldown. A repository declared in the control plane is seeded
  * only for the programs its declaration lists — the same narrowing as
  * `seed-dogfood --enrolled` — while an undeclared opt-in gets the whole
  * catalog, like `seed-dogfood <owner/repo>`.

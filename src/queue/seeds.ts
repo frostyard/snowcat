@@ -1,87 +1,11 @@
 import type { RepositoryMaintenanceProgram } from "../control/registry.ts";
 import { enrolledRepositoryPrograms } from "./eligibility.ts";
+import { discoveryRootFor, maintenancePrograms } from "./programs.ts";
 import { QueueStore } from "./store.ts";
-import type { AllowedAction, SeedWorkInput, WorkItem } from "./types.ts";
+import type { AllowedAction, WorkItem } from "./types.ts";
 
 const discoveryActions: AllowedAction[] = ["read", "create-followup"];
-const implementationCeiling: AllowedAction[] = [
-  "read",
-  "write",
-  "run-tests",
-  "open-issue",
-  "open-pr",
-  "create-followup",
-];
-
-/**
- * One discovery root template per maintenance program. `program` is the Core
- * `maintenance_programs` value the template serves; a repository under the
- * enrollment gate is seeded only for the programs its declaration lists.
- */
-type DogfoodTemplate = Omit<SeedWorkInput, "repository" | "createdBy"> & { program: RepositoryMaintenanceProgram };
-
-const dogfoodTemplates: DogfoodTemplate[] = [
-  {
-    program: "quality",
-    kind: "quality-gap-discovery",
-    objective: "Identify one evidence-backed software quality gap without proposing a new product feature.",
-    instructions:
-      "Inspect existing behavior and identify exactly one maintainability, reliability, or error-handling gap. Do not edit files or open a GitHub artifact. Report impact and file-level evidence, and propose one bounded implementation child only when justified.",
-    acceptanceCriteria: [
-      "The result identifies exactly one gap in existing behavior rather than a feature request.",
-      "Evidence names the relevant implementation and any related tests or documentation.",
-      "Any follow-up has a bounded change and verifiable project check.",
-    ],
-    allowedActions: discoveryActions,
-    delegableActions: implementationCeiling,
-    priority: 0,
-  },
-  {
-    program: "ci",
-    kind: "ci-gap-discovery",
-    objective: "Identify one evidence-backed gap in CI or test signal quality.",
-    instructions:
-      "Inspect CI workflows, project checks, and tests. Identify exactly one missing, misleading, flaky, or unnecessarily weak signal. Do not edit files or open a GitHub artifact. Propose one bounded implementation child only when justified.",
-    acceptanceCriteria: [
-      "The result identifies exactly one CI or test-signal gap.",
-      "Evidence cites the relevant workflow, command, source, or test paths.",
-      "Any follow-up states the signal that will change and how it will be verified.",
-    ],
-    allowedActions: discoveryActions,
-    delegableActions: implementationCeiling,
-    priority: 0,
-  },
-  {
-    program: "security",
-    kind: "security-gap-discovery",
-    objective: "Identify one evidence-backed security hardening gap.",
-    instructions:
-      "Inspect trust boundaries, input validation, secret handling, dependencies, and authorization code. Identify exactly one concrete hardening gap without overstating exploitability. Do not edit files or open a GitHub artifact. Propose one bounded child only when the evidence justifies it.",
-    acceptanceCriteria: [
-      "The result identifies exactly one security hardening gap and distinguishes observation from verified exploitability.",
-      "Evidence cites the relevant boundary and source, test, configuration, or dependency paths.",
-      "Any follow-up has least-authority actions and mechanically verifiable criteria.",
-    ],
-    allowedActions: discoveryActions,
-    delegableActions: implementationCeiling,
-    priority: 0,
-  },
-  {
-    program: "architecture",
-    kind: "architecture-gap-discovery",
-    objective: "Identify one evidence-backed mismatch between this repository and its documented current contracts.",
-    instructions:
-      "Compare implementation and live repository instructions with accepted ADRs, design documents, and specs. Identify exactly one current mismatch; do not invent an organization standard or treat an aspiration as implemented truth. Do not edit files or open a GitHub artifact. Propose one bounded child only when justified.",
-    acceptanceCriteria: [
-      "The result identifies exactly one mismatch between live code or instructions and a current documented contract.",
-      "Evidence cites both sides of the mismatch.",
-      "Any follow-up preserves the distinction between current truth and aspiration.",
-    ],
-    allowedActions: discoveryActions,
-    delegableActions: implementationCeiling,
-    priority: 0,
-  },
-];
+const implementationCeiling: AllowedAction[] = ["read", "write", "run-tests", "open-issue", "open-pr", "create-followup"];
 
 export function enqueueTestingGap(queue: QueueStore, repository: string, createdBy = "operator:cli"): WorkItem {
   return queue.enqueueSeed({
@@ -106,10 +30,11 @@ export function enqueueTestingGap(queue: QueueStore, repository: string, created
   });
 }
 
-/** Default no-finding cooldown for the repeating dogfood feeder: one day. */
-export const DEFAULT_DOGFOOD_COOLDOWN_SECONDS = 24 * 60 * 60;
-
 export interface DogfoodBatchOptions {
+  /**
+   * Overrides every program's own no-finding cooldown (`--cooldown-hours`);
+   * omitted means each program's catalog cadence applies.
+   */
   cooldownSeconds?: number;
   /**
    * The maintenance programs to seed. Omitted means every program in the
@@ -128,14 +53,23 @@ export interface DogfoodBatchResult {
   undeclaredKinds: string[];
 }
 
+/**
+ * Seeds the discovery roots of the maintenance program catalog for one
+ * repository: every program, or only `options.programs`. Each root carries its
+ * program's own no-finding cooldown unless `options.cooldownSeconds` overrides
+ * them all.
+ */
 export function enqueueDogfoodBatch(queue: QueueStore, repository: string, options: DogfoodBatchOptions = {}): DogfoodBatchResult {
   const declared = options.programs === undefined ? undefined : new Set(options.programs);
-  const offered = dogfoodTemplates.filter((template) => declared === undefined || declared.has(template.program));
-  const undeclaredKinds = dogfoodTemplates.filter((template) => !offered.includes(template)).map((template) => template.kind);
+  const offered = maintenancePrograms.filter((program) => declared === undefined || declared.has(program.id));
+  const undeclaredKinds = maintenancePrograms.filter((program) => !offered.includes(program)).map((program) => program.discovery.kind);
   const batch = queue.enqueueInactiveRootBatch(
     repository,
-    offered.map(({ program: _program, ...template }) => ({ ...template, createdBy: "operator:dogfood" })),
-    { cooldownSeconds: options.cooldownSeconds ?? DEFAULT_DOGFOOD_COOLDOWN_SECONDS },
+    offered.map((program) => {
+      const { repository: _repository, ...root } = discoveryRootFor(program, repository);
+      return { ...root, cooldownSeconds: program.cooldownSeconds };
+    }),
+    options.cooldownSeconds === undefined ? {} : { cooldownSeconds: options.cooldownSeconds },
   );
   return { ...batch, undeclaredKinds };
 }

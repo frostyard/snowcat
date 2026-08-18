@@ -38,21 +38,29 @@ their children may be admitted on creation.
   `test/cli.test.ts`, and `test/surface.test.ts` assert the two-root result;
   the [runbook](../design/queue-operations.md) names `--enrolled`.
 
-## Phase 2 — Program catalog with cadence (small)
+## Phase 2 — Program catalog with cadence (small) — done 2026-08-18
 
-- Move the templates out of `src/queue/seeds.ts` into a catalog
-  (`src/queue/programs.ts`): id, discovery template, default child ceiling,
-  cadence (no-finding cooldown per program instead of one 24 h value),
-  admission policy for children (`proposed` default), and the repository
-  types it applies to. The four existing programs are the first entries and
-  keep their current text.
-- Cadence defaults: security daily, quality and CI daily, architecture
-  weekly, dependencies weekly, docs weekly, conformance on Core-ADR change
-  (or weekly), triage daily, cure per feed interval.
-- Runbook and spec name the catalog and its cadences; the surface's Seed
-  dogfood button reads the catalog.
+- The templates moved out of `src/queue/seeds.ts` into the catalog
+  [`src/queue/programs.ts`](../../src/queue/programs.ts): id (the Core enum
+  value), discovery template, child ceiling (`delegableActions`), cadence
+  (`cooldownSeconds`, a no-finding cooldown per program instead of one 24 h
+  value), and children's admission policy (`proposed`). The four existing
+  programs are the first entries and keep their text. Repository types are
+  deliberately absent: Core declares none yet, and the catalog will not
+  invent a classification Core does not have (revisit with Phase 3).
+- Cadence defaults in the catalog: quality, CI, and security daily,
+  architecture weekly. Reserved for later entries: dependencies weekly, docs
+  weekly, conformance on Core-ADR change (or weekly), triage daily, cure per
+  feed interval.
+- `QueueStore.enqueueInactiveRootBatch` takes a cooldown per candidate;
+  `--cooldown-hours <n>` overrides every program's for one run. The runbook
+  and spec rule 32 name the catalog and its cadences; the board's Seed dogfood
+  note spells out each declared program's cadence.
 - **Done when:** the feeder seeds from the catalog with per-program cooldown
-  and a new program is one catalog entry plus a Core enum value.
+  and a new program is one catalog entry plus a Core enum value. — Met:
+  `test/programs.test.ts` pins the catalog shape and cadences,
+  `test/seeds.test.ts` shows a daily program re-offered while a weekly one is
+  still cooling.
 
 ## Phase 3 — Widen the Core enum (Core-side, operator)
 
