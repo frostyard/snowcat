@@ -33,6 +33,15 @@ decision kinds that exist today.
 
 ### Views
 
+Layout decisions settled 2026-08-17 on the design canvas
+([Fluent Operator Surface](https://claude.ai/code/artifact/86d7da78-b87d-4df4-a725-2d8a34b29384),
+Frostyard Pilothouse admin shell, real dogfood data): the inbox is **grouped
+by decision kind** (proposals, blocked, unverified artifacts) rather than one
+merged list; the repository board is **three columns** (queued in claim
+order, leased, completed) rather than a filtered table; the **events rail
+stays on the inbox**; and **requeue-with-note is inline** in the blocked row
+as well as on the item page.
+
 | View | Route | Reads | Purpose |
 | --- | --- | --- | --- |
 | Inbox | `/` | `list({status:"proposed"})`, `list({status:"blocked"})`, completed items with any `unverified` artifact | Everything waiting on the operator, grouped: proposals to admit (children under their parent's finding), blocked items to requeue or cancel, unverified artifacts to re-check |
