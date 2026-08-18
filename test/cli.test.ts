@@ -435,7 +435,7 @@ test("operator CLI verify-artifacts validates its flags and reports an empty pas
     updated: [],
     unavailable: [],
     rejected: [],
-    cure: { inspected: 0, foreign: { listed: 0, inspected: 0 }, enqueued: [], healthy: [], skipped: [], unavailable: [] },
+    cure: { inspected: 0, foreign: { listed: 0, inspected: 0 }, enqueued: [], healthy: [], skipped: [], unavailable: [], notes: [] },
   });
 });
 

@@ -488,16 +488,22 @@ unavailable.
 
 **Pull-request cure** ([ADR-0061](../adr/0061-cure-pull-requests-as-bounded-per-head-work.md)).
 The same pass then looks at every open pull request a completed item reported
-— its `mergeable_state`, the check runs on its head, its reviews, and the
+— its `mergeable_state`, the check runs on its head, its reviews, its review
+threads (read through GraphQL, so `FLUENT_GITHUB_TOKEN` must be set), and the
 identity of its patch — and, for each head that has *decayed* (`dirty` or
-`behind`, a failing check, a reviewer's latest review requesting changes),
-enqueues one **admitted** root of kind `pr-cure` keyed by
-`<pull-request URL>@<head SHA>`. The output's `cure` section lists
+`behind`, a failing check, a reviewer's latest review requesting changes, a
+review thread that is neither resolved nor outdated — decay
+`unresolved-threads`), enqueues one **admitted** root of kind `pr-cure` keyed
+by `<pull-request URL>@<head SHA>`. The output's `cure` section lists
 `enqueued`, `healthy`, `skipped` (same head already known, draft, closed,
-patch identity uncomputable), and `unavailable`. A cure item tells the worker
-to do only a *mechanical* cure — rebase or merge the base when it resolves
-cleanly, retitle for the title lint, re-run checks, reply to reviews — and
-Fluent enforces that on `complete_work` by recomputing the pull request's
+patch identity uncomputable), `unavailable`, and `notes` — when GraphQL could
+not answer, the thread signal is left out for that pull request and a note
+says why; the REST signals still decide. A cure item tells the worker to do
+only a *mechanical* cure — rebase or merge the base when it resolves cleanly,
+retitle for the title lint, re-run checks, reply to review threads or resolve
+one a later commit already addressed (a thread asking for a code change
+becomes the `pr-cure-change` proposal) — and Fluent enforces that on
+`complete_work` by recomputing the pull request's
 patch identity (its added and removed lines per file, so a clean rebase keeps
 it): a changed patch is refused and the item stays claimed. When curing needs
 a code change the worker proposes one `pr-cure-change` child for you to admit,

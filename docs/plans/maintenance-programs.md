@@ -105,9 +105,10 @@ their children may be admitted on creation.
   the repository's open pull requests, skip drafts, and inspect the rest
   through the same path (priority 0, no `originItemId`).
 - Deliberately deferred: title lint as its own signal (on updex it is a
-  check run), age threshold, unresolved review threads (GraphQL). Each is a
-  follow-up issue when a week of curing Fluent's own pull requests says it
-  matters.
+  check run), age threshold. Each is a follow-up issue when a week of curing
+  Fluent's own pull requests says it matters. Unresolved review threads
+  (GraphQL `reviewThreads`) landed as the `unresolved-threads` decay on
+  2026-08-18.
 - **Done when:** a fixture pull request that falls behind its base yields one
   admitted `pr-cure` item, a mechanical rebase completes with an unchanged
   digest, a conflicting one is refused and yields a `pr-cure-change`
