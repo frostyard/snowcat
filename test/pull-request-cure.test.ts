@@ -8,7 +8,7 @@ import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 
 import { buildQueueMcpServer } from "../src/mcp/server.ts";
 import { refreshArtifactVerifications } from "../src/queue/artifact-verification.ts";
-import { assertCureCompletion, curePullRequests, inspectPullRequestHealth } from "../src/queue/pull-request-cure.ts";
+import { assertCureCompletion, cureRootDefinition, curePullRequests, inspectPullRequestHealth } from "../src/queue/pull-request-cure.ts";
 import { QueueStore } from "../src/queue/store.ts";
 
 const REPOSITORY = "frostyard/updex";
@@ -51,11 +51,33 @@ const FILE_V2 = {
   patch: "@@ -10,4 +10,5 @@ func parse() {\n ctx1\n-old line\n+new line\n+a DIFFERENT new line\n ctx2\n",
 };
 
+/** The GraphQL route key: `POST /graphql` is dispatched on the query's operation name, not the path. */
+const THREADS_ROUTE = "graphql:FluentReviewThreads";
+
+function reviewThreads(threads: Array<{ resolved: boolean; outdated: boolean; author?: string }>): unknown {
+  return {
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            nodes: threads.map((thread) => ({
+              isResolved: thread.resolved,
+              isOutdated: thread.outdated,
+              comments: { nodes: [{ author: { login: thread.author ?? "alice" } }] },
+            })),
+          },
+        },
+      },
+    },
+  };
+}
+
 function routesFor(options: {
   pull?: Record<string, unknown>;
   head?: string;
   checks?: Array<{ name: string; status: string; conclusion: string | null }>;
   reviews?: Array<{ user: string; state: string }>;
+  threads?: Array<{ resolved: boolean; outdated: boolean; author?: string }>;
   files?: unknown[];
 }): Record<string, unknown> {
   const head = options.head ?? HEAD_A;
@@ -63,21 +85,36 @@ function routesFor(options: {
     [PR_PATH]: options.pull ?? pullRequest({ head: { sha: head } }),
     [`/repos/frostyard/updex/commits/${head}/check-runs`]: { check_runs: options.checks ?? [{ name: "check", status: "completed", conclusion: "success" }] },
     [`${PR_PATH}/reviews`]: (options.reviews ?? []).map((review, index) => ({ id: index + 1, user: { login: review.user }, state: review.state })),
+    [THREADS_ROUTE]: reviewThreads(options.threads ?? []),
     [`${PR_PATH}/files`]: options.files ?? [FILE_V1],
   };
 }
 
-function apiFetcher(routes: Record<string, unknown>, options: { status?: number } = {}) {
+/**
+ * Answers REST reads by pathname and `POST /graphql` by the query's operation
+ * name (`graphql:<OperationName>` route keys); `graphqlStatus` fails only the
+ * GraphQL route so the REST signals can be tested against a GraphQL outage.
+ */
+function apiFetcher(routes: Record<string, unknown>, options: { status?: number; graphqlStatus?: number } = {}) {
   const requests: string[] = [];
-  const fetcher = (async (input: string | URL | Request) => {
+  const graphqlQueries: string[] = [];
+  const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
     requests.push(url.pathname);
     if (options.status !== undefined) return new Response("{}", { status: options.status, headers: { "content-type": "application/json" } });
-    const body = routes[url.pathname];
+    let key = url.pathname;
+    if (url.pathname === "/graphql") {
+      assert.equal(init?.method, "POST");
+      const query = String(JSON.parse(String(init?.body)).query);
+      graphqlQueries.push(query);
+      if (options.graphqlStatus !== undefined) return new Response("", { status: options.graphqlStatus });
+      key = `graphql:${/query\s+(\w+)/.exec(query)?.[1] ?? "unknown"}`;
+    }
+    const body = routes[key];
     if (body === undefined) return new Response("{}", { status: 404 });
     return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
-  return { fetcher, requests };
+  return { fetcher, requests, graphqlQueries };
 }
 
 async function completedWithOpenPr(queue: QueueStore, priority = 7): Promise<string> {
@@ -179,6 +216,83 @@ test("patch identity ignores hunk headers and context but sees a changed line; d
   assert.equal(down.kind, "unavailable");
 });
 
+test("unresolved, non-outdated review threads are decay read through GraphQL; the signal fails open when GraphQL cannot answer", async () => {
+  // Two unresolved, non-outdated threads on an otherwise clean pull request: the one decay.
+  const unanswered = apiFetcher(routesFor({ threads: [{ resolved: false, outdated: false }, { resolved: false, outdated: false, author: "bob" }] }));
+  const decayed = await inspectPullRequestHealth(REPOSITORY, PR_URL, { fetcher: unanswered.fetcher });
+  assert.equal(decayed.kind, "health");
+  if (decayed.kind !== "health") return;
+  assert.equal(decayed.health.unresolvedThreads, 2);
+  assert.deepEqual(decayed.health.decay, ["unresolved-threads"]);
+  assert.deepEqual(decayed.health.notes, []);
+  assert.equal(unanswered.graphqlQueries.length, 1);
+  assert.match(unanswered.graphqlQueries[0]!, /reviewThreads\(first: 100\)/);
+  assert.match(unanswered.graphqlQueries[0]!, /isResolved isOutdated comments\(first: 1\)/);
+  const description = cureRootDefinition(REPOSITORY, decayed.health, "operator:test");
+  assert.match(description.instructions, /2 review threads have no reply and are not outdated/);
+  assert.match(description.instructions, /resolving one whose request a later commit already addressed, is mechanical/);
+
+  // One resolved and one outdated thread: nothing unanswered, no decay.
+  const answered = await inspectPullRequestHealth(REPOSITORY, PR_URL, {
+    fetcher: apiFetcher(routesFor({ threads: [{ resolved: true, outdated: false }, { resolved: false, outdated: true }] })).fetcher,
+  });
+  assert.equal(answered.kind, "health");
+  if (answered.kind !== "health") return;
+  assert.equal(answered.health.unresolvedThreads, 0);
+  assert.deepEqual(answered.health.decay, []);
+
+  // A draft's threads are read but are not decay.
+  const draft = await inspectPullRequestHealth(REPOSITORY, PR_URL, {
+    fetcher: apiFetcher(routesFor({ pull: pullRequest({ draft: true }), threads: [{ resolved: false, outdated: false }] })).fetcher,
+  });
+  assert.equal(draft.kind, "health");
+  if (draft.kind === "health") {
+    assert.equal(draft.health.unresolvedThreads, 1);
+    assert.deepEqual(draft.health.decay, []);
+  }
+
+  // GraphQL 502: the thread signal is undefined with a note, the REST signals still decide, and the sweep still enqueues.
+  const outage = await inspectPullRequestHealth(REPOSITORY, PR_URL, {
+    fetcher: apiFetcher(routesFor({ pull: pullRequest({ mergeable_state: "behind" }), threads: [{ resolved: false, outdated: false }] }), { graphqlStatus: 502 }).fetcher,
+  });
+  assert.equal(outage.kind, "health");
+  if (outage.kind !== "health") return;
+  assert.equal(outage.health.unresolvedThreads, undefined);
+  assert.deepEqual(outage.health.decay, ["behind"]);
+  assert.deepEqual(outage.health.notes, ["review threads unavailable: GitHub GraphQL returned HTTP 502"]);
+  const errored = await inspectPullRequestHealth(REPOSITORY, PR_URL, {
+    fetcher: apiFetcher({ ...routesFor({}), [THREADS_ROUTE]: { data: null, errors: [{ message: "Resource not accessible by integration" }] } }).fetcher,
+  });
+  assert.equal(errored.kind, "health");
+  if (errored.kind === "health") {
+    assert.equal(errored.health.unresolvedThreads, undefined);
+    assert.deepEqual(errored.health.decay, []);
+    assert.deepEqual(errored.health.notes, ["review threads unavailable: GitHub GraphQL errors: Resource not accessible by integration"]);
+  }
+
+  const directory = await mkdtemp(join(tmpdir(), "fluent-cure-threads-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"), clock);
+  test.after(() => queue.close());
+  await completedWithOpenPr(queue);
+  const swept = await curePullRequests(queue, {
+    fetcher: apiFetcher(routesFor({ pull: pullRequest({ mergeable_state: "behind" }), threads: [{ resolved: false, outdated: false }] }), { graphqlStatus: 502 }).fetcher,
+    clock,
+  });
+  assert.equal(swept.enqueued.length, 1);
+  assert.deepEqual(swept.enqueued[0]!.decay, ["behind"]);
+  assert.deepEqual(swept.notes, [{ url: PR_URL, note: "review threads unavailable: GitHub GraphQL returned HTTP 502" }]);
+  assert.deepEqual(queue.get(swept.enqueued[0]!.id)!.cure!.decay, ["behind"]);
+  // Same head, GraphQL back: the head is already known, so nothing new; a new head with only unanswered threads is its own cure.
+  const pushed = await curePullRequests(queue, {
+    fetcher: apiFetcher(routesFor({ head: HEAD_B, pull: pullRequest({ head: { sha: HEAD_B } }), threads: [{ resolved: false, outdated: false }] })).fetcher,
+    clock,
+  });
+  assert.equal(pushed.enqueued.length, 1);
+  assert.deepEqual(pushed.enqueued[0]!.decay, ["unresolved-threads"]);
+  assert.deepEqual(pushed.notes, []);
+  assert.match(queue.get(pushed.enqueued[0]!.id)!.objective, /unresolved-threads$/);
+});
+
 test("the cure sweep enqueues one admitted pr-cure root per decayed head, never the same head twice, and a push is a new head", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fluent-cure-sweep-test-"));
   const queue = new QueueStore(join(directory, "queue.db"), clock);
@@ -187,7 +301,7 @@ test("the cure sweep enqueues one admitted pr-cure root per decayed head, never 
 
   // Healthy: nothing enqueued.
   const healthy = await curePullRequests(queue, { fetcher: apiFetcher(routesFor({})).fetcher, clock });
-  assert.deepEqual(healthy, { inspected: 1, foreign: { listed: 0, inspected: 0 }, enqueued: [], healthy: [PR_URL], skipped: [], unavailable: [] });
+  assert.deepEqual(healthy, { inspected: 1, foreign: { listed: 0, inspected: 0 }, enqueued: [], healthy: [PR_URL], skipped: [], unavailable: [], notes: [] });
 
   // Behind its base and failing a check: one admitted root, keyed by head, carrying the cure record.
   const decayedRoutes = routesFor({ pull: pullRequest({ mergeable_state: "behind" }), checks: [{ name: "Lint", status: "completed", conclusion: "failure" }] });
@@ -275,7 +389,7 @@ test("foreign pull requests are cured only for a repository with cureForeign on:
   // Off (the default): the listing is never read and the pull request is ignored.
   const off = apiFetcher(foreignRoutes());
   const ignored = await curePullRequests(queue, { fetcher: off.fetcher, clock });
-  assert.deepEqual(ignored, { inspected: 0, foreign: { listed: 0, inspected: 0 }, enqueued: [], healthy: [], skipped: [], unavailable: [] });
+  assert.deepEqual(ignored, { inspected: 0, foreign: { listed: 0, inspected: 0 }, enqueued: [], healthy: [], skipped: [], unavailable: [], notes: [] });
   assert.deepEqual(off.requests, []);
 
   // On: exactly one pr-cure root for that head, priority 0, no originating item, marked foreign for the worker.
@@ -428,6 +542,14 @@ test("enqueueCureRoot validates its cure record and kind", async () => {
   assert.throws(() => queue.enqueueCureRoot(REPOSITORY, { ...base, allowedActions: [...base.allowedActions], delegableActions: [...base.delegableActions], cure: { ...cure, decay: ["stale" as never] } }), /decay/);
   const created = queue.enqueueCureRoot(REPOSITORY, { ...base, allowedActions: [...base.allowedActions], delegableActions: [...base.delegableActions], cure });
   assert.equal(created?.status, "queued");
+  const threads = queue.enqueueCureRoot(REPOSITORY, {
+    ...base,
+    allowedActions: [...base.allowedActions],
+    delegableActions: [...base.delegableActions],
+    sourceRef: `${PR_URL}@${HEAD_B}`,
+    cure: { ...cure, headSha: HEAD_B, decay: ["unresolved-threads"] },
+  });
+  assert.deepEqual(threads?.cure?.decay, ["unresolved-threads"]);
   assert.equal(queue.enqueueCureRoot(REPOSITORY, { ...base, allowedActions: [...base.allowedActions], delegableActions: [...base.delegableActions], cure }), undefined);
   assert.equal(queue.metadata().schemaVersion, 6, "rung 5 carries cure_json; rung 6 the repository cure_foreign setting");
 });

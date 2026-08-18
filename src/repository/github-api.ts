@@ -19,17 +19,48 @@ export async function githubApiJson(
   fetcher: GitHubFetch = fetch,
 ): Promise<GitHubJsonResponse> {
   if (!path.startsWith("/") || path.startsWith("//")) throw new Error("GitHub API path must be root-relative");
+  return githubJson(`${GITHUB_API_ORIGIN}${path}`, { method: "GET" }, signal, fetcher);
+}
+
+/**
+ * One bounded GraphQL read (`POST /graphql`) with the same headers, token,
+ * size cap, and redirect handling as `githubApiJson`. The `value` of a
+ * `response` is GitHub's raw envelope (`{ data, errors }`); callers decide
+ * what a partial answer means. GitHub's GraphQL endpoint requires a token:
+ * without `FLUENT_GITHUB_TOKEN` it answers 401, a `response`, not a throw.
+ */
+export async function githubGraphql(
+  query: string,
+  variables: Record<string, unknown>,
+  signal: AbortSignal,
+  fetcher: GitHubFetch = fetch,
+): Promise<GitHubJsonResponse> {
+  return githubJson(
+    `${GITHUB_API_ORIGIN}/graphql`,
+    { method: "POST", body: JSON.stringify({ query, variables }), contentType: "application/json" },
+    signal,
+    fetcher,
+  );
+}
+
+async function githubJson(
+  initialUrl: string,
+  options: { method: "GET" | "POST"; body?: string; contentType?: string },
+  signal: AbortSignal,
+  fetcher: GitHubFetch,
+): Promise<GitHubJsonResponse> {
   const headers: Record<string, string> = {
     Accept: GITHUB_API_ACCEPT,
     "User-Agent": GITHUB_API_USER_AGENT,
     "X-GitHub-Api-Version": GITHUB_API_VERSION,
   };
+  if (options.contentType) headers["Content-Type"] = options.contentType;
   const token = process.env.FLUENT_GITHUB_TOKEN;
   if (token) headers.Authorization = `Bearer ${token}`;
   const request = (url: string) =>
-    fetcher(url, { method: "GET", headers, redirect: "manual", signal });
+    fetcher(url, { method: options.method, headers, redirect: "manual", signal, ...(options.body === undefined ? {} : { body: options.body }) });
   try {
-    let response = await request(`${GITHUB_API_ORIGIN}${path}`);
+    let response = await request(initialUrl);
     if (isRedirect(response.status)) {
       const redirected = sameOriginUrl(response.headers.get("location"));
       if (!redirected) return { kind: "unavailable" };

@@ -91,7 +91,7 @@ export interface PullRequestCure {
   originItemId?: string;
 }
 
-export const pullRequestDecays = ["behind", "dirty", "failing-checks", "changes-requested"] as const;
+export const pullRequestDecays = ["behind", "dirty", "failing-checks", "changes-requested", "unresolved-threads"] as const;
 export type PullRequestDecay = (typeof pullRequestDecays)[number];
 
 export interface WorkItem {

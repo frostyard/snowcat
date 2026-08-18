@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 
-import { githubApiJson, type GitHubFetch } from "../repository/github-api.ts";
+import { githubApiJson, githubGraphql, type GitHubFetch } from "../repository/github-api.ts";
 import type { QueueStore } from "./store.ts";
 import type { AllowedAction, PullRequestCure, PullRequestDecay, SeedWorkInput, WorkArtifact, WorkItem } from "./types.ts";
 
 /**
  * Pull-request cure (ADR-0061): the verification pass that already re-checks
  * reported pull requests also reads each open one's health — mergeability,
- * check runs, reviews, and the identity of its patch — and enqueues one
+ * check runs, reviews, review threads, and the identity of its patch — and enqueues one
  * admitted `pr-cure` root per decayed head. A `pr-cure` completion is refused
  * when the patch identity changed, so "mechanical" is a fact Fluent computes,
  * not a claim the worker makes. Merge, approval, and review dismissal stay
@@ -21,6 +21,17 @@ const MAX_FILE_PAGES = 3;
 /** `/pulls?state=open` pages read per foreign-cure repository before the listing is reported truncated (100 pull requests each). */
 const MAX_LISTING_PAGES = 3;
 const FAILING_CONCLUSIONS = new Set(["failure", "timed_out", "startup_failure", "action_required"]);
+/** Review threads read per pull request; the REST reviews list carries the `CHANGES_REQUESTED` signal, this carries the unanswered inline comments. */
+const MAX_REVIEW_THREADS = 100;
+const REVIEW_THREADS_QUERY = `query FluentReviewThreads($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: ${MAX_REVIEW_THREADS}) {
+        nodes { isResolved isOutdated comments(first: 1) { nodes { author { login } } } }
+      }
+    }
+  }
+}`;
 
 export const CURE_KIND = "pr-cure";
 export const CURE_CHANGE_KIND = "pr-cure-change";
@@ -40,6 +51,14 @@ export interface PullRequestHealth {
   failingChecks: string[];
   /** A reviewer's latest review requests changes. */
   changesRequested: boolean;
+  /**
+   * Review threads that are neither resolved nor outdated (GraphQL
+   * `reviewThreads`), or `undefined` when GraphQL could not answer — that
+   * one signal then fails open and `notes` says why; the REST signals still apply.
+   */
+  unresolvedThreads: number | undefined;
+  /** Why an optional signal is missing; the sweep carries each note in its `notes` output beside the list the pull request landed in. */
+  notes: string[];
   /** Patch identity, or `undefined` with the reason it could not be computed. */
   patchDigest: string | undefined;
   patchUnavailableReason?: string;
@@ -97,6 +116,8 @@ export async function inspectPullRequestHealth(repository: string, url: string, 
     mergeableState,
     failingChecks: [],
     changesRequested: false,
+    unresolvedThreads: undefined,
+    notes: [],
     patchDigest: undefined,
     decay: [],
   };
@@ -130,6 +151,10 @@ export async function inspectPullRequestHealth(repository: string, url: string, 
     health.changesRequested = [...latest.values()].includes("CHANGES_REQUESTED");
   }
 
+  const threads = await readUnresolvedThreads(locator, fetcher);
+  if (threads.kind === "count") health.unresolvedThreads = threads.count;
+  else health.notes.push(`review threads unavailable: ${threads.reason}`);
+
   const patch = await readPatchDigest(base, locator.number, fetcher);
   if (patch.kind === "unavailable") return { kind: "unavailable", reason: patch.reason };
   if (patch.kind === "digest") health.patchDigest = patch.digest;
@@ -140,8 +165,40 @@ export async function inspectPullRequestHealth(repository: string, url: string, 
     if (mergeableState === "dirty") health.decay.push("dirty");
     if (health.failingChecks.length > 0) health.decay.push("failing-checks");
     if (health.changesRequested) health.decay.push("changes-requested");
+    if (health.unresolvedThreads !== undefined && health.unresolvedThreads > 0) health.decay.push("unresolved-threads");
   }
   return { kind: "health", health };
+}
+
+/**
+ * Counts the pull request's review threads that are neither resolved nor
+ * outdated — the "inline comments nobody answered" decay ADR-0061 names,
+ * which the REST reviews list cannot see. Only GraphQL serves review
+ * threads, and this is the one signal that fails open: any failure returns a
+ * reason instead of a count, so a GraphQL outage or a token without GraphQL
+ * access never hides the REST-visible decay of the same head.
+ */
+async function readUnresolvedThreads(
+  locator: { owner: string; name: string; number: number },
+  fetcher: GitHubFetch,
+): Promise<{ kind: "count"; count: number } | { kind: "unavailable"; reason: string }> {
+  const response = await githubGraphql(REVIEW_THREADS_QUERY, locator, AbortSignal.timeout(GITHUB_TIMEOUT_MS), fetcher);
+  if (response.kind === "unavailable") return { kind: "unavailable", reason: "GitHub GraphQL unavailable" };
+  if (response.status !== 200) return { kind: "unavailable", reason: `GitHub GraphQL returned HTTP ${response.status}` };
+  const envelope = asObject(response.value);
+  const pull = asObject(asObject(asObject(envelope?.data)?.repository)?.pullRequest);
+  const nodes = asObject(pull?.reviewThreads)?.nodes;
+  if (!Array.isArray(nodes)) {
+    const errors = Array.isArray(envelope?.errors) ? envelope.errors.map((error) => asObject(error)?.message).filter((message): message is string => typeof message === "string") : [];
+    return { kind: "unavailable", reason: errors.length > 0 ? `GitHub GraphQL errors: ${errors.join("; ")}` : "GitHub GraphQL response has no reviewThreads" };
+  }
+  let count = 0;
+  for (const node of nodes) {
+    const thread = asObject(node);
+    if (!thread) continue;
+    if (thread.isResolved === false && thread.isOutdated === false) count += 1;
+  }
+  return { kind: "count", count };
 }
 
 /**
@@ -209,6 +266,8 @@ export interface CureSweepResult {
   /** Decayed heads already known (any status), drafts, closed, or uncomputable patches: nothing enqueued. */
   skipped: Array<{ url: string; reason: string }>;
   unavailable: Array<{ url: string; reason: string }>;
+  /** An optional signal (review threads) that could not be read for an inspected pull request, whichever list it landed in: the head was judged on the rest. */
+  notes: Array<{ url: string; note: string }>;
 }
 
 /**
@@ -233,7 +292,7 @@ export async function curePullRequests(
       else if (item.priority > existing.priority) candidates.set(artifact.url, { repository: item.repository, priority: item.priority, originItemId: item.id });
     }
   }
-  const result: CureSweepResult = { inspected: 0, foreign: { listed: 0, inspected: 0 }, enqueued: [], healthy: [], skipped: [], unavailable: [] };
+  const result: CureSweepResult = { inspected: 0, foreign: { listed: 0, inspected: 0 }, enqueued: [], healthy: [], skipped: [], unavailable: [], notes: [] };
   for (const [url, origin] of candidates) {
     result.inspected += 1;
     await inspectCandidate(queue, result, url, origin, actor, options);
@@ -291,6 +350,7 @@ async function inspectCandidate(
     return;
   }
   const { health } = check;
+  for (const note of health.notes) result.notes.push({ url, note });
   if (health.state !== "open") {
     result.skipped.push({ url, reason: `pull request is ${health.state}` });
     return;
@@ -358,7 +418,7 @@ async function listOpenPullRequests(
 /** The `pr-cure` root definition for one decayed head: mechanical cure only, substantive change proposed. */
 export function cureRootDefinition(
   repository: string,
-  health: Pick<PullRequestHealth, "url" | "number" | "headSha" | "decay" | "failingChecks" | "mergeableState" | "title">,
+  health: Pick<PullRequestHealth, "url" | "number" | "headSha" | "decay" | "failingChecks" | "mergeableState" | "unresolvedThreads" | "title">,
   createdBy: string,
   foreign = false,
 ): Omit<SeedWorkInput, "repository" | "priority"> {
@@ -372,9 +432,9 @@ export function cureRootDefinition(
       ...(foreign
         ? ["This pull request was NOT opened by a Fluent worker (the repository opted in to curing foreign pull requests): read its description and its author's intent on GitHub before acting."]
         : []),
-      "Perform only a MECHANICAL cure — one that leaves the pull request's patch identical: rebase or merge the base branch when that resolves cleanly, retitle to satisfy the repository's title lint, re-run or re-trigger checks, reply to review comments, fix labels or the body.",
+      "Perform only a MECHANICAL cure — one that leaves the pull request's patch identical: rebase or merge the base branch when that resolves cleanly, retitle to satisfy the repository's title lint, re-run or re-trigger checks, reply to review comments, fix labels or the body. Replying to a review thread, or resolving one whose request a later commit already addressed, is mechanical (it changes no patch); a thread that asks for a code change is not.",
       "Fluent recomputes the digest of the pull request's patch (its added and removed lines per file) when you complete this item and REFUSES the completion if it changed, so do not edit code, resolve conflicts by hand, change tests, or squash in fixes.",
-      `If curing this head requires changing the patch (a conflict that needs edits, a failing check that needs a code or test change, a review that asks for a change), do NOT push: create exactly one follow-up of kind ${CURE_CHANGE_KIND} that names the exact change and how it will be verified, or block this item if the change is the maintainer's to make.`,
+      `If curing this head requires changing the patch (a conflict that needs edits, a failing check that needs a code or test change, a review or review thread that asks for a change), do NOT push: create exactly one follow-up of kind ${CURE_CHANGE_KIND} that names the exact change and how it will be verified, or block this item if the change is the maintainer's to make.`,
       "Never merge, approve, or dismiss a review. Read the pull request and its checks on GitHub before acting; if the head has moved on since this item was created, block with that reason.",
       "Complete with the pull request reported as a pull-request artifact and evidence: the checks you observed on the new head, the mergeable state, and what you changed (metadata only).",
     ].join(" "),
@@ -390,7 +450,7 @@ export function cureRootDefinition(
   };
 }
 
-function describeDecay(reason: PullRequestDecay, health: Pick<PullRequestHealth, "failingChecks" | "mergeableState">): string {
+function describeDecay(reason: PullRequestDecay, health: Pick<PullRequestHealth, "failingChecks" | "mergeableState" | "unresolvedThreads">): string {
   switch (reason) {
     case "behind":
       return "the head is behind its base branch (mergeable_state behind)";
@@ -400,6 +460,8 @@ function describeDecay(reason: PullRequestDecay, health: Pick<PullRequestHealth,
       return `failing checks: ${health.failingChecks.join(", ")}`;
     case "changes-requested":
       return "a reviewer's latest review requests changes";
+    case "unresolved-threads":
+      return `${health.unresolvedThreads ?? 0} review threads have no reply and are not outdated`;
   }
 }
 
