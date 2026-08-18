@@ -328,6 +328,11 @@ test("claim_work on a requeued item carries operator notes and prior results, an
     "list_work",
     "release_work",
   ]);
+  // Operator authority never crosses the worker boundary: no admission,
+  // blocked-exit, priority, or note tool exists here (spec rule 37).
+  for (const operatorOnly of ["approve", "reject", "defer", "requeue", "cancel", "prioritize", "note"]) {
+    assert.equal(tools.some((tool) => tool.includes(operatorOnly)), false, operatorOnly);
+  }
 
   const before = parseToolText(await client.callTool({ name: "get_work", arguments: { id: seed.id } }));
   assert.equal(before.leaseToken, undefined);
