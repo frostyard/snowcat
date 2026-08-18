@@ -210,6 +210,31 @@ sweep hourly after the import; it needs `FLUENT_GITHUB_TOKEN` for private
 repositories and reports `swept`, `releaseNeeded`, `dependencyBumps`,
 `skipped`, `failed`, and `notOptedIn`.
 
+**Repository settings conformance** — a second mechanical sweep
+([`src/queue/repository-settings.ts`](../../src/queue/repository-settings.ts),
+core [ADR-0040](https://github.com/frostyard/core/blob/main/docs/adr/0040-publish-the-repository-settings-contract.md)):
+
+```bash
+npm run --silent queue -- sweep-repository-settings --enrolled       # every opted-in + enrolled repository
+npm run --silent queue -- sweep-repository-settings frostyard/updex  # one repository
+```
+
+It reads core's repository settings contract from the active Core snapshot
+(and says so, doing nothing, if the snapshot predates it), then reads each
+repository's live GitHub settings — merge hygiene, features, metadata,
+Actions token permissions, security features, active rulesets on the default
+branch and on `v*` tags, classic protection, labels — and creates one
+**`settings-drift`** proposal per repository per distinct drift set (same
+drift again: nothing; drift changed: a new proposal, reject the old one). The
+proposal lists every drift as expected/observed. Fluent never changes a
+setting: you apply the contract with core's
+`scripts/apply-repo-settings.sh <owner/repo>` (dry-run first; pass the
+repository's required-check names) and a worker completing the item only
+verifies, read-only, that the settings now match. Settings the token cannot
+read (admin-only fields) are reported as `unreadable`, not drift; give the
+token admin read on the fleet repositories for full coverage.
+`fluent-feed.timer` runs it hourly as its fourth step.
+
 **Standing maintenance** — the maintenance program catalog in
 [`src/queue/programs.ts`](../../src/queue/programs.ts): one bounded, read-only
 discovery root per program, each of which may propose one implementation
@@ -582,7 +607,7 @@ Fluent v1 runs on **one operator host** and stays there deliberately:
 
   | Timer | Cadence | Runs |
   | --- | --- | --- |
-  | `fluent-feed.timer` | hourly (`OnCalendar=hourly`, `RandomizedDelaySec=300`) | `queue -- seed-dogfood --enrolled`, then `queue -- import-issues --enrolled --label fluent`, then `queue -- sweep-dependencies --enrolled` (three `ExecStart=` lines; each runs only if the previous exited 0) |
+  | `fluent-feed.timer` | hourly (`OnCalendar=hourly`, `RandomizedDelaySec=300`) | `queue -- seed-dogfood --enrolled`, then `queue -- import-issues --enrolled --label fluent`, then `queue -- sweep-dependencies --enrolled`, then `queue -- sweep-repository-settings --enrolled` (four `ExecStart=` lines; each runs only if the previous exited 0) |
   | `fluent-verify.timer` | every 15 minutes (`OnCalendar=*:0/15`) | `queue -- verify-artifacts` (default limit) |
   | `fluent-backup.timer` | daily (`OnCalendar=daily`, `Persistent=true`) | [`deploy/bin/fluent-backup`](../../deploy/bin/fluent-backup) |
 

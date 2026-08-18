@@ -19,6 +19,7 @@ const SCHEMA_PATHS = {
   governance: "organization/schemas/v1/repository-agent-governance.schema.json",
   verificationProfile: "organization/schemas/v1/verification-profile.schema.json",
   goal: "organization/schemas/v1/goal.schema.json",
+  settings: "organization/schemas/v1/repository-settings.schema.json",
 } as const;
 const BUNDLED_SCHEMA_URLS = {
   envelope: new URL("./schemas/v1/envelope.schema.json", import.meta.url),
@@ -27,6 +28,7 @@ const BUNDLED_SCHEMA_URLS = {
   governance: new URL("./schemas/v1/repository-agent-governance.schema.json", import.meta.url),
   verificationProfile: new URL("./schemas/v1/verification-profile.schema.json", import.meta.url),
   goal: new URL("./schemas/v1/goal.schema.json", import.meta.url),
+  settings: new URL("./schemas/v1/repository-settings.schema.json", import.meta.url),
 } as const;
 const EXPECTED_SCHEMA_DIGESTS = {
   envelope: "sha256:07eb4ca0d97de3668e3d71227c675562f69c451647ab5e6fa33e6fe9de80eb5f",
@@ -35,6 +37,7 @@ const EXPECTED_SCHEMA_DIGESTS = {
   governance: "sha256:254e131a94c5477e861b0ec792defa1fd05ddebe380fc4e062d03cefc3ab8ebe",
   verificationProfile: "sha256:5562df1740d133ff32a7bcfc488907b3783a3eda9ba8e8e1d9559a07f44a4507",
   goal: "sha256:76341409e4dc33fbc50d1432d2488e1ecec767263733939f0abe9bf173aada0b",
+  settings: "sha256:a0008dbdd77d11e604ddee20a12218d1c692748fe80d037d589d2acd051871e1",
 } as const;
 /**
  * Earlier revisions of a v1 schema that Fluent reviewed and bundled before a
@@ -53,6 +56,8 @@ const SUPERSEDED_SCHEMA_REVISIONS: Partial<Record<SchemaKind, ReadonlyArray<{ di
   ],
 };
 const SURFACE_CONTRACT_PATH = "organization/contracts/repository-surfaces/v1.json";
+/** Optional in a candidate (core ADR-0040): present iff its schema is; older core trees carry neither. */
+const SETTINGS_CONTRACT_PATH = "organization/contracts/repository-settings/v1.json";
 const STATIC_PATHS = new Set([
   "organization/README.md",
   SCHEMA_PATHS.repository,
@@ -65,12 +70,12 @@ const VERIFICATION_PROFILE_PATH =
   /^organization\/contracts\/verification-profiles\/([a-z0-9]+(?:-[a-z0-9]+)*)\/v([1-9][0-9]*)\.json$/;
 const GOAL_PATH = /^organization\/goals\/([a-z0-9]+(?:-[a-z0-9]+)*)\.json$/;
 const FIXTURE_PATH =
-  /^organization\/fixtures\/v1\/(valid|invalid)\/(repository-agent-governance|repository-surfaces|repository|verification-profile|goal)(?:-[a-z0-9-]+)?\.json$/;
+  /^organization\/fixtures\/v1\/(valid|invalid)\/(repository-agent-governance|repository-surfaces|repository-settings|repository|verification-profile|goal)(?:-[a-z0-9-]+)?\.json$/;
 const MAX_VERIFICATION_PROFILE_BYTES = 65_536;
 const MAX_GOAL_BYTES = 65_536;
 type SchemaKind = keyof typeof SCHEMA_PATHS;
 type FixtureKind = Exclude<SchemaKind, "envelope">;
-type OptionalSchemaKind = "verificationProfile" | "envelope" | "goal";
+type OptionalSchemaKind = "verificationProfile" | "envelope" | "goal" | "settings";
 type RequiredSchemaKind = Exclude<SchemaKind, OptionalSchemaKind>;
 type ParsedSchemas = Record<RequiredSchemaKind, unknown> & Partial<Record<OptionalSchemaKind, unknown>>;
 type SchemaDigests = Record<RequiredSchemaKind, string> & Partial<Record<OptionalSchemaKind, string>>;
@@ -200,6 +205,54 @@ export interface ValidatedCoreCatalog {
   repositories: ValidatedRepositoryDeclaration[];
   verificationProfiles: ValidatedVerificationProfile[];
   goals: ValidatedOrganizationGoal[];
+  /** The repository settings contract (core ADR-0040) when the candidate carries one. */
+  repositorySettings?: RepositorySettingsContract;
+}
+
+/** `organization/contracts/repository-settings/v1.json`: the GitHub settings every enrolled repository must match. */
+export interface RepositorySettingsContract {
+  schema_version: 1;
+  contract: { id: "repository-settings"; version: 1 };
+  repository: {
+    delete_branch_on_merge: boolean;
+    allow_update_branch: boolean;
+    allow_auto_merge: boolean;
+    allow_merge_commit: boolean;
+    allow_squash_merge: boolean;
+    allow_rebase_merge: boolean;
+    merge_commit_title: "PR_TITLE" | "MERGE_MESSAGE";
+    merge_commit_message: "PR_TITLE" | "PR_BODY" | "BLANK";
+    squash_merge_commit_title: "PR_TITLE" | "COMMIT_OR_PR_TITLE";
+    squash_merge_commit_message: "PR_BODY" | "COMMIT_MESSAGES" | "BLANK";
+    has_wiki: boolean;
+    has_projects: boolean;
+    has_issues: boolean;
+    web_commit_signoff_required: boolean;
+  };
+  actions: { default_workflow_permissions: "read" | "write"; can_approve_pull_request_reviews: boolean };
+  security: {
+    vulnerability_alerts: boolean;
+    dependabot_security_updates: boolean;
+    secret_scanning: boolean;
+    secret_scanning_push_protection: boolean;
+    private_vulnerability_reporting: boolean;
+  };
+  default_branch_ruleset: {
+    enforcement: "active";
+    bypass_actors: "none";
+    require_pull_request: boolean;
+    required_approving_review_count: number;
+    require_conversation_resolution: boolean;
+    require_status_checks: boolean;
+    strict_required_status_checks: boolean;
+    block_deletions: boolean;
+    block_force_pushes: boolean;
+    merge_queue: false;
+    classic_branch_protection: "absent";
+  };
+  tag_ruleset: { pattern: string; enforcement: "active"; block_deletions: boolean; block_force_pushes: boolean; restrict_creation: boolean };
+  metadata: { license_required: boolean; description_required: boolean; topics_include: string[] };
+  labels: { required: string[] };
 }
 
 export class CoreValidationError extends Error {
@@ -248,6 +301,13 @@ export function validateCoreCatalog(inputEntries: readonly CoreTreeEntry[]): Val
   const surfaceEntry = byPath.get(SURFACE_CONTRACT_PATH)!;
   const surfaces = validateOne(surfaceEntry, validators.surfaces);
   assertSurfaceInvariants(surfaces, surfaceEntry.path, availablePaths);
+
+  let repositorySettings: RepositorySettingsContract | undefined;
+  const settingsEntry = byPath.get(SETTINGS_CONTRACT_PATH);
+  if (settingsEntry) repositorySettings = validateRepositorySettings(settingsEntry, validators.settings);
+  else if (validators.settings) {
+    throw new CoreValidationError(`${SETTINGS_CONTRACT_PATH}: repository settings schema is present but the contract is missing`);
+  }
 
   const verificationProfiles: ValidatedVerificationProfile[] = [];
   const verificationProfileIds = new Map<string, VerificationProfile>();
@@ -305,6 +365,8 @@ export function validateCoreCatalog(inputEntries: readonly CoreTreeEntry[]): Val
   let invalidFixtureCount = 0;
   let validVerificationProfileFixtureCount = 0;
   let invalidVerificationProfileFixtureCount = 0;
+  let validSettingsFixtureCount = 0;
+  let invalidSettingsFixtureCount = 0;
   let validGoalFixtureCount = 0;
   let invalidGoalFixtureCount = 0;
   for (const entry of entries.filter((item) => FIXTURE_PATH.test(item.path))) {
@@ -320,6 +382,7 @@ export function validateCoreCatalog(inputEntries: readonly CoreTreeEntry[]): Val
       );
       validFixtureCount += 1;
       if (fixture.kind === "verificationProfile") validVerificationProfileFixtureCount += 1;
+      if (fixture.kind === "settings") validSettingsFixtureCount += 1;
       if (fixture.kind === "goal") validGoalFixtureCount += 1;
       continue;
     }
@@ -336,6 +399,7 @@ export function validateCoreCatalog(inputEntries: readonly CoreTreeEntry[]): Val
       if (!(error instanceof CoreValidationError)) throw error;
       invalidFixtureCount += 1;
       if (fixture.kind === "verificationProfile") invalidVerificationProfileFixtureCount += 1;
+      if (fixture.kind === "settings") invalidSettingsFixtureCount += 1;
       if (fixture.kind === "goal") invalidGoalFixtureCount += 1;
       continue;
     }
@@ -354,6 +418,9 @@ export function validateCoreCatalog(inputEntries: readonly CoreTreeEntry[]): Val
   }
   if (validators.goal && (validGoalFixtureCount === 0 || invalidGoalFixtureCount === 0)) {
     throw new CoreValidationError("Goal support requires valid and invalid conformance fixtures");
+  }
+  if (validators.settings && (validSettingsFixtureCount === 0 || invalidSettingsFixtureCount === 0)) {
+    throw new CoreValidationError("repository settings support requires valid and invalid conformance fixtures");
   }
 
   const catalogMaterial = entries.map((entry) => ({
@@ -377,6 +444,7 @@ export function validateCoreCatalog(inputEntries: readonly CoreTreeEntry[]): Val
     repositories,
     verificationProfiles,
     goals,
+    ...(repositorySettings ? { repositorySettings } : {}),
   };
 }
 
@@ -509,7 +577,7 @@ function loadBundledSchemas(entries: Map<string, CoreTreeEntry>): {
   for (const kind of Object.keys(SCHEMA_PATHS) as SchemaKind[]) {
     const bundledBytes = readFileSync(BUNDLED_SCHEMA_URLS[kind]);
     const fetched = entries.get(SCHEMA_PATHS[kind]);
-    if (!fetched && (["verificationProfile", "envelope", "goal"] satisfies OptionalSchemaKind[]).includes(kind as OptionalSchemaKind)) {
+    if (!fetched && (["verificationProfile", "envelope", "goal", "settings"] satisfies OptionalSchemaKind[]).includes(kind as OptionalSchemaKind)) {
       continue;
     }
     if (!fetched) {
@@ -561,6 +629,7 @@ function createValidators(schemas: ParsedSchemas): Validators {
     validators.verificationProfile = ajv.compile(schemas.verificationProfile as object);
   }
   if (schemas.goal) validators.goal = ajv.compile(schemas.goal as object);
+  if (schemas.settings) validators.settings = ajv.compile(schemas.settings as object);
   return validators;
 }
 
@@ -580,10 +649,29 @@ function validateFixture(
     validateGoal(entry, validators.goal, repositoryIds, verificationProfiles, false);
     return;
   }
+  if (kind === "settings") {
+    validateRepositorySettings(entry, validators.settings);
+    return;
+  }
   const data = validateOne(entry, validators[kind]);
   if (kind === "repository") assertRepositoryInvariants(data as RepositoryDeclaration, entry.path);
   else if (kind === "surfaces") assertSurfaceInvariants(data, entry.path, availablePaths);
   else assertGovernanceInvariants(data, entry.path);
+}
+
+function validateRepositorySettings(entry: CoreTreeEntry, validator: ValidateFunction | undefined): RepositorySettingsContract {
+  if (!validator) {
+    throw new CoreValidationError(`${entry.path}: repository settings contract requires ${SCHEMA_PATHS.settings}`);
+  }
+  const data = validateOne(entry, validator) as RepositorySettingsContract;
+  // Same invariants as core: required checks imply a required pull request; a tag ruleset must protect something.
+  if (data.default_branch_ruleset.require_status_checks && !data.default_branch_ruleset.require_pull_request) {
+    throw new CoreValidationError(`${entry.path}: required status checks need require_pull_request`);
+  }
+  if (!data.tag_ruleset.block_deletions && !data.tag_ruleset.restrict_creation) {
+    throw new CoreValidationError(`${entry.path}: tag ruleset must block deletion or restrict creation`);
+  }
+  return data;
 }
 
 function validateVerificationProfile(
@@ -917,6 +1005,8 @@ function fixtureContract(path: string): { expectation: "valid" | "invalid"; kind
         ? "repository"
         : name === "repository-surfaces"
           ? "surfaces"
+          : name === "repository-settings"
+            ? "settings"
           : name === "verification-profile"
             ? "verificationProfile"
             : name === "goal"
@@ -931,6 +1021,8 @@ function isRecognizedPath(path: string): boolean {
     path === SCHEMA_PATHS.verificationProfile ||
     path === SCHEMA_PATHS.envelope ||
     path === SCHEMA_PATHS.goal ||
+    path === SCHEMA_PATHS.settings ||
+    path === SETTINGS_CONTRACT_PATH ||
     REPOSITORY_PATH.test(path) ||
     VERIFICATION_PROFILE_PATH.test(path) ||
     GOAL_PATH.test(path) ||

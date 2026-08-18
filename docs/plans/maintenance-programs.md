@@ -137,6 +137,11 @@ Hive is retired and Fluent owns conformance and triage.
   (`triage-discovery`).
 - A repository opts in by declaring the program in Core; the feeder seeds it
   from the catalog on the next run.
+- **Repository settings (landed 2026-08-18):** the mechanical half of
+  conformance — core ADR-0040's repository settings contract, read by
+  `sweep-repository-settings` (fourth feed step) into `settings-drift`
+  proposals; applied by a human with core's `scripts/apply-repo-settings.sh`.
+  Spec rule 46.
 - **Done when:** both programs produce a valid no-finding or one admitted
   child on updex, and triage's proposals close at least one resolved-but-open
   issue through the operator's admission. — Catalog entries, tests, and docs

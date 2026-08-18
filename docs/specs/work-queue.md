@@ -514,6 +514,24 @@ MCP (rule 41).
     a `dependency-bump` MUST NOT target an unreleased commit. Failures MUST
     be reported per repository, never abort the sweep. `--enrolled` requires
     `FLUENT_CONTROL_DB` and skips enrolled repositories not opted in.
+46. **Repository settings conformance (core ADR-0040).** `sweep-repository-
+    settings <owner/repo> | --enrolled` MUST read the repository settings
+    contract from the active Core snapshot's retained files (and MUST report
+    and do nothing when the snapshot carries none), then, for each swept
+    repository, read only — the repository object (merge hygiene, features,
+    metadata, `security_and_analysis`), Actions workflow permissions,
+    vulnerability alerts, private vulnerability reporting, active rulesets
+    and their rules, classic branch protection, and labels — and diff each
+    contract value against the live one. A setting the token cannot read
+    MUST be reported as `unreadable`, never counted as drift; a private
+    repository's private-vulnerability-reporting is not applicable. Every
+    non-empty drift set MUST become one `proposed` root of kind
+    `settings-drift` with `sourceRef = settings-drift:<owner/repo>@<sha256 of
+    the sorted drifts>`, `allowedActions` `read` only, instructions listing
+    every drift as expected/observed and naming core's
+    `scripts/apply-repo-settings.sh` as the way to apply; a repeat of the
+    same drift set MUST create nothing and a changed set MUST create a new
+    proposal. Fluent MUST NOT change any repository setting.
 
 ## Derived artifacts
 
@@ -525,6 +543,7 @@ MCP (rule 41).
 | Artifact verification | Completion-time, `attach-artifact`, and `verify-artifacts` observations per rules 33–35 and 41; `delivery` derived per rule 35 |
 | Pull-request cure | `verify-artifacts` enqueues `pr-cure` roots per decayed head per rules 42–43; `complete_work` enforces patch identity per rule 44 |
 | Internal dependency chain | `sweep-dependencies` maps tags, branch comparison, and `go.mod` to `release-needed` and `dependency-bump` proposals per rule 45 |
+| Repository settings drift | `sweep-repository-settings` diffs live GitHub settings against core's contract into `settings-drift` proposals per rule 46 |
 | MCP worker behavior | Portable `work-fluent-queue` skill constrained by this contract |
 | Testing-gap seed | Deterministic CLI instance of this contract |
 

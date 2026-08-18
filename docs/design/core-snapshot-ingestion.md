@@ -106,7 +106,13 @@ revision are still refused. The closed program vocabulary in
 [`registry.ts`](../../src/control/registry.ts)
 (`REPOSITORY_MAINTENANCE_PROGRAMS`) widens with the schema. The feeder seeds
 only the programs its catalog implements and reports the rest as
-`unsupportedPrograms`.
+`unsupportedPrograms`. Core ADR-0040 added an optional
+`organization/contracts/repository-settings/v1.json` with its schema; Fluent
+bundles that schema (`settings`, optional like the profile and Goal schemas),
+validates the contract when present (required checks imply a required pull
+request; the tag ruleset must protect something; valid and invalid fixtures
+required), exposes it as `repositorySettings` on the validated catalog, and
+still accepts a core tree without it.
 
 The independent validator uses the same pinned Ajv 2020 and `jsonc-parser`
 versions as core. It rejects invalid UTF-8, comments, trailing commas, duplicate

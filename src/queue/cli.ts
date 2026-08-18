@@ -5,6 +5,7 @@ import { queueStoreOptionsFromEnvironment } from "./eligibility.ts";
 import { curePullRequests } from "./pull-request-cure.ts";
 import { importLabeledIssues, importLabeledIssuesForEnrolled } from "./github-issues.ts";
 import { sweepInternalDependencies } from "./internal-dependencies.ts";
+import { sweepRepositorySettings } from "./repository-settings.ts";
 import { QueueStore, queueDatabasePath, type MutationPrecondition } from "./store.ts";
 import {
   enqueueDogfoodBatch,
@@ -168,6 +169,17 @@ try {
       throw new Error("sweep-dependencies --enrolled requires FLUENT_CONTROL_DB to name the control-plane database");
     }
     print(await sweepInternalDependencies(queue, controlPlanePath, repository ? { repository } : {}));
+  } else if (command === "sweep-repository-settings") {
+    // Repository settings conformance (core ADR-0040): read-only diff of each
+    // enrolled repository's live GitHub settings against the contract in the
+    // active Core snapshot; one settings-drift proposal per drift set.
+    const enrolled = args[0] === "--enrolled";
+    const repository = enrolled ? undefined : required(args[0], "repository");
+    const controlPlanePath = process.env.FLUENT_CONTROL_DB;
+    if (!controlPlanePath || controlPlanePath === ":memory:") {
+      throw new Error("sweep-repository-settings requires FLUENT_CONTROL_DB to name the control-plane database (the contract lives in the active Core snapshot)");
+    }
+    print(await sweepRepositorySettings(queue, controlPlanePath, repository ? { repository } : {}));
   } else if (command === "verify-artifacts") {
     const noCure = args.includes("--no-cure");
     const flags = parseFlags(args.filter((argument) => argument !== "--no-cure"), ["repository", "limit"]);
@@ -209,6 +221,7 @@ try {
     console.error("       npm run queue -- watch [--repository <owner/repo>] [--interval <seconds>]");
     console.error("       npm run queue -- sweep-dependencies <owner/repo>");
     console.error("       npm run queue -- sweep-dependencies --enrolled   (requires FLUENT_CONTROL_DB; FLUENT_GITHUB_TOKEN in practice)");
+    console.error("       npm run queue -- sweep-repository-settings <owner/repo> | --enrolled   (requires FLUENT_CONTROL_DB; FLUENT_GITHUB_TOKEN with admin read)");
     console.error("       npm run queue -- verify-artifacts [--repository <owner/repo>] [--limit <1-100>] [--no-cure]");
     console.error("       npm run queue -- metadata");
     console.error("       npm run queue -- backup <new-file-path>");

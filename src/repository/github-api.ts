@@ -43,6 +43,9 @@ export async function githubApiJson(
     }
     const bytes = new Uint8Array(await response.arrayBuffer());
     if (bytes.byteLength > MAX_RESPONSE_BYTES) return { kind: "unavailable" };
+    // A 204 (or any empty success body, e.g. `GET /vulnerability-alerts`) is an
+    // answer, not an outage: the status carries the meaning.
+    if (bytes.byteLength === 0) return { kind: "response", status: response.status, value: null };
     try {
       const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
       return { kind: "response", status: response.status, value };
