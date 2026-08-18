@@ -225,6 +225,28 @@ notes override nothing in the objective, instructions, or acceptance criteria
 (change those by cancelling and re-importing or re-seeding). Only the operator
 CLI and approved policy can write notes; workers cannot, and no MCP tool does.
 
+
+## From the browser
+
+The same queue, read-only for now, at `http://127.0.0.1:3000/` once the
+operator host runs the surface
+([design](operator-surface.md#operational-notes)):
+
+```bash
+FLUENT_APP_TOKEN=… FLUENT_QUEUE_DB=/var/lib/fluent/queue.db \
+FLUENT_CONTROL_DB=/var/lib/fluent/control-plane.db \
+npm run build && npm run serve        # binds 127.0.0.1:3000; HOST/PORT override
+```
+
+Sign in with the host's `FLUENT_APP_TOKEN`; the inbox shows what needs you —
+proposals awaiting admission (children under their parent's finding), blocked
+items with the worker's reason, and completed items whose issue or pull-request
+artifact is still `unverified` — plus the last 30 ledger events. It reads the
+same rows `list`, `show`, and `events` print, never renders a lease token, and
+refreshes every 30 seconds. Approve, reject, requeue, cancel, and re-verify
+still happen in the CLI above until the mutation slice ships; the browser
+buttons are disabled placeholders until then.
+
 ## Run workers
 
 Configure an MCP server named `fluent` in the client you start and let it

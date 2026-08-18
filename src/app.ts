@@ -7,6 +7,8 @@ import { createAgentRouter } from "@flue/runtime/routing";
 import { Hono } from "hono";
 
 import { QueueClerk } from "./agents/queue-clerk.ts";
+import { QueueStore, queueDatabasePath } from "./queue/store.ts";
+import { createSurfaceApp, type SurfaceStores } from "./surface/app.ts";
 
 const lemonadeBaseUrl = process.env.LEMONADE_BASE_URL ?? "http://10.0.1.200:13305/v1";
 const lemonadeModel = process.env.LEMONADE_MODEL ?? "Qwen3.8-27B-GGUF-UD-Q4_K_XL";
@@ -42,7 +44,17 @@ setProvider(
   }),
 );
 
-export function createApp(options: { appToken?: string }): Hono {
+export interface AppOptions {
+  appToken?: string;
+  /**
+   * Stores for the operator surface. Defaults to opening `FLUENT_QUEUE_DB`
+   * lazily on the first authenticated surface request and reading
+   * `FLUENT_CONTROL_DB` for enrollment states; tests pass their own.
+   */
+  surfaceStores?: () => SurfaceStores;
+}
+
+export function createApp(options: AppOptions): Hono {
   const app = new Hono();
 
   app.get("/health", (context) => context.json({ status: "ok" }));
@@ -61,8 +73,23 @@ export function createApp(options: { appToken?: string }): Hono {
     await next();
   });
   app.route("/agents/queue-clerk", createAgentRouter(QueueClerk));
+  // The operator surface: `/login`, `/logout`, and the inbox at `/`, all
+  // behind the cookie session; `/health` and `/agents/*` above are untouched.
+  app.route("/", createSurfaceApp({ appToken: options.appToken, stores: options.surfaceStores ?? defaultSurfaceStores() }));
 
   return app;
+}
+
+/** Opens the host's queue store once, on first use, from the same environment the CLI reads. */
+function defaultSurfaceStores(): () => SurfaceStores {
+  let stores: SurfaceStores | undefined;
+  return () => {
+    stores ??= {
+      queue: new QueueStore(queueDatabasePath()),
+      controlPlanePath: process.env.FLUENT_CONTROL_DB && process.env.FLUENT_CONTROL_DB !== ":memory:" ? process.env.FLUENT_CONTROL_DB : undefined,
+    };
+    return stores;
+  };
 }
 
 function safeEqual(actual: string, expected: string): boolean {
