@@ -7,7 +7,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { ControlPlaneStore } from "../src/control/store.ts";
 import { QueueStore, SCHEMA_VERSION } from "../src/queue/store.ts";
+import { disabledDeclaration, enrollExampleRepository } from "./helpers/core-fixtures.ts";
 
 test("administrative queue listings do not expose a live lease token", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fluent-cli-test-"));
@@ -529,4 +531,54 @@ test("operator CLI watch tails new events as JSON lines and stops cleanly when s
   assert.equal(code, 0);
   assert.equal(lines.length, 1, `only the claim was printed: ${lines.join("\n")}`);
   reader.close();
+});
+
+test("operator CLI seed-dogfood --enrolled requires FLUENT_CONTROL_DB and seeds only enrolled opt-ins", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-enrolled-test-"));
+  const path = join(directory, "queue.db");
+  const controlPath = join(directory, "control-plane.db");
+  const store = new ControlPlaneStore(controlPath, () => new Date("2026-08-17T12:00:00.000Z"));
+  await enrollExampleRepository(store, { additionalDeclarations: [disabledDeclaration()] });
+  store.close();
+  const queue = new QueueStore(path);
+  queue.setRepositoryEnabled("frostyard/example", true);
+  queue.setRepositoryEnabled("frostyard/retired", true);
+  queue.close();
+  const baseEnvironment = stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path });
+  delete baseEnvironment.FLUENT_CONTROL_DB;
+  const run = (env: Record<string, string>, ...args: string[]) =>
+    spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env,
+    });
+
+  const unconfigured = run(baseEnvironment, "seed-dogfood", "--enrolled");
+  assert.notEqual(unconfigured.status, 0);
+  assert.match(unconfigured.stderr, /FLUENT_CONTROL_DB/);
+  assert.equal(unconfigured.stdout, "");
+  const memory = run({ ...baseEnvironment, FLUENT_CONTROL_DB: ":memory:" }, "seed-dogfood", "--enrolled");
+  assert.notEqual(memory.status, 0);
+  assert.match(memory.stderr, /FLUENT_CONTROL_DB/);
+  const badFlag = run({ ...baseEnvironment, FLUENT_CONTROL_DB: controlPath }, "seed-dogfood", "--enrolled", "--bogus", "1");
+  assert.notEqual(badFlag.status, 0);
+  assert.match(badFlag.stderr, /unknown flag: --bogus/);
+
+  const seeded = run({ ...baseEnvironment, FLUENT_CONTROL_DB: controlPath }, "seed-dogfood", "--enrolled", "--cooldown-hours", "0");
+  assert.equal(seeded.status, 0, seeded.stderr);
+  const result = JSON.parse(seeded.stdout) as {
+    seeded: Array<{ repository: string; created: Array<{ kind: string; status: string }>; skippedKinds: string[]; cooledKinds: string[] }>;
+    notOptedIn: string[];
+  };
+  assert.deepEqual(result.notOptedIn, []);
+  assert.deepEqual(
+    result.seeded.map((entry) => [entry.repository, entry.created.length, entry.skippedKinds, entry.cooledKinds]),
+    [["frostyard/example", 4, [], []]],
+  );
+  assert.equal(seeded.stdout.includes("leaseToken"), false);
+
+  const verify = new QueueStore(path);
+  assert.deepEqual(verify.list({ repository: "frostyard/retired" }), []);
+  assert.equal(verify.list({ repository: "frostyard/example", status: "queued" }).length, 4);
+  verify.close();
 });

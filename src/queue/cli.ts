@@ -4,7 +4,12 @@ import { refreshArtifactVerifications } from "./artifact-verification.ts";
 import { queueStoreOptionsFromEnvironment } from "./eligibility.ts";
 import { importLabeledIssues } from "./github-issues.ts";
 import { QueueStore, queueDatabasePath } from "./store.ts";
-import { DEFAULT_DOGFOOD_COOLDOWN_SECONDS, enqueueDogfoodBatch, enqueueTestingGap } from "./seeds.ts";
+import {
+  DEFAULT_DOGFOOD_COOLDOWN_SECONDS,
+  enqueueDogfoodBatch,
+  enqueueDogfoodBatchForEnrolled,
+  enqueueTestingGap,
+} from "./seeds.ts";
 import { withoutLeaseToken, workStatuses, type WorkStatus } from "./types.ts";
 
 const DEFAULT_WATCH_INTERVAL_SECONDS = 10;
@@ -27,14 +32,20 @@ try {
     const repository = required(args[0], "repository");
     print(enqueueTestingGap(queue, repository));
   } else if (command === "seed-dogfood") {
-    const repository = required(args[0], "repository");
+    const enrolled = args[0] === "--enrolled";
+    const repository = enrolled ? undefined : required(args[0], "repository");
     const flags = parseFlags(args.slice(1), ["cooldown-hours"]);
     const cooldownHours = flags["cooldown-hours"] === undefined ? undefined : parseNonNegativeInteger(flags["cooldown-hours"], "cooldown-hours");
-    print(
-      enqueueDogfoodBatch(queue, repository, {
-        cooldownSeconds: cooldownHours === undefined ? DEFAULT_DOGFOOD_COOLDOWN_SECONDS : cooldownHours * 3600,
-      }),
-    );
+    const cooldownSeconds = cooldownHours === undefined ? DEFAULT_DOGFOOD_COOLDOWN_SECONDS : cooldownHours * 3600;
+    if (repository !== undefined) {
+      print(enqueueDogfoodBatch(queue, repository, { cooldownSeconds }));
+    } else {
+      const controlPlanePath = process.env.FLUENT_CONTROL_DB;
+      if (!controlPlanePath || controlPlanePath === ":memory:") {
+        throw new Error("seed-dogfood --enrolled requires FLUENT_CONTROL_DB to name the control-plane database");
+      }
+      print(enqueueDogfoodBatchForEnrolled(queue, controlPlanePath, { cooldownSeconds }));
+    }
   } else if (command === "import-issues") {
     const repository = required(args[0], "repository");
     const flags = parseFlags(args.slice(1), ["label", "priority"]);
@@ -115,6 +126,7 @@ try {
     console.error("       npm run queue -- opt-out <owner/repo>");
     console.error("       npm run queue -- seed-testing-gap <owner/repo>");
     console.error("       npm run queue -- seed-dogfood <owner/repo> [--cooldown-hours <n>]");
+    console.error("       npm run queue -- seed-dogfood --enrolled [--cooldown-hours <n>]   (requires FLUENT_CONTROL_DB)");
     console.error("       npm run queue -- import-issues <owner/repo> --label <label> [--priority <n>]");
     console.error("       npm run queue -- approve <work-item-id>");
     console.error("       npm run queue -- reject <work-item-id> <reason>");

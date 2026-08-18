@@ -179,6 +179,14 @@ removed. -->
   in [`src/control/registry.ts`](src/control/registry.ts). Do not add a generic
   record or fact mutation surface, and do not add control-plane registry or
   schema versions that no recovery-plan phase consumes.
+- Keep host scheduling in [`deploy/`](deploy/): three systemd timer/service
+  pairs plus `deploy/bin/fluent-backup` call the existing idempotent `queue`
+  and `control` commands (`seed-dogfood --enrolled`, `verify-artifacts`,
+  `backup`); never add a scheduler, daemon, or MCP tool inside Fluent for
+  them. `npm run check:deploy` (part of `check`) runs `systemd-analyze verify`
+  against a stub root and `shellcheck` on `deploy/bin/*`, so a broken unit
+  fails the PR; the operator runbook is
+  [docs/design/queue-operations.md](docs/design/queue-operations.md).
 - Run `npm run check` before calling any change done. CI must run the same
   recipe, so a local pass is a CI pass.
 - Tests are `*.test.ts` files anywhere under `test/`, discovered recursively by

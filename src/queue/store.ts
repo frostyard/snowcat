@@ -247,6 +247,12 @@ export class QueueStore {
     }
   }
 
+  /** Slugs of every repository currently opted in, in slug order. */
+  enabledRepositories(): string[] {
+    const rows = this.db.prepare("SELECT slug FROM repositories WHERE enabled = 1 ORDER BY slug").all() as Row[];
+    return rows.map((row) => String(row.slug));
+  }
+
   setRepositoryEnabled(repository: string, enabled: boolean): void {
     validateRepository(repository);
     this.transaction(() => {
