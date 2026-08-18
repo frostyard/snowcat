@@ -1469,3 +1469,48 @@ test("eventsSince reads the ledger across items in global order with joined item
   assert.throws(() => queue.eventsSince(0, { limit: 501 }), /between 1 and 500/);
   assert.throws(() => queue.eventsSince(0, { repository: "not-a-slug" }));
 });
+
+test("rename-repository carries the opt-in and every item to the new slug and leaves history alone", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-rename-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/fluent", true);
+  queue.setRepositoryCureForeign("frostyard/fluent", true);
+  const root = queue.enqueueSeed({
+    repository: "frostyard/fluent",
+    kind: "quality-gap-discovery",
+    objective: "Find one gap.",
+    instructions: "Read only.",
+    acceptanceCriteria: ["One gap."],
+    allowedActions: ["read"],
+    delegableActions: [],
+    createdBy: "operator:test",
+  });
+  const imported = queue.enqueueProposedRoots("frostyard/fluent", [
+    {
+      sourceRef: "https://github.com/frostyard/fluent/issues/7",
+      kind: "issue-resolution",
+      objective: "Resolve #7",
+      instructions: "Do it.",
+      acceptanceCriteria: ["PR open."],
+      allowedActions: ["read", "write", "open-pr"],
+      delegableActions: [],
+      createdBy: "operator:test",
+    },
+  ]);
+  assert.throws(() => queue.renameRepository("frostyard/fluent", "frostyard/fluent", "operator:test"), /different slug/);
+  assert.throws(() => queue.renameRepository("frostyard/nope", "frostyard/snowcat", "operator:test"), /not known/);
+  assert.throws(() => queue.renameRepository("frostyard/fluent", "frostyard/snowcat", "claude:worker"), /operator: or policy:/);
+  const renamed = queue.renameRepository("frostyard/fluent", "frostyard/snowcat", "operator:test");
+  assert.deepEqual(renamed, { from: "frostyard/fluent", to: "frostyard/snowcat", items: 2 });
+  assert.deepEqual(queue.enabledRepositories(), ["frostyard/snowcat"]);
+  assert.deepEqual(queue.repositoryCureSettings(), [{ repository: "frostyard/snowcat", cureForeign: true }]);
+  assert.equal(queue.get(root.id)?.repository, "frostyard/snowcat");
+  assert.equal(queue.get(imported.created[0]!.id)?.sourceRef, "https://github.com/frostyard/fluent/issues/7", "history keeps the recorded string");
+  assert.equal(queue.list({ repository: "frostyard/fluent" }).length, 0);
+  assert.equal(queue.list({ repository: "frostyard/snowcat" }).length, 2);
+  assert.throws(() => queue.renameRepository("frostyard/snowcat", "frostyard/snowcat2", "operator:test") && queue.renameRepository("frostyard/snowcat2", "frostyard/snowcat2", "operator:test"), /different slug/);
+  // Claiming under the new slug works; the old slug is gone.
+  assert.equal(queue.claim({ worker: "claude:rename-test", repository: "frostyard/snowcat2" })?.id, root.id);
+});
+

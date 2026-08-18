@@ -38,6 +38,12 @@ try {
     if (value !== "on" && value !== "off") throw new Error(`cure-foreign expects on or off, got ${value}`);
     queue.setRepositoryCureForeign(repository, value === "on");
     print({ repository, cureForeign: value === "on" });
+  } else if (command === "rename-repository") {
+    // After a GitHub rename: carry the opt-in and every item to the new slug;
+    // history keeps the old strings. Attributed to the CLI operator.
+    const from = required(args[0], "old repository");
+    const to = required(args[1], "new repository");
+    print(queue.renameRepository(from, to, "operator:cli"));
   } else if (command === "seed-testing-gap") {
     const repository = required(args[0], "repository");
     print(enqueueTestingGap(queue, repository));
@@ -201,6 +207,7 @@ try {
   } else {
     console.error("Usage: npm run queue -- opt-in <owner/repo>");
     console.error("       npm run queue -- opt-out <owner/repo>");
+    console.error("       npm run queue -- rename-repository <old owner/repo> <new owner/repo>   (after a GitHub rename; history keeps the old slug)");
     console.error("       npm run queue -- cure-foreign <owner/repo> on|off");
     console.error("       npm run queue -- seed-testing-gap <owner/repo>");
     console.error("       npm run queue -- seed-dogfood <owner/repo> [--cooldown-hours <n>]");

@@ -304,6 +304,33 @@ export class QueueStore {
    * `cureForeign` says whether the cure sweep also lists and inspects open
    * pull requests no Fluent item reported (ADR-0061's per-repository opt-in).
    */
+  /**
+   * Renames a repository slug in place — the opt-in row and every work item
+   * that carries it — after the repository was renamed on GitHub (its
+   * immutable ID and Core enrollment continue under the new name). History
+   * is not rewritten: `sourceRef`s, results, and events keep the strings they
+   * were recorded with. Attributed operator command; refuses an unknown old
+   * slug, an existing new slug, or a rename to the same slug.
+   */
+  renameRepository(from: string, to: string, actor: string): { from: string; to: string; items: number } {
+    validateRepository(from);
+    validateRepository(to);
+    validateOperatorActor(actor, "repository rename");
+    if (from.toLowerCase() === to.toLowerCase()) throw new Error("repository rename needs a different slug");
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT slug, enabled, cure_foreign, created_at FROM repositories WHERE slug = ?").get(from) as Row | undefined;
+      if (!row) throw new Error(`repository is not known to the queue: ${from}`);
+      if (this.db.prepare("SELECT 1 AS present FROM repositories WHERE slug = ?").get(to)) throw new Error(`repository already exists: ${to}`);
+      const now = this.now();
+      this.db
+        .prepare("INSERT INTO repositories (slug, enabled, cure_foreign, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
+        .run(to, Number(row.enabled), Number(row.cure_foreign), String(row.created_at), now);
+      const updated = this.db.prepare("UPDATE work_items SET repository = ? WHERE repository = ?").run(to, from);
+      this.db.prepare("DELETE FROM repositories WHERE slug = ?").run(from);
+      return { from, to, items: Number(updated.changes) };
+    });
+  }
+
   repositoryCureSettings(): Array<{ repository: string; cureForeign: boolean }> {
     const rows = this.db.prepare("SELECT slug, cure_foreign FROM repositories WHERE enabled = 1 ORDER BY slug").all() as Row[];
     return rows.map((row) => ({ repository: String(row.slug), cureForeign: Number(row.cure_foreign) === 1 }));

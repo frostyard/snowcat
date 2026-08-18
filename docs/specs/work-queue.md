@@ -541,6 +541,16 @@ MCP (rule 41).
     same drift set MUST create nothing and a changed set MUST create a new
     proposal. Fluent MUST NOT change any repository setting.
 
+47. `rename-repository <old owner/repo> <new owner/repo>` MUST, in one
+    transaction attributed to an `operator:` or `policy:` actor, carry the
+    opt-in row (enabled and cure-foreign flags, creation time) and every work
+    item from the old slug to the new one and remove the old row; it MUST
+    refuse an unknown old slug, an existing new slug, and a rename to the same
+    slug; and it MUST NOT rewrite history — `sourceRef`s, results, and events
+    keep the strings they were recorded with. Used after a GitHub repository
+    rename (ADR-0064), whose immutable repository ID keeps enrollment
+    continuous once the Core declaration is renamed.
+
 ## Derived artifacts
 
 | Artifact | Derivation |
