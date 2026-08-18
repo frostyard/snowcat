@@ -1,6 +1,6 @@
 # 0063 — Authenticate people through Cloudflare Access; mint MCP tokens so the ledger says who
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-18
 
 ## Context

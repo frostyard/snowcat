@@ -1,6 +1,6 @@
 # 0064 — Adopt the name Snowcat
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-18
 
 ## Context
