@@ -166,8 +166,19 @@ Phase 10 and later.
   and no mutation; success redirects back with a `?done=<event type>`
   banner. Inline on the inbox: approve/reject, requeue-with-note/cancel,
   re-verify; the item page's *Decide* card offers every action its state
-  allows. The board's Hold / Import issues / Seed dogfood remain disabled
-  until [#24](https://github.com/frostyard/fluent/issues/24). The event
+  allows. The board's repository actions shipped with
+  [#24](https://github.com/frostyard/fluent/issues/24): `POST
+  /repositories/:owner/:name/{import-issues,seed-dogfood,hold,clear-hold}`
+  beside `verify-artifacts` — `importLabeledIssues` (label default `fluent`,
+  optional priority; imported items land in the inbox as proposals),
+  `enqueueDogfoodBatch` with the default cooldown, and
+  `ControlPlaneStore.imposeRepositoryOperatorHold` /
+  `clearRepositoryOperatorHold` against the `lastTransactionSequence` and
+  active hold read in the same handler (a concurrent write re-renders the
+  board with "the control plane changed; try again", 409); hold and clear
+  render only when `FLUENT_CONTROL_DB` is set and the repository is declared,
+  and the badge flips to `operator-held`, which the claim gate already
+  respects. No batch action and nothing runs a worker. The event
   stream and live inbox/board shipped with
   [#23](https://github.com/frostyard/fluent/issues/23) (see "Rendering and
   liveness"); the meta refresh remains only as the `<noscript>` fallback. Pages inline their stylesheet (Frostyard tokens and the

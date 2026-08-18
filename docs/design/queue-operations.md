@@ -297,9 +297,19 @@ Three more views sit behind the same session:
   its priority and a `note` tag when an operator note is carried, leased work
   with the worker identity and how much of the lease is left, and completed
   work with its `delivery` state; the header shows the enrollment state, Core
-  and surface commits, and repository id from the control plane. Hold,
-  import-issues, and seed-dogfood buttons are placeholders for now — use the
-  `repository -- hold` and `queue -- import-issues | seed-dogfood` commands.
+  and surface commits, and repository id from the control plane. The
+  *Repository actions* strip under the header runs the CLI's repository-level
+  commands as `operator:web`: **Import issues** (label, default `fluent`, and
+  optional priority — the same import as `queue -- import-issues`, so a second
+  run creates nothing), **Seed dogfood** (the four discovery roots with the
+  24-hour cooldown), **Verify artifacts** (`verify-artifacts` for that
+  repository), and, when `FLUENT_CONTROL_DB` is set and the repository is
+  declared, **Hold repository** / **Clear hold** with a reason — the same
+  attributed local-operator decision as `repository -- hold | clear-hold`,
+  recorded against the control plane's current sequence (if it moved
+  meanwhile you are asked to try again). The badge flips to `operator-held`
+  and workers stop claiming until it is cleared. Each lands you back on the
+  board with a banner naming what was recorded.
 - `/items/<id>` — `queue -- show <id>` rendered: definition, acceptance
   criteria, result with artifacts and their verification, operator notes,
   previous results, the full event timeline, and the *Decide* card. Every

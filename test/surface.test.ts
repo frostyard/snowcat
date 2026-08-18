@@ -354,7 +354,10 @@ test("the repository board shows queued, leased, and completed columns with the 
   assert.match(body, /class="ph-eyebrow"><i><\/i>repository · board<\/div><h1>frostyard\/example<\/h1>/);
   assert.match(body, /<span class="ph-badge ok">enrolled<\/span>/);
   assert.match(body, new RegExp(`<span class="fl-facts">Core ${coreCommit.slice(0, 7)} · surfaces [0-9a-f]{7} · id github\\.com:9001</span>`));
-  assert.match(body, /<button class="ph-button reject" disabled[^>]*>Hold repository<\/button>/);
+  assert.match(body, /<form class="fl-action" method="post" action="\/repositories\/frostyard\/example\/hold"><input type="hidden" name="return" value="\/repositories\/frostyard\/example">.*?<button class="ph-button reject" type="submit">Hold repository<\/button><\/form>/s);
+  assert.match(body, /<form class="fl-action" method="post" action="\/repositories\/frostyard\/example\/import-issues">/);
+  assert.match(body, /<form class="fl-action" method="post" action="\/repositories\/frostyard\/example\/seed-dogfood">/);
+  assert.match(body, /<form class="fl-inline" method="post" action="\/repositories\/frostyard\/example\/verify-artifacts">/);
   assert.match(body, /<span>Queued<\/span><strong>2<\/strong><small>next: #304 \(p5\)<\/small>/);
   assert.match(body, /<span>Leased<\/span><strong>1<\/strong><small>copilot-cli · \d+m left<\/small>/);
   assert.match(body, /<span>Merged \/ attempts<\/span><strong>1 \/ 1<\/strong>/);
@@ -814,4 +817,193 @@ test("?partial= returns one inbox group or one board column as a fragment, and r
   assert.equal(column.includes("ph-sidebar"), false);
   assert.equal(column.includes(seeded.leaseToken), false);
   assert.equal((await app.request("/repositories/frostyard/example?partial=nope", { headers: { Cookie: cookie } })).status, 400);
+});
+
+test("board actions import labeled issues, seed dogfood, verify artifacts, and impose/clear the operator hold as operator:web behind the session", async () => {
+  const { controlPlaneClaimEligibility } = await import("../src/queue/eligibility.ts");
+  const directory = await mkdtemp(join(tmpdir(), "fluent-surface-actions-test-"));
+  const controlPlanePath = join(directory, "control-plane.db");
+  const control = new ControlPlaneStore(controlPlanePath);
+  await enrollExampleRepository(control);
+  control.close();
+  // A gated queue: claims consult the control plane, so a hold must stop them.
+  const queue = new QueueStore(join(directory, "queue.db"), undefined, { claimEligibility: controlPlaneClaimEligibility(controlPlanePath) });
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/example", true);
+
+  const github: Record<string, unknown> = {
+    "/repos/frostyard/example/issues": [
+      { number: 1, title: "First labeled issue", body: "Body one.", html_url: "https://github.com/frostyard/example/issues/1", state: "open", labels: [{ name: "fluent" }] },
+      { number: 2, title: "Second labeled issue", body: "", html_url: "https://github.com/frostyard/example/issues/2", state: "open", labels: [{ name: "fluent" }] },
+    ],
+    "/repos/frostyard/example/pulls/12": {
+      number: 12,
+      html_url: "https://github.com/frostyard/example/pull/12",
+      state: "closed",
+      merged: true,
+      merged_at: "2026-08-18T01:00:00Z",
+      closed_at: "2026-08-18T01:00:00Z",
+      head: { sha: "abcdef0123456789abcdef0123456789abcdef01" },
+      base: { repo: { full_name: "frostyard/example" } },
+    },
+  };
+  const requests: string[] = [];
+  const fetcher = (async (input: RequestInfo | URL) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    requests.push(url.pathname);
+    const body = github[url.pathname];
+    return new Response(JSON.stringify(body ?? {}), { status: body ? 200 : 404, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue, controlPlanePath, verifier: { fetcher, clock: () => new Date("2026-08-18T02:00:00.000Z") } }) });
+  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const post = (action: string, fields: Record<string, string> = {}, headers: Record<string, string> = { Cookie: cookie }) =>
+    app.request(`/repositories/frostyard/example/${action}`, { method: "POST", body: new URLSearchParams(fields), headers });
+
+  // Every action without the cookie is refused before doing anything.
+  for (const action of ["import-issues", "seed-dogfood", "verify-artifacts", "hold", "clear-hold"]) {
+    const anonymous = await post(action, { reason: "x" }, {});
+    assert.equal(anonymous.status, 303, action);
+    assert.equal(anonymous.headers.get("Location"), "/login");
+  }
+  assert.deepEqual(requests, []);
+  assert.equal(queue.list({ limit: 100 }).length, 0);
+
+  // Import issues: two proposals, banner with counts; a second import creates nothing.
+  const imported = await post("import-issues", { label: "fluent", priority: "7" });
+  assert.equal(imported.status, 303);
+  assert.equal(imported.headers.get("Location"), "/repositories/frostyard/example?done=work.proposed&detail=2+fetched%2C+2+created%2C+0+already+imported");
+  assert.deepEqual(requests.splice(0), ["/repos/frostyard/example/issues"]);
+  const proposals = queue.list({ status: "proposed", repository: "frostyard/example" });
+  assert.deepEqual(proposals.map((item) => [item.kind, item.priority, item.sourceRef]).sort(), [
+    ["issue-resolution", 7, "https://github.com/frostyard/example/issues/1"],
+    ["issue-resolution", 7, "https://github.com/frostyard/example/issues/2"],
+  ]);
+  const banner = await (await app.request(imported.headers.get("Location")!, { headers: { Cookie: cookie } })).text();
+  assert.match(banner, /Recorded work\.proposed — 2 fetched, 2 created, 0 already imported\./);
+  const again = await post("import-issues", {});
+  assert.equal(again.headers.get("Location"), "/repositories/frostyard/example?done=import.unchanged&detail=2+fetched%2C+0+created%2C+2+already+imported");
+  assert.equal(queue.list({ status: "proposed", repository: "frostyard/example" }).length, 2);
+  assert.deepEqual(requests.splice(0), ["/repos/frostyard/example/issues"]);
+  const badPriority = await post("import-issues", { priority: "high" });
+  assert.equal(badPriority.status, 400);
+  assert.match(await badPriority.text(), /Import issues was not applied: priority must be an integer/);
+  const inboxProposals = await (await app.request("/", { headers: { Cookie: cookie } })).text();
+  assert.match(inboxProposals, /Resolve frostyard\/example#1: <span>First labeled issue<\/span>/);
+
+  // Seed dogfood: the four roots, then a second seed is all "active".
+  const seeded = await post("seed-dogfood");
+  assert.equal(seeded.status, 303);
+  assert.match(seeded.headers.get("Location")!, /^\/repositories\/frostyard\/example\?done=work\.queued&detail=4\+created\+%28/);
+  const roots = queue.list({ status: "queued", repository: "frostyard/example" });
+  assert.equal(roots.length, 4);
+  assert.deepEqual(roots.map((item) => item.kind).sort(), ["architecture-gap-discovery", "ci-gap-discovery", "quality-gap-discovery", "security-gap-discovery"]);
+  const reseed = await post("seed-dogfood");
+  assert.equal(reseed.headers.get("Location"), "/repositories/frostyard/example?done=seed.unchanged&detail=0+created%2C+4+active%2C+0+cooling");
+
+  // Verify artifacts: a completed item with an open PR becomes merged and records artifact.verified by operator:web.
+  const done = queue.enqueueSeed({
+    repository: "frostyard/example",
+    kind: "issue-resolution",
+    objective: "Ship #12.",
+    instructions: "Do it.",
+    acceptanceCriteria: ["Done."],
+    allowedActions: ["read", "open-pr"],
+    delegableActions: [],
+    createdBy: "operator:test",
+    priority: 100,
+  });
+  const lease = queue.claim({ worker: "claude:example:ship", repository: "frostyard/example" })!;
+  assert.equal(lease.id, done.id, "the enrolled repository is claimable before the hold");
+  queue.complete({
+    id: done.id,
+    leaseToken: lease.leaseToken!,
+    worker: "claude:example:ship",
+    result: {
+      summary: "Opened PR #12.",
+      evidence: ["ok"],
+      artifacts: [{ kind: "pull-request", url: "https://github.com/frostyard/example/pull/12", verification: { status: "verified", verifiedAt: "2026-08-18T00:00:00.000Z", number: 12, state: "open", headSha: "abcdef0123456789abcdef0123456789abcdef01" } }],
+    },
+    followUps: [],
+  });
+  const verified = await post("verify-artifacts");
+  assert.equal(verified.status, 303);
+  assert.equal(verified.headers.get("Location"), "/repositories/frostyard/example?done=artifact.verified&detail=1+checked%2C+1+updated%2C+0+rejected%2C+0+unavailable");
+  assert.deepEqual(requests.splice(0), ["/repos/frostyard/example/pulls/12"]);
+  assert.equal(queue.get(done.id)!.delivery, "merged");
+  const verifiedEvent = queue.events(done.id).at(-1)!;
+  assert.equal(verifiedEvent.type, "artifact.verified");
+  assert.equal(verifiedEvent.actor, "operator:web");
+
+  // Hold: the repository becomes operator-held, the badge flips, and a gated claim finds nothing.
+  const claimable = queue.enqueueSeed({
+    repository: "frostyard/example",
+    kind: "ci-implementation",
+    objective: "Held behind the hold.",
+    instructions: "Do it.",
+    acceptanceCriteria: ["Done."],
+    allowedActions: ["read"],
+    delegableActions: [],
+    createdBy: "operator:test",
+    priority: 200,
+  });
+  const noReason = await post("hold", {});
+  assert.equal(noReason.status, 400);
+  assert.match(await noReason.text(), /Enter a reason to hold frostyard\/example/);
+  const held = await post("hold", { reason: "Incident review." });
+  assert.equal(held.status, 303);
+  assert.equal(held.headers.get("Location"), "/repositories/frostyard/example?done=repository.hold-imposed&detail=frostyard%2Fexample+is+now+operator-held");
+  const holdStore = new ControlPlaneStore(controlPlanePath);
+  const heldStatus = holdStore.repositoryStatuses()[0]!;
+  assert.equal(heldStatus.effectiveState, "operator-held");
+  assert.equal(heldStatus.operatorHold?.choice, "impose");
+  holdStore.close();
+  assert.equal(queue.claim({ worker: "claude:example:blocked", repository: "frostyard/example" }), undefined, "the hold gates claims");
+  assert.equal(queue.get(claimable.id)!.status, "queued");
+  const heldBoard = await (await app.request(held.headers.get("Location")!, { headers: { Cookie: cookie } })).text();
+  assert.match(heldBoard, /<span class="ph-badge warn">operator-held<\/span> <span class="ph-badge danger">held<\/span>/);
+  assert.match(heldBoard, /Recorded repository\.hold-imposed — frostyard\/example is now operator-held\./);
+  assert.match(heldBoard, /<form class="fl-action" method="post" action="\/repositories\/frostyard\/example\/clear-hold">/);
+  assert.equal(heldBoard.includes('action="/repositories/frostyard/example/hold"'), false);
+  const doubleHold = await post("hold", { reason: "again" });
+  assert.equal(doubleHold.status, 400);
+  assert.match(await doubleHold.text(), /Hold was not applied: repository already has active operator hold/);
+
+  // Clear: enrolled again and claimable again.
+  const cleared = await post("clear-hold", { reason: "Resolved." });
+  assert.equal(cleared.status, 303);
+  assert.equal(cleared.headers.get("Location"), "/repositories/frostyard/example?done=repository.hold-cleared&detail=frostyard%2Fexample+is+now+enrolled");
+  assert.equal(queue.claim({ worker: "claude:example:after", repository: "frostyard/example" })?.id, claimable.id);
+  const clearedBoard = await (await app.request("/repositories/frostyard/example", { headers: { Cookie: cookie } })).text();
+  assert.match(clearedBoard, /<span class="ph-badge ok">enrolled<\/span>/);
+  assert.equal(clearedBoard.includes("held</span>"), false);
+  const clearAgain = await post("clear-hold", { reason: "again" });
+  assert.equal(clearAgain.status, 400);
+  assert.match(await clearAgain.text(), /has no active operator hold to clear/);
+
+  // Nothing above ever exposed a lease token.
+  for (const response of [banner, inboxProposals, heldBoard, clearedBoard]) {
+    assert.equal(response.includes(lease.leaseToken!), false);
+    assert.equal(response.includes("leaseToken"), false);
+  }
+  const claimed = queue.get(claimable.id)!;
+  assert.equal(clearedBoard.includes(claimed.leaseToken!), false);
+});
+
+test("hold from the board needs a control plane, and an unknown repository or action is refused", async () => {
+  const seeded = await seededQueue();
+  test.after(() => seeded.queue.close());
+  const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue: seeded.queue }) });
+  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const withoutControlPlane = await app.request("/repositories/frostyard/example/hold", { method: "POST", body: new URLSearchParams({ reason: "x" }), headers: { Cookie: cookie } });
+  assert.equal(withoutControlPlane.status, 503);
+  assert.match(await withoutControlPlane.text(), /Hold is unavailable: FLUENT_CONTROL_DB is not configured/);
+  const board = await (await app.request("/repositories/frostyard/example", { headers: { Cookie: cookie } })).text();
+  assert.match(board, /<span class="fl-action-label">Hold<\/span><small class="fl-sub">Needs FLUENT_CONTROL_DB\.<\/small>/);
+  const unknownRepository = await app.request("/repositories/frostyard/nope/seed-dogfood", { method: "POST", body: new URLSearchParams({}), headers: { Cookie: cookie } });
+  assert.equal(unknownRepository.status, 404);
+  const unknownAction = await app.request("/repositories/frostyard/example/explode", { method: "POST", body: new URLSearchParams({}), headers: { Cookie: cookie } });
+  assert.equal(unknownAction.status, 404);
+  const crossSite = await app.request("/repositories/frostyard/example/seed-dogfood", { method: "POST", body: new URLSearchParams({}), headers: { Cookie: cookie, "Sec-Fetch-Site": "cross-site" } });
+  assert.equal(crossSite.status, 403);
+  assert.equal(seeded.queue.list({ repository: "frostyard/example", kind: "ci-gap-discovery" }).length, 0);
 });

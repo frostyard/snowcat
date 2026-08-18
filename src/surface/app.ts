@@ -21,6 +21,14 @@ import {
 import { readBoard, readEnrollments, readRepositoryIndex, sidebarFromEnrollments, type RepositoryEnrollment } from "./repositories.ts";
 import { DEFAULT_STREAM_HEARTBEAT_MS, DEFAULT_STREAM_POLL_MS, STREAM_PAGE_SIZE, toStreamedEvent, type StreamOptions } from "./stream.ts";
 import { boardPartial, boardPartials, type BoardPartial } from "./pages-repositories.ts";
+import {
+  ControlPlaneConflictError,
+  ControlPlaneUnavailableError,
+  GitHubListingError,
+  applyImportIssues,
+  applyRepositoryHold,
+  applySeedDogfood,
+} from "./repository-actions.ts";
 import { inboxPartial, inboxPartials, type InboxPartial } from "./pages.ts";
 import { clearedSessionCookie, hasValidSession, sessionCookie, tokenMatches } from "./session.ts";
 
@@ -285,6 +293,60 @@ export function createSurfaceApp(options: SurfaceOptions): Hono {
       const outcome = await applyVerifyArtifacts(stores.queue, slug, stores.verifier ?? {});
       const detail = `${outcome.checked} checked, ${outcome.updated} updated, ${outcome.rejected} rejected, ${outcome.unavailable} unavailable`;
       return redirectWithBanner(back, outcome.eventType, detail);
+    })(context),
+  );
+
+  // Repository actions from the board header: import labeled issues, seed
+  // dogfood, impose or clear the operator hold — the CLI's repository-level
+  // commands, one same-origin POST each. Failures re-render the board with a
+  // banner; success redirects back with the result.
+  app.post("/repositories/:owner/:name/:action{import-issues|seed-dogfood|hold|clear-hold}", requireConfigured, requireSession, requireSameOrigin, (context) =>
+    page(async (stores, enrollments, chrome) => {
+      const slug = `${context.req.param("owner")}/${context.req.param("name")}`;
+      const action = context.req.param("action");
+      const body = await formBody(context);
+      const back = returnPath(body, repositoryPath(slug));
+      const renderBoard = (banner: NonNullable<PageContext["banner"]>, status: number) => {
+        // Re-read after the attempt so the board (and its enrollment badge) shows the current state.
+        const board = readBoard(stores.queue, slug, readEnrollments(stores.controlPlanePath));
+        if (!board) return new Response(notFoundPage(chrome, `${slug} is neither opted in to the queue nor declared in the control plane.`), htmlHeaders(404));
+        return new Response(boardPage({ ...chrome, banner }, board), htmlHeaders(status));
+      };
+      let board;
+      try {
+        board = readBoard(stores.queue, slug, enrollments);
+      } catch (error) {
+        return new Response(notFoundPage(chrome, `No repository ${slug}: ${message(error)}`), htmlHeaders(404));
+      }
+      if (!board) return new Response(notFoundPage(chrome, `${slug} is neither opted in to the queue nor declared in the control plane.`), htmlHeaders(404));
+      try {
+        if (action === "import-issues") {
+          if (!board.optedIn) throw new MutationInputError(`${slug} is not opted in to the queue; opt it in first.`);
+          const outcome = await applyImportIssues(stores.queue, slug, body, stores.verifier?.fetcher);
+          return redirectWithBanner(back, outcome.eventType, `${outcome.fetched} fetched, ${outcome.created} created, ${outcome.skipped} already imported`);
+        }
+        if (action === "seed-dogfood") {
+          if (!board.optedIn) throw new MutationInputError(`${slug} is not opted in to the queue; opt it in first.`);
+          const outcome = applySeedDogfood(stores.queue, slug);
+          const detail = [
+            `${outcome.created.length} created${outcome.created.length > 0 ? ` (${outcome.created.join(", ")})` : ""}`,
+            `${outcome.skippedKinds.length} active`,
+            `${outcome.cooledKinds.length} cooling`,
+          ].join(", ");
+          return redirectWithBanner(back, outcome.eventType, detail);
+        }
+        const outcome = applyRepositoryHold(stores.controlPlanePath, slug, action === "hold" ? "impose" : "clear", body);
+        return redirectWithBanner(back, outcome.eventType, `${slug} is now ${outcome.effectiveState}`);
+      } catch (error) {
+        const label = action.replace("-", " ");
+        if (error instanceof ControlPlaneConflictError) {
+          return renderBoard({ tone: "error", text: `The control plane changed while ${label} was being recorded; nothing was changed — try again from the current state.` }, 409);
+        }
+        if (error instanceof ControlPlaneUnavailableError) return renderBoard({ tone: "error", text: `${capitalize(label)} is unavailable: ${error.message}` }, 503);
+        if (error instanceof GitHubListingError) return renderBoard({ tone: "error", text: `${capitalize(label)} did not run: ${error.message}` }, 502);
+        const status = error instanceof MutationInputError ? 400 : 409;
+        return renderBoard({ tone: "error", text: `${capitalize(label)} was not applied: ${message(error)}` }, status);
+      }
     })(context),
   );
 

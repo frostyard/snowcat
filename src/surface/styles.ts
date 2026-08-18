@@ -269,6 +269,17 @@ code{font-family:var(--font-mono);color:var(--text-mono-accent)}
 .fl-event-head a{font-size:11px;color:var(--text-body);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px}
 .fl-event-head a:hover{color:var(--ice)}
 .fl-name a{color:inherit;text-decoration:none}.fl-name a:hover{color:var(--ice)}
+/* Repository actions strip */
+.fl-repo-actions{margin-bottom:10px}
+.fl-action-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;padding:12px 14px}
+.fl-action{display:grid;gap:6px;align-content:start}
+.fl-action-label{color:#7cbddc;font:750 9px var(--font-mono);letter-spacing:.12em;text-transform:uppercase;display:flex;gap:6px;align-items:center}
+.fl-action-fields{display:flex;gap:6px}
+.fl-action .fl-input{max-width:none}
+.fl-action .ph-button{justify-self:start}
+.fl-repo-actions>.fl-sub{padding:0 14px 12px}
+@media(max-width:1050px){.fl-action-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
 /* Mutation forms */
 .fl-decide{display:grid;gap:6px;justify-items:end}
 .fl-decide .fl-actions{align-items:center}
