@@ -80,9 +80,11 @@ export interface QueueMetadata {
 export const RESERVED_PRINCIPAL_PREFIXES = ["operator:", "policy:", "system:"] as const;
 
 /**
- * Principals allowed to annotate work: the operator CLI and approved policy.
- * Operator notes are advice from earlier leases and MUST NOT be forgeable by
- * a worker, so `system:` and every worker namespace are rejected here.
+ * Principals allowed to decide about work: the operator CLI, the operator
+ * surface, and approved policy. Admission (`approve`, `reject`), blocked
+ * exits (`requeue`, `cancel`), `defer`, `prioritize`, and `note` are all
+ * operator authority and MUST NOT be forgeable by a worker, so `system:` and
+ * every worker namespace are rejected here (spec rule 37).
  */
 export function validateOperatorActor(actor: string, purpose: string): string {
   const identity = actor.trim();
@@ -683,7 +685,7 @@ export class QueueStore {
   }
 
   approve(id: string, actor: string, precondition?: MutationPrecondition): WorkItem {
-    if (!actor.trim()) throw new Error("approval actor is required");
+    validateOperatorActor(actor, "approval");
     return this.transaction(() => {
       const item = this.getRequired(id);
       this.assertPrecondition(item, precondition);
@@ -759,7 +761,7 @@ export class QueueStore {
   }
 
   reject(id: string, actor: string, reason: string, precondition?: MutationPrecondition): WorkItem {
-    if (!actor.trim()) throw new Error("rejection actor is required");
+    validateOperatorActor(actor, "rejection");
     if (!reason.trim()) throw new Error("rejection reason is required");
     return this.transaction(() => {
       const item = this.getRequired(id);
@@ -808,7 +810,7 @@ export class QueueStore {
   }
 
   cancel(id: string, actor: string, reason: string, precondition?: MutationPrecondition): WorkItem {
-    if (!actor.trim()) throw new Error("cancellation actor is required");
+    validateOperatorActor(actor, "cancellation");
     if (!reason.trim()) throw new Error("cancellation reason is required");
     return this.transaction(() => {
       const item = this.getRequired(id);

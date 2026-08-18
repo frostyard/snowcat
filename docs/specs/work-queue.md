@@ -342,9 +342,11 @@ command is not exposed through MCP.
     lease sees what happened on earlier ones. Every note MUST record `at`,
     `actor`, `action`, and a non-empty `reason` of at most 4,000 characters,
     and MUST be appended, never edited, reordered, or removed. Only an actor in
-    the `operator:` or `policy:` namespace MAY append one: `QueueStore` MUST
-    reject every other actor for `requeue`, `defer`, `prioritize`, and `note`,
-    and no MCP tool MAY write a note. `note <id> <text>` MUST append an `action = "note"`
+    the `operator:` or `policy:` namespace MAY decide about work: `QueueStore`
+    MUST reject every other actor (worker namespaces and `system:` alike) for
+    all seven operator mutations — `approve`, `reject`, `defer`, `requeue`,
+    `cancel`, `prioritize`, and `note` — leaving the item unchanged with no
+    event, and no MCP tool MAY perform any of them or write a note. `note <id> <text>` MUST append an `action = "note"`
     entry and record `work.noted` without changing status, admission, lease,
     or result. `claim_work`, `get_work`, `list_work`, `list`, and `show` MUST
     return both arrays (empty on a fresh item) and MUST NOT reveal a lease

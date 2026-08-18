@@ -1312,6 +1312,59 @@ test("operator mutations honor a status/updatedAt precondition and refuse stale 
   assert.equal(blockedC.status, "blocked");
 });
 
+test("approve, reject, and cancel accept only operator or policy actors and change nothing for anyone else", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-admission-actor-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/core", true);
+
+  /** The call throws naming the namespace rule, and the item and its ledger are byte-identical afterwards. */
+  const refused = (id: string, call: () => unknown) => {
+    const before = queue.get(id)!;
+    const events = queue.events(id).length;
+    assert.throws(call, /must use the operator: or policy: principal namespace/);
+    assert.deepEqual(queue.get(id), before);
+    assert.equal(queue.events(id).length, events);
+  };
+  const forbidden = ["claude:core:worker", "copilot-cli:frostyard/core:1", "system:", "system:lease-expiry", "System:Ops"];
+
+  // approve / reject on proposed items: one proposal per outcome, refused for every worker and system actor first.
+  const proposeOne = () => {
+    const seed = seedTestingGap(queue, "frostyard/core");
+    queue.defer(seed.id, "operator:test", "hold");
+    assert.equal(queue.get(seed.id)!.status, "proposed");
+    return seed.id;
+  };
+  const toApprove = proposeOne();
+  for (const actor of forbidden) refused(toApprove, () => queue.approve(toApprove, actor));
+  assert.throws(() => queue.approve(toApprove, ""), /approval actor is required/);
+  assert.equal(queue.approve(toApprove, "policy:test").status, "queued");
+  assert.equal(queue.events(toApprove).at(-1)!.actor, "policy:test");
+  const toReject = proposeOne();
+  for (const actor of forbidden) refused(toReject, () => queue.reject(toReject, actor, "no"));
+  assert.throws(() => queue.reject(toReject, "", "no"), /rejection actor is required/);
+  assert.equal(queue.reject(toReject, "operator:test", "no").status, "cancelled");
+  const toRejectByPolicy = proposeOne();
+  assert.equal(queue.reject(toRejectByPolicy, "policy:test", "no").status, "cancelled");
+
+  // cancel on a blocked item.
+  queue.setRepositoryEnabled("frostyard/blocked", true); // separate repository so the approved item above is not what gets claimed
+  const blockOne = () => {
+    const seed = seedTestingGap(queue, "frostyard/blocked");
+    const lease = queue.claim({ worker: "claude:core:w", repository: "frostyard/blocked" })!;
+    assert.equal(lease.id, seed.id);
+    queue.block(seed.id, lease.leaseToken!, "claude:core:w", "need input");
+    return seed.id;
+  };
+  const toCancel = blockOne();
+  for (const actor of forbidden) refused(toCancel, () => queue.cancel(toCancel, actor, "stop"));
+  assert.throws(() => queue.cancel(toCancel, "", "stop"), /cancellation actor is required/);
+  assert.equal(queue.cancel(toCancel, "operator:test", "stop").status, "cancelled");
+  const toCancelByPolicy = blockOne();
+  assert.equal(queue.cancel(toCancelByPolicy, "policy:test", "stop").status, "cancelled");
+  assert.equal(queue.events(toCancelByPolicy).at(-1)!.actor, "policy:test");
+});
+
 type Row = Record<string, unknown>;
 
 function seedTestingGap(queue: QueueStore, repository: string) {
