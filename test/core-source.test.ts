@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, symlink, unlink, writeFile } from "node:fs/promises";
@@ -170,6 +171,31 @@ test("the widened v1 program enum (core ADR-0039) validates and the enum stays c
   assert.equal(all.repositories[0]?.declaration.maintenance_programs.length, 9);
   assert.throws(() => validateCoreCatalog(swap(declare(["quality", "feature"]))), CoreValidationError);
   assert.throws(() => validateCoreCatalog(swap(declare(["quality", "quality"]))), CoreValidationError);
+});
+
+test("a superseded, bundled schema revision is still accepted and reported by its own digest", async () => {
+  const entries = await validCoreEntries();
+  const schema = entries.find((entry) => entry.path.endsWith("repository.schema.json"))!;
+  const supersededBytes = readFileSync(new URL("../src/core/schemas/v1/superseded/repository.schema.2419d096.json", import.meta.url));
+  const withSuperseded = entries.map((entry) => (entry === schema ? entryFor(entry.path, supersededBytes) : entry));
+  const validated = validateCoreCatalog(withSuperseded);
+  assert.equal(validated.schemaDigests.repository, "sha256:2419d096faac298b8c4a75a3a83b617f4797e4e5f190ccd918ead73ba604bead");
+  assert.notEqual(validated.schemaDigests.repository, validateCoreCatalog(entries).schemaDigests.repository);
+  // The superseded revision validates with its own (narrower) enum: a widened value is unknown to it.
+  const repository = withSuperseded.find((entry) => entry.path === "organization/repositories/frostyard/core.json")!;
+  const widened = entryFor(
+    repository.path,
+    json({
+      schema_version: 1,
+      repository: { owner: "frostyard", name: "core", repository_id: "1331309458" },
+      accountable_owners: [{ kind: "github-user", login: "bketelsen" }],
+      fleet_state: "enabled",
+      maintenance_programs: ["conformance"],
+      action_ceiling: ["read"],
+      surface_contract_version: 1,
+    }),
+  );
+  assert.throws(() => validateCoreCatalog(withSuperseded.map((entry) => (entry === repository ? widened : entry))), CoreValidationError);
 });
 
 test("schema byte drift and duplicate live keys fail the candidate", async () => {

@@ -36,6 +36,22 @@ const EXPECTED_SCHEMA_DIGESTS = {
   verificationProfile: "sha256:5562df1740d133ff32a7bcfc488907b3783a3eda9ba8e8e1d9559a07f44a4507",
   goal: "sha256:76341409e4dc33fbc50d1432d2488e1ecec767263733939f0abe9bf173aada0b",
 } as const;
+/**
+ * Earlier revisions of a v1 schema that Fluent reviewed and bundled before a
+ * compatible widening (core ADR-0039). A candidate or retained snapshot whose
+ * schema bytes match one of these is validated with exactly that revision, so
+ * snapshots accepted under the old bytes stay valid, rollback to them works,
+ * and a core revision that has not yet merged the widening is still accepted.
+ * Bytes that match no bundled revision are still refused. Order: newest first.
+ */
+const SUPERSEDED_SCHEMA_REVISIONS: Partial<Record<SchemaKind, ReadonlyArray<{ digest: string; url: URL }>>> = {
+  repository: [
+    {
+      digest: "sha256:2419d096faac298b8c4a75a3a83b617f4797e4e5f190ccd918ead73ba604bead",
+      url: new URL("./schemas/v1/superseded/repository.schema.2419d096.json", import.meta.url),
+    },
+  ],
+};
 const SURFACE_CONTRACT_PATH = "organization/contracts/repository-surfaces/v1.json";
 const STATIC_PATHS = new Set([
   "organization/README.md",
@@ -501,19 +517,26 @@ function loadBundledSchemas(entries: Map<string, CoreTreeEntry>): {
     }
     const fetchedDigest = digestBytes(fetched.bytes);
     const expectedDigest = EXPECTED_SCHEMA_DIGESTS[kind];
+    let matchedDigest: string = expectedDigest;
+    let matchedBytes = bundledBytes;
     if (fetchedDigest !== expectedDigest) {
-      throw new CoreValidationError(
-        `${fetched.path}: schema bytes do not match Fluent's bundled v1 contract`,
-        [`expected ${expectedDigest}`, `received ${fetchedDigest}`],
-      );
+      const superseded = (SUPERSEDED_SCHEMA_REVISIONS[kind] ?? []).find((revision) => revision.digest === fetchedDigest);
+      if (!superseded) {
+        throw new CoreValidationError(
+          `${fetched.path}: schema bytes do not match Fluent's bundled v1 contract`,
+          [`expected ${expectedDigest}`, `received ${fetchedDigest}`],
+        );
+      }
+      matchedDigest = superseded.digest;
+      matchedBytes = readFileSync(superseded.url);
     }
-    const bundledSchema = readStrictJson(bundledBytes, `bundled:${fetched.path}`);
+    const bundledSchema = readStrictJson(matchedBytes, `bundled:${fetched.path}`);
     const fetchedSchema = readStrictJson(fetched.bytes, fetched.path);
     if (canonicalJson(bundledSchema as JsonValue) !== canonicalJson(fetchedSchema as JsonValue)) {
       throw new CoreValidationError(`${fetched.path}: bundled validator schema does not match fetched schema semantics`);
     }
     parsed[kind] = bundledSchema;
-    digests[kind] = expectedDigest;
+    digests[kind] = matchedDigest;
   }
   const hasEnvelope = parsed.envelope !== undefined;
   const hasGoal = parsed.goal !== undefined;

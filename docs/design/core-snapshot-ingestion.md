@@ -94,11 +94,19 @@ content must match the bundled validator schema, before validation begins.
 Fetched schema code or validation scripts are never executed. Core may widen
 an enum inside a published schema version as a compatible change (core
 ADR-0039, first applied to `maintenance_programs` on 2026-08-18: nine
-programs, `maxItems: 9`); because the digest is exact, Fluent ships the new
-bundled bytes and digest **before** the core change merges, and the closed
-program vocabulary in [`registry.ts`](../../src/control/registry.ts)
-(`REPOSITORY_MAINTENANCE_PROGRAMS`) widens with it. The feeder seeds only the
-programs its catalog implements and reports the rest as `unsupportedPrograms`.
+programs, `maxItems: 9`). Fluent then bundles the new bytes as the expected
+revision **and keeps the superseded revision bundled** under
+`src/core/schemas/v1/superseded/` (`SUPERSEDED_SCHEMA_REVISIONS` in
+[`validator.ts`](../../src/core/validator.ts)): a candidate or retained
+snapshot whose schema bytes match either reviewed revision validates with
+exactly that revision and reports its digest, so snapshots accepted under the
+old bytes still pass the store's startup revalidation, rollback to them works,
+and the two repositories may merge in either order; bytes matching no bundled
+revision are still refused. The closed program vocabulary in
+[`registry.ts`](../../src/control/registry.ts)
+(`REPOSITORY_MAINTENANCE_PROGRAMS`) widens with the schema. The feeder seeds
+only the programs its catalog implements and reports the rest as
+`unsupportedPrograms`.
 
 The independent validator uses the same pinned Ajv 2020 and `jsonc-parser`
 versions as core. It rejects invalid UTF-8, comments, trailing commas, duplicate

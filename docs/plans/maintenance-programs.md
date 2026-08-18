@@ -69,7 +69,10 @@ their children may be admitted on creation.
   `triage`, `dependencies`, `docs`, `release`), `maxItems: 9`; no cadence
   field in the declaration (catalog stays the cadence source of truth until
   a repository shows a need); Fluent ships the new bundled schema bytes and
-  digest first, then core merges. Fluent's `REPOSITORY_MAINTENANCE_PROGRAMS`
+  digest and keeps the superseded revision bundled (so retained snapshots,
+  rollback, and either merge order keep working — the first attempt without
+  it locked the control-plane store on the operator host for a few minutes on
+  2026-08-18). Fluent's `REPOSITORY_MAINTENANCE_PROGRAMS`
   (`src/control/registry.ts`) is the widened closed vocabulary; the feeder
   reports declared programs the catalog does not implement yet as
   `unsupportedPrograms` and seeds nothing for them.
