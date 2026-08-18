@@ -405,7 +405,7 @@ test("operator CLI validates import-issues and seed-dogfood flags before touchin
   const seeded = run("seed-dogfood", "frostyard/updex", "--cooldown-hours", "0");
   assert.equal(seeded.status, 0, seeded.stderr);
   const result = JSON.parse(seeded.stdout) as { created: unknown[]; skippedKinds: string[]; cooledKinds: string[] };
-  assert.equal(result.created.length, 6);
+  assert.equal(result.created.length, 8);
   assert.deepEqual(result.cooledKinds, []);
 });
 
@@ -788,7 +788,7 @@ test("operator CLI seed-dogfood --enrolled requires FLUENT_CONTROL_DB and seeds 
   // The example declaration lists `quality` and `ci`; the feeder honors it and names what it left out.
   assert.deepEqual(
     result.seeded.map((entry) => [entry.repository, entry.programs, entry.created.map((item) => item.kind), entry.skippedKinds, entry.cooledKinds, entry.undeclaredKinds]),
-    [["frostyard/example", ["quality", "ci"], ["quality-gap-discovery", "ci-gap-discovery"], [], [], ["security-gap-discovery", "architecture-gap-discovery", "conformance-gap-discovery", "triage-discovery"]]],
+    [["frostyard/example", ["quality", "ci"], ["quality-gap-discovery", "ci-gap-discovery"], [], [], ["security-gap-discovery", "architecture-gap-discovery", "conformance-gap-discovery", "triage-discovery", "dependencies-gap-discovery", "docs-drift-discovery"]]],
   );
   assert.equal(seeded.stdout.includes("leaseToken"), false);
 

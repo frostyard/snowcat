@@ -137,17 +137,32 @@ Hive is retired and Fluent owns conformance and triage.
   issue through the operator's admission. — Catalog entries, tests, and docs
   are in; the operational half waits on the first week of runs.
 
-## Phase 6 — Dependencies and docs drift
+## Phase 6 — Dependencies and docs drift — catalog entries landed 2026-08-18
 
-- **dependencies** — outdated or vulnerable modules (Go, npm), Dependabot
-  noise consolidation, license drift. Proposal-only: the supply-chain
-  boundary is `review-required` in every governance file. Cadence: weekly.
-- **docs** — user-facing docs, README, runbooks, and examples that no longer
-  match code (architecture covers contracts versus code; this covers what a
-  reader runs). The `frostyard-repo-docs` skill is the procedure. Cadence:
-  weekly.
-- **Done when:** each produces a valid no-finding or one admitted child on
-  two enrolled repositories.
+- **dependencies** — weekly `dependencies-gap-discovery`: outdated or
+  vulnerable modules (`go list -m -u`, `govulncheck`; `npm outdated`, `npm
+  audit`), Dependabot noise consolidation, license drift; prefers
+  frostyard-owned modules behind their latest release. Proposal-only: the
+  supply-chain boundary is `review-required` in every governance file, so an
+  admitted child's bump is one human-merged pull request.
+- **docs** — weekly `docs-drift-discovery`: reader-facing docs, README,
+  runbooks, and examples that no longer match code (architecture covers
+  contracts versus code; conformance covers whether the canonical surfaces
+  exist; this covers what a reader runs). The `frostyard-repo-docs` skill is
+  the procedure.
+- **Internal dependency chain (decided 2026-08-18, next):** a mechanical
+  sweep — no model — over enrolled repositories' manifests: for each
+  frostyard-owned upstream whose default branch is ahead of its latest tag,
+  one `release-needed` proposal on the upstream; for each downstream
+  `require` behind the upstream's latest *release*, one `dependency-bump`
+  proposal on the downstream, deduplicated by `sourceRef`. The bump never
+  appears before the release exists, so the chain orders itself. Requires
+  the libraries (`frostyard/clix`, `frostyard/std`) to be enrolled, which
+  requires their ACMM conformance pass, governance surface, and release
+  setup (GoReleaser Pro on tag push, `make bump` via svu) — in flight.
+- **Done when:** each program produces a valid no-finding or one admitted
+  child on two enrolled repositories. — Catalog entries, tests, and docs are
+  in; the operational half and the internal-chain sweep follow.
 
 ## Later / ideas
 

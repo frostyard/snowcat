@@ -8,13 +8,13 @@ test("every catalog entry is a Core program with a distinct discovery kind; Core
   const ids = maintenancePrograms.map((program) => program.id);
   assert.equal(new Set(ids).size, ids.length);
   for (const id of ids) assert.ok((REPOSITORY_MAINTENANCE_PROGRAMS as readonly string[]).includes(id), id);
-  assert.deepEqual(ids.sort(), ["architecture", "ci", "conformance", "quality", "security", "triage"]);
+  assert.deepEqual(ids.sort(), ["architecture", "ci", "conformance", "dependencies", "docs", "quality", "security", "triage"]);
   const kinds = maintenancePrograms.map((program) => program.discovery.kind);
   assert.equal(new Set(kinds).size, kinds.length);
   for (const id of ids) assert.equal(maintenanceProgram(id).id, id);
   // Declared in Core (ADR-0039) but not yet in the catalog: known to the registry, unknown to the catalog.
   assert.deepEqual([...REPOSITORY_MAINTENANCE_PROGRAMS], ["quality", "ci", "security", "architecture", "conformance", "triage", "dependencies", "docs", "release"]);
-  assert.throws(() => maintenanceProgram("dependencies"), /unknown maintenance program/);
+  assert.throws(() => maintenanceProgram("release"), /unknown maintenance program/);
   // Triage children are proposals with issue-mutation authority at most, never a pull request (ADR-0062).
   assert.deepEqual(maintenanceProgram("triage").childCeiling, ["read", "open-issue"]);
   assert.equal(maintenanceProgram("triage").childAdmission, "proposed");
@@ -32,7 +32,7 @@ test("every program is a read-only discovery root with a positive cooldown, a bo
   }
   // Cadence defaults recorded in the maintenance programs plan.
   const cadence = Object.fromEntries(maintenancePrograms.map((program) => [program.id, program.cooldownSeconds]));
-  assert.deepEqual(cadence, { quality: 86_400, ci: 86_400, security: 86_400, architecture: 604_800, conformance: 604_800, triage: 86_400 });
+  assert.deepEqual(cadence, { quality: 86_400, ci: 86_400, security: 86_400, architecture: 604_800, conformance: 604_800, triage: 86_400, dependencies: 604_800, docs: 604_800 });
 });
 
 test("discoveryRootFor authors the program's root for a repository with the child ceiling as delegableActions", () => {
