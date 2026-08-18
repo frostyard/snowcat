@@ -852,7 +852,24 @@ export interface CoreRollbackActivatedPayload extends Record<string, JsonValue> 
 }
 
 export type RepositoryFleetState = "enabled" | "paused" | "disabled";
-export type RepositoryMaintenanceProgram = "quality" | "ci" | "security" | "architecture";
+/**
+ * Core `maintenance_programs` values, exactly the enum in the bundled
+ * `repository.schema.json` (widened within v1 by core ADR-0039). Fluent's
+ * program catalog (`src/queue/programs.ts`) implements a subset; a declared
+ * program without a catalog entry is reported by the feeder, not refused.
+ */
+export const REPOSITORY_MAINTENANCE_PROGRAMS = [
+  "quality",
+  "ci",
+  "security",
+  "architecture",
+  "conformance",
+  "triage",
+  "dependencies",
+  "docs",
+  "release",
+] as const;
+export type RepositoryMaintenanceProgram = (typeof REPOSITORY_MAINTENANCE_PROGRAMS)[number];
 export type RepositoryAction = "read" | "write" | "run-tests" | "open-issue" | "open-pr" | "create-followup";
 export const repositoryHoldGates = ["discovery", "admission", "claim", "lease-renewal"] as const;
 export type RepositoryHoldGate = (typeof repositoryHoldGates)[number];
@@ -1666,7 +1683,7 @@ function isRepositoryCoreAuthorityPayload(value: unknown): value is RepositoryCo
     value.surfaceContractVersion !== 1 ||
     !isUtcInstant(value.authorizedAt) ||
     !isRepositoryOwners(value.accountableOwners) ||
-    !isClosedUniqueArray(value.maintenancePrograms, ["quality", "ci", "security", "architecture"], 4) ||
+    !isClosedUniqueArray(value.maintenancePrograms, REPOSITORY_MAINTENANCE_PROGRAMS, REPOSITORY_MAINTENANCE_PROGRAMS.length) ||
     !isClosedUniqueArray(
       value.actionCeiling,
       ["read", "write", "run-tests", "open-issue", "open-pr", "create-followup"],
@@ -2465,7 +2482,7 @@ function isRepositoryEnrollmentPayload(value: unknown): value is RepositoryEnrol
     typeof value.repositoryCommitId === "string" &&
     /^[0-9a-f]{40}$/.test(value.repositoryCommitId) &&
     value.surfaceContractVersion === 1 &&
-    isClosedUniqueArray(value.maintenancePrograms, ["quality", "ci", "security", "architecture"], 4) &&
+    isClosedUniqueArray(value.maintenancePrograms, REPOSITORY_MAINTENANCE_PROGRAMS, REPOSITORY_MAINTENANCE_PROGRAMS.length) &&
     value.maintenancePrograms.length > 0 &&
     isClosedUniqueArray(
       value.actionCeiling,

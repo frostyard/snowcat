@@ -1,19 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { REPOSITORY_MAINTENANCE_PROGRAMS } from "../src/control/registry.ts";
 import { discoveryRootFor, maintenanceProgram, maintenancePrograms } from "../src/queue/programs.ts";
 
-const coreEnum = ["quality", "ci", "security", "architecture"] as const;
-
-test("the maintenance program catalog has exactly one entry per Core program with a distinct discovery kind", () => {
-  assert.deepEqual(
-    maintenancePrograms.map((program) => program.id).sort(),
-    [...coreEnum].sort(),
-  );
+test("every catalog entry is a Core program with a distinct discovery kind; Core's enum may be wider than the catalog", () => {
+  const ids = maintenancePrograms.map((program) => program.id);
+  assert.equal(new Set(ids).size, ids.length);
+  for (const id of ids) assert.ok((REPOSITORY_MAINTENANCE_PROGRAMS as readonly string[]).includes(id), id);
+  assert.deepEqual(ids.sort(), ["architecture", "ci", "quality", "security"]);
   const kinds = maintenancePrograms.map((program) => program.discovery.kind);
   assert.equal(new Set(kinds).size, kinds.length);
-  for (const id of coreEnum) assert.equal(maintenanceProgram(id).id, id);
-  assert.throws(() => maintenanceProgram("dependencies" as never), /unknown maintenance program/);
+  for (const id of ids) assert.equal(maintenanceProgram(id).id, id);
+  // Declared in Core (ADR-0039) but not yet in the catalog: known to the registry, unknown to the catalog.
+  assert.deepEqual([...REPOSITORY_MAINTENANCE_PROGRAMS], ["quality", "ci", "security", "architecture", "conformance", "triage", "dependencies", "docs", "release"]);
+  assert.throws(() => maintenanceProgram("dependencies"), /unknown maintenance program/);
 });
 
 test("every program is a read-only discovery root with a positive cooldown, a bounded child ceiling, and proposed children", () => {

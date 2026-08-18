@@ -125,7 +125,12 @@ function seedDogfoodNote(data: BoardData): string {
       .join(", ");
   if (programs === undefined) return `Read-only discovery roots for every program (${cadence(maintenancePrograms.map((program) => program.id))}); no-finding cooldown per program.`;
   if (programs.length === 0) return "No maintenance programs declared, so nothing to seed.";
-  return `Read-only discovery roots for the declared programs (${cadence(programs)}); no-finding cooldown per program.`;
+  const catalogIds = new Set(maintenancePrograms.map((program) => program.id));
+  const unsupported = programs.filter((program) => !catalogIds.has(program));
+  const supported = programs.filter((program) => catalogIds.has(program));
+  const tail = unsupported.length > 0 ? ` No catalog entry yet for ${unsupported.join(", ")}.` : "";
+  if (supported.length === 0) return `None of the declared programs (${programs.join(", ")}) has a catalog entry yet, so nothing to seed.`;
+  return `Read-only discovery roots for the declared programs (${cadence(supported)}); no-finding cooldown per program.${tail}`;
 }
 
 function cadenceLabel(cooldownSeconds: number): string {

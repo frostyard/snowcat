@@ -5,6 +5,7 @@ import { Ajv2020, type ValidateFunction } from "ajv/dist/2020.js";
 import { getNodeValue, parseTree, printParseErrorCode, type Node as JsonNode } from "jsonc-parser";
 
 import { canonicalJson, sha256, type JsonValue } from "../control/encoding.ts";
+import type { RepositoryMaintenanceProgram } from "../control/registry.ts";
 import {
   supportsVerificationAttestationPolicy,
   supportsVerificationEvaluator,
@@ -29,7 +30,7 @@ const BUNDLED_SCHEMA_URLS = {
 } as const;
 const EXPECTED_SCHEMA_DIGESTS = {
   envelope: "sha256:07eb4ca0d97de3668e3d71227c675562f69c451647ab5e6fa33e6fe9de80eb5f",
-  repository: "sha256:2419d096faac298b8c4a75a3a83b617f4797e4e5f190ccd918ead73ba604bead",
+  repository: "sha256:fb0c88c5e978f33576cb6c1f6c13b08805005d7925326924e28291ca0ddbf58f",
   surfaces: "sha256:b6742c283148d9a75f56d7fc8482d9309955ca5bab669170ac0cade92829670d",
   governance: "sha256:254e131a94c5477e861b0ec792defa1fd05ddebe380fc4e062d03cefc3ab8ebe",
   verificationProfile: "sha256:5562df1740d133ff32a7bcfc488907b3783a3eda9ba8e8e1d9559a07f44a4507",
@@ -82,7 +83,7 @@ export interface RepositoryDeclaration {
   };
   accountable_owners: AccountableOwner[];
   fleet_state: "enabled" | "paused" | "disabled";
-  maintenance_programs: Array<"quality" | "ci" | "security" | "architecture">;
+  maintenance_programs: RepositoryMaintenanceProgram[];
   action_ceiling: Array<"read" | "write" | "run-tests" | "open-issue" | "open-pr" | "create-followup">;
   surface_contract_version: 1;
 }

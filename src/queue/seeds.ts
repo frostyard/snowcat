@@ -51,6 +51,12 @@ export interface DogfoodBatchResult {
   cooledKinds: string[];
   /** Catalog kinds not offered because `programs` did not list their program. */
   undeclaredKinds: string[];
+  /**
+   * Declared programs the catalog has no entry for yet (Core's enum is wider
+   * than Fluent's catalog): reported, never refused, and nothing is seeded
+   * for them.
+   */
+  unsupportedPrograms: RepositoryMaintenanceProgram[];
 }
 
 /**
@@ -63,6 +69,8 @@ export function enqueueDogfoodBatch(queue: QueueStore, repository: string, optio
   const declared = options.programs === undefined ? undefined : new Set(options.programs);
   const offered = maintenancePrograms.filter((program) => declared === undefined || declared.has(program.id));
   const undeclaredKinds = maintenancePrograms.filter((program) => !offered.includes(program)).map((program) => program.discovery.kind);
+  const catalogIds = new Set(maintenancePrograms.map((program) => program.id));
+  const unsupportedPrograms = (options.programs ?? []).filter((program) => !catalogIds.has(program));
   const batch = queue.enqueueInactiveRootBatch(
     repository,
     offered.map((program) => {
@@ -71,7 +79,7 @@ export function enqueueDogfoodBatch(queue: QueueStore, repository: string, optio
     }),
     options.cooldownSeconds === undefined ? {} : { cooldownSeconds: options.cooldownSeconds },
   );
-  return { ...batch, undeclaredKinds };
+  return { ...batch, undeclaredKinds, unsupportedPrograms };
 }
 
 export interface EnrolledDogfoodResult {
