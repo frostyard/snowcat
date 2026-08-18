@@ -1,12 +1,17 @@
-# Fluent dogfood feeder: seeds the standing read-only discovery roots for every
-# repository that is opted in to the queue and `enrolled` in the control-plane
-# store. Idempotent; run from fluent-feed.timer. Install steps set `User=` in a
-# drop-in (`systemctl edit fluent-feed.service`) to the operator user that owns
-# the databases, and create /etc/fluent/env with FLUENT_HOME, FLUENT_QUEUE_DB,
+# Fluent feeder: for every repository that is opted in to the queue and
+# `enrolled` in the control-plane store, seeds the standing read-only discovery
+# roots and then imports open GitHub issues labeled `fluent` as proposed work
+# (the operator admits them). Both steps are idempotent; run from
+# fluent-feed.timer. Two ExecStart= lines on a oneshot unit run in order and the
+# second runs only if the first exits 0, so a feeder failure also skips the
+# import and the unit reports failed. The import needs FLUENT_GITHUB_TOKEN to
+# list private repositories. Install steps set `User=` in a drop-in
+# (`systemctl edit fluent-feed.service`) to the operator user that owns the
+# databases, and create /etc/fluent/env with FLUENT_HOME, FLUENT_QUEUE_DB,
 # FLUENT_CONTROL_DB, and FLUENT_GITHUB_TOKEN. `npm` must resolve on systemd's
 # fixed search path (/usr/local/bin or /usr/bin).
 [Unit]
-Description=Fluent: seed dogfood discovery roots for enrolled repositories
+Description=Fluent: seed dogfood roots and import labeled issues for enrolled repositories
 Documentation=https://github.com/frostyard/fluent/blob/main/docs/design/queue-operations.md
 After=network-online.target
 Wants=network-online.target
@@ -15,6 +20,7 @@ Wants=network-online.target
 Type=oneshot
 EnvironmentFile=/etc/fluent/env
 ExecStart=npm --prefix ${FLUENT_HOME} run --silent queue -- seed-dogfood --enrolled
+ExecStart=npm --prefix ${FLUENT_HOME} run --silent queue -- import-issues --enrolled --label fluent
 NoNewPrivileges=yes
 # PrivateTmp gives tsx a writable compile cache under a private /tmp.
 PrivateTmp=yes

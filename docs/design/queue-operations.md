@@ -158,6 +158,27 @@ imported once — even if its item was later rejected or completed — is never
 imported again. Higher `--priority` claims first (ties by creation time).
 Priority is operator-owned; workers cannot change it.
 
+The label convention is **`fluent`**: labeling an issue `fluent` is the
+queue's claim on it, and the operator host imports it for you. `fluent-feed.timer`
+runs `import-issues --enrolled --label fluent` hourly, right after the dogfood
+feeder, for every repository that is opted in **and** `enrolled` in the
+control-plane store:
+
+```bash
+npm run --silent queue -- import-issues --enrolled --label fluent [--priority <n>]
+```
+
+It reads the control-plane store once, runs the same import in one transaction
+per repository, and prints `imported` (per repository: `fetched`, `created`,
+`skippedSourceRefs`), `failed` (a repository whose GitHub listing returned 5xx
+or was unavailable — reported and skipped while the others still run), and
+`notOptedIn` (enrolled but not opted in). It exits non-zero only when
+`FLUENT_CONTROL_DB` is unset or every repository failed, and it needs
+`FLUENT_GITHUB_TOKEN` to list private repositories. Imported items stay
+`proposed` until you admit them; hand-run `import-issues <owner/repo>` still
+works for a repository that is opted in but not enrolled, or for a different
+label.
+
 **Standing maintenance** — one bounded, read-only discovery root per specialty
 (quality, CI, security, architecture), each of which may propose one
 implementation child:
@@ -174,7 +195,8 @@ re-asked. `--enrolled` requires `FLUENT_CONTROL_DB` (it exits non-zero naming
 the variable otherwise), reads the control-plane store once, and runs the
 feeder in one transaction per repository that is both opted in and `enrolled`,
 printing each repository's result plus any enrolled repository that is not
-opted in (`notOptedIn`). It is what `fluent-feed.timer` runs hourly (see
+opted in (`notOptedIn`). It is the first thing `fluent-feed.timer` runs hourly,
+followed by the labeled-issue import above (see
 [Deployment](#deployment-v1-decided-2026-08-17)). These roots are admitted
 immediately (they are read-only); their children are not.
 
@@ -437,7 +459,7 @@ Fluent v1 runs on **one operator host** and stays there deliberately:
 
   | Timer | Cadence | Runs |
   | --- | --- | --- |
-  | `fluent-feed.timer` | hourly (`OnCalendar=hourly`, `RandomizedDelaySec=300`) | `queue -- seed-dogfood --enrolled` |
+  | `fluent-feed.timer` | hourly (`OnCalendar=hourly`, `RandomizedDelaySec=300`) | `queue -- seed-dogfood --enrolled`, then `queue -- import-issues --enrolled --label fluent` (two `ExecStart=` lines; the import runs only if the feeder exits 0) |
   | `fluent-verify.timer` | every 15 minutes (`OnCalendar=*:0/15`) | `queue -- verify-artifacts` (default limit) |
   | `fluent-backup.timer` | daily (`OnCalendar=daily`, `Persistent=true`) | [`deploy/bin/fluent-backup`](../../deploy/bin/fluent-backup) |
 
