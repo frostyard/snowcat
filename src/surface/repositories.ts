@@ -76,12 +76,12 @@ export interface BoardData {
 /**
  * Sidebar and index share one control-plane read per request; the store is
  * opened fresh (like the claim-eligibility hook) so pages show current facts.
- * Returns `undefined` when `FLUENT_CONTROL_DB` is not configured.
+ * Returns `undefined` when `SNOWCAT_CONTROL_DB` is not configured.
  */
 export function readEnrollments(controlPlanePath: string | undefined): Map<string, RepositoryEnrollment> | undefined {
   if (!controlPlanePath) return undefined;
   const path = resolve(controlPlanePath);
-  if (!existsSync(path)) throw new Error(`control-plane database does not exist: ${path} (FLUENT_CONTROL_DB)`);
+  if (!existsSync(path)) throw new Error(`control-plane database does not exist: ${path} (SNOWCAT_CONTROL_DB)`);
   const store = new ControlPlaneStore(path);
   try {
     const coreCommit = store.activeCoreSnapshot()?.sourceCommitId;

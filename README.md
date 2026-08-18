@@ -1,16 +1,17 @@
-# Fluent (working name)
+# Snowcat
 
-Fluent is a self-hosted, durable work queue for capable coding agents that
+Snowcat is a self-hosted, durable work queue for capable coding agents that
 maintain opted-in repositories in a GitHub organization. The operator starts
 Codex, Claude, Copilot, or another MCP-capable client and tells it to work the
-queue; Fluent decides what it may claim, records what it reports, verifies
+queue; Snowcat decides what it may claim, records what it reports, verifies
 reported issues and pull requests against GitHub under its own credential, and
 keeps every operator decision as an attributed event. It is being built for
-Frostyard first; the product definition is still a discovery draft and the
-name is not final.
+Frostyard first; the product definition is still a discovery draft. It was
+named Fluent until 2026-08-18 (ADR-0064); `FLUENT_*` environment variables
+are still read for one release.
 
 The canonical source repository is
-[`frostyard/fluent`](https://github.com/frostyard/fluent), as recorded in
+[`frostyard/snowcat`](https://github.com/frostyard/snowcat), as recorded in
 [ADR-0045](docs/adr/0045-host-fluent-under-frostyard.md). Start with the
 [documentation index](docs/README.md), the
 [recovery plan](docs/plans/recover.md) for what is built and what is next, and
@@ -27,35 +28,35 @@ the [operations runbook](docs/design/queue-operations.md) for how to run it.
   feed timer for enrolled repositories) and standing read-only discovery
   roots (`seed-dogfood`) whose findings become proposals the operator admits.
 - **Authority sidecar:** the control-plane store activates `frostyard/core`
-  snapshots and reconciles repository enrollment; with `FLUENT_CONTROL_DB`
+  snapshots and reconciles repository enrollment; with `SNOWCAT_CONTROL_DB`
   set, only `enrolled` repositories' work is claimable.
 - **Operator surface:** inbox, repository board, item page, and the CLI's
   operator mutations with stale-intent preconditions, live from the event
-  ledger, on loopback behind `FLUENT_APP_TOKEN`
+  ledger, on loopback behind `SNOWCAT_APP_TOKEN`
   ([ADR-0060](docs/adr/0060-bring-the-operator-surface-forward-as-a-read-first-inbox.md)).
 - **Deployment:** one operator host — `deploy/install.sh`, `deploy/upgrade.sh`,
-  `/etc/fluent/env`, systemd timers for feeder, verification, and backup;
+  `/etc/snowcat/env`, systemd timers for feeder, verification, and backup;
   remote workers deliberately deferred.
-- **Dogfood so far:** `frostyard/updex` and Fluent itself are enrolled; 27
+- **Dogfood so far:** `frostyard/updex` and Snowcat itself are enrolled; 27
   items completed by four different client kinds, 22 pull requests merged
-  and verified, including every Fluent feature above being built through
+  and verified, including every Snowcat feature above being built through
   the queue.
 
 ## Quick start
 
 ```bash
 npm ci
-sudo deploy/install.sh --user "$USER"      # dirs, /etc/fluent/env, timers
-set -a; . /etc/fluent/env; set +a
+sudo deploy/install.sh --user "$USER"      # dirs, /etc/snowcat/env, timers
+set -a; . /etc/snowcat/env; set +a
 npm run --silent queue -- opt-in frostyard/updex
-npm run --silent queue -- import-issues frostyard/updex --label fluent --priority 10
+npm run --silent queue -- import-issues frostyard/updex --label snowcat --priority 10
 npm run --silent queue -- list proposed
 npm run --silent queue -- approve <id>
 npm run build && node scripts/serve.mjs   # operator surface on http://127.0.0.1:3000
 ```
 
-Then configure an MCP server named `fluent` running `npm run --silent mcp`
-in your client and say "work the Fluent queue." Everything above is spelled
+Then configure an MCP server named `snowcat` running `npm run --silent mcp`
+in your client and say "work the Snowcat queue." Everything above is spelled
 out, with enrollment through `frostyard/core`, in the
 [runbook](docs/design/queue-operations.md).
 
@@ -67,13 +68,13 @@ execution:
 - deterministic code owns enrollment, queue state, leases, permissions,
   delegation, and provenance;
 - an operator starts Codex, Claude, Copilot, or another capable client and asks
-  it to work one item from Fluent through MCP;
+  it to work one item from Snowcat through MCP;
 - an optional Flue agent may use local Lemonade for non-authoritative assistance
   without entering the control path.
 
-Fluent does not launch, supervise, authenticate, refresh credentials for, or
+Snowcat does not launch, supervise, authenticate, refresh credentials for, or
 sandbox those worker processes. The worker environment owns those concerns;
-Fluent owns repository opt-in, leases, action limits, lineage, and evidence.
+Snowcat owns repository opt-in, leases, action limits, lineage, and evidence.
 
 Try it against a scratch database:
 
@@ -96,8 +97,8 @@ them.
 Real work comes from labeled GitHub issues:
 
 ```bash
-export FLUENT_GITHUB_TOKEN=...   # optional; raises the API rate limit and reads private repositories
-npm run queue -- import-issues frostyard/updex --label fluent --priority 10
+export SNOWCAT_GITHUB_TOKEN=...   # optional; raises the API rate limit and reads private repositories
+npm run queue -- import-issues frostyard/updex --label snowcat --priority 10
 npm run queue -- list proposed
 npm run queue -- approve <work-item-id>
 ```
@@ -110,7 +111,7 @@ To gate claims on Core enrollment, point the same processes at the
 control-plane database:
 
 ```bash
-export FLUENT_CONTROL_DB=/var/lib/fluent/control-plane.db
+export SNOWCAT_CONTROL_DB=/var/lib/snowcat/control-plane.db
 npm run --silent core -- activate <sequence>       # activate frostyard/core main
 npm run --silent repository -- reconcile           # resolve identity, surfaces, enrollment
 npm run --silent repository -- status              # effectiveState must be "enrolled"
@@ -120,7 +121,7 @@ With the variable set, `claim_work` only leases items whose repository is
 `enrolled` (not disabled, paused, unresolved, or operator-held); unset it and
 opt-in alone governs. Restart the MCP server after changing it.
 
-When a worker completes an item citing an issue or pull request, Fluent checks
+When a worker completes an item citing an issue or pull request, Snowcat checks
 it against GitHub before accepting: a wrong repository, number, or kind is
 refused and the item stays claimed; a GitHub outage records `unverified`
 instead. Re-check later and watch delivery:
@@ -145,9 +146,9 @@ npm run queue -- cancel <work-item-id> <reason>
 `cancel` are the operator-only exits from `blocked`; workers can neither admit
 work nor choose those exits through MCP.
 
-Configure an MCP server named `fluent` to run `npm run mcp`, then tell a capable
-client to "work the Fluent queue." The portable
-[worker skill](.agents/skills/work-fluent-queue/SKILL.md) claims at most one
+Configure an MCP server named `snowcat` to run `npm run mcp`, then tell a capable
+client to "work the Snowcat queue." The portable
+[worker skill](.agents/skills/work-snowcat-queue/SKILL.md) claims at most one
 item per invocation by default.
 
 ## Operating the queue
@@ -161,18 +162,18 @@ the queue is the v1 work engine and its database is durable state; the
 one operator host:
 
 ```bash
-export FLUENT_QUEUE_DB=/var/lib/fluent/queue.db   # absolute; default is ./data/queue.db
+export SNOWCAT_QUEUE_DB=/var/lib/snowcat/queue.db   # absolute; default is ./data/queue.db
 npm run --silent queue -- metadata                 # path, database_id, schema version, counts
-npm run --silent queue -- backup /var/backups/fluent/queue-$(date -u +%Y%m%dT%H%M%SZ).db > manifest.json
-npm run --silent queue -- verify-backup /var/backups/fluent/queue-<stamp>.db
+npm run --silent queue -- backup /var/backups/snowcat/queue-$(date -u +%Y%m%dT%H%M%SZ).db > manifest.json
+npm run --silent queue -- verify-backup /var/backups/snowcat/queue-<stamp>.db
 ```
 
 Opening an older database upgrades it in place through a forward-only
 migration ladder; a newer one is refused. Restart MCP servers after upgrading
-Fluent — an already-open process refuses its next write once the schema moves.
+Snowcat — an already-open process refuses its next write once the schema moves.
 Backups contain lease tokens and are created `0600`; restore is a file copy to
 a new path after `verify-backup`, never an overwrite of the live file.
 
 The optional local clerk defaults to `http://10.0.1.200:13305/v1` and
-`Qwen3.8-27B-GGUF-UD-Q4_K_XL`. Fluent remains useful when that endpoint is
-absent, and subscription credentials never enter Fluent.
+`Qwen3.8-27B-GGUF-UD-Q4_K_XL`. Snowcat remains useful when that endpoint is
+absent, and subscription credentials never enter Snowcat.

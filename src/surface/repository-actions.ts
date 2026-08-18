@@ -35,7 +35,7 @@ export class GitHubListingError extends Error {
 
 /**
  * Board "Import issues": the same import the CLI runs for one repository,
- * with the label (default `fluent`) and optional priority from the form.
+ * with the label (default `snowcat`) and optional priority from the form.
  * Imported items are proposals; the operator admits them from the inbox.
  */
 export async function applyImportIssues(
@@ -44,7 +44,7 @@ export async function applyImportIssues(
   body: Record<string, unknown>,
   fetcher: GitHubFetch | undefined,
 ): Promise<MutationOutcome & { fetched: number; created: number; skipped: number }> {
-  const rawLabel = typeof body.label === "string" && body.label.trim().length > 0 ? body.label.trim() : "fluent";
+  const rawLabel = typeof body.label === "string" && body.label.trim().length > 0 ? body.label.trim() : "snowcat";
   const rawPriority = typeof body.priority === "string" ? body.priority.trim() : "";
   let priority: number | undefined;
   if (rawPriority.length > 0) {
@@ -104,11 +104,11 @@ export function applyRepositoryHold(
   choice: "impose" | "clear",
   body: Record<string, unknown>,
 ): MutationOutcome & { repositoryId: string; effectiveState: string } {
-  if (!controlPlanePath) throw new ControlPlaneUnavailableError("FLUENT_CONTROL_DB is not configured on this host, so repository holds are unavailable here.");
+  if (!controlPlanePath) throw new ControlPlaneUnavailableError("SNOWCAT_CONTROL_DB is not configured on this host, so repository holds are unavailable here.");
   const reason = typeof body.reason === "string" ? body.reason.trim() : "";
   if (reason.length === 0) throw new MutationInputError(`Enter a reason to ${choice === "impose" ? "hold" : "clear the hold on"} ${repository}.`);
   const path = resolve(controlPlanePath);
-  if (!existsSync(path)) throw new ControlPlaneUnavailableError(`control-plane database does not exist: ${path} (FLUENT_CONTROL_DB)`);
+  if (!existsSync(path)) throw new ControlPlaneUnavailableError(`control-plane database does not exist: ${path} (SNOWCAT_CONTROL_DB)`);
   const store = new ControlPlaneStore(path);
   try {
     const status = store.repositoryStatuses().find((candidate) => `${candidate.owner}/${candidate.name}`.toLowerCase() === repository.toLowerCase());

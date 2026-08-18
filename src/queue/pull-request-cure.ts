@@ -9,9 +9,9 @@ import type { AllowedAction, PullRequestCure, PullRequestDecay, SeedWorkInput, W
  * reported pull requests also reads each open one's health — mergeability,
  * check runs, reviews, review threads, and the identity of its patch — and enqueues one
  * admitted `pr-cure` root per decayed head. A `pr-cure` completion is refused
- * when the patch identity changed, so "mechanical" is a fact Fluent computes,
+ * when the patch identity changed, so "mechanical" is a fact Snowcat computes,
  * not a claim the worker makes. Merge, approval, and review dismissal stay
- * human; foreign pull requests (ones no Fluent item reported) are inspected
+ * human; foreign pull requests (ones no Snowcat item reported) are inspected
  * only for repositories whose `cure_foreign` setting is on.
  */
 
@@ -88,7 +88,7 @@ export async function inspectPullRequestHealth(repository: string, url: string, 
   const pull = await githubApiJson(`${base}/pulls/${locator.number}`, AbortSignal.timeout(GITHUB_TIMEOUT_MS), fetcher);
   if (pull.kind === "unavailable") return { kind: "unavailable", reason: "GitHub API unavailable" };
   if (pull.status === 404 || pull.status === 410) {
-    if (!process.env.FLUENT_GITHUB_TOKEN) return { kind: "unavailable", reason: `GitHub returned ${pull.status} without FLUENT_GITHUB_TOKEN` };
+    if (!process.env.SNOWCAT_GITHUB_TOKEN) return { kind: "unavailable", reason: `GitHub returned ${pull.status} without SNOWCAT_GITHUB_TOKEN` };
     return { kind: "rejected", reason: `pull request ${url} does not exist on GitHub` };
   }
   if (pull.status !== 200) return { kind: "unavailable", reason: `GitHub API returned HTTP ${pull.status}` };
@@ -274,7 +274,7 @@ export interface CureSweepResult {
  * The cure sweep: for every open pull request that a completed item reported
  * (verified, state `open`), and for every open non-draft pull request GitHub
  * lists in a repository whose `cureForeign` setting is on, read its health
- * and enqueue one admitted `pr-cure` root per decayed head that Fluent has
+ * and enqueue one admitted `pr-cure` root per decayed head that Snowcat has
  * not seen. Runs after `refreshArtifactVerifications` on the same timer.
  */
 export async function curePullRequests(
@@ -430,16 +430,16 @@ export function cureRootDefinition(
     instructions: [
       `Pull request ${health.url} at head ${health.headSha} has decayed: ${reasons}.`,
       ...(foreign
-        ? ["This pull request was NOT opened by a Fluent worker (the repository opted in to curing foreign pull requests): read its description and its author's intent on GitHub before acting."]
+        ? ["This pull request was NOT opened by a Snowcat worker (the repository opted in to curing foreign pull requests): read its description and its author's intent on GitHub before acting."]
         : []),
       "Perform only a MECHANICAL cure — one that leaves the pull request's patch identical: rebase or merge the base branch when that resolves cleanly, retitle to satisfy the repository's title lint, re-run or re-trigger checks, reply to review comments, fix labels or the body. Replying to a review thread, or resolving one whose request a later commit already addressed, is mechanical (it changes no patch); a thread that asks for a code change is not.",
-      "Fluent recomputes the digest of the pull request's patch (its added and removed lines per file) when you complete this item and REFUSES the completion if it changed, so do not edit code, resolve conflicts by hand, change tests, or squash in fixes.",
+      "Snowcat recomputes the digest of the pull request's patch (its added and removed lines per file) when you complete this item and REFUSES the completion if it changed, so do not edit code, resolve conflicts by hand, change tests, or squash in fixes.",
       `If curing this head requires changing the patch (a conflict that needs edits, a failing check that needs a code or test change, a review or review thread that asks for a change), do NOT push: create exactly one follow-up of kind ${CURE_CHANGE_KIND} that names the exact change and how it will be verified, or block this item if the change is the maintainer's to make.`,
       "Never merge, approve, or dismiss a review. Read the pull request and its checks on GitHub before acting; if the head has moved on since this item was created, block with that reason.",
       "Complete with the pull request reported as a pull-request artifact and evidence: the checks you observed on the new head, the mergeable state, and what you changed (metadata only).",
     ].join(" "),
     acceptanceCriteria: [
-      `The pull request ${health.url} is reported as a pull-request artifact and its patch identity is unchanged (Fluent enforces this on completion).`,
+      `The pull request ${health.url} is reported as a pull-request artifact and its patch identity is unchanged (Snowcat enforces this on completion).`,
       "The pull request's mergeable state is clean, or the result names exactly what still blocks it and why that is not a mechanical cure.",
       "The checks on the pull request's new head are green, or the result names the failing check and the follow-up or block that carries the fix.",
       "No merge, approval, or review dismissal was performed.",

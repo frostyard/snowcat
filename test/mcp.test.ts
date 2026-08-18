@@ -10,7 +10,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { QueueStore } from "../src/queue/store.ts";
 
 test("a manually started MCP client can claim, complete, and create child work", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-mcp-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-mcp-test-"));
   const path = join(directory, "queue.db");
   const setup = new QueueStore(path);
   setup.setRepositoryEnabled("frostyard/updex", true);
@@ -26,12 +26,12 @@ test("a manually started MCP client can claim, complete, and create child work",
   });
   setup.close();
 
-  const client = new Client({ name: "fluent-test-worker", version: "0.1.0" });
+  const client = new Client({ name: "snowcat-test-worker", version: "0.1.0" });
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: ["--import", "tsx", "src/mcp/stdio.ts"],
     cwd: process.cwd(),
-    env: stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path }),
+    env: stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path }),
   });
   await client.connect(transport);
   test.after(async () => client.close());
@@ -100,7 +100,7 @@ test("a manually started MCP client can claim, complete, and create child work",
 });
 
 test("the MCP boundary rejects a follow-up that supplies priority", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-mcp-priority-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-mcp-priority-test-"));
   const path = join(directory, "queue.db");
   const setup = new QueueStore(path);
   setup.setRepositoryEnabled("frostyard/updex", true);
@@ -117,12 +117,12 @@ test("the MCP boundary rejects a follow-up that supplies priority", async () => 
   });
   setup.close();
 
-  const client = new Client({ name: "fluent-test-worker", version: "0.1.0" });
+  const client = new Client({ name: "snowcat-test-worker", version: "0.1.0" });
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: ["--import", "tsx", "src/mcp/stdio.ts"],
     cwd: process.cwd(),
-    env: stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path }),
+    env: stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path }),
   });
   await client.connect(transport);
   test.after(async () => client.close());
@@ -170,7 +170,7 @@ test("the MCP boundary rejects a follow-up that supplies priority", async () => 
 });
 
 test("the MCP boundary rejects worker identities in reserved principal namespaces", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-mcp-principal-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-mcp-principal-test-"));
   const path = join(directory, "queue.db");
   const setup = new QueueStore(path);
   setup.setRepositoryEnabled("frostyard/updex", true);
@@ -186,12 +186,12 @@ test("the MCP boundary rejects worker identities in reserved principal namespace
   });
   setup.close();
 
-  const client = new Client({ name: "fluent-test-worker", version: "0.1.0" });
+  const client = new Client({ name: "snowcat-test-worker", version: "0.1.0" });
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: ["--import", "tsx", "src/mcp/stdio.ts"],
     cwd: process.cwd(),
-    env: stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path }),
+    env: stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path }),
   });
   await client.connect(transport);
   test.after(async () => client.close());
@@ -221,7 +221,7 @@ test("the MCP boundary rejects worker identities in reserved principal namespace
 });
 
 test("the MCP release path omits the old token and permits reclaim by another worker", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-mcp-release-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-mcp-release-test-"));
   const path = join(directory, "queue.db");
   const setup = new QueueStore(path);
   setup.setRepositoryEnabled("frostyard/updex", true);
@@ -237,12 +237,12 @@ test("the MCP release path omits the old token and permits reclaim by another wo
   });
   setup.close();
 
-  const client = new Client({ name: "fluent-release-test-worker", version: "0.1.0" });
+  const client = new Client({ name: "snowcat-release-test-worker", version: "0.1.0" });
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: ["--import", "tsx", "src/mcp/stdio.ts"],
     cwd: process.cwd(),
-    env: stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path }),
+    env: stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path }),
   });
   await client.connect(transport);
   test.after(async () => client.close());
@@ -282,7 +282,7 @@ test("the MCP release path omits the old token and permits reclaim by another wo
 });
 
 test("claim_work on a requeued item carries operator notes and prior results, and no MCP tool writes notes", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-mcp-notes-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-mcp-notes-test-"));
   const path = join(directory, "queue.db");
   const setup = new QueueStore(path);
   setup.setRepositoryEnabled("frostyard/updex", true);
@@ -302,12 +302,12 @@ test("claim_work on a requeued item carries operator notes and prior results, an
   setup.note(seed.id, "operator:cli", "Do not open a second pull request.");
   setup.close();
 
-  const client = new Client({ name: "fluent-notes-test-worker", version: "0.1.0" });
+  const client = new Client({ name: "snowcat-notes-test-worker", version: "0.1.0" });
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: ["--import", "tsx", "src/mcp/stdio.ts"],
     cwd: process.cwd(),
-    env: stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path }),
+    env: stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path }),
   });
   await client.connect(transport);
   test.after(async () => client.close());

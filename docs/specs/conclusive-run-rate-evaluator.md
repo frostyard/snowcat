@@ -1,7 +1,7 @@
 # Spec: Conclusive-run-rate evaluator
 
 This contract governs the callable `conclusive-run-rate:v1` verification
-evaluator in Fluent's closed mechanism registry. The evaluator consumes a
+evaluator in Snowcat's closed mechanism registry. The evaluator consumes a
 source-adapter-produced evidence population; it does not acquire or classify
 raw source data.
 

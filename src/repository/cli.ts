@@ -2,6 +2,10 @@
 
 import { ControlPlaneStore, controlPlaneDatabasePath } from "../control/store.ts";
 import { reconcileRepositories } from "./controller.ts";
+import { adoptLegacyEnvironment } from "../env-compat.ts";
+
+// FLUENT_* is read for one release (Snowcat ADR-0064); every entry point adopts it first.
+adoptLegacyEnvironment();
 
 const [command, ...args] = process.argv.slice(2);
 

@@ -3,14 +3,14 @@
 #
 # 1. `bash -n` and `shellcheck` on every script in deploy/bin/ and deploy/*.sh.
 # 2. `systemd-analyze verify` on every unit in deploy/systemd/, run against a
-#    throwaway --root that holds a stub /etc/fluent/env, stub `npm` and
+#    throwaway --root that holds a stub /etc/snowcat/env, stub `npm` and
 #    `/bin/bash` executables, and stub default-dependency targets, so the
 #    result is the same on any host with systemd and never depends on what is
 #    installed there. Any diagnostic at all (error or warning) fails the check.
-# 3. deploy/install.sh twice against FLUENT_INSTALL_ROOT=$(mktemp -d) with
-#    systemctl stubbed (FLUENT_SYSTEMCTL=true): the second run must change
+# 3. deploy/install.sh twice against SNOWCAT_INSTALL_ROOT=$(mktemp -d) with
+#    systemctl stubbed (SNOWCAT_SYSTEMCTL=true): the second run must change
 #    nothing (`diff -r` of the root before/after) and must leave a pre-existing
-#    /etc/fluent/env untouched; then the installed units plus their drop-ins
+#    /etc/snowcat/env untouched; then the installed units plus their drop-ins
 #    are verified in that root the same way.
 #
 # Both tools are required: a missing tool fails the check rather than passing
@@ -42,9 +42,9 @@ for script in "${scripts[@]}"; do
 done
 echo "check:deploy: shellcheck ok (${scripts[*]})"
 
-root="$(mktemp -d "${TMPDIR:-/tmp}/fluent-check-deploy.XXXXXX")"
-install_root="$(mktemp -d "${TMPDIR:-/tmp}/fluent-check-install.XXXXXX")"
-install_snapshot="$(mktemp -d "${TMPDIR:-/tmp}/fluent-check-install-snapshot.XXXXXX")"
+root="$(mktemp -d "${TMPDIR:-/tmp}/snowcat-check-deploy.XXXXXX")"
+install_root="$(mktemp -d "${TMPDIR:-/tmp}/snowcat-check-install.XXXXXX")"
+install_snapshot="$(mktemp -d "${TMPDIR:-/tmp}/snowcat-check-install-snapshot.XXXXXX")"
 trap 'rm -rf "$root" "$install_root" "$install_snapshot"' EXIT
 
 # Stub default-dependency targets our units reach through DefaultDependencies
@@ -72,12 +72,12 @@ verify_root() {
   echo "check:deploy: systemd-analyze verify ok ($label: $*)"
 }
 
-mkdir -p "$root/etc/fluent" "$root/etc/systemd/system" "$root/usr/bin" "$root/bin"
-cat > "$root/etc/fluent/env" <<'ENV'
-FLUENT_HOME=/opt/fluent
-FLUENT_QUEUE_DB=/var/lib/fluent/queue.db
-FLUENT_CONTROL_DB=/var/lib/fluent/control-plane.db
-FLUENT_GITHUB_TOKEN=stub
+mkdir -p "$root/etc/snowcat" "$root/etc/systemd/system" "$root/usr/bin" "$root/bin"
+cat > "$root/etc/snowcat/env" <<'ENV'
+SNOWCAT_HOME=/opt/snowcat
+SNOWCAT_QUEUE_DB=/var/lib/snowcat/queue.db
+SNOWCAT_CONTROL_DB=/var/lib/snowcat/control-plane.db
+SNOWCAT_GITHUB_TOKEN=stub
 ENV
 printf '#!/bin/sh\nexit 0\n' > "$root/usr/bin/npm"
 printf '#!/bin/sh\nexit 0\n' > "$root/bin/bash"
@@ -89,22 +89,22 @@ names=()
 for unit in "${units[@]}"; do names+=("$(basename "$unit")"); done
 verify_root "$root" "shipped units" "${names[@]}"
 
-# Install dry run, twice. FLUENT_SYSTEMCTL=true stubs systemctl so the
+# Install dry run, twice. SNOWCAT_SYSTEMCTL=true stubs systemctl so the
 # enable/start path is exercised without touching the host.
-FLUENT_INSTALL_ROOT="$install_root" FLUENT_SYSTEMCTL=true deploy/install.sh > "$install_root.first.log"
-env_file="$install_root/etc/fluent/env"
-[[ -f $env_file ]] || { echo "check:deploy: install.sh did not create etc/fluent/env" >&2; exit 1; }
+SNOWCAT_INSTALL_ROOT="$install_root" SNOWCAT_SYSTEMCTL=true deploy/install.sh > "$install_root.first.log"
+env_file="$install_root/etc/snowcat/env"
+[[ -f $env_file ]] || { echo "check:deploy: install.sh did not create etc/snowcat/env" >&2; exit 1; }
 marker="# check:deploy marker $(basename "$install_root")"
 printf '%s\n' "$marker" >> "$env_file"
 cp -a "$install_root/." "$install_snapshot/"
-FLUENT_INSTALL_ROOT="$install_root" FLUENT_SYSTEMCTL=true deploy/install.sh > "$install_root.second.log"
+SNOWCAT_INSTALL_ROOT="$install_root" SNOWCAT_SYSTEMCTL=true deploy/install.sh > "$install_root.second.log"
 if ! diff -r "$install_snapshot" "$install_root" > "$install_root.diff"; then
   echo "check:deploy: second install.sh run changed the install root:" >&2
   cat "$install_root.diff" >&2
   exit 1
 fi
 if ! grep -qxF "$marker" "$env_file"; then
-  echo "check:deploy: install.sh overwrote an existing etc/fluent/env" >&2
+  echo "check:deploy: install.sh overwrote an existing etc/snowcat/env" >&2
   exit 1
 fi
 if grep -q "created\|updated" "$install_root.second.log"; then

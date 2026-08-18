@@ -8,10 +8,10 @@ import { verifyForm } from "./forms.ts";
 
 export function repositoriesPage(context: PageContext, data: RepositoryIndexData): string {
   return document(
-    "Repositories · Fluent",
+    "Repositories · Snowcat",
     shell(
       context,
-      { title: "Repositories", eyebrow: "fluent · repositories", heading: "Repositories", active: "repositories" },
+      { title: "Repositories", eyebrow: "snowcat · repositories", heading: "Repositories", active: "repositories" },
       html`<section class="fl-group"><div class="fl-group-head"><h2>Opted in${data.controlPlaneConfigured ? " and declared" : ""}</h2><span>${data.rows.length} ${data.rows.length === 1 ? "repository" : "repositories"}</span></div>${
         data.rows.length === 0
           ? html`<p class="fl-empty">No repository is opted in. <code>npm run queue -- opt-in &lt;owner/repo&gt;</code> adds one.</p>`
@@ -68,7 +68,7 @@ export function boardPage(context: PageContext, data: BoardData): string {
     facts.length > 0 ? html`<span class="fl-facts">${facts.join(" · ")}</span>` : ""
   }`;
   return document(
-    `${data.repository} · Fluent`,
+    `${data.repository} · Snowcat`,
     shell(
       context,
       { title: data.repository, eyebrow: "repository · board", heading: data.repository, active: "repositories", actions, refresh: true, repository: data.repository },
@@ -101,14 +101,14 @@ function repositoryActions(data: BoardData, controlPlaneConfigured: boolean): Sa
   const base = repositoryPath(data.repository);
   const disabledNote = data.optedIn ? "" : html`<small class="fl-sub">Not opted in to the queue: import and seed are unavailable until <code>queue -- opt-in ${data.repository}</code>.</small>`;
   const holdForm = !controlPlaneConfigured
-    ? html`<div class="fl-action"><span class="fl-action-label">Hold</span><small class="fl-sub">Needs FLUENT_CONTROL_DB.</small></div>`
+    ? html`<div class="fl-action"><span class="fl-action-label">Hold</span><small class="fl-sub">Needs SNOWCAT_CONTROL_DB.</small></div>`
     : !data.enrollment
       ? html`<div class="fl-action"><span class="fl-action-label">Hold</span><small class="fl-sub">Not declared in the active Core snapshot.</small></div>`
       : data.enrollment.held
         ? html`<form class="fl-action" method="post" action="${base}/clear-hold"><input type="hidden" name="return" value="${here}"><span class="fl-action-label">Hold <span class="ph-badge danger">held</span></span><input class="fl-input" name="reason" placeholder="Reason to clear the hold" maxlength="4000" required><button class="ph-button secondary" type="submit">Clear hold</button></form>`
         : html`<form class="fl-action" method="post" action="${base}/hold"><input type="hidden" name="return" value="${here}"><span class="fl-action-label">Hold</span><input class="fl-input" name="reason" placeholder="Reason for the hold" maxlength="4000" required><button class="ph-button reject" type="submit">Hold repository</button></form>`;
   return html`<section class="fl-group fl-repo-actions" id="repository-actions"><div class="fl-group-head"><h2>Repository actions</h2><span>as operator:web · same as the CLI</span></div><div class="fl-action-grid">
-    <form class="fl-action" method="post" action="${base}/import-issues"><input type="hidden" name="return" value="${here}"><span class="fl-action-label">Import issues</span><div class="fl-action-fields"><input class="fl-input" name="label" value="fluent" placeholder="label" maxlength="100"><input class="fl-input fl-input-num" type="number" name="priority" placeholder="priority" step="1"></div><button class="ph-button secondary" type="submit"${data.optedIn ? "" : " disabled"}>Import issues</button></form>
+    <form class="fl-action" method="post" action="${base}/import-issues"><input type="hidden" name="return" value="${here}"><span class="fl-action-label">Import issues</span><div class="fl-action-fields"><input class="fl-input" name="label" value="snowcat" placeholder="label" maxlength="100"><input class="fl-input fl-input-num" type="number" name="priority" placeholder="priority" step="1"></div><button class="ph-button secondary" type="submit"${data.optedIn ? "" : " disabled"}>Import issues</button></form>
     <form class="fl-action" method="post" action="${base}/seed-dogfood"><input type="hidden" name="return" value="${here}"><span class="fl-action-label">Seed dogfood</span><small class="fl-sub">${seedDogfoodNote(data)}</small><button class="ph-button secondary" type="submit"${data.optedIn ? "" : " disabled"}>Seed dogfood</button></form>
     <div class="fl-action"><span class="fl-action-label">Verify artifacts</span><small class="fl-sub">Re-check pending issue and pull-request artifacts against GitHub.</small>${verifyForm(data.repository, here, { label: "Verify artifacts" })}</div>
     ${holdForm}

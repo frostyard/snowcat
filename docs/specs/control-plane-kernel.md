@@ -2,7 +2,7 @@
 
 This contract governs initialization, validation, typed Core snapshot storage,
 and the first rebuildable read models of the clean target SQLite database. It
-is consumed only by internal Fluent code and host-local diagnostics; it exposes
+is consumed only by internal Snowcat code and host-local diagnostics; it exposes
 no generic record-writing, fact-writing, administrative, or worker interface.
 
 ## Interface
@@ -11,7 +11,7 @@ no generic record-writing, fact-writing, administrative, or worker interface.
 
 | Item | Value | Constraint |
 | --- | --- | --- |
-| Environment variable | `FLUENT_CONTROL_DB` | Optional; target database path |
+| Environment variable | `SNOWCAT_CONTROL_DB` | Optional; target database path |
 | Default path | `./data/control-plane.db` | Distinct from the queue-spike default |
 | SQLite application ID | `1179405908` | Decimal encoding of `FLNT` |
 | Schema version | `7` | Stored in both `PRAGMA user_version` and metadata |
@@ -30,9 +30,9 @@ sequence and position. Neither method mutates the database or returns a secret.
 
 | Registry | Name | Version or ID rule | Contract |
 | --- | --- | --- | --- |
-| Subject | `control-plane-database` | UUIDv7 | Fluent authority; accepts `sha256` and `transaction-sequence` revisions |
-| Subject | `operator-principal` | UUIDv7 | Fluent authority; accepts `sha256` revision |
-| Subject | `core-snapshot` | UUIDv7 | Fluent authority; accepts `core-catalog-sha256` revision |
+| Subject | `control-plane-database` | UUIDv7 | Snowcat authority; accepts `sha256` and `transaction-sequence` revisions |
+| Subject | `operator-principal` | UUIDv7 | Snowcat authority; accepts `sha256` revision |
+| Subject | `core-snapshot` | UUIDv7 | Snowcat authority; accepts `core-catalog-sha256` revision |
 | Subject | `github-repository` | `github.com:<repository-id>` | GitHub authority; accepts exact Core-declaration, metadata, surface, Git-commit, rules, branch-transition, checkpoint, source-gap, and installation-reconciliation revisions |
 | Subject | `github-app-hook` | `github.com:app:<app-id>:hook` | GitHub authority; one App webhook bound to direct-delivery and delivery-audit revisions |
 | Subject | `github-pull-request` | `github.com:<repository-id>:pull:<number>` | GitHub authority; immutable repository identity plus positive pull-request number |
@@ -49,7 +49,7 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Revisions | `github-rules-sha256`, `github-pull-request-sha256`, `github-branch-transition-sha256`, `github-check-run-sha256`, `github-commit-status-sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact canonical allowlisted source representation for the named GitHub subject or repository transition |
 | Revisions | `github-source-checkpoint-sha256`, `github-source-gap-sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact canonical checkpoint or gap observation contract input |
 | Revisions | `github-installation-response-sha256`, `github-installation-reconciliation-sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact bounded GitHub response or canonical installation reconciliation input; unavailable acquisition has no source revision |
-| Source | `fluent-system` | Source ID `kernel` or `github-observer` | Internal deterministic bootstrap or GitHub reconciliation source; accepts no caller-selected source revision |
+| Source | `snowcat-system` | Source ID `kernel` or `github-observer` | Internal deterministic bootstrap or GitHub reconciliation source; accepts no caller-selected source revision |
 | Source | `github-repository` | `github.com:` plus immutable positive numeric repository ID | Source revision must be `git-commit-sha1` |
 | Source | `operator-principal` | UUIDv7 matching a stored operator subject | Human authority source; accepts no source revision |
 | Source | `github-api` | Only source ID `api.github.com` | Bounded selected GitHub API acquisition; accepts only registered API-obtainable metadata, delivery-audit, installation-response, rules, pull-request, transition, check-run, and commit-status revisions—not controller checkpoint, gap, or unavailable-result digests |
@@ -376,7 +376,7 @@ for an already enrolled immutable repository and exact optimistic sequence. It
 atomically appends observation, reconciliation fact, and event at positions
 `[0,1,2]`, causally rooted in the latest enrollment. Source-backed observed and
 `not-installed` outcomes retain source `github-api` and the exact response
-revision; `unavailable` uses `fluent-system/github-observer` with no invented
+revision; `unavailable` uses `snowcat-system/github-observer` with no invented
 GitHub revision. Replay is bound to the complete inspection for 30 days.
 Startup re-derives command and inspection digests and verifies enrollment,
 source distinction, output order, causation, result, and retention. No outcome
@@ -423,7 +423,7 @@ not call GitHub or independently prove caller-supplied pagination digests.
 Every command requires a currently enrolled immutable repository, exact
 optimistic pre-command sequence, UUIDv7 run ID, configured App and installation
 IDs, organization information class, deployment scope, and the
-`fluent-system/github-observer` source with no source revision.
+`snowcat-system/github-observer` source with no source revision.
 
 `recordGitHubSourceCheckpoint(input)` accepts canonical UTC `coveredFrom` and
 `coveredThrough`, 1–100 completed pages, 0–10,000 selected deliveries, and
@@ -501,7 +501,7 @@ Subject rows contain subject kind and ID, creation sequence, creation-record
 ID, and current information class/scope. The creation record is the earliest
 durable record for that subject in its creation transaction; source-native
 subjects may therefore be introduced by an observation rather than being
-misclassified as Fluent definitions. Event rows contain event record
+misclassified as Snowcat definitions. Event rows contain event record
 ID, kind/version, subject, correlation ID, current information class/scope,
 transaction coordinates, and recorded time. Event payloads and payload digests
 are deliberately absent from the cursor projection.
@@ -561,7 +561,7 @@ Every successful command prints exactly one JSON value to stdout. Usage and
 failure messages go to stderr with a nonzero exit status. The CLI is local
 operator tooling, not an authenticated remote API or worker surface. Projection
 rebuild/repair and backup staging remain non-authoritative operations; invoking
-the integrity check does not change its registered `fluent-system/kernel`
+the integrity check does not change its registered `snowcat-system/kernel`
 source identity.
 
 ### Tables
@@ -594,7 +594,7 @@ registry are accepted by current kernel code.
 
 The first accepted transaction has sequence `1`, command
 `control-plane.initialize` schema `1`, principal/source
-`fluent-system` / `kernel`, no session or idempotency key, and one captured UTC
+`snowcat-system` / `kernel`, no session or idempotency key, and one captured UTC
 evaluation/recorded time. Its outputs are:
 
 | Position | Subtype | Kind | Class | Information |
@@ -736,7 +736,7 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
     arguments, require canonical positive safe-integer sequence values, emit no
     stack trace, and write no successful JSON to stdout after a failure.
 39. `verify-backup` and `stage-restore` MUST dispatch without constructing a
-    store at `FLUENT_CONTROL_DB`; inspecting a backup must never initialize an
+    store at `SNOWCAT_CONTROL_DB`; inspecting a backup must never initialize an
     absent live database as a side effect.
 40. Normal startup MUST continue to reject missing or unknown projection heads.
     The projection-repair opener MAY skip only projection-catalog startup

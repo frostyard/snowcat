@@ -15,7 +15,7 @@ import type { AllowedAction, ProposedRootInput } from "./types.ts";
  * compares them with the repository settings contract carried by the active
  * Core snapshot. Every drift set becomes one `settings-drift` proposal per
  * repository (deduplicated by the digest of what drifted), never an admin
- * write: Fluent holds no admin credential, and the operator applies the
+ * write: Snowcat holds no admin credential, and the operator applies the
  * contract with core's `scripts/apply-repo-settings.sh`.
  */
 
@@ -67,7 +67,7 @@ export interface SettingsSweepOptions {
  */
 export function activeRepositorySettingsContract(controlPlanePath: string): { contract: RepositorySettingsContract; commit: string } | undefined {
   const path = resolve(controlPlanePath);
-  if (!existsSync(path)) throw new Error(`control-plane database does not exist: ${path} (FLUENT_CONTROL_DB)`);
+  if (!existsSync(path)) throw new Error(`control-plane database does not exist: ${path} (SNOWCAT_CONTROL_DB)`);
   const store = new ControlPlaneStore(path);
   try {
     const active = store.activeCoreSnapshot();
@@ -91,7 +91,7 @@ export async function sweepRepositorySettings(
 
   let contract = options.contract;
   if (!contract) {
-    if (!controlPlanePath) throw new Error("sweep-repository-settings requires FLUENT_CONTROL_DB to name the control-plane database");
+    if (!controlPlanePath) throw new Error("sweep-repository-settings requires SNOWCAT_CONTROL_DB to name the control-plane database");
     const active = activeRepositorySettingsContract(controlPlanePath);
     if (!active) {
       result.skipped.push({ repository: "*", reason: "the active Core snapshot carries no repository settings contract (core ADR-0040 not yet activated)" });
@@ -107,7 +107,7 @@ export async function sweepRepositorySettings(
     if (!repository) throw new Error(`repository is not opted in: ${options.repository}`);
     targets = [repository];
   } else {
-    if (!controlPlanePath) throw new Error("sweep-repository-settings --enrolled requires FLUENT_CONTROL_DB to name the control-plane database");
+    if (!controlPlanePath) throw new Error("sweep-repository-settings --enrolled requires SNOWCAT_CONTROL_DB to name the control-plane database");
     targets = [];
     for (const slug of [...enrolledRepositories(controlPlanePath)].sort()) {
       const repository = optedIn.get(slug.toLowerCase());
@@ -302,8 +302,8 @@ function driftProposal(repository: string, report: RepositorySettingsReport, dig
     kind: SETTINGS_DRIFT_KIND,
     objective: `Apply the repository settings contract to ${repository}: ${report.drifts.length} setting${report.drifts.length === 1 ? "" : "s"} drifted`,
     instructions: [
-      `Fluent compared ${repository}'s live GitHub settings with the organization's repository settings contract (core ADR-0040${contractCommit ? `, snapshot ${contractCommit.slice(0, 7)}` : ""}) and found these differences:\n${lines.join("\n")}\n`,
-      "This is a read-only finding. Fluent holds no admin credential and changes no setting; the operator applies the contract with core's `scripts/apply-repo-settings.sh <owner/repo>` (dry-run first), supplying the repository's required-check names.",
+      `Snowcat compared ${repository}'s live GitHub settings with the organization's repository settings contract (core ADR-0040${contractCommit ? `, snapshot ${contractCommit.slice(0, 7)}` : ""}) and found these differences:\n${lines.join("\n")}\n`,
+      "This is a read-only finding. Snowcat holds no admin credential and changes no setting; the operator applies the contract with core's `scripts/apply-repo-settings.sh <owner/repo>` (dry-run first), supplying the repository's required-check names.",
       "A worker completing this item verifies, read-only, that the settings now match — re-read the same GitHub endpoints and quote them — and completes with that evidence; if they still drift, block with what remains." + unreadable,
     ].join(" "),
     acceptanceCriteria: [

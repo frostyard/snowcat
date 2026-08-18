@@ -17,7 +17,7 @@ Current contract:
 ## Overview
 
 Success-measure verification connects reviewed outcome intent in Core to
-versioned executable mechanisms in Fluent without executing repository-authored
+versioned executable mechanisms in Snowcat without executing repository-authored
 code or treating a model verdict as authority. The implemented foundation
 imports and retains profile definitions, validates Goal fixtures, references,
 parameters, and lifecycle rules, and exposes one pure registered evaluator.
@@ -29,7 +29,7 @@ Core profile + measure declaration
           │ strict snapshot validation and exact retention
           ▼
 profile resolution + parameter validation          (Goal import implemented)
-          │ closed Fluent mechanism registry       (first evaluator implemented)
+          │ closed Snowcat mechanism registry       (first evaluator implemented)
           ▼
 trusted observations / deterministic facts / attestation
           │ versioned evaluation and evidence retention
@@ -45,9 +45,9 @@ criterion fact ──► slice state ──► initiative outcome projection
 | --- | --- |
 | Goal, initiative, and success-measure intent | Reviewed Core records |
 | Profile identity, mode, mechanism contract, and parameter schema | Immutable Core verification profile |
-| Adapter/evaluator/attestation-policy implementation | Closed versioned Fluent registry |
+| Adapter/evaluator/attestation-policy implementation | Closed versioned Snowcat registry |
 | External source truth | Registered source adapter and source-native revision |
-| Verification result and retained evidence | Fluent predicate contract and facts |
+| Verification result and retained evidence | Snowcat predicate contract and facts |
 | Goal lifecycle change | Reviewed Core change, never inferred from a result |
 
 A profile is not an organization record and has no lifecycle or applicability.
@@ -90,7 +90,7 @@ measure contains a stable local ID, required/optional designation, repeated
 evidence mode, typed subject, absolute start/end instants, exact profile ID and
 version, and parameters. Resolution fails when the profile is absent, the mode
 differs, parameters fail its embedded schema, the subject kind is unsupported,
-the window is invalid, or any named mechanism version is absent from Fluent's
+the window is invalid, or any named mechanism version is absent from Snowcat's
 closed registry. That registry currently contains
 `conclusive-run-rate:v1` but not the required
 `github-required-checks:v1` source adapter, so the merged fixture-only Goal
@@ -133,13 +133,13 @@ would make an unsupported claim.
 
 ADR-0056 resolves the source choice: GitHub's active rulesets, not a duplicated
 Core selector list, own which checks are required. A measurement window starts
-only after Fluent retains a non-empty, integration-bound ruleset baseline for
+only after Snowcat retains a non-empty, integration-bound ruleset baseline for
 the observed default branch. The branch and normalized selector set remain
 fixed through the half-open window. Any observed drift, source gap, or
 unsupported rule shape makes the population incomplete.
 
 The qualifying change population contains pull requests merged during that
-window into the retained default branch. Fluent also reconciles every update to
+window into the retained default branch. Snowcat also reconciles every update to
 that branch; a direct or bypass update that cannot be attributed to exactly one
 qualifying pull request prevents completeness. For each qualifying pull
 request, the controller must already have the required-check revision GitHub
@@ -177,7 +177,7 @@ count or elapsed time into outcome success.
 
 ## Operational notes
 
-- Deploy Goal-capable Fluent before publishing the first live Goal in Core.
+- Deploy Goal-capable Snowcat before publishing the first live Goal in Core.
 - A candidate rejection naming the profile schema digest indicates producer/
   consumer byte drift, not a retryable source outage.
 - A profile fixture failure rejects the complete candidate and leaves the last

@@ -204,7 +204,7 @@ test("schema byte drift and duplicate live keys fail the candidate", async () =>
   const drifted = entries.map((entry) =>
     entry === schema ? entryFor(entry.path, Buffer.concat([Buffer.from(entry.bytes), Buffer.from("\n")])) : entry,
   );
-  assert.throws(() => validateCoreCatalog(drifted), /schema bytes do not match Fluent's bundled v1 contract/);
+  assert.throws(() => validateCoreCatalog(drifted), /schema bytes do not match Snowcat's bundled v1 contract/);
 
   const repository = entries.find((entry) => entry.path === "organization/repositories/frostyard/core.json")!;
   const duplicate = Buffer.from(
@@ -217,7 +217,7 @@ test("schema byte drift and duplicate live keys fail the candidate", async () =>
 });
 
 test("the Git source reads an exact commit through a bare mirror and rejects a symlink", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-core-source-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-core-source-test-"));
   const source = join(directory, "source");
   const mirror = join(directory, "mirror.git");
   const entries = await validCoreEntries();
@@ -227,8 +227,8 @@ test("the Git source reads an exact commit through a bare mirror and rejects a s
     await writeFile(path, entry.bytes);
   }
   git(source, ["init", "-b", "main"]);
-  git(source, ["config", "user.name", "Fluent Test"]);
-  git(source, ["config", "user.email", "fluent-test@example.invalid"]);
+  git(source, ["config", "user.name", "Snowcat Test"]);
+  git(source, ["config", "user.email", "snowcat-test@example.invalid"]);
   git(source, ["add", "organization"]);
   git(source, ["commit", "-m", "valid authority"]);
 
@@ -311,7 +311,7 @@ test("the Git source reads an exact commit through a bare mirror and rejects a s
 });
 
 test("a Core candidate rejection is bounded, idempotent, queryable, and non-authoritative", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-core-rejection-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-core-rejection-test-"));
   const path = join(directory, "control-plane.db");
   const observedAt = "2026-08-16T12:30:00.000Z";
   const checkId = uuidV7(new Date(observedAt));
@@ -384,7 +384,7 @@ test("a Core candidate rejection is bounded, idempotent, queryable, and non-auth
   const output = execFileSync(
     process.execPath,
     ["--import", "tsx", "src/core/cli.ts", "rejections", "1"],
-    { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, FLUENT_CONTROL_DB: path } },
+    { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, SNOWCAT_CONTROL_DB: path } },
   );
   const cliRows = JSON.parse(output) as Array<Record<string, unknown>>;
   assert.equal(cliRows.length, 1);
@@ -392,7 +392,7 @@ test("a Core candidate rejection is bounded, idempotent, queryable, and non-auth
 });
 
 test("Core source freshness stays distinct from immediate admission blockers", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-core-readiness-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-core-readiness-test-"));
   const path = join(directory, "control-plane.db");
   let now = new Date("2026-08-16T10:00:00.000Z");
   const store = new ControlPlaneStore(path, () => now);
@@ -578,7 +578,7 @@ test("Core source freshness stays distinct from immediate admission blockers", a
 });
 
 test("a stale-source override neither transfers to new authority nor masks a later hard failure", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-core-override-boundary-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-core-override-boundary-test-"));
   let now = new Date("2026-08-14T09:00:00.000Z");
   const store = new ControlPlaneStore(join(directory, "control-plane.db"), () => now);
   const first = await activationCandidate("1".repeat(40), "2".repeat(40));
@@ -633,7 +633,7 @@ test("a stale-source override neither transfers to new authority nor masks a lat
 });
 
 test("Core check-detail pruning enforces 30 days while preserving readiness and cited evidence", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-core-retention-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-core-retention-test-"));
   const path = join(directory, "control-plane.db");
   let now = new Date("2026-06-01T00:00:00.000Z");
   let injectFailure = false;
@@ -745,7 +745,7 @@ test("Core check-detail pruning enforces 30 days while preserving readiness and 
   const cliOutput = execFileSync(
     process.execPath,
     ["--import", "tsx", "src/core/cli.ts", "prune-check-history", String(empty.transactionSequence)],
-    { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, FLUENT_CONTROL_DB: path } },
+    { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, SNOWCAT_CONTROL_DB: path } },
   );
   const cliPrune = JSON.parse(cliOutput) as Record<string, unknown>;
   assert.equal(cliPrune.deletedTransactionCount, 0);
@@ -758,14 +758,14 @@ test("Core check-detail pruning enforces 30 days while preserving readiness and 
 });
 
 test("activate records a bounded source rejection while verify remains outside the target store", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-core-cli-rejection-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-core-cli-rejection-test-"));
   const controlPath = join(directory, "control-plane.db");
   const invalidMirror = join(directory, "not-a-bare-repository");
   await writeFile(invalidMirror, "not git", "utf8");
   const environment = {
     ...process.env,
-    FLUENT_CONTROL_DB: controlPath,
-    FLUENT_CORE_MIRROR: invalidMirror,
+    SNOWCAT_CONTROL_DB: controlPath,
+    SNOWCAT_CORE_MIRROR: invalidMirror,
   };
 
   const verify = spawnSync(process.execPath, ["--import", "tsx", "src/core/cli.ts", "verify"], {
@@ -800,7 +800,7 @@ test("activate records a bounded source rejection while verify remains outside t
 });
 
 test("a validated Core candidate is retained and activated atomically with exact retry", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-core-activation-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-core-activation-test-"));
   const path = join(directory, "control-plane.db");
   const candidate = await activationCandidate("a".repeat(40), "b".repeat(40));
   const store = new ControlPlaneStore(path, () => new Date("2026-08-16T13:00:00.000Z"));
@@ -868,7 +868,7 @@ test("a validated Core candidate is retained and activated atomically with exact
 });
 
 test("automatic activation retains adopted verification profiles while rollback may select legacy", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-core-profile-activation-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-core-profile-activation-test-"));
   const path = join(directory, "control-plane.db");
   const store = new ControlPlaneStore(
     path,
@@ -940,7 +940,7 @@ test("automatic activation retains adopted verification profiles while rollback 
 });
 
 test("the shared source synchronizer activates and then records an unchanged eligible check", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-core-synchronizer-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-core-synchronizer-test-"));
   let now = new Date("2026-08-16T13:30:00.000Z");
   const store = new ControlPlaneStore(join(directory, "control-plane.db"), () => now);
   const candidate = await activationCandidate("4".repeat(40), "5".repeat(40));
@@ -969,7 +969,7 @@ test("the shared source synchronizer activates and then records an unchanged eli
 });
 
 test("an attributed operator rollback creates a new snapshot and preserves later reactivation", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-core-operator-rollback-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-core-operator-rollback-test-"));
   const path = join(directory, "control-plane.db");
   const first = await activationCandidate("1".repeat(40), "2".repeat(40));
   const second = await activationCandidate("3".repeat(40), "4".repeat(40));
@@ -1076,7 +1076,7 @@ test("an attributed operator rollback creates a new snapshot and preserves later
       first.commitId,
       "Restore the retained reviewed authority through the operator CLI",
     ],
-    { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, FLUENT_CONTROL_DB: path } },
+    { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, SNOWCAT_CONTROL_DB: path } },
   );
   const cliRollback = JSON.parse(cliOutput) as Record<string, unknown>;
   assert.equal(cliRollback.sourceCommitId, first.commitId);
@@ -1096,7 +1096,7 @@ test("an attributed operator rollback creates a new snapshot and preserves later
 });
 
 test("Core snapshot failure rolls back retained bytes and byte tampering fails closed", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-core-rollback-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-core-rollback-test-"));
   const failedPath = join(directory, "failed.db");
   const candidate = await activationCandidate("c".repeat(40), "d".repeat(40));
   const failed = new ControlPlaneStore(

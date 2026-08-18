@@ -1,12 +1,12 @@
 # Hourly dogfood feeder with a small random delay so several hosts do not hit
-# GitHub at the same minute. Enable with `systemctl enable --now fluent-feed.timer`.
+# GitHub at the same minute. Enable with `systemctl enable --now snowcat-feed.timer`.
 [Unit]
-Description=Fluent: seed dogfood discovery roots hourly
+Description=Snowcat: seed dogfood discovery roots hourly
 
 [Timer]
 OnCalendar=hourly
 RandomizedDelaySec=300
-Unit=fluent-feed.service
+Unit=snowcat-feed.service
 
 [Install]
 WantedBy=timers.target

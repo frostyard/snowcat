@@ -113,7 +113,7 @@ withdrawn; the [recovery plan](recover.md) carries the delivery order.
 - Reimplement only worker-facing behavior that remains valid under the target
   model. Any MCP contract change lands with code, updates the current design and
   spec, and updates the portable
-  [`work-fluent-queue`](../../.agents/skills/work-fluent-queue/SKILL.md) skill in
+  [`work-snowcat-queue`](../../.agents/skills/work-snowcat-queue/SKILL.md) skill in
   the same change.
 - Exercise duplicate claims, lease expiry and renewal, action ceilings,
   information access, bounded follow-up creation, cancellation, and failed

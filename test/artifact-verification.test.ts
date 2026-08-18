@@ -20,7 +20,7 @@ const PR_URL = "https://github.com/frostyard/updex/pull/12";
 const ISSUE_URL = "https://github.com/frostyard/updex/issues/7";
 const clock = () => new Date("2026-08-17T20:00:00.000Z");
 // Verification treats 404 as absence only when a credential was presented.
-process.env.FLUENT_GITHUB_TOKEN ??= "test-token";
+process.env.SNOWCAT_GITHUB_TOKEN ??= "test-token";
 
 function pullRequest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -111,14 +111,14 @@ test("a pull request is verified with its state and head, and mismatches are rej
   assert.match(missing.kind === "rejected" ? missing.reason : "", /does not exist/);
 
   // Without a credential, 404 is ambiguous (private repository or missing) and must not refuse the completion.
-  const token = process.env.FLUENT_GITHUB_TOKEN;
-  delete process.env.FLUENT_GITHUB_TOKEN;
+  const token = process.env.SNOWCAT_GITHUB_TOKEN;
+  delete process.env.SNOWCAT_GITHUB_TOKEN;
   try {
     const ambiguous = await verifyGitHubArtifact(REPOSITORY, prArtifact, { fetcher: apiFetcher({}).fetcher, clock });
     assert.equal(ambiguous.kind, "unverified");
-    assert.match(ambiguous.kind === "unverified" ? ambiguous.verification.reason : "", /without FLUENT_GITHUB_TOKEN/);
+    assert.match(ambiguous.kind === "unverified" ? ambiguous.verification.reason : "", /without SNOWCAT_GITHUB_TOKEN/);
   } finally {
-    if (token !== undefined) process.env.FLUENT_GITHUB_TOKEN = token;
+    if (token !== undefined) process.env.SNOWCAT_GITHUB_TOKEN = token;
   }
   const wrongRepoUrl = await verifyGitHubArtifact(REPOSITORY, { kind: "pull-request", url: "https://github.com/frostyard/lodge/pull/12" }, { fetcher: apiFetcher({}).fetcher, clock });
   assert.equal(wrongRepoUrl.kind, "rejected");
@@ -190,7 +190,7 @@ async function connect(path: string, fetcher: typeof fetch) {
 const parse = (result: unknown) => JSON.parse((result as { content: Array<{ text: string }> }).content[0]!.text) as Record<string, any>;
 
 test("MCP completion verifies reported pull requests: rejected stays claimed, verified is stored, worker cannot supply verification", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-verify-mcp-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-verify-mcp-test-"));
   const path = join(directory, "queue.db");
   const queue = new QueueStore(path);
   const claimed = await seedClaimed(queue);
@@ -222,7 +222,7 @@ test("MCP completion verifies reported pull requests: rejected stays claimed, ve
   assert.match(rejected.content[0]!.text, /targets frostyard\/lodge, not frostyard\/updex/);
   assert.equal(queue.get(claimed.id)?.status, "claimed");
 
-  // The corrected report is verified and stored with Fluent's own observation.
+  // The corrected report is verified and stored with Snowcat's own observation.
   routes[PR_PATH] = pullRequest();
   const accepted = parse(await complete([{ kind: "pull-request", url: PR_URL, description: "Fix" }]));
   assert.equal(accepted.completed.status, "completed");
@@ -240,7 +240,7 @@ test("MCP completion verifies reported pull requests: rejected stays claimed, ve
 });
 
 test("MCP completion during a GitHub outage records unverified, and verify-artifacts closes the loop later", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-verify-outage-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-verify-outage-test-"));
   const path = join(directory, "queue.db");
   const queue = new QueueStore(path);
   const claimed = await seedClaimed(queue);
@@ -318,7 +318,7 @@ test("MCP completion during a GitHub outage records unverified, and verify-artif
 });
 
 test("delivery derives from pull-request artifacts only, and recordArtifactVerification guards its inputs", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-delivery-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-delivery-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   const claimed = await seedClaimed(queue);

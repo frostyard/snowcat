@@ -26,7 +26,7 @@ function seed(queue: QueueStore, repository: string, priority: number, kind = "q
 }
 
 test("the claim eligibility hook filters repositories on top of opt-in and fails closed when it throws", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-eligibility-store-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-eligibility-store-test-"));
   const path = join(directory, "queue.db");
   const asked: string[] = [];
   let eligible = new Set(["frostyard/lodge"]);
@@ -68,7 +68,7 @@ test("the claim eligibility hook filters repositories on top of opt-in and fails
 });
 
 test("control-plane eligibility admits only enrolled repositories and reacts to operator holds", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-eligibility-control-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-eligibility-control-test-"));
   const controlPath = join(directory, "control-plane.db");
   const store = new ControlPlaneStore(controlPath, () => new Date("2026-08-17T12:00:00.000Z"));
   test.after(() => store.close());
@@ -111,11 +111,11 @@ test("control-plane eligibility admits only enrolled repositories and reacts to 
   assert.equal(queue.get(other.id)?.status, "queued");
 });
 
-test("host processes wire the control-plane hook only when FLUENT_CONTROL_DB is configured", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-eligibility-env-test-"));
+test("host processes wire the control-plane hook only when SNOWCAT_CONTROL_DB is configured", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-eligibility-env-test-"));
   assert.deepEqual(queueStoreOptionsFromEnvironment({}), {});
-  assert.deepEqual(queueStoreOptionsFromEnvironment({ FLUENT_CONTROL_DB: ":memory:" }), {});
-  const configured = queueStoreOptionsFromEnvironment({ FLUENT_CONTROL_DB: join(directory, "control-plane.db") });
+  assert.deepEqual(queueStoreOptionsFromEnvironment({ SNOWCAT_CONTROL_DB: ":memory:" }), {});
+  const configured = queueStoreOptionsFromEnvironment({ SNOWCAT_CONTROL_DB: join(directory, "control-plane.db") });
   assert.equal(typeof configured.claimEligibility, "function");
 
   // The MCP server honors the same environment: with an unenrolled control plane configured,
@@ -144,14 +144,14 @@ test("host processes wire the control-plane hook only when FLUENT_CONTROL_DB is 
       ),
     ) as { id?: string } | null;
 
-  assert.equal(claimVia({ FLUENT_QUEUE_DB: queuePath, FLUENT_CONTROL_DB: controlPath }), null, "control plane configured, nothing enrolled");
-  const claimed = claimVia({ FLUENT_QUEUE_DB: queuePath, FLUENT_CONTROL_DB: "" });
+  assert.equal(claimVia({ SNOWCAT_QUEUE_DB: queuePath, SNOWCAT_CONTROL_DB: controlPath }), null, "control plane configured, nothing enrolled");
+  const claimed = claimVia({ SNOWCAT_QUEUE_DB: queuePath, SNOWCAT_CONTROL_DB: "" });
   assert.equal(claimed?.id, item.id, "opt-in alone when unset");
 
   const list = spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", "list", "claimed"], {
     cwd: process.cwd(),
     encoding: "utf8",
-    env: { ...baseEnv, FLUENT_QUEUE_DB: queuePath, FLUENT_CONTROL_DB: controlPath },
+    env: { ...baseEnv, SNOWCAT_QUEUE_DB: queuePath, SNOWCAT_CONTROL_DB: controlPath },
   });
   assert.equal(list.status, 0, list.stderr);
   assert.equal((JSON.parse(list.stdout) as unknown[]).length, 1, "read commands work with the hook configured");

@@ -7,7 +7,7 @@ import { QueueStore, queueDatabasePath, validateWorkerIdentity, type QueueStoreO
 import { allowedActions, withoutLeaseToken, workStatuses } from "../queue/types.ts";
 
 const actionSchema = z.enum(allowedActions);
-// Worker identities may not borrow Fluent's reserved principal namespaces
+// Worker identities may not borrow Snowcat's reserved principal namespaces
 // (operator:, policy:, system:), so provenance cannot be spoofed at the boundary.
 const workerSchema = z.string().min(1).refine(
   (worker) => {
@@ -20,7 +20,7 @@ const workerSchema = z.string().min(1).refine(
   },
   { message: "worker identity uses a reserved principal namespace (operator:, policy:, system:)" },
 );
-// Strict: `verification` is Fluent's own observation, computed by the server
+// Strict: `verification` is Snowcat's own observation, computed by the server
 // at completion time; a worker-supplied value is rejected, not stripped.
 const artifactSchema = z.strictObject({
   kind: z.enum(["issue", "pull-request", "commit", "report", "other"]),
@@ -45,7 +45,7 @@ export function buildQueueMcpServer(
 ): McpServer {
   const queue = new QueueStore(path, undefined, storeOptions);
   const server = new McpServer(
-    { name: "fluent-queue", version: "0.1.0" },
+    { name: "snowcat-queue", version: "0.1.0" },
     {
       instructions: [
         "Claim at most one work item unless the operator explicitly requests a loop.",
@@ -140,7 +140,7 @@ export function buildQueueMcpServer(
         ? await verifyCompletionArtifacts(item.repository, input.result.artifacts, verifier)
         : input.result.artifacts;
       // A pr-cure completion is refused when the pull request's patch identity
-      // changed (ADR-0061): mechanical is a fact Fluent computes, not a claim.
+      // changed (ADR-0061): mechanical is a fact Snowcat computes, not a claim.
       if (item) await assertCureCompletion(item, artifacts, verifier);
       return toolResult(queue.complete({ ...input, result: { ...input.result, artifacts } }));
     },

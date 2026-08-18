@@ -31,7 +31,7 @@ test("GitHub delivery-audit policy validates cadence and applies fixed incomplet
 });
 
 test("App-wide delivery-audit leases exclude overlap and recover after expiry", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-github-audit-lease-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-github-audit-lease-test-"));
   const path = join(directory, "control.db");
   let now = new Date("2026-08-17T10:00:00.000Z");
   const first = new ControlPlaneStore(path, () => now);
@@ -95,7 +95,7 @@ test("App-wide delivery-audit leases exclude overlap and recover after expiry", 
 });
 
 test("delivery-audit controller runs acquisition outside SQLite and retains bounded retry state", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-github-audit-controller-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-github-audit-controller-test-"));
   const path = join(directory, "control.db");
   let now = new Date("2026-08-17T12:00:00.000Z");
   const store = new ControlPlaneStore(path, () => now);

@@ -17,7 +17,7 @@ const PR_PATH = "/repos/frostyard/updex/pulls/12";
 const HEAD_A = "a".repeat(40);
 const HEAD_B = "b".repeat(40);
 const clock = () => new Date("2026-08-18T20:00:00.000Z");
-process.env.FLUENT_GITHUB_TOKEN ??= "test-token";
+process.env.SNOWCAT_GITHUB_TOKEN ??= "test-token";
 
 function pullRequest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -270,7 +270,7 @@ test("unresolved, non-outdated review threads are decay read through GraphQL; th
     assert.deepEqual(errored.health.notes, ["review threads unavailable: GitHub GraphQL errors: Resource not accessible by integration"]);
   }
 
-  const directory = await mkdtemp(join(tmpdir(), "fluent-cure-threads-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cure-threads-test-"));
   const queue = new QueueStore(join(directory, "queue.db"), clock);
   test.after(() => queue.close());
   await completedWithOpenPr(queue);
@@ -294,7 +294,7 @@ test("unresolved, non-outdated review threads are decay read through GraphQL; th
 });
 
 test("the cure sweep enqueues one admitted pr-cure root per decayed head, never the same head twice, and a push is a new head", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-cure-sweep-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cure-sweep-test-"));
   const queue = new QueueStore(join(directory, "queue.db"), clock);
   test.after(() => queue.close());
   const originId = await completedWithOpenPr(queue, 7);
@@ -367,13 +367,13 @@ test("the cure sweep enqueues one admitted pr-cure root per decayed head, never 
 });
 
 test("foreign pull requests are cured only for a repository with cureForeign on: one root per head, no originItemId, drafts skipped", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-cure-foreign-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cure-foreign-test-"));
   const queue = new QueueStore(join(directory, "queue.db"), clock);
   test.after(() => queue.close());
   queue.setRepositoryEnabled(REPOSITORY, true);
   assert.deepEqual(queue.repositoryCureSettings(), [{ repository: REPOSITORY, cureForeign: false }]);
 
-  // A Dependabot-style pull request no Fluent item reported, open and conflicting.
+  // A Dependabot-style pull request no Snowcat item reported, open and conflicting.
   const FOREIGN_URL = "https://github.com/frostyard/updex/pull/30";
   const FOREIGN_PATH = "/repos/frostyard/updex/pulls/30";
   const foreignPull = (overrides: Record<string, unknown> = {}) =>
@@ -409,7 +409,7 @@ test("foreign pull requests are cured only for a repository with cureForeign on:
   assert.equal(item.priority, 0);
   assert.equal(item.cure!.originItemId, undefined, "a foreign head has no originating item");
   assert.deepEqual(item.cure, { pullRequestUrl: FOREIGN_URL, headSha: HEAD_B, patchDigest: item.cure!.patchDigest, decay: ["dirty"] });
-  assert.match(item.instructions, /NOT opened by a Fluent worker/);
+  assert.match(item.instructions, /NOT opened by a Snowcat worker/);
   assert.match(item.instructions, /MECHANICAL cure/);
 
   // A second sweep enqueues nothing: the head is known.
@@ -444,7 +444,7 @@ test("foreign pull requests are cured only for a repository with cureForeign on:
 });
 
 test("a pr-cure completion is refused when the patch changed, when the pull request is not reported, or when GitHub cannot answer", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-cure-complete-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cure-complete-test-"));
   const path = join(directory, "queue.db");
   // Wall clock on purpose: the MCP server below opens its own store on real
   // time, so a frozen clock here would make the lease look expired to it.
@@ -523,7 +523,7 @@ test("a pr-cure completion is refused when the patch changed, when the pull requ
 });
 
 test("enqueueCureRoot validates its cure record and kind", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-cure-store-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cure-store-test-"));
   const queue = new QueueStore(join(directory, "queue.db"), clock);
   test.after(() => queue.close());
   queue.setRepositoryEnabled(REPOSITORY, true);

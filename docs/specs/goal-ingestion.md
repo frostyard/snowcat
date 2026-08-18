@@ -1,6 +1,6 @@
 # Spec: Goal ingestion
 
-This contract governs Fluent's independent validation and retention of the
+This contract governs Snowcat's independent validation and retention of the
 version-one Goal records published in a Core authority snapshot. It covers the
 import boundary and automatic lifecycle safety. It does not make Goals eligible
 for discovery, derive queue priority, execute measures, or admit work.
@@ -47,11 +47,11 @@ their exact prior shapes.
    evidence mode MUST match, and its parameters MUST satisfy the profile's
    retained embedded schema.
 7. Valid Goal fixtures resolve only fixture repositories and fixture profiles;
-   they do not create live authority and do not require executable Fluent
+   they do not create live authority and do not require executable Snowcat
    mechanisms. Live Goals resolve only the live catalog.
 8. Before a live Goal can enter a candidate report, every adapter, evaluator,
    or attestation policy named by its profiles MUST have a real versioned entry
-   in Fluent's closed implementation registry. The registry currently contains
+   in Snowcat's closed implementation registry. The registry currently contains
    `conclusive-run-rate:v1` but no source adapter, so Goal-capable snapshots
    with fixtures and zero live Goals are accepted while the representative live
    Goal is rejected with bounded `github-required-checks:v1` detail.

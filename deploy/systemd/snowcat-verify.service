@@ -1,0 +1,19 @@
+# Snowcat artifact verification: re-checks reported issues and pull requests
+# against GitHub and derives `delivery`. Idempotent and safe while GitHub is
+# unavailable; run from snowcat-verify.timer. Configure `User=` and, when
+# SNOWCAT_HOME is not /opt/snowcat, `ReadWritePaths=` in a drop-in.
+[Unit]
+Description=Snowcat: refresh queue artifact verification
+Documentation=https://github.com/frostyard/snowcat/blob/main/docs/design/queue-operations.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/snowcat/env
+ExecStart=npm --prefix ${SNOWCAT_HOME} run --silent queue -- verify-artifacts
+NoNewPrivileges=yes
+# PrivateTmp gives tsx a writable compile cache under a private /tmp.
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/snowcat -/opt/snowcat/data

@@ -48,9 +48,9 @@ setProvider(
 export interface AppOptions {
   appToken?: string;
   /**
-   * Stores for the operator surface. Defaults to opening `FLUENT_QUEUE_DB`
+   * Stores for the operator surface. Defaults to opening `SNOWCAT_QUEUE_DB`
    * lazily on the first authenticated surface request and reading
-   * `FLUENT_CONTROL_DB` for enrollment states; tests pass their own.
+   * `SNOWCAT_CONTROL_DB` for enrollment states; tests pass their own.
    */
   surfaceStores?: () => SurfaceStores;
   /** Event-stream cadence for the surface; tests shorten it. */
@@ -64,7 +64,7 @@ export function createApp(options: AppOptions): Hono {
   app.use("/agents/*", async (context, next) => {
     const token = options.appToken;
     if (!token) {
-      return context.json({ error: "FLUENT_APP_TOKEN is not configured" }, 503);
+      return context.json({ error: "SNOWCAT_APP_TOKEN is not configured" }, 503);
     }
 
     const authorization = context.req.header("Authorization") ?? "";
@@ -89,7 +89,7 @@ function defaultSurfaceStores(): () => SurfaceStores {
   return () => {
     stores ??= {
       queue: new QueueStore(queueDatabasePath()),
-      controlPlanePath: process.env.FLUENT_CONTROL_DB && process.env.FLUENT_CONTROL_DB !== ":memory:" ? process.env.FLUENT_CONTROL_DB : undefined,
+      controlPlanePath: process.env.SNOWCAT_CONTROL_DB && process.env.SNOWCAT_CONTROL_DB !== ":memory:" ? process.env.SNOWCAT_CONTROL_DB : undefined,
     };
     return stores;
   };
@@ -101,6 +101,6 @@ function safeEqual(actual: string, expected: string): boolean {
   return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
 }
 
-const app = createApp({ appToken: process.env.FLUENT_APP_TOKEN });
+const app = createApp({ appToken: process.env.SNOWCAT_APP_TOKEN });
 
 export default app;

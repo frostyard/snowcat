@@ -29,7 +29,7 @@ Repository contract:
 ## Overview
 
 Core snapshot ingestion is the deterministic boundary between the mutable
-`frostyard/core` branch and Fluent authority. The implemented path fetches one
+`frostyard/core` branch and Snowcat authority. The implemented path fetches one
 exact commit into a bare mirror, reads only its Git tree and blob objects under
 `organization/`, validates the complete supported contract, and emits a
 content-addressed candidate catalog. A separate typed command reruns validation,
@@ -65,7 +65,7 @@ frostyard/core refs/heads/main
 `frostyard/core` GitHub URL forms and one canonical `refs/heads/*` ref. The
 defaults are HTTPS `frostyard/core`, `refs/heads/main`, and
 `./data/core.git`. Git authentication remains in the host Git mechanism;
-Fluent neither accepts credentials in the URL nor persists them in its
+Snowcat neither accepts credentials in the URL nor persists them in its
 database.
 
 The source is fetched into an internal candidate ref in a bare mirror. Git
@@ -81,7 +81,7 @@ object graph must be present in the fetched mirror exactly as addressed.
 
 ### Bundled contract and parity
 
-Fluent bundles the three required schema documents implemented by merged Core
+Snowcat bundles the three required schema documents implemented by merged Core
 PR #80: repository declaration, repository surfaces, and repository agent
 governance. It also bundles the profile-capable extension merged in Core PR
 #81 and the common-envelope and Goal extension merged in Core PR #82. Legacy
@@ -89,12 +89,12 @@ candidates remain accepted without those extensions; any profile path requires
 its exact schema and profile-specific conformance fixtures. Goal support
 requires both Goal schemas, the profile schema, and Goal-specific fixtures.
 The expected SHA-256 digest of each exact core schema blob is compiled into
-Fluent. A fetched schema must match that byte digest, and its parsed canonical
+Snowcat. A fetched schema must match that byte digest, and its parsed canonical
 content must match the bundled validator schema, before validation begins.
 Fetched schema code or validation scripts are never executed. Core may widen
 an enum inside a published schema version as a compatible change (core
 ADR-0039, first applied to `maintenance_programs` on 2026-08-18: nine
-programs, `maxItems: 9`). Fluent then bundles the new bytes as the expected
+programs, `maxItems: 9`). Snowcat then bundles the new bytes as the expected
 revision **and keeps the superseded revision bundled** under
 `src/core/schemas/v1/superseded/` (`SUPERSEDED_SCHEMA_REVISIONS` in
 [`validator.ts`](../../src/core/validator.ts)): a candidate or retained
@@ -107,7 +107,7 @@ revision are still refused. The closed program vocabulary in
 (`REPOSITORY_MAINTENANCE_PROGRAMS`) widens with the schema. The feeder seeds
 only the programs its catalog implements and reports the rest as
 `unsupportedPrograms`. Core ADR-0040 added an optional
-`organization/contracts/repository-settings/v1.json` with its schema; Fluent
+`organization/contracts/repository-settings/v1.json` with its schema; Snowcat
 bundles that schema (`settings`, optional like the profile and Goal schemas),
 validates the contract when present (required checks imply a required pull
 request; the tag ruleset must protect something; valid and invalid fixtures
@@ -167,7 +167,7 @@ returns its retained result before continuity is reevaluated.
 
 Operator rollback is not an option on that automatic path. The local operator
 names an exact target commit, observed control-plane sequence, and bounded
-reason. Fluent uses a retained snapshot of that commit when available so
+reason. Snowcat uses a retained snapshot of that commit when available so
 recovery survives source outage; otherwise it asks the secured Git adapter to
 materialize the exact commit. The store revalidates either candidate and writes
 one resolved `core.rollback-decision`, a new snapshot definition, a new active
@@ -182,7 +182,7 @@ its original result.
 
 The source is the immutable GitHub repository identity
 `github.com:1331309458`, with its exact commit as a typed source revision. Each
-accepted catalog receives a new Fluent-native `core-snapshot` UUIDv7 subject.
+accepted catalog receives a new Snowcat-native `core-snapshot` UUIDv7 subject.
 Its creation transaction emits a snapshot definition, an active-snapshot fact
 on the control-plane database subject, and a past-tense activation event. The
 active fact's registered latest-transaction precedence is authority; the
@@ -282,10 +282,10 @@ more than once per 24 hours.
 - Run `npm run --silent core -- poll` for the long-running leased controller,
   `poll-once` for one due attempt, and `poll-state` for read-only schedule,
   lease, backoff, and completion state.
-- `FLUENT_CORE_POLL_INTERVAL_SECONDS` defaults to `900` and accepts canonical
+- `SNOWCAT_CORE_POLL_INTERVAL_SECONDS` defaults to `900` and accepts canonical
   integers from `60` through `3600`; outage backoff remains fixed at the
   accepted 30/60-minute boundaries.
-- `FLUENT_CORE_URL`, `FLUENT_CORE_REF`, and `FLUENT_CORE_MIRROR` select the
+- `SNOWCAT_CORE_URL`, `SNOWCAT_CORE_REF`, and `SNOWCAT_CORE_MIRROR` select the
   exact allowed source, branch ref, and host-local mirror path.
 - A valid report proves compatibility with the implemented repository,
   verification-profile, and fixture-only Goal contract slices. Profile import

@@ -23,7 +23,7 @@ export interface EnrolledRepositoryPrograms {
 export function enrolledRepositoryPrograms(controlPlanePath: string): EnrolledRepositoryPrograms[] {
   const path = resolve(controlPlanePath);
   if (!existsSync(path)) {
-    throw new Error(`control-plane database does not exist: ${path} (FLUENT_CONTROL_DB); unset it to run on queue opt-in alone`);
+    throw new Error(`control-plane database does not exist: ${path} (SNOWCAT_CONTROL_DB); unset it to run on queue opt-in alone`);
   }
   const store = new ControlPlaneStore(path);
   try {
@@ -56,11 +56,11 @@ export function controlPlaneClaimEligibility(controlPlanePath: string): ClaimEli
 
 /**
  * Queue store options for a host process: the control-plane hook only when
- * `FLUENT_CONTROL_DB` is explicitly configured; otherwise opt-in alone
+ * `SNOWCAT_CONTROL_DB` is explicitly configured; otherwise opt-in alone
  * governs claims.
  */
 export function queueStoreOptionsFromEnvironment(env: NodeJS.ProcessEnv = process.env): QueueStoreOptions {
-  const configured = env.FLUENT_CONTROL_DB;
+  const configured = env.SNOWCAT_CONTROL_DB;
   if (!configured || configured === ":memory:") return {};
   return { claimEligibility: controlPlaneClaimEligibility(configured) };
 }

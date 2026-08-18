@@ -17,7 +17,7 @@ Contracts: [work queue](../specs/work-queue.md). Delivery:
 
 ## Overview
 
-Fluent turns approved maintenance intent into durable, bounded work for an
+Snowcat turns approved maintenance intent into durable, bounded work for an
 operator-started coding agent. Each enrolled repository has one logical
 RepositoryController: deterministic code and durable repository state, work,
 and history—not a model process. Maintenance specialists are work kinds and
@@ -30,7 +30,7 @@ operator / approved policy / capable finding
           deterministic validation
                      │ accepted state transition
                      ▼
-             Fluent SQLite queue
+             Snowcat SQLite queue
                      │ MCP claim, lease, result, child work
                      ▼
           operator-started capable client
@@ -107,7 +107,7 @@ release operations. A portable skill tells Codex, Claude, Copilot, and other
 clients how to use that contract. The lease token is returned only by a
 successful claim and must be treated as a secret capability.
 
-The capable client is started by the operator. Fluent neither knows nor needs
+The capable client is started by the operator. Snowcat neither knows nor needs
 its provider credentials. The client selects its own tools and isolation. It
 must obey the item's `allowedActions`; child items must remain within the
 parent's `delegableActions`. V1 never permits merge, release, or deploy.
@@ -120,8 +120,8 @@ source can establish that an artifact exists and has the reported state.
 
 ### Trial findings
 
-The first host-local trial used the then-current `bketelsen/fluent` locator.
-The same repository identity was transferred to canonical `frostyard/fluent`
+The first host-local trial used the then-current `bketelsen/snowcat` locator.
+The same repository identity was transferred to canonical `frostyard/snowcat`
 on 2026-08-16 under
 [ADR-0045](../adr/0045-host-fluent-under-frostyard.md). One Claude invocation
 completed a testing-gap discovery in about 44 seconds and created one bounded
@@ -151,7 +151,7 @@ operator step the guard cannot perform.
 
 ## Operational notes
 
-- `FLUENT_QUEUE_DB` selects the application queue database. SQLite assumes one
+- `SNOWCAT_QUEUE_DB` selects the application queue database. SQLite assumes one
   host and uses WAL mode.
 - Each queue connection installs its busy timeout as an SQLite open option,
   before reading or negotiating journal mode. Reopening an existing WAL
@@ -165,7 +165,7 @@ operator step the guard cannot perform.
   transaction; a newer database is refused. Rung 2 gives each database an
   immutable `database_id` that backups carry; rung 4 adds the operator-note
   and previous-result columns with empty defaults.
-- Host layout for v1: one operator host, `FLUENT_QUEUE_DB` set to an absolute
+- Host layout for v1: one operator host, `SNOWCAT_QUEUE_DB` set to an absolute
   path outside the checkout (the default `./data/queue.db` is relative to the
   process working directory), MCP served over stdio from that host, and
   workers started by the operator on the same host. `npm run queue -- metadata`
@@ -176,7 +176,7 @@ operator step the guard cannot perform.
   contains lease tokens and is created `0600`; keep it under the same access
   controls as the live database. Restore is a file operation: stop MCP servers
   and feeders, verify the backup, copy it to a new path, point
-  `FLUENT_QUEUE_DB` at that path, and restart. Opening the copy migrates it to
+  `SNOWCAT_QUEUE_DB` at that path, and restart. Opening the copy migrates it to
   WAL mode; expired leases in it are reclaimed by the next claim. `VACUUM
   INTO` was chosen over `node:sqlite`'s asynchronous `backup()` because the
   latter stalled for ~30 s in-process on Node 26.7 whenever another SQLite
@@ -184,10 +184,10 @@ operator step the guard cannot perform.
   snapshot has no threadpool hand-off to race.
 - Every MCP server process and CLI invocation opens its own connection to the
   queue file, so long-lived processes can outlive a code change. Restart
-  Fluent MCP servers after upgrading; the database triggers and schema-version
+  Snowcat MCP servers after upgrading; the database triggers and schema-version
   guard turn a forgotten restart into a hard write failure rather than silent
   drift, but only the operator can restart the process.
-- MCP is served over stdio, so the MCP host and Fluent checkout share a
+- MCP is served over stdio, so the MCP host and Snowcat checkout share a
   machine (containers on that host included). Remote clients need
   authenticated Streamable HTTP and per-worker grants; that is the deferred
   set named in the runbook's Deployment section and gets its own ADR when the
@@ -195,14 +195,14 @@ operator step the guard cannot perform.
 - The queue uses Node's built-in SQLite API in WAL mode; PostgreSQL waits for
   measured need (roadmap "Later").
 - The optional Flue HTTP app listens on all interfaces on `PORT` (default
-  `3000`). Its `/agents/*` routes fail closed unless `FLUENT_APP_TOKEN` is set
+  `3000`). Its `/agents/*` routes fail closed unless `SNOWCAT_APP_TOKEN` is set
   and require an exact `Authorization: Bearer <token>` header. The unauthenticated
   `/health` response contains only `{ "status": "ok" }`, not queue data.
   Operators must also firewall the port or place it behind an authenticated
   reverse proxy; the shared token is a single-operator v1 boundary, not the
   future named-member authorization model.
 - MCP stdout is protocol-only; operational logging goes to stderr.
-- Control-plane coupling: when `FLUENT_CONTROL_DB` is set, `claim_work`
+- Control-plane coupling: when `SNOWCAT_CONTROL_DB` is set, `claim_work`
   additionally requires the item's repository to be `enrolled` in the
   control-plane store — Core-declared and enabled, GitHub identity and
   canonical surfaces resolved, and not under an operator hold
@@ -246,11 +246,11 @@ operator step the guard cannot perform.
   into `proposed` roots of kind `issue-resolution` with `open-pr` authority.
   The issue URL is the item's `sourceRef` and the idempotency key, so the
   command is safe to repeat; nothing is claimable until the operator approves
-  it. Fluent reads issues with the optional `FLUENT_GITHUB_TOKEN`; the issue
+  it. Snowcat reads issues with the optional `SNOWCAT_GITHUB_TOKEN`; the issue
   body is quoted to the worker as untrusted context. Closure sync is a later
   step in the recovery plan.
 - Artifact verification: `complete_work` checks each reported issue and pull
-  request against the GitHub API under Fluent's own credential before the
+  request against the GitHub API under Snowcat's own credential before the
   completion transaction. Wrong repository, wrong number, wrong kind, or
   nonexistent → the completion is refused and the item stays claimed. Confirmed
   → the artifact carries `verification` (state, head SHA, merge time). GitHub
@@ -274,7 +274,7 @@ operator step the guard cannot perform.
 
 ## References
 
-- Overview for the team: [how Fluent works](how-fluent-works.md)
+- Overview for the team: [how Snowcat works](how-snowcat-works.md)
 - Rationale:
   [ADR-0003](../adr/0003-separate-work-coordination-from-execution.md) and
   [ADR-0004](../adr/0004-keep-models-outside-the-control-path.md), plus

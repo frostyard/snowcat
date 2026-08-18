@@ -1,0 +1,11 @@
+interface:
+  display_name: "Work Snowcat Queue"
+  short_description: "Claim and complete queued repository work"
+  default_prompt: "Use $work-snowcat-queue to claim and complete one eligible Snowcat work item."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "snowcat"
+      description: "Snowcat durable work queue"
+      transport: "stdio"

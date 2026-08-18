@@ -1,6 +1,6 @@
 # Plan: Core snapshot ingestion
 
-This plan turns the merged core authoring contract into atomic Fluent snapshots
+This plan turns the merged core authoring contract into atomic Snowcat snapshots
 without allowing branch contents or partial records to become authority. It is
 the detailed delivery path spanning the core-authoring and durable-control-plane
 phases of the [product foundation roadmap](product-foundation-roadmap.md).

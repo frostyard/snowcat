@@ -12,7 +12,7 @@ import { QueueStore, SCHEMA_VERSION } from "../src/queue/store.ts";
 import { disabledDeclaration, enrollExampleRepository } from "./helpers/core-fixtures.ts";
 
 test("administrative queue listings do not expose a live lease token", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cli-test-"));
   const path = join(directory, "queue.db");
   const queue = new QueueStore(path);
   queue.setRepositoryEnabled("frostyard/updex", true);
@@ -32,7 +32,7 @@ test("administrative queue listings do not expose a live lease token", async () 
   const output = execFileSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", "list", "claimed"], {
     cwd: process.cwd(),
     encoding: "utf8",
-    env: stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path }),
+    env: stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path }),
   });
   const listed = JSON.parse(output) as Array<Record<string, unknown>>;
 
@@ -44,7 +44,7 @@ test("administrative queue listings do not expose a live lease token", async () 
 });
 
 test("the list command rejects an unknown status instead of printing an empty array", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-status-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cli-status-test-"));
   const path = join(directory, "queue.db");
   const queue = new QueueStore(path);
   queue.setRepositoryEnabled("frostyard/updex", true);
@@ -59,7 +59,7 @@ test("the list command rejects an unknown status instead of printing an empty ar
     createdBy: "operator:test",
   });
   queue.close();
-  const env = stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path });
+  const env = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
   const run = (...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
       cwd: process.cwd(),
@@ -85,7 +85,7 @@ test("the list command rejects an unknown status instead of printing an empty ar
 });
 
 test("operator CLI exposes blocked requeue and cancellation without lease tokens", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-blocked-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cli-blocked-test-"));
   const path = join(directory, "queue.db");
   const queue = new QueueStore(path);
   queue.setRepositoryEnabled("frostyard/updex", true);
@@ -115,7 +115,7 @@ test("operator CLI exposes blocked requeue and cancellation without lease tokens
   queue.block(second.id, secondClaim.leaseToken!, "claude:updex:second", "Needs input.");
   queue.close();
 
-  const env = stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path });
+  const env = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
   const run = (...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
       cwd: process.cwd(),
@@ -179,7 +179,7 @@ test("operator CLI exposes blocked requeue and cancellation without lease tokens
 });
 
 test("operator CLI can defer admitted work and approve it later", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-defer-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cli-defer-test-"));
   const path = join(directory, "queue.db");
   const queue = new QueueStore(path);
   queue.setRepositoryEnabled("frostyard/updex", true);
@@ -195,7 +195,7 @@ test("operator CLI can defer admitted work and approve it later", async () => {
   });
   queue.close();
 
-  const env = stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path });
+  const env = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
   const run = (...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
       cwd: process.cwd(),
@@ -217,7 +217,7 @@ test("operator CLI can defer admitted work and approve it later", async () => {
 });
 
 test("operator CLI --if-updated-at refuses a stale approve, prioritize, and note, and applies a fresh one", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-precondition-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cli-precondition-test-"));
   const path = join(directory, "queue.db");
   let now = new Date("2026-08-18T00:00:00.000Z");
   const queue = new QueueStore(path, () => now);
@@ -238,7 +238,7 @@ test("operator CLI --if-updated-at refuses a stale approve, prioritize, and note
   assert.notEqual(proposed.updatedAt, seed.updatedAt);
   queue.close();
 
-  const env = stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path });
+  const env = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
   const run = (...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
       cwd: process.cwd(),
@@ -292,7 +292,7 @@ function stringEnvironment(source: NodeJS.ProcessEnv): Record<string, string> {
 }
 
 test("operator CLI reports metadata, backs up to a new path, and verifies the copy without printing lease tokens", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-backup-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cli-backup-test-"));
   const path = join(directory, "queue.db");
   const queue = new QueueStore(path);
   queue.setRepositoryEnabled("frostyard/updex", true);
@@ -308,7 +308,7 @@ test("operator CLI reports metadata, backs up to a new path, and verifies the co
   });
   const claimed = queue.claim({ worker: "claude:updex:backup" })!;
   queue.close();
-  const env = stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path });
+  const env = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
   const run = (...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
       cwd: process.cwd(),
@@ -355,12 +355,12 @@ test("operator CLI reports metadata, backs up to a new path, and verifies the co
 });
 
 test("operator CLI validates import-issues and seed-dogfood flags before touching GitHub or the queue", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-import-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cli-import-test-"));
   const path = join(directory, "queue.db");
   const queue = new QueueStore(path);
   queue.setRepositoryEnabled("frostyard/updex", true);
   queue.close();
-  const env = stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path });
+  const env = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
   const run = (...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
       cwd: process.cwd(),
@@ -371,33 +371,33 @@ test("operator CLI validates import-issues and seed-dogfood flags before touchin
   const noLabel = run("import-issues", "frostyard/updex");
   assert.notEqual(noLabel.status, 0);
   assert.match(noLabel.stderr, /--label is required/);
-  const unknownFlag = run("import-issues", "frostyard/updex", "--label", "fluent", "--bogus", "1");
+  const unknownFlag = run("import-issues", "frostyard/updex", "--label", "snowcat", "--bogus", "1");
   assert.notEqual(unknownFlag.status, 0);
   assert.match(unknownFlag.stderr, /unknown flag: --bogus/);
-  const badPriority = run("import-issues", "frostyard/updex", "--label", "fluent", "--priority", "high");
+  const badPriority = run("import-issues", "frostyard/updex", "--label", "snowcat", "--priority", "high");
   assert.notEqual(badPriority.status, 0);
   assert.match(badPriority.stderr, /priority must be an integer/);
   const danglingValue = run("import-issues", "frostyard/updex", "--label");
   assert.notEqual(danglingValue.status, 0);
   assert.match(danglingValue.stderr, /--label requires a value/);
 
-  // --enrolled: needs a label, and FLUENT_CONTROL_DB naming the control plane; both are refused before any GitHub read.
+  // --enrolled: needs a label, and SNOWCAT_CONTROL_DB naming the control plane; both are refused before any GitHub read.
   const enrolledNoLabel = run("import-issues", "--enrolled");
   assert.notEqual(enrolledNoLabel.status, 0);
   assert.match(enrolledNoLabel.stderr, /--label is required/);
-  const enrolledUnconfigured = run("import-issues", "--enrolled", "--label", "fluent");
+  const enrolledUnconfigured = run("import-issues", "--enrolled", "--label", "snowcat");
   assert.notEqual(enrolledUnconfigured.status, 0);
   assert.equal(enrolledUnconfigured.stdout, "");
-  assert.match(enrolledUnconfigured.stderr, /import-issues --enrolled requires FLUENT_CONTROL_DB/);
-  const enrolledMemory = spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", "import-issues", "--enrolled", "--label", "fluent"], {
+  assert.match(enrolledUnconfigured.stderr, /import-issues --enrolled requires SNOWCAT_CONTROL_DB/);
+  const enrolledMemory = spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", "import-issues", "--enrolled", "--label", "snowcat"], {
     cwd: process.cwd(),
     encoding: "utf8",
-    env: { ...env, FLUENT_CONTROL_DB: ":memory:" },
+    env: { ...env, SNOWCAT_CONTROL_DB: ":memory:" },
   });
   assert.notEqual(enrolledMemory.status, 0);
-  assert.match(enrolledMemory.stderr, /requires FLUENT_CONTROL_DB/);
+  assert.match(enrolledMemory.stderr, /requires SNOWCAT_CONTROL_DB/);
   const usage = run("help");
-  assert.match(usage.stderr, /import-issues --enrolled --label <label> \[--priority <n>\]   \(requires FLUENT_CONTROL_DB; FLUENT_GITHUB_TOKEN in practice\)/);
+  assert.match(usage.stderr, /import-issues --enrolled --label <label> \[--priority <n>\]   \(requires SNOWCAT_CONTROL_DB; SNOWCAT_GITHUB_TOKEN in practice\)/);
 
   const badCooldown = run("seed-dogfood", "frostyard/updex", "--cooldown-hours", "-2");
   assert.notEqual(badCooldown.status, 0);
@@ -410,10 +410,10 @@ test("operator CLI validates import-issues and seed-dogfood flags before touchin
 });
 
 test("operator CLI verify-artifacts validates its flags and reports an empty pass without touching GitHub", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-verify-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cli-verify-test-"));
   const path = join(directory, "queue.db");
   new QueueStore(path).close();
-  const env = stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path });
+  const env = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
   const run = (...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
       cwd: process.cwd(),
@@ -440,12 +440,12 @@ test("operator CLI verify-artifacts validates its flags and reports an empty pas
 });
 
 test("operator CLI cure-foreign is a repository-level setting: on|off for an opted-in repository only", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-cure-foreign-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cli-cure-foreign-test-"));
   const path = join(directory, "queue.db");
   const seeded = new QueueStore(path);
   seeded.setRepositoryEnabled("frostyard/updex", true);
   seeded.close();
-  const env = stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path });
+  const env = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
   const run = (...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
       cwd: process.cwd(),
@@ -480,7 +480,7 @@ test("operator CLI cure-foreign is a repository-level setting: on|off for an opt
 });
 
 test("operator CLI attach-artifact verifies against GitHub first: refuses another repository and a 404, attaches unverified on 5xx, and verify-artifacts later promotes it", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-attach-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cli-attach-test-"));
   const path = join(directory, "queue.db");
   const queue = new QueueStore(path);
   queue.setRepositoryEnabled("frostyard/updex", true);
@@ -512,10 +512,10 @@ test("operator CLI attach-artifact verifies against GitHub first: refuses anothe
   const requests = async () => (await readFile(logPath, "utf8").catch(() => "")).split("\n").filter(Boolean);
   const env = stringEnvironment({
     ...process.env,
-    FLUENT_QUEUE_DB: path,
-    FLUENT_GITHUB_TOKEN: "test-token", // so a 404 counts as absence, exactly as complete_work treats it
-    FLUENT_TEST_FAKE_GITHUB: fixturePath,
-    FLUENT_TEST_FAKE_GITHUB_LOG: logPath,
+    SNOWCAT_QUEUE_DB: path,
+    SNOWCAT_GITHUB_TOKEN: "test-token", // so a 404 counts as absence, exactly as complete_work treats it
+    SNOWCAT_TEST_FAKE_GITHUB: fixturePath,
+    SNOWCAT_TEST_FAKE_GITHUB_LOG: logPath,
   });
   const run = (...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "--import", "./test/helpers/fake-github-fetch.ts", "src/queue/cli.ts", ...args], {
@@ -601,7 +601,7 @@ test("operator CLI attach-artifact verifies against GitHub first: refuses anothe
 });
 
 test("operator CLI list filters by repository and kind, and show prints an item with its events but no lease token", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-show-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cli-show-test-"));
   const path = join(directory, "queue.db");
   const queue = new QueueStore(path);
   for (const repository of ["frostyard/updex", "frostyard/lodge"]) queue.setRepositoryEnabled(repository, true);
@@ -621,7 +621,7 @@ test("operator CLI list filters by repository and kind, and show prints an item 
   seedOne("frostyard/lodge", "quality-gap-discovery");
   const claimed = queue.claim({ worker: "claude:show-test", repository: "frostyard/updex", kinds: ["quality-gap-discovery"] })!;
   queue.close();
-  const env = stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path });
+  const env = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
   const run = (...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], { cwd: process.cwd(), encoding: "utf8", env });
 
@@ -650,7 +650,7 @@ test("operator CLI list filters by repository and kind, and show prints an item 
 });
 
 test("operator CLI events reads the ledger since a sequence as JSON without lease tokens", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-events-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cli-events-test-"));
   const path = join(directory, "queue.db");
   const queue = new QueueStore(path);
   for (const repository of ["frostyard/updex", "frostyard/lodge"]) queue.setRepositoryEnabled(repository, true);
@@ -669,7 +669,7 @@ test("operator CLI events reads the ledger since a sequence as JSON without leas
   seedOne("frostyard/lodge");
   const claimed = queue.claim({ worker: "claude:events-test", repository: "frostyard/updex" })!;
   queue.close();
-  const env = stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path });
+  const env = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
   const run = (...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], { cwd: process.cwd(), encoding: "utf8", env });
 
@@ -707,7 +707,7 @@ test("operator CLI events reads the ledger since a sequence as JSON without leas
 });
 
 test("operator CLI watch tails new events as JSON lines and stops cleanly when signalled", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-watch-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cli-watch-test-"));
   const path = join(directory, "queue.db");
   const queue = new QueueStore(path);
   test.after(() => queue.close());
@@ -722,7 +722,7 @@ test("operator CLI watch tails new events as JSON lines and stops cleanly when s
     delegableActions: [],
     createdBy: "operator:test",
   });
-  const env = stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path });
+  const env = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
 
   const invalid = spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", "watch", "--interval", "0"], {
     cwd: process.cwd(),
@@ -787,8 +787,8 @@ test("operator CLI watch tails new events as JSON lines and stops cleanly when s
   reader.close();
 });
 
-test("operator CLI seed-dogfood --enrolled requires FLUENT_CONTROL_DB and seeds only enrolled opt-ins", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-enrolled-test-"));
+test("operator CLI seed-dogfood --enrolled requires SNOWCAT_CONTROL_DB and seeds only enrolled opt-ins", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cli-enrolled-test-"));
   const path = join(directory, "queue.db");
   const controlPath = join(directory, "control-plane.db");
   const store = new ControlPlaneStore(controlPath, () => new Date("2026-08-17T12:00:00.000Z"));
@@ -798,8 +798,8 @@ test("operator CLI seed-dogfood --enrolled requires FLUENT_CONTROL_DB and seeds 
   queue.setRepositoryEnabled("frostyard/example", true);
   queue.setRepositoryEnabled("frostyard/retired", true);
   queue.close();
-  const baseEnvironment = stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path });
-  delete baseEnvironment.FLUENT_CONTROL_DB;
+  const baseEnvironment = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
+  delete baseEnvironment.SNOWCAT_CONTROL_DB;
   const run = (env: Record<string, string>, ...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
       cwd: process.cwd(),
@@ -809,16 +809,16 @@ test("operator CLI seed-dogfood --enrolled requires FLUENT_CONTROL_DB and seeds 
 
   const unconfigured = run(baseEnvironment, "seed-dogfood", "--enrolled");
   assert.notEqual(unconfigured.status, 0);
-  assert.match(unconfigured.stderr, /FLUENT_CONTROL_DB/);
+  assert.match(unconfigured.stderr, /SNOWCAT_CONTROL_DB/);
   assert.equal(unconfigured.stdout, "");
-  const memory = run({ ...baseEnvironment, FLUENT_CONTROL_DB: ":memory:" }, "seed-dogfood", "--enrolled");
+  const memory = run({ ...baseEnvironment, SNOWCAT_CONTROL_DB: ":memory:" }, "seed-dogfood", "--enrolled");
   assert.notEqual(memory.status, 0);
-  assert.match(memory.stderr, /FLUENT_CONTROL_DB/);
-  const badFlag = run({ ...baseEnvironment, FLUENT_CONTROL_DB: controlPath }, "seed-dogfood", "--enrolled", "--bogus", "1");
+  assert.match(memory.stderr, /SNOWCAT_CONTROL_DB/);
+  const badFlag = run({ ...baseEnvironment, SNOWCAT_CONTROL_DB: controlPath }, "seed-dogfood", "--enrolled", "--bogus", "1");
   assert.notEqual(badFlag.status, 0);
   assert.match(badFlag.stderr, /unknown flag: --bogus/);
 
-  const seeded = run({ ...baseEnvironment, FLUENT_CONTROL_DB: controlPath }, "seed-dogfood", "--enrolled", "--cooldown-hours", "0");
+  const seeded = run({ ...baseEnvironment, SNOWCAT_CONTROL_DB: controlPath }, "seed-dogfood", "--enrolled", "--cooldown-hours", "0");
   assert.equal(seeded.status, 0, seeded.stderr);
   const result = JSON.parse(seeded.stdout) as {
     seeded: Array<{ repository: string; programs: string[]; created: Array<{ kind: string; status: string }>; skippedKinds: string[]; cooledKinds: string[]; undeclaredKinds: string[] }>;

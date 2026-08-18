@@ -26,7 +26,7 @@ test("the optional Flue app fails closed and does not expose queue counts", asyn
     headers: { Authorization: "Bearer test-app-token" },
   });
   assert.equal(unavailable.status, 503);
-  assert.deepEqual(await unavailable.json(), { error: "FLUENT_APP_TOKEN is not configured" });
+  assert.deepEqual(await unavailable.json(), { error: "SNOWCAT_APP_TOKEN is not configured" });
 
   const health = await configured.request("/health");
   assert.equal(health.status, 200);

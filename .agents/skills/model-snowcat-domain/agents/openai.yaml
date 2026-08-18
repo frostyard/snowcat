@@ -1,0 +1,4 @@
+interface:
+  display_name: "Model Snowcat Domain"
+  short_description: "Sharpen Snowcat terms and boundaries"
+  default_prompt: "Use $model-snowcat-domain to resolve and record ambiguous Snowcat domain terms."

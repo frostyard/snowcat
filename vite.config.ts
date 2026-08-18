@@ -13,7 +13,7 @@ import { defineConfig, type Plugin } from "vite";
  */
 function copyBundledSchemas(): Plugin {
   return {
-    name: "fluent-copy-bundled-schemas",
+    name: "snowcat-copy-bundled-schemas",
     closeBundle() {
       mkdirSync(resolve("dist/schemas"), { recursive: true });
       cpSync(resolve("src/core/schemas"), resolve("dist/schemas"), { recursive: true });

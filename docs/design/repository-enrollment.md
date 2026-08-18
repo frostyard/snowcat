@@ -118,8 +118,8 @@ broaden the declaration's programs or action ceiling.
 
 `npm run --silent repository -- reconcile` runs one convergence pass.
 `npm run --silent repository -- status` performs no network or authority write.
-`FLUENT_GITHUB_TOKEN` is optional for public repositories and is sent only as a
-Bearer header; it is never logged or stored. `FLUENT_GITHUB_API_URL` is fixed to
+`SNOWCAT_GITHUB_TOKEN` is optional for public repositories and is sent only as a
+Bearer header; it is never logged or stored. `SNOWCAT_GITHUB_API_URL` is fixed to
 `https://api.github.com` outside explicit test adapters.
 
 An interrupted pass may leave later repositories visibly `awaiting-authority`,

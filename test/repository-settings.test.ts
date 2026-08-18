@@ -11,7 +11,7 @@ import { QueueStore } from "../src/queue/store.ts";
 import { enabledDeclaration, validCoreEntries } from "./helpers/core-fixtures.ts";
 
 const clock = () => new Date("2026-08-18T22:00:00.000Z");
-process.env.FLUENT_GITHUB_TOKEN ??= "test-token";
+process.env.SNOWCAT_GITHUB_TOKEN ??= "test-token";
 const REPO = "frostyard/updex";
 
 const CONTRACT: RepositorySettingsContract = {
@@ -56,7 +56,7 @@ const CONTRACT: RepositorySettingsContract = {
   },
   tag_ruleset: { pattern: "v*", enforcement: "active", block_deletions: true, block_force_pushes: true, restrict_creation: true },
   metadata: { license_required: true, description_required: true, topics_include: ["frostyard"] },
-  labels: { required: ["fluent"] },
+  labels: { required: ["snowcat"] },
 };
 
 /** A GitHub that matches the contract exactly; `overrides` patch individual routes (a function receives the default body). */
@@ -115,7 +115,7 @@ function conformantRoutes(overrides: Record<string, unknown | ((body: unknown) =
       },
     },
     [`${base}/branches/main/protection`]: { status: 404 },
-    [`${base}/labels`]: { status: 200, body: [{ name: "bug" }, { name: "fluent" }] },
+    [`${base}/labels`]: { status: 200, body: [{ name: "bug" }, { name: "snowcat" }] },
   };
   for (const [key, override] of Object.entries(overrides)) {
     const path = key.startsWith("/") ? key : `${base}${key === "" ? "" : `/${key}`}`;
@@ -165,7 +165,7 @@ test("a conformant repository reads with zero drift; each contract section is di
     "actions.default_workflow_permissions",
     "default_branch_ruleset.classic_branch_protection",
     "default_branch_ruleset.enforcement",
-    "labels.required.fluent",
+    "labels.required.snowcat",
     "metadata.license_required",
     "metadata.topics_include.frostyard",
     "repository.delete_branch_on_merge",
@@ -219,7 +219,7 @@ test("a conformant repository reads with zero drift; each contract section is di
 });
 
 test("the sweep proposes one settings-drift per repository per drift set, dedupes it, and re-proposes when the drift changes", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-settings-sweep-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-settings-sweep-test-"));
   const queue = new QueueStore(join(directory, "queue.db"), clock);
   test.after(() => queue.close());
   queue.setRepositoryEnabled(REPO, true);
@@ -238,7 +238,7 @@ test("the sweep proposes one settings-drift per repository per drift set, dedupe
   assert.deepEqual(item.allowedActions, ["read"]);
   assert.match(item.objective, /^Apply the repository settings contract to frostyard\/updex: 2 settings drifted$/);
   assert.match(item.instructions, /repository\.delete_branch_on_merge: expected true, observed false/);
-  assert.match(item.instructions, /labels\.required\.fluent: expected true, observed false/);
+  assert.match(item.instructions, /labels\.required\.snowcat: expected true, observed false/);
   assert.match(item.instructions, /apply-repo-settings\.sh/);
   assert.equal(item.sourceRef, `settings-drift:${REPO}@${driftDigest(first.reports[0]!.drifts)}`);
 
@@ -257,7 +257,7 @@ test("the sweep proposes one settings-drift per repository per drift set, dedupe
   const down = await sweepRepositorySettings(queue, undefined, { fetcher: apiFetcher({}).fetcher, clock, repository: REPO, contract: CONTRACT });
   assert.equal(down.failed.length, 1);
   await assert.rejects(sweepRepositorySettings(queue, undefined, { fetcher: apiFetcher({}).fetcher, clock, repository: "frostyard/nope", contract: CONTRACT }), /not opted in/);
-  await assert.rejects(sweepRepositorySettings(queue, undefined, { fetcher: apiFetcher({}).fetcher, clock, contract: CONTRACT }), /FLUENT_CONTROL_DB/);
+  await assert.rejects(sweepRepositorySettings(queue, undefined, { fetcher: apiFetcher({}).fetcher, clock, contract: CONTRACT }), /SNOWCAT_CONTROL_DB/);
 });
 
 test("the validator accepts a core tree with the settings schema and contract, exposes the contract, and refuses a contract without its schema", async () => {
@@ -273,7 +273,7 @@ test("the validator accepts a core tree with the settings schema and contract, e
     entry("organization/fixtures/v1/invalid/repository-settings-bypass-actors.json", invalid),
   ];
   const validated = validateCoreCatalog(withSettings);
-  assert.deepEqual(JSON.parse(JSON.stringify(validated.repositorySettings?.labels)), { required: ["fluent"] });
+  assert.deepEqual(JSON.parse(JSON.stringify(validated.repositorySettings?.labels)), { required: ["snowcat"] });
   assert.match(validated.schemaDigests.settings!, /^sha256:/);
   assert.equal(validateCoreCatalog(entries).repositorySettings, undefined, "a core tree without the contract is still accepted");
   assert.throws(() => validateCoreCatalog([...entries, entry("organization/contracts/repository-settings/v1.json", contractBytes)]), /requires organization\/schemas\/v1\/repository-settings\.schema\.json/);

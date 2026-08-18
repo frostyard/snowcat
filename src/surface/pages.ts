@@ -131,12 +131,12 @@ const LIVE_SCRIPT = String.raw`(function () {
 
 export function loginPage(options: { error?: string }): string {
   return document(
-    "Sign in · Fluent",
+    "Sign in · Snowcat",
     html`<div class="ph-login-body"><div class="ph-login"><div class="ph-login-panel">
       ${brand()}
       <div class="ph-login-copy">
         <h1>Sign in to the <em>operator inbox.</em></h1>
-        <p>This is the single-operator surface over Fluent's queue on this host. It shows what needs you and, once mutations land, lets you decide exactly what the CLI can. Enter the host's <code>FLUENT_APP_TOKEN</code>.</p>
+        <p>This is the single-operator surface over Snowcat's queue on this host. It shows what needs you and, once mutations land, lets you decide exactly what the CLI can. Enter the host's <code>SNOWCAT_APP_TOKEN</code>.</p>
         ${options.error ? html`<div class="fl-error" role="alert">${options.error}</div>` : ""}
         <form class="ph-login-form" method="post" action="/login">
           <label>Operator token<input type="password" name="token" autocomplete="current-password" required autofocus></label>
@@ -144,14 +144,14 @@ export function loginPage(options: { error?: string }): string {
         </form>
       </div>
       <p class="ph-login-foot">Loopback-only by default. Same store as the CLI. No lease token is ever rendered.</p>
-    </div><div class="ph-login-art"><div><span>fluent · operator surface</span><strong>What needs you, and nothing else.</strong></div></div></div></div>`,
+    </div><div class="ph-login-art"><div><span>snowcat · operator surface</span><strong>What needs you, and nothing else.</strong></div></div></div></div>`,
   );
 }
 
 export function unavailablePage(message: string): string {
   return document(
-    "Unavailable · Fluent",
-    html`<div class="ph-login-body"><div class="ph-card" style="max-width:520px"><div class="ph-eyebrow"><i></i>fluent · operator surface</div><h1 style="font-size:20px;letter-spacing:-.04em;margin:0 0 8px">Unavailable</h1><p class="fl-reason" style="font-size:12px">${message}</p></div></div>`,
+    "Unavailable · Snowcat",
+    html`<div class="ph-login-body"><div class="ph-card" style="max-width:520px"><div class="ph-eyebrow"><i></i>snowcat · operator surface</div><h1 style="font-size:20px;letter-spacing:-.04em;margin:0 0 8px">Unavailable</h1><p class="fl-reason" style="font-size:12px">${message}</p></div></div>`,
   );
 }
 
@@ -174,10 +174,10 @@ export function inboxPartial(data: InboxData, partial: InboxPartial): string {
 
 export function inboxPage(context: PageContext, data: InboxData): string {
   return document(
-    "Inbox · Fluent",
+    "Inbox · Snowcat",
     shell(
       context,
-      { title: "Inbox", eyebrow: "fluent · operator inbox", heading: "Needs you", active: "inbox", refresh: true },
+      { title: "Inbox", eyebrow: "snowcat · operator inbox", heading: "Needs you", active: "inbox", refresh: true },
       html`${statRow(data)}
       ${data.truncated.length > 0 ? html`<div class="fl-error">Showing the first 100 rows of: ${data.truncated.join(", ")}. Use the CLI for the full list.</div>` : ""}
       <div class="fl-columns"><div class="fl-stack">
@@ -193,10 +193,10 @@ export function inboxPage(context: PageContext, data: InboxData): string {
 /** A 404 for an unknown item or repository, inside the shell so navigation stays available. */
 export function notFoundPage(context: PageContext, what: string): string {
   return document(
-    "Not found · Fluent",
+    "Not found · Snowcat",
     shell(
       context,
-      { title: "Not found", eyebrow: "fluent · operator surface", heading: "Not found", active: "none" },
+      { title: "Not found", eyebrow: "snowcat · operator surface", heading: "Not found", active: "none" },
       html`<div class="ph-card"><p class="fl-reason" style="font-size:12px;max-width:none">${what}</p></div>`,
     ),
   );
@@ -252,7 +252,7 @@ export function itemPath(id: string): string {
 }
 
 function brand(): SafeHtml {
-  return html`<a class="ph-brand" href="/"><span class="flake">❄</span><span><strong>fluent</strong><small>operator surface</small></span></a>`;
+  return html`<a class="ph-brand" href="/"><span class="flake">❄</span><span><strong>snowcat</strong><small>operator surface</small></span></a>`;
 }
 
 function statRow(data: InboxData): SafeHtml {

@@ -33,7 +33,7 @@ test("GitHub observation subjects use exact source-native identities", () => {
   assert.doesNotThrow(() => assertSubject("github-commit-status", "github.com:987:commit-status:321"));
 
   assert.throws(() => assertSubject("github-app-hook", "github.com:app:0:hook"));
-  assert.throws(() => assertSubject("github-pull-request", "frostyard/fluent#42"));
+  assert.throws(() => assertSubject("github-pull-request", "frostyard/snowcat#42"));
   assert.throws(() => assertSubject("github-pull-request", "github.com:987:pull:0"));
   assert.throws(() => assertSubject("github-check-run", "github.com:987:check:654"));
   assert.throws(() => assertSubject("github-commit-status", "github.com:987:status:321"));
@@ -64,7 +64,7 @@ test("webhook and GitHub API sources cannot exchange acquisition revisions", () 
   );
   assert.doesNotThrow(() => assertSourceRevision("github-webhook-body-sha256", digest));
   assert.doesNotThrow(() => assertSourceRevision("github-delivery-audit-sha256", digest));
-  assert.doesNotThrow(() => assertSource("fluent-system", "github-observer"));
+  assert.doesNotThrow(() => assertSource("snowcat-system", "github-observer"));
 
   assert.throws(() =>
     assertSource("github-app-webhook", "github.com:app:12345:hook", "github-delivery-audit-sha256"),
@@ -79,6 +79,6 @@ test("webhook and GitHub API sources cannot exchange acquisition revisions", () 
     assertSource("github-api", "api.github.com", "github-source-gap-sha256"),
   );
   assert.throws(() =>
-    assertSource("fluent-system", "github-observer", "github-source-gap-sha256"),
+    assertSource("snowcat-system", "github-observer", "github-source-gap-sha256"),
   );
 });

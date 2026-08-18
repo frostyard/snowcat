@@ -89,7 +89,7 @@ function createVersionOneDatabase(path: string): { itemId: string } {
 }
 
 test("a version-1 database upgrades in place through the ladder and keeps its history", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-ladder-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-ladder-test-"));
   const path = join(directory, "queue.db");
   const { itemId } = createVersionOneDatabase(path);
   assert.equal(SCHEMA_VERSION, 6, "this test pins the ladder at rung 6; extend it when a rung is added");
@@ -157,7 +157,7 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
 });
 
 test("a version-3 database upgrades in place through rung 4 and keeps a blocked item's history", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-ladder-v3-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-ladder-v3-test-"));
   const path = join(directory, "queue.db");
   const { itemId } = createVersionOneDatabase(path);
   // Bring the hand-built database to exactly version 3 with rungs 2 and 3's
@@ -206,7 +206,7 @@ test("a version-3 database upgrades in place through rung 4 and keeps a blocked 
 });
 
 test("a version-5 database gains rung 6's cure_foreign column, off for every existing repository", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-ladder-v5-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-ladder-v5-test-"));
   const path = join(directory, "queue.db");
   createVersionOneDatabase(path);
   // Bring the hand-built database to exactly version 5 with rungs 2–5's objects.
@@ -248,7 +248,7 @@ test("a version-5 database gains rung 6's cure_foreign column, off for every exi
 });
 
 test("re-running the ladder from an unversioned database converges without changing the identity", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-ladder-rerun-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-ladder-rerun-test-"));
   const path = join(directory, "queue.db");
   const first = new QueueStore(path);
   const identity = first.metadata().databaseId;
@@ -265,7 +265,7 @@ test("re-running the ladder from an unversioned database converges without chang
 });
 
 test("a database newer than the ladder is refused, and one older is upgraded rather than refused", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-ladder-refuse-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-ladder-refuse-test-"));
   const path = join(directory, "queue.db");
   new QueueStore(path).close();
   const raw = new DatabaseSync(path);
@@ -282,7 +282,7 @@ test("a database newer than the ladder is refused, and one older is upgraded rat
 });
 
 test("backup copies the live queue to a new file, verifies it, and never overwrites", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-backup-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-backup-test-"));
   const path = join(directory, "queue.db");
   const queue = new QueueStore(path);
   test.after(() => queue.close());
@@ -339,7 +339,7 @@ test("backup copies the live queue to a new file, verifies it, and never overwri
 });
 
 test("inspection rejects a file that is not a supported queue backup", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-backup-reject-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-backup-reject-test-"));
   const foreign = join(directory, "foreign.db");
   const db = new DatabaseSync(foreign);
   db.exec("CREATE TABLE unrelated (id INTEGER PRIMARY KEY)");

@@ -13,7 +13,7 @@ export function itemPage(context: PageContext, data: ItemData): string {
     item.status === "completed" ? html`<span class="ph-badge ${deliveryTone}">delivery · ${item.delivery ?? "none"}</span>` : ""
   }`;
   return document(
-    `${item.kind} · ${item.repository} · Fluent`,
+    `${item.kind} · ${item.repository} · Snowcat`,
     shell(
       context,
       {

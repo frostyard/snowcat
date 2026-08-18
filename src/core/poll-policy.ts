@@ -10,7 +10,7 @@ export const CORE_POLL_PRUNE_INTERVAL_SECONDS = 86_400;
 export function parseCorePollInterval(value: string | undefined): number {
   if (value === undefined) return CORE_POLL_DEFAULT_INTERVAL_SECONDS;
   if (!/^[1-9][0-9]*$/.test(value)) {
-    throw new Error("FLUENT_CORE_POLL_INTERVAL_SECONDS must be one canonical positive integer");
+    throw new Error("SNOWCAT_CORE_POLL_INTERVAL_SECONDS must be one canonical positive integer");
   }
   const interval = Number(value);
   if (
@@ -19,7 +19,7 @@ export function parseCorePollInterval(value: string | undefined): number {
     interval > CORE_POLL_MAXIMUM_INTERVAL_SECONDS
   ) {
     throw new Error(
-      `FLUENT_CORE_POLL_INTERVAL_SECONDS must be from ${CORE_POLL_MINIMUM_INTERVAL_SECONDS} through ${CORE_POLL_MAXIMUM_INTERVAL_SECONDS}`,
+      `SNOWCAT_CORE_POLL_INTERVAL_SECONDS must be from ${CORE_POLL_MINIMUM_INTERVAL_SECONDS} through ${CORE_POLL_MAXIMUM_INTERVAL_SECONDS}`,
     );
   }
   return interval;

@@ -11,7 +11,7 @@ const DEFAULT_REFRESH_LIMIT = 100;
  * - `verified`: the artifact exists in the item's repository; its observed
  *   state is recorded beside it.
  * - `unverified`: GitHub could not answer (outage, malformed body, or a
- *   response Fluent cannot interpret without more authority). The completion
+ *   response Snowcat cannot interpret without more authority). The completion
  *   is accepted with the reason recorded; `verify-artifacts` retries later.
  * - `rejected`: GitHub answered and the artifact is not what was reported —
  *   it does not exist, lives in another repository, or is the wrong kind.
@@ -51,12 +51,12 @@ export async function verifyGitHubArtifact(
   }
   if (response.status === 404 || response.status === 410) {
     // Unauthenticated, GitHub answers 404 for private repositories exactly as
-    // for missing ones, so "not found" is only evidence of absence when Fluent
+    // for missing ones, so "not found" is only evidence of absence when Snowcat
     // asked with a credential.
-    if (!process.env.FLUENT_GITHUB_TOKEN) {
+    if (!process.env.SNOWCAT_GITHUB_TOKEN) {
       return unverified(
         now(),
-        `GitHub returned ${response.status} without FLUENT_GITHUB_TOKEN; private repositories cannot be verified unauthenticated`,
+        `GitHub returned ${response.status} without SNOWCAT_GITHUB_TOKEN; private repositories cannot be verified unauthenticated`,
       );
     }
     return { kind: "rejected", reason: `${artifact.kind} ${artifact.url} does not exist on GitHub` };

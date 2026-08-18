@@ -12,10 +12,10 @@ import { enqueueDogfoodBatch, enqueueDogfoodBatchForEnrolled } from "../src/queu
 import { QueueStore } from "../src/queue/store.ts";
 import { disabledDeclaration, enrollExampleRepository } from "./helpers/core-fixtures.ts";
 
-const DOGFOOD_REPOSITORY = "frostyard/fluent";
+const DOGFOOD_REPOSITORY = "frostyard/snowcat";
 
 test("the dogfood feeder creates one bounded read-only root per specialty without active duplicates", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-dogfood-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-dogfood-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.setRepositoryEnabled(DOGFOOD_REPOSITORY, true);
@@ -37,11 +37,11 @@ test("the dogfood feeder creates one bounded read-only root per specialty withou
   assert.deepEqual(second.created, []);
   assert.deepEqual(second.skippedKinds, first.created.map((item) => item.kind));
 
-  const quality = queue.claim({ worker: "claude:fluent:dogfood", kinds: ["quality-gap-discovery"] })!;
+  const quality = queue.claim({ worker: "claude:snowcat:dogfood", kinds: ["quality-gap-discovery"] })!;
   const completion = queue.complete({
     id: quality.id,
     leaseToken: quality.leaseToken!,
-    worker: "claude:fluent:dogfood",
+    worker: "claude:snowcat:dogfood",
     result: { summary: "Found one quality gap.", evidence: ["src/example.ts"], artifacts: [] },
     followUps: [
       {
@@ -62,7 +62,7 @@ test("the dogfood feeder creates one bounded read-only root per specialty withou
 });
 
 test("the dogfood feeder detects active lineages beyond the 100-row listing cap", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-dogfood-scale-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-dogfood-scale-test-"));
   let tick = 0;
   const queue = new QueueStore(join(directory, "queue.db"), () => new Date(Date.UTC(2026, 7, 15, 0, 0, tick++)));
   test.after(() => queue.close());
@@ -85,11 +85,11 @@ test("the dogfood feeder detects active lineages beyond the 100-row listing cap"
 
   const first = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY);
   assert.equal(first.created.length, 8);
-  const quality = queue.claim({ worker: "claude:fluent:dogfood", kinds: ["quality-gap-discovery"] })!;
+  const quality = queue.claim({ worker: "claude:snowcat:dogfood", kinds: ["quality-gap-discovery"] })!;
   const completion = queue.complete({
     id: quality.id,
     leaseToken: quality.leaseToken!,
-    worker: "claude:fluent:dogfood",
+    worker: "claude:snowcat:dogfood",
     result: { summary: "Found one quality gap.", evidence: ["src/example.ts"], artifacts: [] },
     followUps: [
       {
@@ -122,7 +122,7 @@ test("the dogfood feeder detects active lineages beyond the 100-row listing cap"
 });
 
 test("an invalid later batch candidate rolls back roots inserted earlier in the transaction", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-dogfood-rollback-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-dogfood-rollback-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.setRepositoryEnabled(DOGFOOD_REPOSITORY, true);
@@ -155,7 +155,7 @@ test("an invalid later batch candidate rolls back roots inserted earlier in the 
 });
 
 test("concurrent dogfood feeders create exactly one active root per specialty", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-dogfood-concurrency-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-dogfood-concurrency-test-"));
   const path = join(directory, "queue.db");
   const setup = new QueueStore(path);
   setup.setRepositoryEnabled(DOGFOOD_REPOSITORY, true);
@@ -252,7 +252,7 @@ test("concurrent dogfood feeders create exactly one active root per specialty", 
 });
 
 test("a no-finding assessment cools its kind for the window, while a finding does not", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-dogfood-cooldown-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-dogfood-cooldown-test-"));
   let now = new Date("2026-08-17T12:00:00.000Z");
   const queue = new QueueStore(join(directory, "queue.db"), () => now);
   test.after(() => queue.close());
@@ -263,19 +263,19 @@ test("a no-finding assessment cools its kind for the window, while a finding doe
   assert.deepEqual(first.cooledKinds, []);
 
   // Quality finds nothing; CI finds something and proposes a child.
-  const quality = queue.claim({ worker: "claude:fluent:dogfood", kinds: ["quality-gap-discovery"] })!;
+  const quality = queue.claim({ worker: "claude:snowcat:dogfood", kinds: ["quality-gap-discovery"] })!;
   queue.complete({
     id: quality.id,
     leaseToken: quality.leaseToken!,
-    worker: "claude:fluent:dogfood",
+    worker: "claude:snowcat:dogfood",
     result: { summary: "No quality gap found.", evidence: ["src/"], artifacts: [] },
     followUps: [],
   });
-  const ci = queue.claim({ worker: "claude:fluent:dogfood", kinds: ["ci-gap-discovery"] })!;
+  const ci = queue.claim({ worker: "claude:snowcat:dogfood", kinds: ["ci-gap-discovery"] })!;
   const ciCompletion = queue.complete({
     id: ci.id,
     leaseToken: ci.leaseToken!,
-    worker: "claude:fluent:dogfood",
+    worker: "claude:snowcat:dogfood",
     result: { summary: "Found one CI gap.", evidence: [".github/workflows/check.yml"], artifacts: [] },
     followUps: [
       {
@@ -301,11 +301,11 @@ test("a no-finding assessment cools its kind for the window, while a finding doe
   const uncooled = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { cooldownSeconds: 0 });
   assert.deepEqual(uncooled.created.map((item) => item.kind), ["quality-gap-discovery"]);
   assert.deepEqual(uncooled.cooledKinds, []);
-  const qualityAgain = queue.claim({ worker: "claude:fluent:dogfood", kinds: ["quality-gap-discovery"] })!;
+  const qualityAgain = queue.claim({ worker: "claude:snowcat:dogfood", kinds: ["quality-gap-discovery"] })!;
   queue.complete({
     id: qualityAgain.id,
     leaseToken: qualityAgain.leaseToken!,
-    worker: "claude:fluent:dogfood",
+    worker: "claude:snowcat:dogfood",
     result: { summary: "Still nothing.", evidence: ["src/"], artifacts: [] },
     followUps: [],
   });
@@ -319,7 +319,7 @@ test("a no-finding assessment cools its kind for the window, while a finding doe
 });
 
 test("each program cools on its own cadence: a daily program is re-offered before a weekly one", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-dogfood-cadence-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-dogfood-cadence-test-"));
   let now = new Date("2026-08-17T12:00:00.000Z");
   const queue = new QueueStore(join(directory, "queue.db"), () => now);
   test.after(() => queue.close());
@@ -331,11 +331,11 @@ test("each program cools on its own cadence: a daily program is re-offered befor
   // Quality (daily) and architecture (weekly) both answer "nothing".
   enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { programs: ["quality", "architecture"] });
   for (const kind of ["quality-gap-discovery", "architecture-gap-discovery"]) {
-    const item = queue.claim({ worker: "claude:fluent:dogfood", kinds: [kind] })!;
+    const item = queue.claim({ worker: "claude:snowcat:dogfood", kinds: [kind] })!;
     queue.complete({
       id: item.id,
       leaseToken: item.leaseToken!,
-      worker: "claude:fluent:dogfood",
+      worker: "claude:snowcat:dogfood",
       result: { summary: "Nothing found.", evidence: ["src/"], artifacts: [] },
       followUps: [],
     });
@@ -356,7 +356,7 @@ test("each program cools on its own cadence: a daily program is re-offered befor
 });
 
 test("an explicit program list narrows the batch to those programs and reports the rest as undeclared", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-dogfood-programs-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-dogfood-programs-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.setRepositoryEnabled(DOGFOOD_REPOSITORY, true);
@@ -388,7 +388,7 @@ test("an explicit program list narrows the batch to those programs and reports t
 });
 
 test("the enrolled feeder seeds only repositories that are opted in and enrolled, one transaction each", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-dogfood-enrolled-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-dogfood-enrolled-test-"));
   const controlPath = join(directory, "control-plane.db");
   const store = new ControlPlaneStore(controlPath, () => new Date("2026-08-17T12:00:00.000Z"));
   test.after(() => store.close());
