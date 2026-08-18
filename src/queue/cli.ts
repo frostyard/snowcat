@@ -3,7 +3,7 @@
 import { refreshArtifactVerifications } from "./artifact-verification.ts";
 import { queueStoreOptionsFromEnvironment } from "./eligibility.ts";
 import { importLabeledIssues } from "./github-issues.ts";
-import { QueueStore, queueDatabasePath } from "./store.ts";
+import { QueueStore, queueDatabasePath, type MutationPrecondition } from "./store.ts";
 import {
   DEFAULT_DOGFOOD_COOLDOWN_SECONDS,
   enqueueDogfoodBatch,
@@ -54,33 +54,40 @@ try {
     const result = await importLabeledIssues(queue, repository, label, { priority });
     print({ ...result, created: result.created.map(withoutLeaseToken) });
   } else if (command === "approve") {
-    const id = required(args[0], "work item id");
-    print(withoutLeaseToken(queue.approve(id, "operator:cli")));
+    const { rest, ifUpdatedAt } = extractIfUpdatedAt(args);
+    const id = required(rest[0], "work item id");
+    print(withoutLeaseToken(queue.approve(id, "operator:cli", precondition("proposed", ifUpdatedAt))));
   } else if (command === "reject") {
-    const id = required(args[0], "work item id");
-    const reason = required(args.slice(1).join(" "), "rejection reason");
-    print(withoutLeaseToken(queue.reject(id, "operator:cli", reason)));
+    const { rest, ifUpdatedAt } = extractIfUpdatedAt(args);
+    const id = required(rest[0], "work item id");
+    const reason = required(rest.slice(1).join(" "), "rejection reason");
+    print(withoutLeaseToken(queue.reject(id, "operator:cli", reason, precondition("proposed", ifUpdatedAt))));
   } else if (command === "defer") {
-    const id = required(args[0], "work item id");
-    const reason = required(args.slice(1).join(" "), "deferral reason");
-    print(withoutLeaseToken(queue.defer(id, "operator:cli", reason)));
+    const { rest, ifUpdatedAt } = extractIfUpdatedAt(args);
+    const id = required(rest[0], "work item id");
+    const reason = required(rest.slice(1).join(" "), "deferral reason");
+    print(withoutLeaseToken(queue.defer(id, "operator:cli", reason, precondition("queued", ifUpdatedAt))));
   } else if (command === "requeue") {
-    const id = required(args[0], "work item id");
-    const reason = required(args.slice(1).join(" "), "requeue reason");
-    print(withoutLeaseToken(queue.requeue(id, "operator:cli", reason)));
+    const { rest, ifUpdatedAt } = extractIfUpdatedAt(args);
+    const id = required(rest[0], "work item id");
+    const reason = required(rest.slice(1).join(" "), "requeue reason");
+    print(withoutLeaseToken(queue.requeue(id, "operator:cli", reason, precondition("blocked", ifUpdatedAt))));
   } else if (command === "cancel") {
-    const id = required(args[0], "work item id");
-    const reason = required(args.slice(1).join(" "), "cancellation reason");
-    print(withoutLeaseToken(queue.cancel(id, "operator:cli", reason)));
+    const { rest, ifUpdatedAt } = extractIfUpdatedAt(args);
+    const id = required(rest[0], "work item id");
+    const reason = required(rest.slice(1).join(" "), "cancellation reason");
+    print(withoutLeaseToken(queue.cancel(id, "operator:cli", reason, precondition("blocked", ifUpdatedAt))));
   } else if (command === "prioritize") {
-    const id = required(args[0], "work item id");
-    const priority = parseSafeInteger(required(args[1], "priority"), "priority");
-    const reason = required(args.slice(2).join(" "), "prioritize reason");
-    print(withoutLeaseToken(queue.prioritize(id, "operator:cli", priority, reason)));
+    const { rest, ifUpdatedAt } = extractIfUpdatedAt(args);
+    const id = required(rest[0], "work item id");
+    const priority = parseSafeInteger(required(rest[1], "priority"), "priority");
+    const reason = required(rest.slice(2).join(" "), "prioritize reason");
+    print(withoutLeaseToken(queue.prioritize(id, "operator:cli", priority, reason, currentStatusPrecondition(id, ifUpdatedAt))));
   } else if (command === "note") {
-    const id = required(args[0], "work item id");
-    const text = required(args.slice(1).join(" "), "note text");
-    print(withoutLeaseToken(queue.note(id, "operator:cli", text)));
+    const { rest, ifUpdatedAt } = extractIfUpdatedAt(args);
+    const id = required(rest[0], "work item id");
+    const text = required(rest.slice(1).join(" "), "note text");
+    print(withoutLeaseToken(queue.note(id, "operator:cli", text, currentStatusPrecondition(id, ifUpdatedAt))));
   } else if (command === "list") {
     const status = args[0] !== undefined && !args[0].startsWith("--") ? args[0] : undefined;
     const flags = parseFlags(status === undefined ? args : args.slice(1), ["repository", "kind", "limit"]);
@@ -128,13 +135,13 @@ try {
     console.error("       npm run queue -- seed-dogfood <owner/repo> [--cooldown-hours <n>]");
     console.error("       npm run queue -- seed-dogfood --enrolled [--cooldown-hours <n>]   (requires FLUENT_CONTROL_DB)");
     console.error("       npm run queue -- import-issues <owner/repo> --label <label> [--priority <n>]");
-    console.error("       npm run queue -- approve <work-item-id>");
-    console.error("       npm run queue -- reject <work-item-id> <reason>");
-    console.error("       npm run queue -- defer <work-item-id> <reason>");
-    console.error("       npm run queue -- requeue <work-item-id> <reason>");
-    console.error("       npm run queue -- cancel <work-item-id> <reason>");
-    console.error("       npm run queue -- prioritize <work-item-id> <priority> <reason>");
-    console.error("       npm run queue -- note <work-item-id> <text>");
+    console.error("       npm run queue -- approve <work-item-id> [--if-updated-at <iso>]");
+    console.error("       npm run queue -- reject <work-item-id> <reason> [--if-updated-at <iso>]");
+    console.error("       npm run queue -- defer <work-item-id> <reason> [--if-updated-at <iso>]");
+    console.error("       npm run queue -- requeue <work-item-id> <reason> [--if-updated-at <iso>]");
+    console.error("       npm run queue -- cancel <work-item-id> <reason> [--if-updated-at <iso>]");
+    console.error("       npm run queue -- prioritize <work-item-id> <priority> <reason> [--if-updated-at <iso>]");
+    console.error("       npm run queue -- note <work-item-id> <text> [--if-updated-at <iso>]");
     console.error("       npm run queue -- list [proposed|queued|claimed|completed|blocked|cancelled] [--repository <owner/repo>] [--kind <kind>] [--limit <1-100>]");
     console.error("       npm run queue -- show <work-item-id>");
     console.error("       npm run queue -- events [--since <sequence>] [--repository <owner/repo>] [--limit <1-500>]");
@@ -193,6 +200,50 @@ async function watchEvents(store: QueueStore, options: { repository?: string; in
     process.off("SIGINT", stop);
     process.off("SIGTERM", stop);
   }
+}
+
+/**
+ * Pulls `--if-updated-at <iso>` out of an operator command's arguments wherever
+ * it appears, so the remaining words are the id, priority, and free-text
+ * reason exactly as before. The flag is opt-in: without it no precondition is
+ * passed and the command behaves as it always has.
+ */
+function extractIfUpdatedAt(args: string[]): { rest: string[]; ifUpdatedAt: string | undefined } {
+  const rest: string[] = [];
+  let ifUpdatedAt: string | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg !== "--if-updated-at") {
+      rest.push(arg);
+      continue;
+    }
+    if (ifUpdatedAt !== undefined) throw new Error("--if-updated-at may be given only once");
+    const value = args[index + 1];
+    if (value === undefined || value.startsWith("--")) throw new Error("--if-updated-at requires a value");
+    if (Number.isNaN(Date.parse(value))) throw new Error("--if-updated-at must be an ISO 8601 timestamp");
+    ifUpdatedAt = value;
+    index += 1;
+  }
+  return { rest, ifUpdatedAt };
+}
+
+/** Precondition for a command whose single required state is known from the command itself. */
+function precondition(status: WorkStatus, ifUpdatedAt: string | undefined): MutationPrecondition | undefined {
+  return ifUpdatedAt === undefined ? undefined : { status, updatedAt: ifUpdatedAt };
+}
+
+/**
+ * Precondition for `prioritize` and `note`, which accept more than one state:
+ * the status is the one the item has right now and `updatedAt` carries the
+ * stale-intent check, since every mutation advances it. The store compares
+ * both inside its transaction, so a change between this read and the write is
+ * still refused.
+ */
+function currentStatusPrecondition(id: string, ifUpdatedAt: string | undefined): MutationPrecondition | undefined {
+  if (ifUpdatedAt === undefined) return undefined;
+  const item = queue.get(id);
+  if (!item) throw new Error(`work item not found: ${id}`);
+  return { status: item.status, updatedAt: ifUpdatedAt };
 }
 
 function parseStatus(value: string | undefined): WorkStatus | undefined {
