@@ -662,7 +662,7 @@ test("re-verify from the browser refreshes a repository's pending artifacts as o
 
   const verified = await app.request("/repositories/frostyard/example/verify-artifacts", { method: "POST", body: new URLSearchParams({ return: "/" }), headers: { Cookie: cookie } });
   assert.equal(verified.status, 303);
-  assert.equal(verified.headers.get("Location"), "/?done=artifact.verified&detail=1+checked%2C+1+updated%2C+0+rejected%2C+0+unavailable");
+  assert.equal(verified.headers.get("Location"), "/?done=artifact.verified&detail=1+checked%2C+1+updated%2C+0+rejected%2C+0+unavailable%2C+0+cure+items+queued");
   assert.deepEqual(requests, ["/repos/frostyard/example/pulls/5"]);
   const item = queue.get(seeded.unverifiedSeed.id)!;
   assert.equal(item.result!.artifacts[0]!.verification!.status, "verified");
@@ -671,7 +671,7 @@ test("re-verify from the browser refreshes a repository's pending artifacts as o
   assert.equal(event.type, "artifact.verified");
   assert.equal(event.actor, "operator:web");
   const inbox = await (await app.request(verified.headers.get("Location")!, { headers: { Cookie: cookie } })).text();
-  assert.match(inbox, /Recorded artifact\.verified — 1 checked, 1 updated, 0 rejected, 0 unavailable\./);
+  assert.match(inbox, /Recorded artifact\.verified — 1 checked, 1 updated, 0 rejected, 0 unavailable, 0 cure items queued\./);
   assert.match(inbox, /<span>Unverified artifacts<\/span><strong>0<\/strong>/);
   assert.equal(inbox.includes(seeded.leaseToken), false);
 
@@ -1036,7 +1036,7 @@ test("board actions import labeled issues, seed dogfood, verify artifacts, and i
   });
   const verified = await post("verify-artifacts");
   assert.equal(verified.status, 303);
-  assert.equal(verified.headers.get("Location"), "/repositories/frostyard/example?done=artifact.verified&detail=1+checked%2C+1+updated%2C+0+rejected%2C+0+unavailable");
+  assert.equal(verified.headers.get("Location"), "/repositories/frostyard/example?done=artifact.verified&detail=1+checked%2C+1+updated%2C+0+rejected%2C+0+unavailable%2C+0+cure+items+queued");
   assert.deepEqual(requests.splice(0), ["/repos/frostyard/example/pulls/12"]);
   assert.equal(queue.get(done.id)!.delivery, "merged");
   const verifiedEvent = queue.events(done.id).at(-1)!;

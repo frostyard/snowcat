@@ -92,7 +92,7 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
   const directory = await mkdtemp(join(tmpdir(), "fluent-ladder-test-"));
   const path = join(directory, "queue.db");
   const { itemId } = createVersionOneDatabase(path);
-  assert.equal(SCHEMA_VERSION, 4, "this test pins the ladder at rung 4; extend it when a rung is added");
+  assert.equal(SCHEMA_VERSION, 5, "this test pins the ladder at rung 5; extend it when a rung is added");
 
   const queue = new QueueStore(path);
   test.after(() => queue.close());
@@ -111,6 +111,20 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
   assert.equal(item?.priority, 3);
   const claimed = queue.claim({ worker: "claude:ladder-test" });
   assert.equal(claimed?.id, itemId);
+
+  // Rung 5 arrived too: a pr-cure root carries its typed cure record on the upgraded database.
+  const cured = queue.enqueueCureRoot("frostyard/updex", {
+    sourceRef: "https://github.com/frostyard/updex/pull/9@" + "c".repeat(40),
+    kind: "pr-cure",
+    objective: "Cure #9",
+    instructions: "Mechanical only.",
+    acceptanceCriteria: ["Patch unchanged."],
+    allowedActions: ["read", "write", "run-tests", "open-pr", "create-followup"],
+    delegableActions: ["read", "write", "run-tests", "open-pr"],
+    createdBy: "operator:test",
+    cure: { pullRequestUrl: "https://github.com/frostyard/updex/pull/9", headSha: "c".repeat(40), patchDigest: `sha256:${"1".repeat(64)}`, decay: ["behind"] },
+  });
+  assert.deepEqual(queue.get(cured!.id)?.cure?.decay, ["behind"]);
 
   // Rung 3 arrived too: imported roots can be recorded and deduplicated on the upgraded database.
   const imported = queue.enqueueProposedRoots("frostyard/updex", [

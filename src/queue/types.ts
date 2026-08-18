@@ -77,6 +77,23 @@ export interface FollowUpInput {
   delegableActions: AllowedAction[];
 }
 
+/** The pull-request cure a `pr-cure` root was created for (ADR-0061). */
+export interface PullRequestCure {
+  /** The pull request being cured; the item's `sourceRef` is `<url>@<headSha>`. */
+  pullRequestUrl: string;
+  /** Head commit at creation; a push makes a new head and a new item. */
+  headSha: string;
+  /** Digest of the patch's identity at creation; `complete_work` refuses a `pr-cure` whose patch changed. */
+  patchDigest: string;
+  /** Why the head was judged decayed. */
+  decay: PullRequestDecay[];
+  /** The completed item that reported the pull request, when known. */
+  originItemId?: string;
+}
+
+export const pullRequestDecays = ["behind", "dirty", "failing-checks", "changes-requested"] as const;
+export type PullRequestDecay = (typeof pullRequestDecays)[number];
+
 export interface WorkItem {
   id: string;
   rootId: string;
@@ -93,6 +110,8 @@ export interface WorkItem {
   createdBy: string;
   /** Stable external origin of an imported root (for example a GitHub issue URL); unique per repository. */
   sourceRef?: string;
+  /** Present on `pr-cure` roots: the head and patch identity the cure is bound to. */
+  cure?: PullRequestCure;
   createdAt: string;
   updatedAt: string;
   leaseOwner?: string;
@@ -144,6 +163,12 @@ export interface SeedWorkInput {
  */
 export interface ProposedRootInput extends Omit<SeedWorkInput, "repository"> {
   sourceRef: string;
+}
+
+/** An admitted `pr-cure` root: one per pull-request head, keyed by `sourceRef`. */
+export interface CureRootInput extends Omit<SeedWorkInput, "repository"> {
+  sourceRef: string;
+  cure: PullRequestCure;
 }
 
 export interface ClaimInput {

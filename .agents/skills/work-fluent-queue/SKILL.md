@@ -57,6 +57,34 @@ its sandbox; Fluent only owns queue authorization and bookkeeping.
   when the issue is unclear or already resolved.
 - Never merge, release, deploy, or widen repository scope in v1.
 
+## Cure a pull request (`pr-cure`)
+
+A `pr-cure` item names one pull request at one head (`sourceRef` is
+`<url>@<head SHA>`; the item's `cure` record carries the head, the decay
+Fluent observed, and the patch identity it will enforce). Its success is not a
+new pull request but an unchanged patch on a healthier one.
+
+- Read the pull request, its checks, and its reviews on GitHub first. If the
+  head has moved on since the item was created, block with that reason.
+- Do only a **mechanical** cure: rebase or merge the base branch when it
+  resolves cleanly, retitle to satisfy the repository's title lint, re-run or
+  re-trigger checks, reply to review comments, fix labels or the body. Push
+  to the pull request's branch only for those.
+- Fluent recomputes the pull request's patch identity — its added and removed
+  lines per file — when you complete, and **refuses** the completion if it
+  changed. Do not edit code, resolve conflicts by hand, change tests, or
+  squash in fixes under the name of curing.
+- When curing needs the patch to change (a conflict that needs edits, a
+  failing check that needs a code or test change, a review asking for a
+  change), do not push: create exactly one follow-up of kind `pr-cure-change`
+  naming the exact change and how it will be verified (its actions may be at
+  most the item's `delegableActions`), or block if the change is the
+  maintainer's to make.
+- Never merge, approve, or dismiss a review.
+- Complete with the pull request reported as a `pull-request` artifact and
+  evidence: the checks on the new head, the mergeable state, and what you
+  changed (metadata only).
+
 ## Finish
 
 - Call `complete_work` only when every acceptance criterion is satisfied or the

@@ -430,7 +430,13 @@ test("operator CLI verify-artifacts validates its flags and reports an empty pas
 
   const empty = run("verify-artifacts");
   assert.equal(empty.status, 0, empty.stderr);
-  assert.deepEqual(JSON.parse(empty.stdout), { checked: 0, updated: [], unavailable: [], rejected: [] });
+  assert.deepEqual(JSON.parse(empty.stdout), {
+    checked: 0,
+    updated: [],
+    unavailable: [],
+    rejected: [],
+    cure: { inspected: 0, enqueued: [], healthy: [], skipped: [], unavailable: [] },
+  });
 });
 
 test("operator CLI attach-artifact verifies against GitHub first: refuses another repository and a 404, attaches unverified on 5xx, and verify-artifacts later promotes it", async () => {
