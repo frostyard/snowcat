@@ -381,6 +381,24 @@ test("operator CLI validates import-issues and seed-dogfood flags before touchin
   assert.notEqual(danglingValue.status, 0);
   assert.match(danglingValue.stderr, /--label requires a value/);
 
+  // --enrolled: needs a label, and FLUENT_CONTROL_DB naming the control plane; both are refused before any GitHub read.
+  const enrolledNoLabel = run("import-issues", "--enrolled");
+  assert.notEqual(enrolledNoLabel.status, 0);
+  assert.match(enrolledNoLabel.stderr, /--label is required/);
+  const enrolledUnconfigured = run("import-issues", "--enrolled", "--label", "fluent");
+  assert.notEqual(enrolledUnconfigured.status, 0);
+  assert.equal(enrolledUnconfigured.stdout, "");
+  assert.match(enrolledUnconfigured.stderr, /import-issues --enrolled requires FLUENT_CONTROL_DB/);
+  const enrolledMemory = spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", "import-issues", "--enrolled", "--label", "fluent"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: { ...env, FLUENT_CONTROL_DB: ":memory:" },
+  });
+  assert.notEqual(enrolledMemory.status, 0);
+  assert.match(enrolledMemory.stderr, /requires FLUENT_CONTROL_DB/);
+  const usage = run("help");
+  assert.match(usage.stderr, /import-issues --enrolled --label <label> \[--priority <n>\]   \(requires FLUENT_CONTROL_DB; FLUENT_GITHUB_TOKEN in practice\)/);
+
   const badCooldown = run("seed-dogfood", "frostyard/updex", "--cooldown-hours", "-2");
   assert.notEqual(badCooldown.status, 0);
   assert.match(badCooldown.stderr, /must not be negative/);

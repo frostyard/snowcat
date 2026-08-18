@@ -2,7 +2,7 @@
 
 import { refreshArtifactVerifications } from "./artifact-verification.ts";
 import { queueStoreOptionsFromEnvironment } from "./eligibility.ts";
-import { importLabeledIssues } from "./github-issues.ts";
+import { importLabeledIssues, importLabeledIssuesForEnrolled } from "./github-issues.ts";
 import { QueueStore, queueDatabasePath, type MutationPrecondition } from "./store.ts";
 import {
   DEFAULT_DOGFOOD_COOLDOWN_SECONDS,
@@ -47,12 +47,31 @@ try {
       print(enqueueDogfoodBatchForEnrolled(queue, controlPlanePath, { cooldownSeconds }));
     }
   } else if (command === "import-issues") {
-    const repository = required(args[0], "repository");
+    const enrolled = args[0] === "--enrolled";
+    const repository = enrolled ? undefined : required(args[0], "repository");
     const flags = parseFlags(args.slice(1), ["label", "priority"]);
     const label = required(flags.label, "--label");
     const priority = flags.priority === undefined ? undefined : parseSafeInteger(flags.priority, "priority");
-    const result = await importLabeledIssues(queue, repository, label, { priority });
-    print({ ...result, created: result.created.map(withoutLeaseToken) });
+    if (repository !== undefined) {
+      const result = await importLabeledIssues(queue, repository, label, { priority });
+      print({ ...result, created: result.created.map(withoutLeaseToken) });
+    } else {
+      const controlPlanePath = process.env.FLUENT_CONTROL_DB;
+      if (!controlPlanePath || controlPlanePath === ":memory:") {
+        throw new Error("import-issues --enrolled requires FLUENT_CONTROL_DB to name the control-plane database");
+      }
+      const result = await importLabeledIssuesForEnrolled(queue, controlPlanePath, label, { priority });
+      print({
+        ...result,
+        imported: result.imported.map((entry) => ({ ...entry, created: entry.created.map(withoutLeaseToken) })),
+      });
+      // Partial failure is reported, not fatal: the timer must not lose the
+      // repositories that did import. Only a total failure exits non-zero.
+      if (result.failed.length > 0 && result.imported.length === 0) {
+        console.error(`import-issues --enrolled: every repository failed (${result.failed.map((entry) => entry.repository).join(", ")})`);
+        process.exitCode = 1;
+      }
+    }
   } else if (command === "approve") {
     const { rest, ifUpdatedAt } = extractIfUpdatedAt(args);
     const id = required(rest[0], "work item id");
@@ -135,6 +154,7 @@ try {
     console.error("       npm run queue -- seed-dogfood <owner/repo> [--cooldown-hours <n>]");
     console.error("       npm run queue -- seed-dogfood --enrolled [--cooldown-hours <n>]   (requires FLUENT_CONTROL_DB)");
     console.error("       npm run queue -- import-issues <owner/repo> --label <label> [--priority <n>]");
+    console.error("       npm run queue -- import-issues --enrolled --label <label> [--priority <n>]   (requires FLUENT_CONTROL_DB; FLUENT_GITHUB_TOKEN in practice)");
     console.error("       npm run queue -- approve <work-item-id> [--if-updated-at <iso>]");
     console.error("       npm run queue -- reject <work-item-id> <reason> [--if-updated-at <iso>]");
     console.error("       npm run queue -- defer <work-item-id> <reason> [--if-updated-at <iso>]");

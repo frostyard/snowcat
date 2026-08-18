@@ -1,4 +1,5 @@
 import { githubApiJson, type GitHubFetch } from "../repository/github-api.ts";
+import { enrolledRepositories } from "./eligibility.ts";
 import type { QueueStore } from "./store.ts";
 import type { AllowedAction, ProposedRootInput, WorkItem } from "./types.ts";
 
@@ -142,6 +143,48 @@ export async function importLabeledIssues(
     created,
     skippedSourceRefs,
   };
+}
+
+export interface EnrolledImportResult {
+  label: string;
+  /** One entry per repository that is opted in and enrolled and whose listing succeeded, in slug order. */
+  imported: ImportLabeledIssuesResult[];
+  /** Repositories whose GitHub listing failed; the others still ran. */
+  failed: Array<{ repository: string; reason: string }>;
+  /** Enrolled repositories that are not opted in to the queue, so nothing was imported for them. */
+  notOptedIn: string[];
+}
+
+/**
+ * `import-issues --enrolled`: the labeled-issue import for every repository
+ * that is opted in to the queue and `enrolled` in the control-plane store,
+ * one transaction per repository (`importLabeledIssues`). A repository whose
+ * listing fails is reported under `failed` and skipped; the rest still run.
+ * The control-plane store is read once, fresh, like `seed-dogfood --enrolled`.
+ */
+export async function importLabeledIssuesForEnrolled(
+  queue: QueueStore,
+  controlPlanePath: string,
+  label: string,
+  options: { priority?: number; fetcher?: GitHubFetch } = {},
+): Promise<EnrolledImportResult> {
+  assertLabel(label);
+  const enrolled = enrolledRepositories(controlPlanePath);
+  const optedIn = new Map(queue.enabledRepositories().map((slug) => [slug.toLowerCase(), slug]));
+  const result: EnrolledImportResult = { label, imported: [], failed: [], notOptedIn: [] };
+  for (const slug of [...enrolled].sort()) {
+    const repository = optedIn.get(slug.toLowerCase());
+    if (repository === undefined) {
+      result.notOptedIn.push(slug);
+      continue;
+    }
+    try {
+      result.imported.push(await importLabeledIssues(queue, repository, label, options));
+    } catch (error) {
+      result.failed.push({ repository, reason: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return result;
 }
 
 function decodeIssue(entry: unknown, owner: string, name: string): LabeledIssue | "pull-request" | undefined {

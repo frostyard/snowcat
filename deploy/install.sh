@@ -167,10 +167,18 @@ for unit in "$units_source"/*.service "$units_source"/*.timer; do
   install_file "$unit" "$unit_dir/$(basename "$unit")" 0644
 done
 
+# write_dropin <service> <rw-paths> <exec-start>...: one ExecStart= per
+# command, in order (a oneshot unit runs them sequentially and stops at the
+# first failure), after clearing the unit's own ExecStart=.
 write_dropin() {
-  local service="$1" exec_start="$2" rw_paths="$3"
+  local service="$1" rw_paths="$2"
+  shift 2
   local dir="$unit_dir/$service.d"
   ensure_dir "$dir" 0755
+  local exec_lines="" exec_start
+  for exec_start in "$@"; do
+    exec_lines+="ExecStart=$exec_start"$'\n'
+  done
   local rendered
   rendered="$(mktemp)"
   cat > "$rendered" <<DROPIN
@@ -180,8 +188,7 @@ write_dropin() {
 User=$install_user
 Environment=PATH=$service_path
 ExecStart=
-ExecStart=$exec_start
-ReadWritePaths=
+${exec_lines}ReadWritePaths=
 ReadWritePaths=$rw_paths
 DROPIN
   install_file "$rendered" "$dir/10-install.conf" 0644
@@ -189,14 +196,15 @@ DROPIN
 }
 
 write_dropin fluent-feed.service \
+  "$state_dir -$fluent_home/data" \
   "$npm_path --prefix $fluent_home run --silent queue -- seed-dogfood --enrolled" \
-  "$state_dir -$fluent_home/data"
+  "$npm_path --prefix $fluent_home run --silent queue -- import-issues --enrolled --label fluent"
 write_dropin fluent-verify.service \
-  "$npm_path --prefix $fluent_home run --silent queue -- verify-artifacts" \
-  "$state_dir -$fluent_home/data"
+  "$state_dir -$fluent_home/data" \
+  "$npm_path --prefix $fluent_home run --silent queue -- verify-artifacts"
 write_dropin fluent-backup.service \
-  "/bin/bash $fluent_home/deploy/bin/fluent-backup" \
-  "$state_dir $backup_dir -$fluent_home/data"
+  "$state_dir $backup_dir -$fluent_home/data" \
+  "/bin/bash $fluent_home/deploy/bin/fluent-backup"
 
 # 4. Reload and enable the timers.
 timers=(fluent-feed.timer fluent-verify.timer fluent-backup.timer)

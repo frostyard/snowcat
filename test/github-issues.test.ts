@@ -156,3 +156,104 @@ test("importing proposes each labeled issue once, needs admission, and never par
   assert.equal(batch.created.length, 1);
   assert.deepEqual(batch.skippedSourceRefs, ["https://github.com/frostyard/updex/issues/9"]);
 });
+
+test("import-issues --enrolled imports only opted-in enrolled repositories, is idempotent, and reports a failed listing without stopping the rest", async () => {
+  const { ControlPlaneStore } = await import("../src/control/store.ts");
+  const { importLabeledIssuesForEnrolled } = await import("../src/queue/github-issues.ts");
+  const { reconcileRepositories } = await import("../src/repository/controller.ts");
+  const { activationCandidate, disabledDeclaration, enabledDeclaration, validSurfaceProbe } = await import("./helpers/core-fixtures.ts");
+  const directory = await mkdtemp(join(tmpdir(), "fluent-import-enrolled-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  const controlPath = join(directory, "control-plane.db");
+  const control = new ControlPlaneStore(controlPath, () => new Date("2026-08-18T04:00:00.000Z"));
+  // Two enabled declarations (frostyard/example 9001, frostyard/second 9003) reach `enrolled`; frostyard/retired stays disabled.
+  const secondDeclaration = { ...enabledDeclaration(), repository: { owner: "frostyard", name: "second", repository_id: "9003" } };
+  const candidate = await activationCandidate(enabledDeclaration(), "7".repeat(40), "8".repeat(40), [secondDeclaration, disabledDeclaration()]);
+  const activation = control.activateCoreSnapshot({ candidate, expectedLastTransactionSequence: control.metadata().lastTransactionSequence });
+  control.recordCoreSourceCheckEligible({ checkId: "0198b9fd-6200-7000-8000-000000000021", candidate, expectedLastTransactionSequence: activation.transactionSequence });
+  await reconcileRepositories(
+    control,
+    async (locator) => ({
+      kind: "found",
+      repositoryId: locator.name === "second" ? "9003" : "9001",
+      owner: locator.owner,
+      name: locator.name,
+      archived: false,
+      defaultBranch: "main",
+    }),
+    async () => validSurfaceProbe(),
+  );
+  assert.deepEqual(
+    control.repositoryStatuses().map((status) => [status.name, status.effectiveState]).sort(),
+    [["example", "enrolled"], ["retired", "disabled"], ["second", "enrolled"]],
+  );
+  control.close();
+  queue.setRepositoryEnabled("frostyard/example", true);
+  queue.setRepositoryEnabled("frostyard/second", true);
+  queue.setRepositoryEnabled("frostyard/retired", true); // opted in but disabled in the control plane → never imported
+  queue.setRepositoryEnabled("frostyard/updex", true); // opted in but not declared → never imported
+
+  const served: Record<string, unknown[]> = {
+    "/repos/frostyard/example/issues": [
+      { ...issue(1), html_url: "https://github.com/frostyard/example/issues/1" },
+      { ...issue(2), html_url: "https://github.com/frostyard/example/issues/2" },
+    ],
+    "/repos/frostyard/second/issues": [{ ...issue(7), html_url: "https://github.com/frostyard/second/issues/7" }],
+  };
+  const requests: string[] = [];
+  let failPath: string | undefined;
+  const fetcher = (async (input: string | URL | Request) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    requests.push(url.pathname);
+    if (url.pathname === failPath) return new Response("{}", { status: 503, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify(served[url.pathname] ?? []), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+
+  const first = await importLabeledIssuesForEnrolled(queue, controlPath, "fluent", { priority: 4, fetcher });
+  assert.deepEqual(requests, ["/repos/frostyard/example/issues", "/repos/frostyard/second/issues"]); // only the enrolled repositories, in slug order
+  assert.equal(first.label, "fluent");
+  assert.deepEqual(first.failed, []);
+  assert.deepEqual(first.notOptedIn, []);
+  assert.deepEqual(
+    first.imported.map((entry) => [entry.repository, entry.fetched, entry.created.length, entry.skippedSourceRefs.length]),
+    [["frostyard/example", 2, 2, 0], ["frostyard/second", 1, 1, 0]],
+  );
+  assert.deepEqual(queue.list({ status: "proposed" }).map((item) => [item.repository, item.priority]).sort(), [
+    ["frostyard/example", 4],
+    ["frostyard/example", 4],
+    ["frostyard/second", 4],
+  ]);
+  assert.equal(queue.list({ repository: "frostyard/retired" }).length, 0);
+  assert.equal(queue.list({ repository: "frostyard/updex" }).length, 0);
+
+  // A second run creates nothing: every source ref is skipped.
+  const second = await importLabeledIssuesForEnrolled(queue, controlPath, "fluent", { fetcher });
+  assert.deepEqual(second.imported.map((entry) => entry.created.length), [0, 0]);
+  assert.deepEqual(second.imported[0]!.skippedSourceRefs.sort(), [
+    "https://github.com/frostyard/example/issues/1",
+    "https://github.com/frostyard/example/issues/2",
+  ]);
+  assert.equal(queue.list({ status: "proposed" }).length, 3);
+
+  // A 503 listing for one repository is reported under failed while the other still runs; the call itself does not throw.
+  failPath = "/repos/frostyard/example/issues";
+  served["/repos/frostyard/second/issues"]!.push({ ...issue(8), html_url: "https://github.com/frostyard/second/issues/8" });
+  const failed = await importLabeledIssuesForEnrolled(queue, controlPath, "fluent", { fetcher });
+  assert.deepEqual(failed.failed.map((entry) => entry.repository), ["frostyard/example"]);
+  assert.match(failed.failed[0]!.reason, /returned HTTP 503; nothing imported/);
+  assert.deepEqual(failed.imported.map((entry) => [entry.repository, entry.created.length]), [["frostyard/second", 1]]);
+  assert.equal(queue.list({ status: "proposed" }).length, 4);
+  failPath = undefined;
+
+  // An enrolled repository that is not opted in is reported, not imported.
+  queue.setRepositoryEnabled("frostyard/example", false);
+  const skipped = await importLabeledIssuesForEnrolled(queue, controlPath, "fluent", { fetcher });
+  assert.deepEqual(skipped.notOptedIn, ["frostyard/example"]);
+  assert.deepEqual(skipped.imported.map((entry) => entry.repository), ["frostyard/second"]);
+
+  // The label is validated once, before any store or GitHub read.
+  const before = requests.length;
+  await assert.rejects(importLabeledIssuesForEnrolled(queue, controlPath, "a,b", { fetcher }), /label must be one non-empty GitHub label name/);
+  assert.equal(requests.length, before);
+});
