@@ -183,10 +183,22 @@ removed. -->
   pairs plus `deploy/bin/fluent-backup` call the existing idempotent `queue`
   and `control` commands (`seed-dogfood --enrolled`, `verify-artifacts`,
   `backup`); never add a scheduler, daemon, or MCP tool inside Fluent for
-  them. `npm run check:deploy` (part of `check`) runs `systemd-analyze verify`
-  against a stub root and `shellcheck` on `deploy/bin/*`, so a broken unit
-  fails the PR; the operator runbook is
+  them. `npm run check:deploy` (part of `check`; needs `shellcheck` and
+  `systemd-analyze` locally) runs `systemd-analyze verify` against a stub
+  root, `shellcheck` on `deploy/bin/*` and `deploy/*.sh`, and a double
+  `install.sh` dry run, so a broken unit or a non-idempotent installer fails
+  the PR; the operator runbook is
   [docs/design/queue-operations.md](docs/design/queue-operations.md).
+- Install and upgrade the single operator host only through
+  [`deploy/install.sh`](deploy/install.sh) (idempotent: directories,
+  `/etc/fluent/env` from `deploy/env.example` only if absent, units plus a
+  per-service drop-in with `User=`, absolute npm `ExecStart=`, and
+  `ReadWritePaths=`, then enable the timers) and
+  [`deploy/upgrade.sh`](deploy/upgrade.sh) (`git pull --ff-only`, `npm ci`,
+  `npm run check`, restart timers, remind to restart MCP clients). Neither
+  activates Core or opens a database. `/etc/fluent/env` is host state — never
+  commit one — and the operator's `FLUENT_HOME` checkout is not a worker's
+  checkout.
 - Run `npm run check` before calling any change done. CI must run the same
   recipe, so a local pass is a CI pass.
 - Tests are `*.test.ts` files anywhere under `test/`, discovered recursively by

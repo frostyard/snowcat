@@ -11,9 +11,10 @@ Contract: [work queue](../specs/work-queue.md). Architecture:
 
 ## Overview
 
-This is the operator runbook for running Fluent's v1 work engine on one host:
-enrolling a repository, filling the queue, admitting work, pointing coding
-agents at it, watching what they produce, and keeping the database safe. It
+This is the operator runbook for running Fluent's v1 work engine on one host,
+in the order you do it: install the host, enroll a repository, fill the queue,
+admit work, run coding agents against it, watch what they produce, and keep
+the database safe (upgrade, back up, restore). It
 follows the [recovery plan](../plans/recover.md) and is written for the first
 dogfood repository, `frostyard/updex`; every command applies to any opted-in
 repository.
@@ -33,22 +34,74 @@ seed-dogfood ──────────────────► queued   
 
 ## Prerequisites
 
-- Node 24 or newer, a checkout of `frostyard/fluent`, and `npm ci`.
-- A GitHub token in `FLUENT_GITHUB_TOKEN` (`gh auth token` works). Optional
+- A Linux host with systemd, git, Node 24 or newer (any install method; the
+  installer finds `npm` on your `PATH`), and `sudo`. `npm run check` — which
+  `deploy/upgrade.sh` runs — also needs `shellcheck` and `systemd-analyze`
+  on the host, because `check:deploy` lints the units and scripts.
+- A GitHub token for `FLUENT_GITHUB_TOKEN` (`gh auth token` works). Optional
   for public repositories but strongly recommended: it lifts the API rate limit
   and lets Fluent verify artifacts on private repositories.
-- Decide where state lives and export it in every shell and in the MCP
-  configuration:
+- **Two checkouts.** The operator's checkout (`FLUENT_HOME`, e.g.
+  `/opt/fluent`) is the one the timers, the CLI, and `deploy/upgrade.sh` use;
+  it stays on `main` and is only ever moved by `git pull --ff-only`. A worker
+  that maintains `frostyard/fluent` itself works in a *different* clone —
+  never in `FLUENT_HOME`. (On 2026-08-17 a worker left the operator checkout
+  on a feature branch; the timers then ran that branch's code.)
+
+State lives in `/var/lib/fluent/{queue,control-plane}.db`, configuration in
+`/etc/fluent/env`, backups in `/var/backups/fluent`, all created by the
+installer below. Without the installer the defaults are `./data/queue.db` and
+`./data/control-plane.db` relative to the process working directory. Every
+command below is `npm run --silent queue -- <command>` unless it names
+another script; all print JSON.
+
+## Install the host
+
+Run once on a clean host, and again whenever `deploy/` changes (it is
+idempotent and reports what it created and what it kept):
 
 ```bash
-export FLUENT_QUEUE_DB=/var/lib/fluent/queue.db          # the work engine; absolute path
-export FLUENT_CONTROL_DB=/var/lib/fluent/control-plane.db # optional: gates claims on Core enrollment
-export FLUENT_GITHUB_TOKEN="$(gh auth token)"
+sudo install -d -o "$USER" -g "$(id -gn)" /opt/fluent
+git clone https://github.com/frostyard/fluent.git /opt/fluent
+cd /opt/fluent && npm ci
+sudo deploy/install.sh --user "$USER"      # dirs, /etc/fluent/env, units, timers
+"${EDITOR:-vi}" /etc/fluent/env            # FLUENT_GITHUB_TOKEN=<gh auth token>
+set -a; . /etc/fluent/env; set +a          # load it into this shell
+npm run --silent queue -- metadata         # databasePath: /var/lib/fluent/queue.db
+systemctl list-timers 'fluent-*'           # three timers, next run times
 ```
 
-Defaults are `./data/queue.db` and `./data/control-plane.db` relative to the
-process working directory. Every command below is `npm run --silent queue --
-<command>` unless it names another script; all print JSON.
+[`deploy/install.sh`](../../deploy/install.sh) creates `/var/lib/fluent` and
+`/var/backups/fluent` (0750, owned by `--user`, default the sudo caller);
+writes `/etc/fluent/env` (0600, same owner) from
+[`deploy/env.example`](../../deploy/env.example) with `FLUENT_HOME` set to
+the checkout and the database paths under `/var/lib/fluent` — **only if the
+file is absent**, so your token and edits survive re-runs; installs the six
+units from [`deploy/systemd/`](../../deploy/systemd/) into
+`/etc/systemd/system/` with one drop-in per service (`10-install.conf`:
+`User=`, an absolute `ExecStart=` for the `npm` the operator user's login
+shell resolves (`sudo` resets `PATH`; override with `FLUENT_NPM=` and
+`FLUENT_NODE=`), a `PATH=` that lets that npm find `node`, and
+`ReadWritePaths=` for the real `FLUENT_HOME`) — systemd's fixed search path
+does not include Homebrew, nvm, or similar, so the drop-in is what makes the
+timers work on such hosts; then
+`daemon-reload` and `enable --now` on the three timers. It never runs
+`core -- activate` and never opens or moves a database. Set
+`FLUENT_INSTALL_ROOT=<dir>` to dry-run it into a directory without root
+(`systemctl` is skipped unless `FLUENT_SYSTEMCTL` names a substitute); that
+is what `npm run check:deploy` does, twice, asserting the second run changes
+nothing.
+
+`/etc/fluent/env` is the single source of the host configuration. Every
+shell in which you run the CLI, and every shell from which you start a worker
+client, loads it first:
+
+```bash
+set -a; . /etc/fluent/env; set +a
+```
+
+Timers get it through `EnvironmentFile=`; nothing else does — a client
+started from a shell that did not source it sees no `FLUENT_*` variables.
 
 ## One-time: enroll a repository
 
@@ -167,9 +220,11 @@ CLI and approved policy can write notes; workers cannot, and no MCP tool does.
 
 ## Run workers
 
-Configure an MCP server named `fluent` in the client you start (Claude Code
-uses `.mcp.json`; Codex and others have equivalents). Give it the same
-environment as your shell:
+Configure an MCP server named `fluent` in the client you start and let it
+inherit the host configuration from the shell that launched it — `set -a; .
+/etc/fluent/env; set +a` first, then start the client. Claude Code
+(`.mcp.json`; the committed one in this repository has the same shape) expands
+`${VAR}` and `${VAR:-default}`:
 
 ```json
 {
@@ -177,16 +232,30 @@ environment as your shell:
     "fluent": {
       "type": "stdio",
       "command": "npm",
-      "args": ["--prefix", "/path/to/fluent", "run", "--silent", "mcp"],
+      "args": ["--prefix", "/opt/fluent", "run", "--silent", "mcp"],
       "env": {
-        "FLUENT_QUEUE_DB": "/var/lib/fluent/queue.db",
-        "FLUENT_CONTROL_DB": "/var/lib/fluent/control-plane.db",
-        "FLUENT_GITHUB_TOKEN": "ghp_…"
+        "FLUENT_QUEUE_DB": "${FLUENT_QUEUE_DB:-/var/lib/fluent/queue.db}",
+        "FLUENT_CONTROL_DB": "${FLUENT_CONTROL_DB:-/var/lib/fluent/control-plane.db}",
+        "FLUENT_GITHUB_TOKEN": "${FLUENT_GITHUB_TOKEN:-}"
       }
     }
   }
 }
 ```
+
+Codex (`~/.codex/config.toml`) does not expand variables in values; whitelist
+them for pass-through instead:
+
+```toml
+[mcp_servers.fluent]
+command = "npm"
+args = ["--prefix", "/opt/fluent", "run", "--silent", "mcp"]
+env_vars = ["FLUENT_QUEUE_DB", "FLUENT_CONTROL_DB", "FLUENT_GITHUB_TOKEN"]
+```
+
+Other clients have equivalents; the rule is the same — the three variables
+come from the launching shell, so a token never has to live in a client
+config file.
 
 `npm --prefix` lets the client run from any directory — typically a checkout
 of the target repository — while the server code comes from the Fluent
@@ -209,8 +278,10 @@ Prompts that work:
 - "Keep working the Fluent queue until it is empty, then stop." — an explicit
   loop; the skill otherwise stops after one item.
 
-Restart every MCP server (i.e. the client) after you `git pull` Fluent: an
-already-open process refuses its next write once the schema moves.
+Restart every MCP server (i.e. the client) after `deploy/upgrade.sh`: an
+already-open process refuses its next write once the schema moves
+([work queue](../specs/work-queue.md) rule 21). The upgrade script prints
+this reminder; nothing does it for you.
 
 ## Watch the work
 
@@ -312,22 +383,36 @@ Fluent v1 runs on **one operator host** and stays there deliberately:
 
   Each service is `Type=oneshot`, reads `EnvironmentFile=/etc/fluent/env`
   (`FLUENT_HOME`, `FLUENT_QUEUE_DB`, `FLUENT_CONTROL_DB`,
-  `FLUENT_GITHUB_TOKEN`; the deployment step creates the file), and runs
+  `FLUENT_GITHUB_TOKEN`, `FLUENT_BACKUP_RETAIN_DAYS`), and runs
   `npm --prefix ${FLUENT_HOME} run --silent …` with `NoNewPrivileges=yes`,
   `PrivateTmp=yes`, and `ProtectSystem=strict`, writable only under
   `/var/lib/fluent`, `/var/backups/fluent` (backup only), and the checkout's
-  `data/`. The install step supplies `User=` (the operator user that owns the
-  databases) through a drop-in, and overrides `ReadWritePaths=` there when
-  `FLUENT_HOME` is not `/opt/fluent`. `npm` must resolve on systemd's fixed
-  search path (`/usr/local/bin` or `/usr/bin`); symlink it there when it comes
-  from a version manager. Copy the six units to `/etc/systemd/system/`, then
-  `systemctl daemon-reload && systemctl enable --now fluent-feed.timer
-  fluent-verify.timer fluent-backup.timer`. Until they are installed, run the
-  three commands by hand as above.
+  `data/`. [`deploy/install.sh`](../../deploy/install.sh) installs them and
+  writes the per-service drop-in (`User=`, absolute `ExecStart=`, `PATH=`,
+  `ReadWritePaths=` for the real `FLUENT_HOME`) — see
+  [Install the host](#install-the-host). Until it has run, run the three
+  commands by hand as above.
 - The timers do not reach worker clients: an MCP client still gets its
   environment from the shell that launches it (`.mcp.json` `env` or the
   operator's login shell), never from `/etc/fluent/env`, because systemd's
   `EnvironmentFile=` applies only to the units it starts.
+
+**Upgrade.** In the operator checkout, as the operator user:
+
+```bash
+cd /opt/fluent && deploy/upgrade.sh
+```
+
+[`deploy/upgrade.sh`](../../deploy/upgrade.sh) refuses a dirty checkout, then
+`git pull --ff-only`, `npm ci`, `npm run check`, `systemctl daemon-reload`,
+and restarts the three timers (via `sudo` when not root; `FLUENT_SYSTEMCTL`
+overrides). If `check` fails it exits non-zero, does not restart the timers,
+and leaves the checkout on the new commit for inspection — roll back with
+`git checkout <previous>` and re-run, or fix forward. If the pull changed
+`deploy/systemd/`, `deploy/env.example`, or `deploy/install.sh`, it tells you
+to re-run `sudo deploy/install.sh` so the installed units match. It ends with
+the reminder to restart every MCP client. Back up first
+([Keep the database safe](#keep-the-database-safe)).
 
 **What is knowingly deferred, and what un-defers it.** Workers off the
 operator host need a network MCP transport (Streamable HTTP over TLS),
@@ -344,26 +429,46 @@ token becomes per-operator auth at the same time. Until then, do not expose
 ## Keep the database safe
 
 ```bash
+set -a; . /etc/fluent/env; set +a
 npm run --silent queue -- metadata                                     # path, database_id, version, counts
-npm run --silent queue -- backup /var/backups/fluent/queue-$(date -u +%Y%m%dT%H%M%SZ).db > manifest.json
+sudo systemctl start fluent-backup.service                             # a backup right now, same as the daily timer
+ls -l /var/backups/fluent/                                             # queue-<stamp>.db, control-plane-<stamp>.db, *.manifest.json
 npm run --silent queue -- verify-backup /var/backups/fluent/queue-<stamp>.db
 ```
 
-Back up before upgrading and daily. `fluent-backup.timer` does the daily run
-through `deploy/bin/fluent-backup`: one queue and one control-plane copy under
-`/var/backups/fluent` (or `FLUENT_BACKUP_DIR`) as `queue-<UTC stamp>.db` and
+`fluent-backup.timer` runs [`deploy/bin/fluent-backup`](../../deploy/bin/fluent-backup)
+daily: one queue and one control-plane copy under `/var/backups/fluent` (or
+`FLUENT_BACKUP_DIR`) as `queue-<UTC stamp>.db` and
 `control-plane-<UTC stamp>.db`, each with its manifest as
 `<name>.manifest.json` beside it, then it deletes only those backup files older
-than `FLUENT_BACKUP_RETAIN_DAYS` (default 14) and never touches the live
-databases. The backup contains lease tokens and is
-created mode `0600`; keep it as private as the live file. Restore is a file
-copy to a new path after `verify-backup`, then point `FLUENT_QUEUE_DB` at it
-and restart clients; no command overwrites a live database. Do not open a
-backup with a queue command before verifying it — opening migrates it to WAL
-and changes its digest.
+than `FLUENT_BACKUP_RETAIN_DAYS` (default 14, from `/etc/fluent/env`) and never
+touches the live databases. Start the service by hand before an upgrade or a
+risky operator action. Backups contain lease tokens and are created mode
+`0600` in a `0750` directory; keep them as private as the live files. Do not
+open a backup with a queue command before verifying it — opening migrates it
+to WAL and changes its digest.
 
-The control-plane database has its own `npm run --silent control -- backup`,
-`verify-backup`, and `stage-restore`.
+**Restore** is a file copy to a *new* path plus a change to
+`/etc/fluent/env`; no command overwrites a live database:
+
+```bash
+sudo systemctl stop fluent-feed.timer fluent-verify.timer fluent-backup.timer   # and stop every MCP client
+set -a; . /etc/fluent/env; set +a
+npm run --silent queue -- verify-backup /var/backups/fluent/queue-<stamp>.db      # compare with queue-<stamp>.manifest.json
+install -m 0600 /var/backups/fluent/queue-<stamp>.db /var/lib/fluent/queue-restored-<stamp>.db
+npm run --silent control -- verify-backup /var/backups/fluent/control-plane-<stamp>.manifest.json <database-lineage-id> <minimum-sequence>
+npm run --silent control -- stage-restore /var/backups/fluent/control-plane-<stamp>.manifest.json /var/lib/fluent/control-plane-restored-<stamp>.db <database-lineage-id> <minimum-sequence>
+"${EDITOR:-vi}" /etc/fluent/env            # FLUENT_QUEUE_DB= and/or FLUENT_CONTROL_DB= → the restored paths
+set -a; . /etc/fluent/env; set +a
+npm run --silent queue -- metadata         # databasePath is the restored file
+sudo systemctl start fluent-feed.timer fluent-verify.timer fluent-backup.timer
+```
+
+Then restart the MCP clients from a shell that sourced the new
+`/etc/fluent/env`. The previous live files stay where they were; remove them
+only after the restored database has been in use and backed up. Restore only
+what failed: the queue and control-plane databases are independent, and each
+keeps its own lineage identity that the verify commands check.
 
 ## What to record for the PRD
 
@@ -419,6 +524,9 @@ Approved. During the dogfood week keep, per repository:
 - `FLUENT_CONTROL_DB` is the only coupling between the queue and the control
   plane. Leave it unset until `repository -- status` shows the repositories you
   care about as `enrolled`, or workers will find nothing to claim.
+  `deploy/install.sh` writes it into `/etc/fluent/env` from the start;
+  comment it out there while enrollment is pending if you want claims to run
+  on queue opt-in alone.
 
 ## References
 
