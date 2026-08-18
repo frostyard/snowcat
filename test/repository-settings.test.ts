@@ -282,6 +282,38 @@ test("the validator accepts a core tree with the settings schema and contract, e
   assert.throws(() => validateCoreCatalog([...withSettings.slice(0, -2), entry("organization/contracts/repository-settings/v1.json", relaxed)].filter((candidate, index, all) => all.findIndex((other) => other.path === candidate.path) === index)), /need require_pull_request|fixtures/);
 });
 
+test("a snapshot definition may record the settings schema digest alongside any historical schema set", async () => {
+  const { recordKindRegistry } = await import("../src/control/registry.ts");
+  const validate = recordKindRegistry["core.snapshot-definition"].validatePayload;
+  const digest = `sha256:${"a".repeat(64)}`;
+  const base = {
+    snapshotId: "01990000-0000-7000-8000-000000000000",
+    sourceRepositoryId: "github.com:1331309458",
+    sourceUrl: "https://github.com/frostyard/core.git",
+    sourceRef: "refs/heads/main",
+    sourceCommitId: "b".repeat(40),
+    sourceTreeId: "c".repeat(40),
+    catalogDigest: digest,
+    fileCount: 40,
+    totalBytes: 1,
+    repositoryCount: 5,
+    verificationProfileCount: 0,
+    validFixtureCount: 7,
+    invalidFixtureCount: 18,
+    importedAt: "2026-08-18T22:00:00.000Z",
+  };
+  const shapes = [
+    { repository: digest, surfaces: digest, governance: digest },
+    { repository: digest, surfaces: digest, governance: digest, verificationProfile: digest },
+  ];
+  for (const schemaDigests of shapes) {
+    assert.equal(validate({ ...base, schemaDigests }), true);
+    assert.equal(validate({ ...base, schemaDigests: { ...schemaDigests, settings: digest } }), true);
+  }
+  assert.equal(validate({ ...base, schemaDigests: { repository: digest, surfaces: digest, governance: digest, settings: digest, verificationProfile: digest, envelope: digest, goal: digest }, goalCount: 0 }), true);
+  assert.equal(validate({ ...base, schemaDigests: { repository: digest, surfaces: digest, governance: digest, other: digest } }), false);
+});
+
 function entry(path: string, bytes: Uint8Array) {
   return { path, mode: "100644" as const, objectId: "0".repeat(40), bytes };
 }

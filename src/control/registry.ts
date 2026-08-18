@@ -1307,20 +1307,19 @@ function isCoreSnapshotDefinitionPayload(value: unknown): value is CoreSnapshotD
     return false;
   }
   const schemaDigests = value.schemaDigests;
-  if (
-    !isExactObject(schemaDigests, ["repository", "surfaces", "governance"]) &&
-    !isExactObject(schemaDigests, ["repository", "surfaces", "governance", "verificationProfile"]) &&
-    !isExactObject(schemaDigests, [
-      "repository",
-      "surfaces",
-      "governance",
-      "verificationProfile",
-      "envelope",
-      "goal",
-    ])
-  ) {
+  // The bundled schema set grew in steps: v1 base, + verification profiles,
+  // + envelope/Goal, + repository settings (core ADR-0040). Each retained
+  // snapshot records exactly the set its candidate carried, so every historical
+  // shape stays valid; the settings digest may accompany any of them.
+  const baseShapes = [
+    ["repository", "surfaces", "governance"],
+    ["repository", "surfaces", "governance", "verificationProfile"],
+    ["repository", "surfaces", "governance", "verificationProfile", "envelope", "goal"],
+  ];
+  if (!baseShapes.some((shape) => isExactObject(schemaDigests, shape) || isExactObject(schemaDigests, [...shape, "settings"]))) {
     return false;
   }
+  if (!isExactObjectLike(schemaDigests)) return false;
   return (
     typeof value.snapshotId === "string" &&
     isUuidV7(value.snapshotId) &&
@@ -2640,6 +2639,10 @@ function isDatabasePayload(value: unknown): value is DatabaseDefinitionPayload {
     value.registryVersion === CONTROL_PLANE_REGISTRY_VERSION &&
     value.schemaVersion === CONTROL_PLANE_SCHEMA_VERSION
   );
+}
+
+function isExactObjectLike(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function isExactObject(value: unknown, keys: string[]): value is Record<string, unknown> {
