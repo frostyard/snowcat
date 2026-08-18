@@ -130,13 +130,33 @@ test("operator CLI exposes blocked requeue and cancellation without lease tokens
   );
   assert.deepEqual(JSON.parse(requeued.stdout).previousResults, [{ summary: "Needs input.", evidence: [], artifacts: [] }]);
 
+  const prioritized = run("prioritize", first.id, "7", "Operator wants this next.");
+  assert.equal(prioritized.status, 0, prioritized.stderr);
+  const prioritizedItem = JSON.parse(prioritized.stdout);
+  assert.equal(prioritizedItem.status, "queued");
+  assert.equal(prioritizedItem.priority, 7);
+  assert.equal(prioritized.stdout.includes("leaseToken"), false);
+  assert.deepEqual(
+    [prioritizedItem.operatorNotes.at(-1).actor, prioritizedItem.operatorNotes.at(-1).action, prioritizedItem.operatorNotes.at(-1).reason],
+    ["operator:cli", "prioritize", "Operator wants this next."],
+  );
+  const badPriority = run("prioritize", first.id, "high", "Operator wants this next.");
+  assert.notEqual(badPriority.status, 0);
+  assert.match(badPriority.stderr, /priority must be an integer/);
+  const fractional = run("prioritize", first.id, "1.5", "Operator wants this next.");
+  assert.notEqual(fractional.status, 0);
+  assert.match(fractional.stderr, /priority must be an integer/);
+  const missingReason = run("prioritize", first.id, "3");
+  assert.notEqual(missingReason.status, 0);
+  assert.match(missingReason.stderr, /prioritize reason is required/);
+
   const noted = run("note", first.id, "PR #5 already exists; re-report it.");
   assert.equal(noted.status, 0, noted.stderr);
   const notedItem = JSON.parse(noted.stdout);
   assert.equal(notedItem.status, "queued");
-  assert.equal(notedItem.operatorNotes.length, 2);
+  assert.equal(notedItem.operatorNotes.length, 3);
   assert.deepEqual(
-    [notedItem.operatorNotes[1].actor, notedItem.operatorNotes[1].action, notedItem.operatorNotes[1].reason],
+    [notedItem.operatorNotes[2].actor, notedItem.operatorNotes[2].action, notedItem.operatorNotes[2].reason],
     ["operator:cli", "note", "PR #5 already exists; re-report it."],
   );
   assert.equal(noted.stdout.includes("leaseToken"), false);
@@ -153,6 +173,7 @@ test("operator CLI exposes blocked requeue and cancellation without lease tokens
   assert.match(usage.stderr, /requeue <work-item-id> <reason>/);
   assert.match(usage.stderr, /cancel <work-item-id> <reason>/);
   assert.match(usage.stderr, /note <work-item-id> <text>/);
+  assert.match(usage.stderr, /prioritize <work-item-id> <priority> <reason>/);
 });
 
 test("operator CLI can defer admitted work and approve it later", async () => {

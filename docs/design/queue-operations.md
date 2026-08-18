@@ -130,8 +130,17 @@ npm run --silent queue -- show <id>                     # full item plus its eve
 npm run --silent queue -- approve <id>                  # proposed → queued (claimable)
 npm run --silent queue -- reject <id> "<reason>"        # proposed → cancelled
 npm run --silent queue -- defer <id> "<reason>"         # queued, unclaimed → proposed again
+npm run --silent queue -- prioritize <id> <n> "<reason>" # proposed/queued/blocked; higher claims first
 npm run --silent queue -- note <id> "<text>"            # annotate; no state change
 ```
+
+Children inherit their parent's priority, and dogfood roots seed at 0, so an
+admitted implementation child queues behind every older discovery root until
+you say otherwise. `prioritize` is how you say otherwise: it works on
+`proposed`, `queued`, and `blocked` items (not claimed or terminal), records
+`work.prioritized` with the previous and new value, and leaves a `prioritize`
+note for the next worker. Approve then prioritize, or prioritize while still
+proposed — either order works.
 
 Worker follow-ups land as `proposed` children with `parentId`; approve them the
 same way. Their permissions can never exceed the parent's `delegableActions`.

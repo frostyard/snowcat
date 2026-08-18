@@ -687,6 +687,31 @@ export class QueueStore {
     });
   }
 
+  /**
+   * Changes the scheduling priority of proposed, queued, or blocked work.
+   * Priority is operator-owned: only an operator or policy actor may call
+   * this, a claimed or terminal item is refused, children still inherit
+   * their parent's value at creation, and the change is recorded both as
+   * `work.prioritized` and as a `prioritize` note carried to the next lease.
+   */
+  prioritize(id: string, actor: string, priority: number, reason: string): WorkItem {
+    validateOperatorActor(actor, "prioritize");
+    if (!Number.isSafeInteger(priority)) throw new Error("priority must be a safe integer");
+    validateOperatorNoteReason(reason, "prioritize reason");
+    return this.transaction(() => {
+      const item = this.getRequired(id);
+      if (item.status !== "proposed" && item.status !== "queued" && item.status !== "blocked") {
+        throw new Error(`work item is not proposed, queued, or blocked: ${id}`);
+      }
+      const now = this.now();
+      this.db
+        .prepare("UPDATE work_items SET priority = ?, operator_notes_json = ?, updated_at = ? WHERE id = ?")
+        .run(priority, appendOperatorNote(item, { at: now, actor, action: "prioritize", reason }), now, id);
+      this.addEvent(id, "work.prioritized", actor, { previous: item.priority, priority, reason });
+      return this.getRequired(id);
+    });
+  }
+
   reject(id: string, actor: string, reason: string): WorkItem {
     if (!actor.trim()) throw new Error("rejection actor is required");
     if (!reason.trim()) throw new Error("rejection reason is required");

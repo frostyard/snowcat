@@ -59,8 +59,11 @@ Worker children remain non-claimable until an operator or approved policy
 admits them. Recursive decomposition uses the same contract at every level and
 is capped at ten proposals per completion and four edges below a root.
 Scheduling priority is operator-owned: seeds may set it, workers cannot, and
-every child inherits its parent's value, so a proposal can never outrank the
-lineage that produced it.
+every child inherits its parent's value at creation, so a proposal can never
+outrank the lineage that produced it on its own. Only the operator CLI's
+`prioritize` command changes it afterwards, on proposed, queued, or blocked
+items, with an attributed `work.prioritized` event; there is no MCP tool for
+it ([spec rule 38](../specs/work-queue.md#rules)).
 
 Admission is enforced twice. Application code filters claims on the
 `admitted` flag and inserts children as proposals; SQLite triggers installed

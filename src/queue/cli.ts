@@ -61,6 +61,11 @@ try {
     const id = required(args[0], "work item id");
     const reason = required(args.slice(1).join(" "), "cancellation reason");
     print(withoutLeaseToken(queue.cancel(id, "operator:cli", reason)));
+  } else if (command === "prioritize") {
+    const id = required(args[0], "work item id");
+    const priority = parseSafeInteger(required(args[1], "priority"), "priority");
+    const reason = required(args.slice(2).join(" "), "prioritize reason");
+    print(withoutLeaseToken(queue.prioritize(id, "operator:cli", priority, reason)));
   } else if (command === "note") {
     const id = required(args[0], "work item id");
     const text = required(args.slice(1).join(" "), "note text");
@@ -116,6 +121,7 @@ try {
     console.error("       npm run queue -- defer <work-item-id> <reason>");
     console.error("       npm run queue -- requeue <work-item-id> <reason>");
     console.error("       npm run queue -- cancel <work-item-id> <reason>");
+    console.error("       npm run queue -- prioritize <work-item-id> <priority> <reason>");
     console.error("       npm run queue -- note <work-item-id> <text>");
     console.error("       npm run queue -- list [proposed|queued|claimed|completed|blocked|cancelled] [--repository <owner/repo>] [--kind <kind>] [--limit <1-100>]");
     console.error("       npm run queue -- show <work-item-id>");

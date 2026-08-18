@@ -20,7 +20,7 @@ claim, renew, and resolve it.
 | `acceptanceCriteria` | string[] | yes | At least one verifiable criterion |
 | `allowedActions` | action[] | yes | Authority for this item |
 | `delegableActions` | action[] | yes | Maximum authority for direct children |
-| `priority` | integer | yes | Safe integer; higher values claim first, creation time breaks ties. Chosen only by operator or policy seeds; worker-created children inherit the parent's value |
+| `priority` | integer | yes | Safe integer; higher values claim first, creation time breaks ties. Chosen only by operator or policy seeds; worker-created children inherit the parent's value; changed afterwards only by the operator `prioritize` command (rule 38) |
 | `status` | enum | yes | `proposed`, `queued`, `claimed`, `completed`, `blocked`, or `cancelled` |
 | `createdBy` | string | yes | Operator, policy, or worker provenance |
 | `sourceRef` | string | imported roots only | Stable external origin (for example the GitHub issue URL); unique per repository, at most 512 characters, never changes |
@@ -29,7 +29,7 @@ claim, renew, and resolve it.
 | `leaseExpiresAt` | timestamp | claimed only | UTC expiry |
 | `delivery` | enum | completed only | Derived from pull-request artifact verifications: `none` (no pull request reported), `unverified`, `open`, `closed`, or `merged`. Delivery is the merge of the reported pull request, not outcome achievement |
 | `result` | result | completed, blocked, or cancelled with a reason only | Completed: worker summary, evidence, and artifacts. Blocked: `summary` is the block reason with empty `evidence` and `artifacts`. Cancelled by proposal rejection or blocked-work cancellation: `summary` is the operator reason with empty `evidence` and `artifacts`. Absent on `proposed`, `queued`, and `claimed` items |
-| `operatorNotes` | note[] | yes | Operator and policy annotations carried on the item, oldest first, each `{ at, actor, action, reason }` with `action` one of `requeue`, `defer`, `prioritize`, or `note`. Appended by `requeue`, `defer`, and `note` (`prioritize` is reserved for the planned operator prioritize command); empty on creation; never written by a worker or through MCP |
+| `operatorNotes` | note[] | yes | Operator and policy annotations carried on the item, oldest first, each `{ at, actor, action, reason }` with `action` one of `requeue`, `defer`, `prioritize`, or `note`. Appended by `requeue`, `defer`, `prioritize`, and `note`; empty on creation; never written by a worker or through MCP |
 | `previousResults` | result[] | yes | Results superseded by an operator requeue, oldest first: each is the block `result` that requeue cleared. Empty until the first requeue; never trimmed |
 
 The action vocabulary is `read`, `write`, `run-tests`, `open-issue`,
@@ -74,6 +74,7 @@ npm run queue -- reject <work-item-id> <reason>
 npm run queue -- defer <work-item-id> <reason>
 npm run queue -- requeue <work-item-id> <reason>
 npm run queue -- cancel <work-item-id> <reason>
+npm run queue -- prioritize <work-item-id> <priority> <reason>
 npm run queue -- note <work-item-id> <text>
 npm run queue -- list [proposed|queued|claimed|completed|blocked|cancelled]
 npm run queue -- show <work-item-id>
@@ -114,6 +115,15 @@ note with the operator reason to `operatorNotes`, and returns the admitted item
 to claimable `queued` state with a `work.requeued` event. Cancel stores the
 operator reason in `result.summary`, moves the item to terminal `cancelled`,
 and records `work.cancelled`. Neither operation is exposed through MCP.
+
+`prioritize` changes the scheduling priority of one `proposed`, `queued`, or
+`blocked` item to a safe integer, appends a `prioritize` note with the operator
+reason to `operatorNotes`, and records `work.prioritized` with the previous
+and new priority and the reason. It refuses `claimed`, `completed`, and
+`cancelled` items and any actor outside the operator and policy namespaces.
+It is the only way priority changes after creation: children still inherit
+their parent's value when they are created, and workers still cannot supply a
+priority anywhere. It is not exposed through MCP.
 
 `note` appends one operator annotation to `operatorNotes` without changing the
 item's status, admission, lease, or result, and records `work.noted` with the
@@ -196,7 +206,8 @@ command is not exposed through MCP.
     integer. A worker follow-up MUST NOT carry a `priority` field: the MCP
     schema MUST reject it as an unknown key rather than strip it, and
     `QueueStore` MUST independently reject it and roll back the whole
-    completion. An accepted child MUST inherit its parent's exact `priority`.
+    completion. An accepted child MUST inherit its parent's exact `priority`
+    at creation; an operator MAY change it afterwards only through rule 38.
 23. The principal namespaces `operator:`, `policy:`, and `system:` (and the
     bare identity `system`) are reserved for Fluent's own operator, policy,
     and lease-expiry actors. A worker identity supplied to `claim_work`,
@@ -332,8 +343,8 @@ command is not exposed through MCP.
     `actor`, `action`, and a non-empty `reason` of at most 4,000 characters,
     and MUST be appended, never edited, reordered, or removed. Only an actor in
     the `operator:` or `policy:` namespace MAY append one: `QueueStore` MUST
-    reject every other actor for `requeue`, `defer`, and `note`, and no MCP
-    tool MAY write a note. `note <id> <text>` MUST append an `action = "note"`
+    reject every other actor for `requeue`, `defer`, `prioritize`, and `note`,
+    and no MCP tool MAY write a note. `note <id> <text>` MUST append an `action = "note"`
     entry and record `work.noted` without changing status, admission, lease,
     or result. `claim_work`, `get_work`, `list_work`, `list`, and `show` MUST
     return both arrays (empty on a fresh item) and MUST NOT reveal a lease
@@ -341,6 +352,16 @@ command is not exposed through MCP.
     change the objective, instructions, acceptance criteria, `allowedActions`,
     or `delegableActions`. Rung 4 of the migration ladder adds both columns
     with an empty-array default so pre-rung items read as note-free.
+38. `prioritize <id> <priority> <reason>` MUST change the priority of one
+    `proposed`, `queued`, or `blocked` item to a safe integer and MUST refuse
+    a `claimed`, `completed`, or `cancelled` item, leaving its priority
+    unchanged. Only an actor in the `operator:` or `policy:` namespace MAY
+    prioritize; a worker identity MUST be rejected. Each prioritization MUST
+    record `work.prioritized` with `previous`, `priority`, and `reason` and
+    append a `prioritize` note (rule 37). It MUST NOT change status,
+    admission, lease, or result, MUST NOT be exposed through MCP, and MUST
+    NOT alter rule 22: children inherit at creation and workers never supply
+    a priority.
 
 ## Derived artifacts
 

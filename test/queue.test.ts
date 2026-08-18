@@ -922,6 +922,86 @@ test("an operator can requeue blocked work and a different worker can claim it",
   );
 });
 
+test("an operator can prioritize proposed, queued, or blocked work, and only an operator can", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-prioritize-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/updex", true);
+
+  // An older discovery root at priority 0 and a parent whose admitted child
+  // inherits 0: the child queues behind the root on creation time alone.
+  const olderRoot = seedTestingGap(queue, "frostyard/updex");
+  const parent = queue.enqueueSeed({
+    repository: "frostyard/updex",
+    kind: "security-gap-discovery",
+    objective: "Find one security gap.",
+    instructions: "Read only.",
+    acceptanceCriteria: ["One gap."],
+    allowedActions: ["read", "create-followup"],
+    delegableActions: ["read", "write", "run-tests", "open-pr"],
+    createdBy: "operator:test",
+  });
+  const claimedParent = queue.claim({ worker: "claude:updex:parent", kinds: ["security-gap-discovery"] })!;
+  const completion = queue.complete({
+    id: parent.id,
+    leaseToken: claimedParent.leaseToken!,
+    worker: "claude:updex:parent",
+    result: { summary: "One gap.", evidence: ["src/auth.ts"], artifacts: [] },
+    followUps: [
+      {
+        kind: "security-implementation",
+        objective: "Fix the gap.",
+        instructions: "Patch and test.",
+        acceptanceCriteria: ["Regression test passes."],
+        allowedActions: ["read", "write", "run-tests", "open-pr"],
+        delegableActions: [],
+      },
+    ],
+  });
+  const child = completion.followUps[0]!;
+  assert.equal(child.priority, 0);
+
+  // Prioritizing works while proposed, and the event carries previous, new, and reason.
+  assert.throws(() => queue.prioritize(child.id, "claude:updex:worker", 9, "urgent"), /operator: or policy: principal namespace/);
+  assert.throws(() => queue.prioritize(child.id, "operator:test", 1.5, "urgent"), /safe integer/);
+  assert.throws(() => queue.prioritize(child.id, "operator:test", 9, " "), /prioritize reason is required/);
+  const proposed = queue.prioritize(child.id, "operator:test", 9, "Security fix outranks discovery.");
+  assert.equal(proposed.status, "proposed");
+  assert.equal(proposed.priority, 9);
+  assert.deepEqual(
+    proposed.operatorNotes.map((note) => [note.actor, note.action, note.reason]),
+    [["operator:test", "prioritize", "Security fix outranks discovery."]],
+  );
+  const event = queue.events(child.id).at(-1)!;
+  assert.equal(event.type, "work.prioritized");
+  assert.equal(event.actor, "operator:test");
+  assert.deepEqual(event.payload, { previous: 0, priority: 9, reason: "Security fix outranks discovery." });
+
+  // Once admitted, the prioritized child is claimed ahead of the older queued root.
+  queue.approve(child.id, "operator:test");
+  const claimed = queue.claim({ worker: "codex:updex:implementer" })!;
+  assert.equal(claimed.id, child.id);
+  assert.equal(claimed.priority, 9);
+  assert.equal(claimed.operatorNotes[0]?.action, "prioritize");
+
+  // A claimed item cannot be reprioritized and keeps its value.
+  assert.throws(() => queue.prioritize(child.id, "operator:test", 1, "too late"), /not proposed, queued, or blocked/);
+  assert.equal(queue.get(child.id)?.priority, 9);
+  assert.equal(queue.events(child.id).filter((entry) => entry.type === "work.prioritized").length, 1);
+
+  // Queued and blocked items can be; completed and cancelled cannot.
+  const requeuedRoot = queue.prioritize(olderRoot.id, "policy:triage", -1, "Discovery can wait.");
+  assert.equal(requeuedRoot.priority, -1);
+  queue.block(child.id, claimed.leaseToken!, "codex:updex:implementer", "Needs a decision.");
+  assert.equal(queue.prioritize(child.id, "operator:test", 10, "Still urgent.").priority, 10);
+  const stillBlocked = queue.get(child.id)!;
+  assert.equal(stillBlocked.status, "blocked");
+  assert.equal(stillBlocked.result?.summary, "Needs a decision.");
+  queue.cancel(child.id, "operator:test", "Handled elsewhere.");
+  assert.throws(() => queue.prioritize(child.id, "operator:test", 11, "terminal"), /not proposed, queued, or blocked/);
+  assert.throws(() => queue.prioritize(parent.id, "operator:test", 11, "terminal"), /not proposed, queued, or blocked/);
+});
+
 test("an operator note appends to the item without changing its status, and workers cannot write one", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fluent-note-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
