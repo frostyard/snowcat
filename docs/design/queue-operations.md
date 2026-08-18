@@ -80,8 +80,12 @@ file is absent**, so your token and edits survive re-runs; installs the six
 units from [`deploy/systemd/`](../../deploy/systemd/) into
 `/etc/systemd/system/` with one drop-in per service (`10-install.conf`:
 `User=`, an absolute `ExecStart=` for the `npm` the operator user's login
-shell resolves (`sudo` resets `PATH`; override with `FLUENT_NPM=` and
-`FLUENT_NODE=`), a `PATH=` that lets that npm find `node`, and
+shell resolves — a plain login shell first, then an interactive one (Homebrew's
+`brew shellenv` usually sits in `~/.bashrc` behind an "if not interactive,
+return" guard), then the installer's own `PATH`, then the well-known Homebrew
+prefixes; `sudo` resets `PATH`, so override with
+`sudo env FLUENT_NPM=/path/to/npm FLUENT_NODE=/path/to/node deploy/install.sh`
+if it still picks the wrong one — a `PATH=` that lets that npm find `node`, and
 `ReadWritePaths=` for the real `FLUENT_HOME`) — systemd's fixed search path
 does not include Homebrew, nvm, or similar, so the drop-in is what makes the
 timers work on such hosts; then
