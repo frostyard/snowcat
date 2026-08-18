@@ -45,12 +45,16 @@ as well as on the item page.
 | View | Route | Reads | Purpose |
 | --- | --- | --- | --- |
 | Inbox | `/` | `list({status:"proposed"})`, `list({status:"blocked"})`, completed items with any `unverified` artifact | Everything waiting on the operator, grouped: proposals to admit (children under their parent's finding), blocked items to requeue or cancel, unverified artifacts to re-check |
-| Repository board | `/repositories/:owner/:name` | `list({repository})` per status; `ControlPlaneStore.repositoryStatuses()` for the enrollment badge; `activeRootKinds` | Queued in claim order with priority; claimed with lease owner and age; completed with `delivery`; the repository's enrollment state and hold |
-| Item | `/items/:id` | `get(id)`, `events(id)`, parent and children via `rootId`/`parentId` | Exactly what `queue -- show` prints, rendered: objective, instructions, criteria, actions, result summary and evidence, artifacts with verification, lineage, event timeline |
+| Repository board | `/repositories/:owner/:name` | `counts(repository)`, `list({repository, status})` for `queued`/`claimed`/`completed`, `events(id)` for the completing worker; `ControlPlaneStore.repositoryStatuses()` and `activeCoreSnapshot()` for the enrollment badge (effective state, Core source commit, surface commit, repository id, hold) | Three columns: queued in claim order (priority tag, `note` tag when `operatorNotes` is non-empty), leased (worker identity, lease-time bar from `updatedAt` → `leaseExpiresAt`), completed newest first with the `delivery` tag; four stat tiles (queued, leased, completed today, merged / attempts); Hold / Import issues / Seed dogfood render disabled until [#24](https://github.com/frostyard/fluent/issues/24) |
+| Item | `/items/:id` | `get(id)`, `events(id)`, `get(parentId)`, `get(rootId)`, `children(id)` | Exactly what `queue -- show` prints, rendered: header with status and delivery tags; Definition (objective, repository + enrollment, kind, lineage links to parent/root/children, priority, allowed/delegable tags, created/updated, instructions, acceptance criteria); Result (summary, evidence, artifacts table with verification tag, head SHA, merged/verified time and the re-verifying actor from `artifact.verified`); Operator notes; Previous results; the full event timeline |
 
-A repositories index (`/repositories`) lists opted-in repositories with counts
-from `counts()` and their enrollment state. Lease tokens are never read into a
-template; views use `withoutLeaseToken` like the CLI.
+A repositories index (`/repositories`) lists opted-in and declared
+repositories with per-status counts from `counts(repository)` and their
+enrollment badge. Unknown repositories and items are 404 inside the shell.
+Lease tokens are never read into a template; views use `withoutLeaseToken`
+like the CLI. `QueueStore.counts(repository?)` and `QueueStore.children(id)`
+are the two read-only additions the surface needed; neither is exposed
+through MCP.
 
 ### Mutations
 
@@ -133,12 +137,14 @@ Phase 10 and later.
 - Slice status: the shell, login, and the read-only inbox (`/`) shipped with
   [frostyard/fluent#17](https://github.com/frostyard/fluent/issues/17):
   stat tiles, the three decision groups, and the events rail (last 30 from
-  `eventsSince`, newest first). Mutation controls render disabled; the
-  repository board and item page
-  ([#18](https://github.com/frostyard/fluent/issues/18)) and the mutations
-  ([#19](https://github.com/frostyard/fluent/issues/19)) follow. The inbox
-  refreshes with `<meta http-equiv="refresh" content="30">` until the event
-  stream lands. Pages inline their stylesheet (Frostyard tokens and the
+  `eventsSince`, newest first). The repositories index, repository board,
+  and item page shipped read-only with
+  [#18](https://github.com/frostyard/fluent/issues/18); inbox rows,
+  board rows, and event-rail entries link to `/items/:id`. Mutation
+  controls render disabled until the mutations slice
+  ([#19](https://github.com/frostyard/fluent/issues/19)). The inbox and
+  board refresh with `<meta http-equiv="refresh" content="30">` until the
+  event stream lands. Pages inline their stylesheet (Frostyard tokens and the
   Pilothouse shell copied into [`src/surface/styles.ts`](../../src/surface/styles.ts));
   nothing is fetched from another host. Every page footer prints the queue
   and control-plane database paths.

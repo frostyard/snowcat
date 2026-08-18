@@ -1,9 +1,6 @@
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
-
-import { ControlPlaneStore } from "../control/store.ts";
 import type { QueueStore } from "../queue/store.ts";
 import { withoutLeaseToken, type ObservableWorkItem, type ObservedWorkEvent, type WorkArtifact } from "../queue/types.ts";
+import type { RepositoryEnrollment } from "./repositories.ts";
 
 /** How many ledger events the inbox rail shows, newest first. */
 export const EVENTS_RAIL_SIZE = 30;
@@ -40,11 +37,6 @@ export interface UnverifiedRow {
 }
 
 export interface InboxData {
-  queuePath: string;
-  controlPlanePath?: string;
-  schemaVersion: number;
-  lastEventSequence: number;
-  repositories: SidebarRepository[];
   stats: {
     proposals: number;
     blocked: number;
@@ -66,7 +58,7 @@ export interface InboxData {
  * uses. Lease tokens are stripped at the boundary with `withoutLeaseToken`;
  * nothing here writes.
  */
-export function readInbox(queue: QueueStore, controlPlanePath: string | undefined): InboxData {
+export function readInbox(queue: QueueStore, enrollments: Map<string, RepositoryEnrollment> | undefined): InboxData {
   const metadata = queue.metadata();
   const counts = queue.counts();
   const truncated: string[] = [];
@@ -79,8 +71,7 @@ export function readInbox(queue: QueueStore, controlPlanePath: string | undefine
   if (completed.length === LIST_LIMIT) truncated.push("unverified artifacts");
   const claimed = queue.list({ status: "claimed", limit: LIST_LIMIT });
 
-  const repositories = sidebarRepositories(queue, controlPlanePath);
-  const stateBySlug = new Map(repositories.map((repository) => [repository.slug.toLowerCase(), repository.state]));
+  const stateBySlug = new Map([...(enrollments?.entries() ?? [])].map(([slug, enrollment]) => [slug, enrollment.effectiveState]));
   const parents = new Map<string, ObservableWorkItem | undefined>();
   const parentOf = (item: ObservableWorkItem): ObservableWorkItem | undefined => {
     if (!item.parentId) return undefined;
@@ -145,11 +136,6 @@ export function readInbox(queue: QueueStore, controlPlanePath: string | undefine
         : `${new Set(claimed.map((item) => item.leaseOwner)).size} workers`;
 
   return {
-    queuePath: metadata.databasePath,
-    controlPlanePath,
-    schemaVersion: metadata.schemaVersion,
-    lastEventSequence: metadata.lastEventSequence,
-    repositories,
     stats: {
       proposals: counts.proposed,
       blocked: counts.blocked,
@@ -164,32 +150,4 @@ export function readInbox(queue: QueueStore, controlPlanePath: string | undefine
     eventsSince,
     truncated,
   };
-}
-
-/**
- * Sidebar repositories: the control-plane declaration set with effective
- * states when `FLUENT_CONTROL_DB` is configured (opened fresh so the page
- * shows current facts, like the claim-eligibility hook), else the queue's
- * opted-in repositories. A configured but missing control-plane database is
- * reported as an error rather than silently falling back.
- */
-function sidebarRepositories(queue: QueueStore, controlPlanePath: string | undefined): SidebarRepository[] {
-  if (!controlPlanePath) {
-    return queue.enabledRepositories().map((slug) => ({ slug, state: "opted-in", enrolled: false }));
-  }
-  const path = resolve(controlPlanePath);
-  if (!existsSync(path)) throw new Error(`control-plane database does not exist: ${path} (FLUENT_CONTROL_DB)`);
-  const store = new ControlPlaneStore(path);
-  try {
-    return store
-      .repositoryStatuses()
-      .map((status) => ({
-        slug: `${status.owner}/${status.name}`,
-        state: status.effectiveState,
-        enrolled: status.effectiveState === "enrolled",
-      }))
-      .sort((left, right) => left.slug.localeCompare(right.slug));
-  } finally {
-    store.close();
-  }
 }

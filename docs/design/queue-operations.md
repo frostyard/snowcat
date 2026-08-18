@@ -247,6 +247,23 @@ refreshes every 30 seconds. Approve, reject, requeue, cancel, and re-verify
 still happen in the CLI above until the mutation slice ships; the browser
 buttons are disabled placeholders until then.
 
+Three more read-only views sit behind the same session:
+
+- `/repositories` — every opted-in (and, with `FLUENT_CONTROL_DB`, declared)
+  repository with its enrollment badge and per-status counts, the browser's
+  `list --repository` at a glance.
+- `/repositories/<owner>/<name>` — the board: queued work in claim order with
+  its priority and a `note` tag when an operator note is carried, leased work
+  with the worker identity and how much of the lease is left, and completed
+  work with its `delivery` state; the header shows the enrollment state, Core
+  and surface commits, and repository id from the control plane. Hold,
+  import-issues, and seed-dogfood buttons are placeholders for now — use the
+  `repository -- hold` and `queue -- import-issues | seed-dogfood` commands.
+- `/items/<id>` — `queue -- show <id>` rendered: definition, acceptance
+  criteria, result with artifacts and their verification, operator notes,
+  previous results, and the full event timeline. Every row on the inbox and
+  board links here.
+
 ## Run workers
 
 Configure an MCP server named `fluent` in the client you start and let it
