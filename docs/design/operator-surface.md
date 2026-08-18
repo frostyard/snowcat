@@ -107,10 +107,41 @@ Phase 10 and later.
 
 ## Operational notes
 
-- The surface runs in the same process as the Flue app (`npm run build`,
-  `dist/server.mjs`), reading `FLUENT_QUEUE_DB`, `FLUENT_CONTROL_DB`,
-  `FLUENT_APP_TOKEN`, `HOST`, and `PORT`. Missing `FLUENT_APP_TOKEN` fails
-  closed for every surface route, as it does for `/agents/*` today.
+- The surface runs in the same process as the Flue app, reading
+  `FLUENT_QUEUE_DB`, `FLUENT_CONTROL_DB`, `FLUENT_APP_TOKEN`, `HOST`, and
+  `PORT`. Missing `FLUENT_APP_TOKEN` fails closed (503) for every surface
+  route, login included, as it does for `/agents/*` today.
+- Run it locally with
+  `FLUENT_APP_TOKEN=… FLUENT_QUEUE_DB=/var/lib/fluent/queue.db npm run build && npm run serve`
+  and open `http://127.0.0.1:3000/`. `npm run serve`
+  ([`scripts/serve.mjs`](../../scripts/serve.mjs)) starts the built
+  `dist/app.mjs` bound to `HOST` (default `127.0.0.1`) and `PORT` (default
+  `3000`); Flue's own `dist/server.mjs` entry honours `PORT` only and lets
+  Node pick the interface, so use `serve` when the bind address matters. The
+  default is loopback: exposing the surface beyond the host (a different
+  `HOST`, a reverse proxy) is a deployment decision recorded with the
+  deployment, not a default this doc endorses. Set `FLUENT_CONTROL_DB` too
+  and the sidebar shows control-plane enrollment states instead of queue
+  opt-ins.
+- Session: `GET /login` renders the token form; `POST /login` compares the
+  submitted token to `FLUENT_APP_TOKEN` in constant time and sets
+  `fluent_session`, an `HttpOnly; SameSite=Strict` cookie holding an
+  HMAC-SHA256 of the token (never the token; `Secure` is added when the
+  request itself arrived over HTTPS). Every other surface route redirects to
+  `/login` without it; `POST /logout` clears it. Rotating the token
+  invalidates every session.
+- Slice status: the shell, login, and the read-only inbox (`/`) shipped with
+  [frostyard/fluent#17](https://github.com/frostyard/fluent/issues/17):
+  stat tiles, the three decision groups, and the events rail (last 30 from
+  `eventsSince`, newest first). Mutation controls render disabled; the
+  repository board and item page
+  ([#18](https://github.com/frostyard/fluent/issues/18)) and the mutations
+  ([#19](https://github.com/frostyard/fluent/issues/19)) follow. The inbox
+  refreshes with `<meta http-equiv="refresh" content="30">` until the event
+  stream lands. Pages inline their stylesheet (Frostyard tokens and the
+  Pilothouse shell copied into [`src/surface/styles.ts`](../../src/surface/styles.ts));
+  nothing is fetched from another host. Every page footer prints the queue
+  and control-plane database paths.
 - It opens its own store connections like any CLI process; SQLite WAL and the
   busy timeout serialize its writes with MCP servers and the CLI. Restart it
   after upgrading Fluent for the same schema-guard reason as MCP servers.

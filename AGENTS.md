@@ -199,6 +199,14 @@ removed. -->
   activates Core or opens a database. `/etc/fluent/env` is host state — never
   commit one — and the operator's `FLUENT_HOME` checkout is not a worker's
   checkout.
+- Keep the operator surface in [`src/surface/`](src/surface/) a view over
+  the same `QueueStore` and `ControlPlaneStore` methods the CLI uses: no new
+  state transitions, no worker-facing route, no lease token in a template
+  (use `withoutLeaseToken`), and every route behind the `FLUENT_APP_TOKEN`
+  cookie session. `npm run serve` binds `127.0.0.1` unless `HOST` says
+  otherwise; exposure is a deployment decision. Pages inline their
+  stylesheet from [`src/surface/styles.ts`](src/surface/styles.ts) (copied
+  from the `frostyard-design` skill) and load nothing from another host.
 - Run `npm run check` before calling any change done. CI must run the same
   recipe, so a local pass is a CI pass.
 - Tests are `*.test.ts` files anywhere under `test/`, discovered recursively by

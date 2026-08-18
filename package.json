@@ -16,6 +16,7 @@
     "mcp": "node --import tsx src/mcp/stdio.ts",
     "queue": "node --import tsx src/queue/cli.ts",
     "repository": "node --import tsx src/repository/cli.ts",
+    "serve": "node scripts/serve.mjs",
     "test": "node --import tsx --test 'test/**/*.test.ts'",
     "typecheck": "tsc --noEmit"
   },
