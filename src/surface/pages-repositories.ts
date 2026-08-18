@@ -1,3 +1,4 @@
+import { maintenancePrograms } from "../queue/programs.ts";
 import type { ObservableWorkItem } from "../queue/types.ts";
 import { html, raw, type SafeHtml } from "./html.ts";
 import { clock, document, itemPath, objective, repositoryPath, shell, type PageContext } from "./pages.ts";
@@ -117,9 +118,20 @@ function repositoryActions(data: BoardData, controlPlaneConfigured: boolean): Sa
 /** What Seed dogfood will offer: the declared programs when Core declares the repository, else the whole catalog. */
 function seedDogfoodNote(data: BoardData): string {
   const programs = data.enrollment?.maintenancePrograms;
-  if (programs === undefined) return "Read-only discovery roots for every program; 24 h no-finding cooldown.";
+  const cadence = (ids: readonly string[]) =>
+    maintenancePrograms
+      .filter((program) => ids.includes(program.id))
+      .map((program) => `${program.id} ${cadenceLabel(program.cooldownSeconds)}`)
+      .join(", ");
+  if (programs === undefined) return `Read-only discovery roots for every program (${cadence(maintenancePrograms.map((program) => program.id))}); no-finding cooldown per program.`;
   if (programs.length === 0) return "No maintenance programs declared, so nothing to seed.";
-  return `Read-only discovery roots for the declared programs (${programs.join(", ")}); 24 h no-finding cooldown.`;
+  return `Read-only discovery roots for the declared programs (${cadence(programs)}); no-finding cooldown per program.`;
+}
+
+function cadenceLabel(cooldownSeconds: number): string {
+  if (cooldownSeconds % (7 * 24 * 3600) === 0) return cooldownSeconds === 7 * 24 * 3600 ? "weekly" : `every ${cooldownSeconds / (7 * 24 * 3600)} weeks`;
+  if (cooldownSeconds % (24 * 3600) === 0) return cooldownSeconds === 24 * 3600 ? "daily" : `every ${cooldownSeconds / (24 * 3600)} days`;
+  return `every ${Math.round(cooldownSeconds / 3600)} h`;
 }
 
 function column(title: string, caption: string, rows: SafeHtml[], empty: string, id: string): SafeHtml {

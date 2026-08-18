@@ -5,7 +5,6 @@ import { queueStoreOptionsFromEnvironment } from "./eligibility.ts";
 import { importLabeledIssues, importLabeledIssuesForEnrolled } from "./github-issues.ts";
 import { QueueStore, queueDatabasePath, type MutationPrecondition } from "./store.ts";
 import {
-  DEFAULT_DOGFOOD_COOLDOWN_SECONDS,
   enqueueDogfoodBatch,
   enqueueDogfoodBatchForEnrolled,
   enqueueTestingGap,
@@ -36,7 +35,7 @@ try {
     const repository = enrolled ? undefined : required(args[0], "repository");
     const flags = parseFlags(args.slice(1), ["cooldown-hours"]);
     const cooldownHours = flags["cooldown-hours"] === undefined ? undefined : parseNonNegativeInteger(flags["cooldown-hours"], "cooldown-hours");
-    const cooldownSeconds = cooldownHours === undefined ? DEFAULT_DOGFOOD_COOLDOWN_SECONDS : cooldownHours * 3600;
+    const cooldownSeconds = cooldownHours === undefined ? undefined : cooldownHours * 3600;
     if (repository !== undefined) {
       print(enqueueDogfoodBatch(queue, repository, { cooldownSeconds }));
     } else {

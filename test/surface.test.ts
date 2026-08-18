@@ -356,7 +356,7 @@ test("the repository board shows queued, leased, and completed columns with the 
   assert.match(body, new RegExp(`<span class="fl-facts">Core ${coreCommit.slice(0, 7)} · surfaces [0-9a-f]{7} · id github\\.com:9001</span>`));
   assert.match(body, /<form class="fl-action" method="post" action="\/repositories\/frostyard\/example\/hold"><input type="hidden" name="return" value="\/repositories\/frostyard\/example">.*?<button class="ph-button reject" type="submit">Hold repository<\/button><\/form>/s);
   assert.match(body, /<form class="fl-action" method="post" action="\/repositories\/frostyard\/example\/import-issues">/);
-  assert.match(body, /<form class="fl-action" method="post" action="\/repositories\/frostyard\/example\/seed-dogfood">.*?Read-only discovery roots for the declared programs \(quality, ci\); 24 h no-finding cooldown\./s);
+  assert.match(body, /<form class="fl-action" method="post" action="\/repositories\/frostyard\/example\/seed-dogfood">.*?Read-only discovery roots for the declared programs \(quality daily, ci daily\); no-finding cooldown per program\./s);
   assert.match(body, /<form class="fl-inline" method="post" action="\/repositories\/frostyard\/example\/verify-artifacts">/);
   assert.match(body, /<span>Queued<\/span><strong>2<\/strong><small>next: #304 \(p5\)<\/small>/);
   assert.match(body, /<span>Leased<\/span><strong>1<\/strong><small>copilot-cli · \d+m left<\/small>/);

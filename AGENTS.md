@@ -166,8 +166,10 @@ removed. -->
   Import work with `queue -- import-issues <owner/repo> --label <label>`
   (proposed roots keyed by issue URL `sourceRef`; operator approval admits
   them) and repeat `seed-dogfood` freely — its no-finding cooldown suppresses
-  re-asking, and `--enrolled` seeds only the programs each repository's Core
-  declaration lists (the catalog is `src/queue/seeds.ts`). `complete_work` verifies issue and pull-request artifacts against
+  re-asking at each program's own cadence, and `--enrolled` seeds only the
+  programs each repository's Core declaration lists (the catalog is
+  [`src/queue/programs.ts`](src/queue/programs.ts); a new program is one
+  entry there plus its Core enum value). `complete_work` verifies issue and pull-request artifacts against
   GitHub (refuse on mismatch, `unverified` on outage); run `queue --
   verify-artifacts` to refresh and to derive `delivery`. When
   `FLUENT_CONTROL_DB` is set, `claim_work` also requires the repository to be

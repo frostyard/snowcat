@@ -310,39 +310,48 @@ export class QueueStore {
 
   /**
    * Creates the candidate roots whose kind has no active lineage in the
-   * repository. With `cooldownSeconds`, a kind whose most recent root completed
-   * within that window without proposing any child (a no-finding assessment)
-   * is also skipped and reported in `cooledKinds`, so a repeating feeder does
-   * not re-ask a question that was just answered "nothing to do".
+   * repository. A candidate's `cooldownSeconds` (or `options.cooldownSeconds`,
+   * which overrides every candidate's) is its no-finding cooldown: a kind whose
+   * most recent root completed within that window without proposing any child
+   * (a no-finding assessment) is skipped and reported in `cooledKinds`, so a
+   * repeating feeder does not re-ask a question that was just answered
+   * "nothing to do".
    */
   enqueueInactiveRootBatch(
     repository: string,
-    candidates: Array<Omit<SeedWorkInput, "repository">>,
+    candidates: Array<Omit<SeedWorkInput, "repository"> & { cooldownSeconds?: number }>,
     options: { cooldownSeconds?: number } = {},
   ): { created: WorkItem[]; skippedKinds: string[]; cooledKinds: string[] } {
     validateRepository(repository);
-    const cooldownSeconds = options.cooldownSeconds ?? 0;
-    if (!Number.isSafeInteger(cooldownSeconds) || cooldownSeconds < 0) {
-      throw new Error("cooldownSeconds must be a non-negative safe integer");
-    }
+    const cooldownOf = (candidate: { cooldownSeconds?: number }): number => {
+      const cooldownSeconds = options.cooldownSeconds ?? candidate.cooldownSeconds ?? 0;
+      if (!Number.isSafeInteger(cooldownSeconds) || cooldownSeconds < 0) {
+        throw new Error("cooldownSeconds must be a non-negative safe integer");
+      }
+      return cooldownSeconds;
+    };
+    const cooldowns = candidates.map(cooldownOf);
     return this.transaction(() => {
       this.assertRepositoryEnabled(repository);
       const activeKinds = new Set(this.activeRootKinds(repository));
-      const cooled = cooldownSeconds > 0 ? new Set(this.recentNoFindingRootKinds(repository, cooldownSeconds)) : new Set<string>();
+      const noFindingAt = cooldowns.some((seconds) => seconds > 0) ? this.latestNoFindingRoots(repository) : new Map<string, string>();
       const created: WorkItem[] = [];
       const skippedKinds: string[] = [];
       const cooledKinds: string[] = [];
 
-      for (const candidate of candidates) {
-        const input: SeedWorkInput = { ...candidate, repository };
+      candidates.forEach((candidate, index) => {
+        const { cooldownSeconds: _cooldownSeconds, ...definition } = candidate;
+        const input: SeedWorkInput = { ...definition, repository };
         validateWorkDefinition(input);
         if (activeKinds.has(input.kind)) {
           skippedKinds.push(input.kind);
-          continue;
+          return;
         }
-        if (cooled.has(input.kind)) {
+        const completedAt = noFindingAt.get(input.kind);
+        const cooldownSeconds = cooldowns[index]!;
+        if (completedAt !== undefined && cooldownSeconds > 0 && new Date(completedAt).getTime() >= this.clock().getTime() - cooldownSeconds * 1000) {
           cooledKinds.push(input.kind);
-          continue;
+          return;
         }
 
         const id = randomUUID();
@@ -351,7 +360,7 @@ export class QueueStore {
         this.addEvent(id, "work.queued", input.createdBy, { root: true });
         created.push(this.getRequired(id));
         activeKinds.add(input.kind);
-      }
+      });
       return { created, skippedKinds, cooledKinds };
     });
   }
@@ -459,26 +468,26 @@ export class QueueStore {
   }
 
   /**
-   * Kinds whose most recent root in the repository completed within the window
-   * and proposed no child: the assessment ran and found nothing actionable.
+   * For each kind whose most recent root in the repository is `completed` and
+   * proposed no child — the assessment ran and found nothing actionable — the
+   * completion time, so a caller can apply its own cooldown window per kind.
    */
-  private recentNoFindingRootKinds(repository: string, cooldownSeconds: number): string[] {
-    const cutoff = new Date(this.clock().getTime() - cooldownSeconds * 1000).toISOString();
+  private latestNoFindingRoots(repository: string): Map<string, string> {
     const rows = this.db
       .prepare(
-        `SELECT latest.kind AS kind
+        `SELECT latest.kind AS kind, latest.updated_at AS updated_at
          FROM work_items latest
          WHERE latest.repository = ? AND latest.parent_id IS NULL
            AND latest.updated_at = (
              SELECT MAX(root.updated_at) FROM work_items root
              WHERE root.repository = latest.repository AND root.parent_id IS NULL AND root.kind = latest.kind
            )
-           AND latest.status = 'completed' AND latest.updated_at >= ?
+           AND latest.status = 'completed'
            AND NOT EXISTS (SELECT 1 FROM work_items child WHERE child.parent_id = latest.id)
          ORDER BY latest.kind`,
       )
-      .all(repository, cutoff) as Row[];
-    return rows.map((row) => String(row.kind));
+      .all(repository) as Row[];
+    return new Map(rows.map((row) => [String(row.kind), String(row.updated_at)]));
   }
 
   private sourceRefExists(repository: string, sourceRef: string): boolean {
