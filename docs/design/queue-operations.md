@@ -722,6 +722,7 @@ Approved. During the dogfood week keep, per repository:
 
 ## References
 
+- Overview for the team: [how Fluent works](how-fluent-works.md)
 - Rationale: [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md),
   [ADR-0003](../adr/0003-separate-work-coordination-from-execution.md),
   [ADR-0005](../adr/0005-admit-worker-created-work-before-claiming.md),

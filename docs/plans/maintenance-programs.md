@@ -199,6 +199,7 @@ Hive is retired and Fluent owns conformance and triage.
 
 ## References
 
+- Overview for the team: [how Fluent works](../design/how-fluent-works.md)
 - Implements: [queue execution boundary](../design/queue-execution-boundary.md),
   [work queue](../specs/work-queue.md),
   [queue operations runbook](../design/queue-operations.md)
