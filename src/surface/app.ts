@@ -1,4 +1,5 @@
 import { Hono, type Context, type MiddlewareHandler } from "hono";
+import { streamSSE } from "hono/streaming";
 
 import type { ArtifactVerifierOptions } from "../queue/artifact-verification.ts";
 import type { QueueStore } from "../queue/store.ts";
@@ -18,6 +19,9 @@ import {
   type ItemMutation,
 } from "./mutations.ts";
 import { readBoard, readEnrollments, readRepositoryIndex, sidebarFromEnrollments, type RepositoryEnrollment } from "./repositories.ts";
+import { DEFAULT_STREAM_HEARTBEAT_MS, DEFAULT_STREAM_POLL_MS, STREAM_PAGE_SIZE, toStreamedEvent, type StreamOptions } from "./stream.ts";
+import { boardPartial, boardPartials, type BoardPartial } from "./pages-repositories.ts";
+import { inboxPartial, inboxPartials, type InboxPartial } from "./pages.ts";
 import { clearedSessionCookie, hasValidSession, sessionCookie, tokenMatches } from "./session.ts";
 
 export interface SurfaceStores {
@@ -37,6 +41,8 @@ export interface SurfaceOptions {
    * open; a throw renders as 503 with the message.
    */
   stores: () => SurfaceStores;
+  /** Event-stream cadence; tests shorten it. */
+  stream?: StreamOptions;
 }
 
 /**
@@ -130,7 +136,16 @@ export function createSurfaceApp(options: SurfaceOptions): Hono {
     "/",
     requireConfigured,
     requireSession,
-    page((stores, enrollments, chrome) => new Response(inboxPage(chrome, readInbox(stores.queue, enrollments)), htmlHeaders())),
+    (context) =>
+      page((stores, enrollments, chrome) => {
+        const data = readInbox(stores.queue, enrollments);
+        const partial = context.req.query("partial");
+        if (partial !== undefined) {
+          if (!(inboxPartials as readonly string[]).includes(partial)) return new Response("unknown partial", { status: 400 });
+          return new Response(inboxPartial(data, partial as InboxPartial), htmlHeaders());
+        }
+        return new Response(inboxPage(chrome, data), htmlHeaders());
+      })(context),
   );
 
   app.get(
@@ -151,9 +166,69 @@ export function createSurfaceApp(options: SurfaceOptions): Hono {
         return new Response(notFoundPage(chrome, `No repository ${slug}: ${message(error)}`), htmlHeaders(404));
       }
       if (!board) return new Response(notFoundPage(chrome, `${slug} is neither opted in to the queue nor declared in the control plane.`), htmlHeaders(404));
+      const partial = context.req.query("partial");
+      if (partial !== undefined) {
+        if (!(boardPartials as readonly string[]).includes(partial)) return new Response("unknown partial", { status: 400 });
+        return new Response(boardPartial(board, partial as BoardPartial), htmlHeaders());
+      }
       return new Response(boardPage(chrome, board), htmlHeaders());
     })(context),
   );
+
+  // Server-sent events: the ledger tail, identifying fields only. Session-
+  // guarded like every surface route; polls eventsSince at a fixed cadence
+  // and stops when the client goes away.
+  app.get("/events/stream", requireConfigured, requireSession, (context) => {
+    let stores: SurfaceStores;
+    try {
+      stores = options.stores();
+    } catch (error) {
+      return context.text(`The queue database could not be opened: ${message(error)}`, 503);
+    }
+    const repository = context.req.query("repository");
+    if (repository !== undefined && !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/.test(repository)) {
+      return context.text("repository must be owner/name", 400);
+    }
+    const pollMs = options.stream?.pollMs ?? DEFAULT_STREAM_POLL_MS;
+    const heartbeatMs = options.stream?.heartbeatMs ?? DEFAULT_STREAM_HEARTBEAT_MS;
+    return streamSSE(context, async (stream) => {
+      const signal = context.req.raw.signal;
+      const onAbort = () => stream.abort();
+      signal.addEventListener("abort", onAbort, { once: true });
+      let cursor = stores.queue.metadata().lastEventSequence;
+      await stream.writeSSE({ event: "cursor", data: JSON.stringify({ sequence: cursor }) });
+      let lastHeartbeat = Date.now();
+      try {
+        while (!stream.aborted && !stream.closed) {
+          let page: ReturnType<QueueStore["eventsSince"]>;
+          try {
+            page = stores.queue.eventsSince(cursor, { repository, limit: STREAM_PAGE_SIZE });
+          } catch {
+            // The store went away under us (closed or unreadable): end the stream; the client reconnects.
+            break;
+          }
+          while (page.length > 0 && !stream.aborted) {
+            for (const event of page) {
+              await stream.writeSSE({ event: "event", id: String(event.sequence), data: JSON.stringify(toStreamedEvent(event)) });
+              cursor = event.sequence;
+            }
+            try {
+              page = page.length === STREAM_PAGE_SIZE ? stores.queue.eventsSince(cursor, { repository, limit: STREAM_PAGE_SIZE }) : [];
+            } catch {
+              page = [];
+            }
+          }
+          if (Date.now() - lastHeartbeat >= heartbeatMs) {
+            await stream.write(": keep-alive\n\n");
+            lastHeartbeat = Date.now();
+          }
+          await stream.sleep(pollMs);
+        }
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+      }
+    });
+  });
 
   app.get("/items/:id", requireConfigured, requireSession, (context) =>
     page((stores, enrollments, chrome) => {

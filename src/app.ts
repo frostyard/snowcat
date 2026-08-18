@@ -9,6 +9,7 @@ import { Hono } from "hono";
 import { QueueClerk } from "./agents/queue-clerk.ts";
 import { QueueStore, queueDatabasePath } from "./queue/store.ts";
 import { createSurfaceApp, type SurfaceStores } from "./surface/app.ts";
+import type { StreamOptions } from "./surface/stream.ts";
 
 const lemonadeBaseUrl = process.env.LEMONADE_BASE_URL ?? "http://10.0.1.200:13305/v1";
 const lemonadeModel = process.env.LEMONADE_MODEL ?? "Qwen3.8-27B-GGUF-UD-Q4_K_XL";
@@ -52,6 +53,8 @@ export interface AppOptions {
    * `FLUENT_CONTROL_DB` for enrollment states; tests pass their own.
    */
   surfaceStores?: () => SurfaceStores;
+  /** Event-stream cadence for the surface; tests shorten it. */
+  surfaceStream?: StreamOptions;
 }
 
 export function createApp(options: AppOptions): Hono {
@@ -75,7 +78,7 @@ export function createApp(options: AppOptions): Hono {
   app.route("/agents/queue-clerk", createAgentRouter(QueueClerk));
   // The operator surface: `/login`, `/logout`, and the inbox at `/`, all
   // behind the cookie session; `/health` and `/agents/*` above are untouched.
-  app.route("/", createSurfaceApp({ appToken: options.appToken, stores: options.surfaceStores ?? defaultSurfaceStores() }));
+  app.route("/", createSurfaceApp({ appToken: options.appToken, stores: options.surfaceStores ?? defaultSurfaceStores(), stream: options.surfaceStream }));
 
   return app;
 }

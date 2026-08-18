@@ -30,14 +30,104 @@ interface View {
 }
 
 /** The whole document; `body` is already-safe markup produced by `html`. */
-export function document(title: string, body: SafeHtml, options: { refresh?: boolean } = {}): string {
+/**
+ * The whole document; `body` is already-safe markup produced by `html`.
+ * `refresh` pages carry the interval reload inside `<noscript>` and, when
+ * `live` names a stream, the inline subscriber below; a browser with scripts
+ * but no `EventSource` re-inserts the meta refresh itself.
+ */
+export function document(title: string, body: SafeHtml, options: { refresh?: boolean; live?: LiveOptions } = {}): string {
   return (
     "<!doctype html>" +
     html`<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">${
-      options.refresh ? html`<meta http-equiv="refresh" content="${REFRESH_SECONDS}">` : ""
-    }<title>${title}</title><style>${raw(surfaceStylesheet)}</style></head><body>${body}</body></html>`.value
+      options.refresh ? html`<noscript><meta http-equiv="refresh" content="${REFRESH_SECONDS}"></noscript>` : ""
+    }<title>${title}</title><style>${raw(surfaceStylesheet)}</style></head><body>${body}${
+      options.refresh ? liveScript(options.live) : ""
+    }</body></html>`.value
   );
 }
+
+/** What the inline subscriber refreshes: the stream URL, the page's partial names, and an optional repository filter. */
+export interface LiveOptions {
+  /** Base path of the page whose `?partial=` fragments to refetch, e.g. `/` or `/repositories/o/n`. */
+  page: string;
+  partials: readonly string[];
+  /** Only events for this repository refresh the page (the stream is filtered too). */
+  repository?: string;
+}
+
+/**
+ * The only script the surface ships: subscribe to `/events/stream`, prepend
+ * ledger events to the rail (cap 30), and after a `work.*` or
+ * `artifact.verified` event refetch this page's groups as HTML fragments and
+ * swap them in. No framework, nothing loaded from anywhere else. Without
+ * `EventSource` it re-inserts the 30-second meta refresh and stops.
+ */
+function liveScript(live: LiveOptions | undefined): SafeHtml {
+  if (!live) return html``;
+  const config = JSON.stringify({ page: live.page, partials: live.partials, repository: live.repository ?? null, refresh: REFRESH_SECONDS });
+  return html`<script>${raw(LIVE_SCRIPT.replace("__CONFIG__", config.replaceAll("<", "\\u003c")))}</script>`;
+}
+
+const LIVE_SCRIPT = String.raw`(function () {
+  var cfg = __CONFIG__;
+  function fallback() {
+    var meta = document.createElement("meta");
+    meta.httpEquiv = "refresh";
+    meta.content = String(cfg.refresh);
+    document.head.appendChild(meta);
+  }
+  if (!("EventSource" in window) || !("fetch" in window)) { fallback(); return; }
+  var pill = document.querySelector(".ph-live");
+  var rail = document.querySelector("#events .fl-events");
+  var url = "/events/stream" + (cfg.repository ? "?repository=" + encodeURIComponent(cfg.repository) : "");
+  var source = new EventSource(url);
+  var pending = null;
+  function setPill(text, ok) {
+    if (!pill) return;
+    pill.lastChild.nodeValue = text;
+    pill.classList.toggle("stale", !ok);
+  }
+  function refetch() {
+    pending = null;
+    cfg.partials.forEach(function (name) {
+      var target = document.getElementById(name);
+      if (!target) return;
+      fetch(cfg.page + "?partial=" + name, { credentials: "same-origin", headers: { Accept: "text/html" } })
+        .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.text(); })
+        .then(function (fragment) { var current = document.getElementById(name); if (current) current.outerHTML = fragment; })
+        .catch(function () { setPill("Live · retrying", false); });
+    });
+  }
+  function scheduleRefetch() { if (pending === null) pending = setTimeout(refetch, 250); }
+  function prepend(ev) {
+    if (!rail) return;
+    var empty = rail.querySelector(".fl-empty"); if (empty) empty.remove();
+    var row = document.createElement("div"); row.className = "fl-event";
+    var time = document.createElement("time"); time.dateTime = ev.occurredAt; time.title = ev.occurredAt; time.textContent = ev.occurredAt.slice(11, 19);
+    var body = document.createElement("div");
+    var head = document.createElement("div"); head.className = "fl-event-head";
+    var type = document.createElement("b"); type.textContent = ev.type;
+    var link = document.createElement("a"); link.href = "/items/" + encodeURIComponent(ev.workItemId); link.title = ev.workItemId; link.textContent = ev.kind;
+    head.appendChild(type); head.appendChild(link);
+    var small = document.createElement("small"); small.title = ev.repository; small.textContent = ev.actor;
+    body.appendChild(head); body.appendChild(small);
+    row.appendChild(time); row.appendChild(body);
+    rail.insertBefore(row, rail.firstChild);
+    while (rail.children.length > 30) rail.removeChild(rail.lastChild);
+    var caption = document.querySelector("#events .fl-group-head span");
+    if (caption) caption.textContent = "live · sequence " + ev.sequence + (cfg.repository ? " · " + cfg.repository : " · all repositories");
+  }
+  source.addEventListener("cursor", function () { setPill("Live · stream", true); });
+  source.addEventListener("event", function (message) {
+    var ev;
+    try { ev = JSON.parse(message.data); } catch (e) { return; }
+    if (cfg.repository && ev.repository !== cfg.repository) return;
+    prepend(ev);
+    if (/^work\./.test(ev.type) || ev.type === "artifact.verified") scheduleRefetch();
+  });
+  source.onerror = function () { setPill("Live · reconnecting", false); };
+})();`;
 
 export function loginPage(options: { error?: string }): string {
   return document(
@@ -65,6 +155,23 @@ export function unavailablePage(message: string): string {
   );
 }
 
+/** The inbox fragments the live script refetches; each renders one element with that id. */
+export const inboxPartials = ["stats", "proposals", "blocked", "unverified"] as const;
+export type InboxPartial = (typeof inboxPartials)[number];
+
+export function inboxPartial(data: InboxData, partial: InboxPartial): string {
+  switch (partial) {
+    case "stats":
+      return statRow(data).value;
+    case "proposals":
+      return proposalsGroup(data.proposals).value;
+    case "blocked":
+      return blockedGroup(data.blocked).value;
+    case "unverified":
+      return unverifiedGroup(data.unverified).value;
+  }
+}
+
 export function inboxPage(context: PageContext, data: InboxData): string {
   return document(
     "Inbox · Fluent",
@@ -79,7 +186,7 @@ export function inboxPage(context: PageContext, data: InboxData): string {
         ${unverifiedGroup(data.unverified)}
       </div>${eventsRail(data.events, data.eventsSince)}</div>`,
     ),
-    { refresh: true },
+    { refresh: true, live: { page: "/", partials: inboxPartials } },
   );
 }
 
@@ -151,7 +258,7 @@ function brand(): SafeHtml {
 function statRow(data: InboxData): SafeHtml {
   const tile = (label: string, value: number, caption: string) =>
     html`<div class="ph-stat"><span>${label}</span><strong>${value}</strong><small>${caption}</small></div>`;
-  return html`<div class="ph-stats">
+  return html`<div class="ph-stats" id="stats">
     ${tile("Proposals", data.stats.proposals, "awaiting admission")}
     ${tile("Blocked", data.stats.blocked, "needs an operator exit")}
     ${tile("Unverified artifacts", data.stats.unverified, "GitHub could not be asked")}

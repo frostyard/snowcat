@@ -154,10 +154,12 @@ test("the operator surface requires a session, sets the cookie on the right toke
   const body = await inbox.text();
 
   // Structure from the artboard: sidebar, header kicker + h1, stat row, three grouped cards, events rail.
-  assert.match(body, /<meta http-equiv="refresh" content="30">/);
+  assert.match(body, /<noscript><meta http-equiv="refresh" content="30"><\/noscript>/);
+  assert.match(body, /<script>\(function \(\) \{\s*var cfg = \{"page":"\/","partials":\["stats","proposals","blocked","unverified"\],"repository":null,"refresh":30\};/);
+  assert.equal(/<script[^>]*src=/.test(body), false); // nothing loaded from elsewhere
   assert.match(body, /<aside class="ph-sidebar">/);
   assert.match(body, /class="ph-eyebrow"><i><\/i>fluent · operator inbox<\/div><h1>Needs you<\/h1>/);
-  assert.match(body, /<div class="ph-stats">/);
+  assert.match(body, /<div class="ph-stats" id="stats">/);
   assert.match(body, /<span>Proposals<\/span><strong>1<\/strong>/);
   assert.match(body, /<span>Blocked<\/span><strong>1<\/strong>/);
   assert.match(body, /<span>Unverified artifacts<\/span><strong>1<\/strong>/);
@@ -672,4 +674,144 @@ test("re-verify from the browser refreshes a repository's pending artifacts as o
 
   const missing = await app.request("/repositories/frostyard/nope/verify-artifacts", { method: "POST", body: new URLSearchParams({}), headers: { Cookie: cookie } });
   assert.equal(missing.status, 404);
+});
+
+test("the event stream is session-guarded, starts with the cursor, and delivers new ledger events with identifying fields and no lease token", async () => {
+  const seeded = await seededQueue();
+  test.after(() => seeded.queue.close());
+  const queue = seeded.queue;
+  const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue }), surfaceStream: { pollMs: 20, heartbeatMs: 60 } });
+  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+
+  const anonymous = await app.request("/events/stream");
+  assert.equal(anonymous.status, 303);
+  assert.equal(anonymous.headers.get("Location"), "/login");
+  const badFilter = await app.request("/events/stream?repository=nope", { headers: { Cookie: cookie } });
+  assert.equal(badFilter.status, 400);
+
+  const response = await app.request("/events/stream", { headers: { Cookie: cookie } });
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("Content-Type") ?? "", /text\/event-stream/);
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const frames: Array<{ event?: string; id?: string; data: string }> = [];
+  const comments: string[] = [];
+  const readUntil = async (predicate: () => boolean) => {
+    const deadline = Date.now() + 5_000;
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error(`stream timed out; frames so far: ${JSON.stringify(frames)}`);
+      const { value, done } = await reader.read();
+      if (done) throw new Error("stream closed early");
+      buffer += decoder.decode(value, { stream: true });
+      let separator = buffer.indexOf("\n\n");
+      while (separator !== -1) {
+        const block = buffer.slice(0, separator);
+        buffer = buffer.slice(separator + 2);
+        if (block.startsWith(":")) comments.push(block);
+        else {
+          const frame: { event?: string; id?: string; data: string } = { data: "" };
+          for (const line of block.split("\n")) {
+            if (line.startsWith("event: ")) frame.event = line.slice(7);
+            else if (line.startsWith("id: ")) frame.id = line.slice(4);
+            else if (line.startsWith("data: ")) frame.data += line.slice(6);
+          }
+          frames.push(frame);
+        }
+        separator = buffer.indexOf("\n\n");
+      }
+    }
+  };
+
+  await readUntil(() => frames.length >= 1);
+  const before = queue.metadata().lastEventSequence;
+  assert.deepEqual(frames[0], { event: "cursor", data: JSON.stringify({ sequence: before }) });
+
+  // Seed and claim after the stream is connected: both ledger events arrive, in order, with the item's fields.
+  const seed = queue.enqueueSeed({
+    repository: "frostyard/updex",
+    kind: "ci-implementation",
+    objective: "Streamed item.",
+    instructions: "Do it.",
+    acceptanceCriteria: ["Done."],
+    allowedActions: ["read"],
+    delegableActions: [],
+    createdBy: "operator:test",
+  });
+  const lease = queue.claim({ worker: "claude:updex:stream", repository: "frostyard/updex" })!;
+  assert.equal(lease.id, seed.id);
+  await readUntil(() => frames.filter((frame) => frame.event === "event").length >= 2);
+  const events = frames
+    .filter((frame) => frame.event === "event")
+    .map((frame) => ({ id: frame.id, ...(JSON.parse(frame.data) as Record<string, unknown>) }) as Record<string, unknown>);
+  // `status` is the item's current logical status when the event is read (as eventsSince reports it), so both say claimed.
+  assert.deepEqual(
+    events.map((event) => [event.type, event.workItemId, event.repository, event.kind, event.status, event.actor]),
+    [
+      ["work.queued", seed.id, "frostyard/updex", "ci-implementation", "claimed", "operator:test"],
+      ["work.claimed", seed.id, "frostyard/updex", "ci-implementation", "claimed", "claude:updex:stream"],
+    ],
+  );
+  assert.equal(events[0]!.sequence, before + 1);
+  assert.equal(events[0]!.id, String(before + 1));
+  assert.equal(typeof events[1]!.occurredAt, "string");
+  assert.deepEqual(Object.keys(events[1]!).sort(), ["actor", "id", "kind", "occurredAt", "repository", "sequence", "status", "type", "workItemId"]);
+  const raw = frames.map((frame) => frame.data).join("\n");
+  assert.equal(raw.includes(lease.leaseToken!), false);
+  assert.equal(raw.includes(seeded.leaseToken), false);
+  assert.equal(raw.includes("leaseToken"), false);
+  assert.equal(raw.includes("payload"), false);
+
+  // Heartbeat comments keep flowing while idle; the client closing ends the loop cleanly.
+  await readUntil(() => comments.some((comment) => comment.startsWith(": keep-alive")));
+  await reader.cancel();
+
+  // Repository filter: an item in another repository never reaches a filtered stream, but the cursor still comes first.
+  const filtered = await app.request("/events/stream?repository=frostyard/example", { headers: { Cookie: cookie } });
+  const filteredReader = filtered.body!.getReader();
+  const first = decoder.decode((await filteredReader.read()).value);
+  assert.match(first, /^event: cursor\n/);
+  queue.note(seed.id, "operator:test", "updex only");
+  const example = queue.list({ repository: "frostyard/example", status: "claimed" })[0]!;
+  queue.heartbeat(example.id, seeded.leaseToken, "copilot-cli:example:four");
+  let filteredText = "";
+  const deadline = Date.now() + 5_000;
+  while (!filteredText.includes("lease.renewed") && Date.now() < deadline) {
+    filteredText += decoder.decode((await filteredReader.read()).value);
+  }
+  assert.match(filteredText, /"type":"lease.renewed"[^\n]*"repository":"frostyard\/example"/);
+  assert.equal(filteredText.includes("updex only"), false);
+  assert.equal(filteredText.includes("work.noted"), false);
+  await filteredReader.cancel();
+});
+
+test("?partial= returns one inbox group or one board column as a fragment, and rejects unknown names", async () => {
+  const seeded = await seededQueue();
+  test.after(() => seeded.queue.close());
+  const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue: seeded.queue }) });
+  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+
+  const proposals = await app.request("/?partial=proposals", { headers: { Cookie: cookie } });
+  assert.equal(proposals.status, 200);
+  const fragment = await proposals.text();
+  assert.match(fragment, /^<section class="fl-group" id="proposals">/);
+  assert.match(fragment, /<\/section>$/);
+  assert.match(fragment, /Reconcile updex with ADR-0022/);
+  assert.equal(fragment.includes("<html"), false);
+  assert.equal(fragment.includes("ph-sidebar"), false);
+  assert.equal(fragment.includes('id="blocked"'), false);
+  assert.equal(fragment.includes(seeded.leaseToken), false);
+  const stats = await (await app.request("/?partial=stats", { headers: { Cookie: cookie } })).text();
+  assert.match(stats, /^<div class="ph-stats" id="stats">/);
+  assert.equal((await app.request("/?partial=sidebar", { headers: { Cookie: cookie } })).status, 400);
+  assert.equal((await app.request("/?partial=proposals")).status, 303);
+
+  const leased = await app.request("/repositories/frostyard/example?partial=leased", { headers: { Cookie: cookie } });
+  assert.equal(leased.status, 200);
+  const column = await leased.text();
+  assert.match(column, /^<section class="fl-group fl-column" id="leased">/);
+  assert.match(column, /security-implementation · copilot-cli:example:four/);
+  assert.equal(column.includes("ph-sidebar"), false);
+  assert.equal(column.includes(seeded.leaseToken), false);
+  assert.equal((await app.request("/repositories/frostyard/example?partial=nope", { headers: { Cookie: cookie } })).status, 400);
 });

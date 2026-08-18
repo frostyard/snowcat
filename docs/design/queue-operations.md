@@ -265,7 +265,12 @@ proposals awaiting admission (children under their parent's finding), blocked
 items with the worker's reason, and completed items whose issue or pull-request
 artifact is still `unverified` — plus the last 30 ledger events. It reads the
 same rows `list`, `show`, and `events` print, never renders a lease token, and
-refreshes every 30 seconds.
+stays live: the page subscribes to `/events/stream` (the ledger tail as
+server-sent events, identifying fields only) and, when a worker or another
+shell moves an item, refetches just the affected group — the `Live · stream`
+pill in the header says it is connected, `Live · reconnecting` that it is not.
+Without scripts it falls back to a 30-second refresh. The repository board is
+live the same way for its own repository.
 
 Decisions happen where you see them: **Approve** / **Reject** (with a reason)
 inline on each proposal, **Requeue with note** / **Cancel** on each blocked
