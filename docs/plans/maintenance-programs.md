@@ -62,17 +62,25 @@ their children may be admitted on creation.
   `test/seeds.test.ts` shows a daily program re-offered while a weekly one is
   still cooling.
 
-## Phase 3 — Widen the Core enum (Core-side, operator)
+## Phase 3 — Widen the Core enum (Core-side, operator) — in flight 2026-08-18
 
-- Core's `repository.schema.json` `maintenance_programs` enum is exactly
-  `quality | ci | security | architecture`, `maxItems: 4`. Extend it (a new
-  schema version or a compatible enum widening, per Core's own ADR rules)
-  with `conformance`, `triage`, `dependencies`, `docs`, `release`, and raise
-  `maxItems`; add fixtures; Fluent's bundled schema copy and digest update
-  alongside (the validator pins schema digests).
+- Decided 2026-08-18: compatible enum widening **within v1** (core ADR-0039,
+  core PR #87), not a v2 schema; all five values at once (`conformance`,
+  `triage`, `dependencies`, `docs`, `release`), `maxItems: 9`; no cadence
+  field in the declaration (catalog stays the cadence source of truth until
+  a repository shows a need); Fluent ships the new bundled schema bytes and
+  digest first, then core merges. Fluent's `REPOSITORY_MAINTENANCE_PROGRAMS`
+  (`src/control/registry.ts`) is the widened closed vocabulary; the feeder
+  reports declared programs the catalog does not implement yet as
+  `unsupportedPrograms` and seeds nothing for them.
+- Still the operator's: merge order (Fluent PR, then core PR #87, then
+  `core -- activate`), and which repositories declare which programs (updex
+  ran `security` and `architecture` productively for two days; `conformance`
+  waits on the Hive/Fluent boundary decision).
 - **Done when:** a repository declaration listing `conformance` validates in
-  Core and in Fluent, and updex's declaration names the programs it actually
-  wants.
+  Core and in Fluent (met by `test/core-source.test.ts` on the bundled schema;
+  live once #87 merges and activates), and updex's declaration names the
+  programs it actually wants (operator).
 
 ## Phase 4 — Pull-request cure (ADR-0061)
 

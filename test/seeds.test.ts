@@ -368,6 +368,13 @@ test("an explicit program list narrows the batch to those programs and reports t
   assert.deepEqual(none.undeclaredKinds.length, 4);
   assert.deepEqual(none.skippedKinds, []);
 
+  // A declared program the catalog does not implement yet is reported, not refused, and seeds nothing.
+  const wider = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { programs: ["triage", "conformance", "architecture"] });
+  assert.deepEqual(wider.created, []);
+  assert.deepEqual(wider.skippedKinds, ["architecture-gap-discovery"]);
+  assert.deepEqual(wider.unsupportedPrograms, ["triage", "conformance"]);
+  assert.deepEqual(narrowed.unsupportedPrograms, []);
+
   // Omitting the list is the whole catalog: the architecture lineage is active, the other three are created.
   const whole = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY);
   assert.deepEqual(whole.created.map((item) => item.kind).sort(), ["ci-gap-discovery", "quality-gap-discovery", "security-gap-discovery"]);

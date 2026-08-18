@@ -91,7 +91,14 @@ requires both Goal schemas, the profile schema, and Goal-specific fixtures.
 The expected SHA-256 digest of each exact core schema blob is compiled into
 Fluent. A fetched schema must match that byte digest, and its parsed canonical
 content must match the bundled validator schema, before validation begins.
-Fetched schema code or validation scripts are never executed.
+Fetched schema code or validation scripts are never executed. Core may widen
+an enum inside a published schema version as a compatible change (core
+ADR-0039, first applied to `maintenance_programs` on 2026-08-18: nine
+programs, `maxItems: 9`); because the digest is exact, Fluent ships the new
+bundled bytes and digest **before** the core change merges, and the closed
+program vocabulary in [`registry.ts`](../../src/control/registry.ts)
+(`REPOSITORY_MAINTENANCE_PROGRAMS`) widens with it. The feeder seeds only the
+programs its catalog implements and reports the rest as `unsupportedPrograms`.
 
 The independent validator uses the same pinned Ajv 2020 and `jsonc-parser`
 versions as core. It rejects invalid UTF-8, comments, trailing commas, duplicate

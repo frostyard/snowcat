@@ -78,7 +78,7 @@ export function applySeedDogfood(
   queue: QueueStore,
   repository: string,
   enrollment?: RepositoryEnrollment,
-): MutationOutcome & { created: string[]; skippedKinds: string[]; cooledKinds: string[]; undeclaredKinds: string[] } {
+): MutationOutcome & { created: string[]; skippedKinds: string[]; cooledKinds: string[]; undeclaredKinds: string[]; unsupportedPrograms: string[] } {
   const result = enqueueDogfoodBatch(queue, repository, enrollment ? { programs: enrollment.maintenancePrograms } : {});
   return {
     eventType: result.created.length > 0 ? "work.queued" : "seed.unchanged",
@@ -86,6 +86,7 @@ export function applySeedDogfood(
     skippedKinds: result.skippedKinds,
     cooledKinds: result.cooledKinds,
     undeclaredKinds: result.undeclaredKinds,
+    unsupportedPrograms: result.unsupportedPrograms,
   };
 }
 

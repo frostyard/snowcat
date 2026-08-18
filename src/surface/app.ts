@@ -333,6 +333,7 @@ export function createSurfaceApp(options: SurfaceOptions): Hono {
             `${outcome.skippedKinds.length} active`,
             `${outcome.cooledKinds.length} cooling`,
             ...(outcome.undeclaredKinds.length > 0 ? [`${outcome.undeclaredKinds.length} not declared`] : []),
+            ...(outcome.unsupportedPrograms.length > 0 ? [`no catalog entry yet: ${outcome.unsupportedPrograms.join(", ")}`] : []),
           ].join(", ");
           return redirectWithBanner(back, outcome.eventType, detail);
         }

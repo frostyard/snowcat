@@ -146,6 +146,32 @@ test("the bundled validator accepts Goal-capable Core and enforces retained life
   assert.doesNotThrow(() => assertGoalRetention(validateCoreCatalog(legacyEntries), capable));
 });
 
+test("the widened v1 program enum (core ADR-0039) validates and the enum stays closed", async () => {
+  const entries = await validCoreEntries();
+  const repository = entries.find((entry) => entry.path === "organization/repositories/frostyard/core.json")!;
+  const declare = (programs: string[]) =>
+    entryFor(
+      repository.path,
+      json({
+        schema_version: 1,
+        repository: { owner: "frostyard", name: "core", repository_id: "1331309458" },
+        accountable_owners: [{ kind: "github-user", login: "bketelsen" }],
+        fleet_state: "enabled",
+        maintenance_programs: programs,
+        action_ceiling: ["read"],
+        surface_contract_version: 1,
+      }),
+    );
+  const swap = (replacement: CoreTreeEntry) => entries.map((entry) => (entry === repository ? replacement : entry));
+
+  const widened = validateCoreCatalog(swap(declare(["quality", "conformance", "triage", "dependencies", "docs", "release"])));
+  assert.deepEqual(widened.repositories[0]?.declaration.maintenance_programs, ["quality", "conformance", "triage", "dependencies", "docs", "release"]);
+  const all = validateCoreCatalog(swap(declare(["quality", "ci", "security", "architecture", "conformance", "triage", "dependencies", "docs", "release"])));
+  assert.equal(all.repositories[0]?.declaration.maintenance_programs.length, 9);
+  assert.throws(() => validateCoreCatalog(swap(declare(["quality", "feature"]))), CoreValidationError);
+  assert.throws(() => validateCoreCatalog(swap(declare(["quality", "quality"]))), CoreValidationError);
+});
+
 test("schema byte drift and duplicate live keys fail the candidate", async () => {
   const entries = await validCoreEntries();
   const schema = entries.find((entry) => entry.path.endsWith("repository.schema.json"))!;
