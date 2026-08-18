@@ -146,6 +146,14 @@ Opt the repository into the queue (this is separate from Core enrollment):
 npm run --silent queue -- opt-in frostyard/updex
 ```
 
+If a repository is renamed on GitHub, rename its queue slug in one attributed
+step after the Core declaration is renamed and activated — the opt-in and
+every item move; history keeps the strings it was recorded with:
+
+```bash
+npm run --silent queue -- rename-repository frostyard/fluent frostyard/snowcat
+```
+
 **From GitHub issues** — write them per the
 [`write-fluent-issues` skill](../../.agents/skills/write-fluent-issues/SKILL.md)
 (conventional title, evidence, bounded scope, at least one acceptance
