@@ -84,6 +84,7 @@ Docs are split by the question they answer:
 
 ### Design
 
+- [How Fluent works](design/how-fluent-works.md) — start here: the team-facing map of core, Fluent, repositories, and workers
 - [Queue execution boundary](design/queue-execution-boundary.md)
 - [Control-plane kernel](design/control-plane-kernel.md)
 - [Core snapshot ingestion](design/core-snapshot-ingestion.md)
