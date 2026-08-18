@@ -175,7 +175,11 @@ removed. -->
   attach-artifact <id> <url>` (operator only, never an MCP tool) to record a
   pull request or issue the operator carried the last mile against a
   completed item — it verifies against GitHub first and never fabricates a
-  `verification`. When
+  `verification`. `verify-artifacts` also runs the pull-request cure sweep
+  ([`src/queue/pull-request-cure.ts`](src/queue/pull-request-cure.ts),
+  ADR-0061): one admitted `pr-cure` root per decayed head, mechanical cure
+  only, and `complete_work` refuses a `pr-cure` whose patch identity changed;
+  substantive fixes are `pr-cure-change` proposals. When
   `FLUENT_CONTROL_DB` is set, `claim_work` also requires the repository to be
   `enrolled` in the control-plane store
   ([`src/queue/eligibility.ts`](src/queue/eligibility.ts)); the hook is the

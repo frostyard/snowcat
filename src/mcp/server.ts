@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 
 import { verifyCompletionArtifacts, type ArtifactVerifierOptions } from "../queue/artifact-verification.ts";
+import { assertCureCompletion } from "../queue/pull-request-cure.ts";
 import { QueueStore, queueDatabasePath, validateWorkerIdentity, type QueueStoreOptions } from "../queue/store.ts";
 import { allowedActions, withoutLeaseToken, workStatuses } from "../queue/types.ts";
 
@@ -138,6 +139,9 @@ export function buildQueueMcpServer(
       const artifacts = item
         ? await verifyCompletionArtifacts(item.repository, input.result.artifacts, verifier)
         : input.result.artifacts;
+      // A pr-cure completion is refused when the pull request's patch identity
+      // changed (ADR-0061): mechanical is a fact Fluent computes, not a claim.
+      if (item) await assertCureCompletion(item, artifacts, verifier);
       return toolResult(queue.complete({ ...input, result: { ...input.result, artifacts } }));
     },
   );

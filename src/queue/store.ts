@@ -6,6 +6,7 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import {
   allowedActions,
   deriveDelivery,
+  pullRequestDecays,
   workStatuses,
   type AllowedAction,
   type ArtifactVerification,
@@ -14,7 +15,9 @@ import {
   type FollowUpInput,
   type ObservedWorkEvent,
   type OperatorNote,
+  type CureRootInput,
   type ProposedRootInput,
+  type PullRequestCure,
   type SeedWorkInput,
   type WorkArtifact,
   type WorkEvent,
@@ -42,7 +45,7 @@ const MAX_OPERATOR_NOTE_LENGTH = 4000;
  * that newer code has already migrated; newer code upgrades an older database
  * in place, forward only, inside one write transaction.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /**
  * Backup manifest emitted by `QueueStore.backup` and re-derived by
@@ -362,6 +365,44 @@ export class QueueStore {
         activeKinds.add(input.kind);
       });
       return { created, skippedKinds, cooledKinds };
+    });
+  }
+
+  /**
+   * Creates one admitted `pr-cure` root for a pull-request head (ADR-0061),
+   * keyed by `sourceRef` (`<pull-request URL>@<head SHA>`); the same head is
+   * never enqueued twice, whatever the earlier item's status became, so this
+   * returns `undefined` when the head is already known. Admitted on creation
+   * because a mechanical cure never changes the patch; the substantive kind
+   * (`pr-cure-change`) is a worker proposal like any other.
+   */
+  enqueueCureRoot(repository: string, input: CureRootInput): WorkItem | undefined {
+    validateRepository(repository);
+    validateSourceRef(input.sourceRef);
+    validateCure(input.cure);
+    if (input.kind !== "pr-cure") throw new Error("a cure root must have kind pr-cure");
+    const definition: SeedWorkInput = { ...input, repository };
+    validateWorkDefinition(definition);
+    return this.transaction(() => {
+      this.assertRepositoryEnabled(repository);
+      if (this.sourceRefExists(repository, input.sourceRef)) return undefined;
+      const id = randomUUID();
+      const now = this.now();
+      this.insertWork({
+        ...definition,
+        id,
+        rootId: id,
+        priority: definition.priority ?? 0,
+        admitted: true,
+        createdAt: now,
+        sourceRef: input.sourceRef,
+        cure: input.cure,
+      });
+      this.addEvent(id, "work.queued", input.createdBy, {
+        root: true,
+        cure: { pullRequestUrl: input.cure.pullRequestUrl, headSha: input.cure.headSha, decay: input.cure.decay },
+      });
+      return this.getRequired(id);
     });
   }
 
@@ -1038,14 +1079,15 @@ export class QueueStore {
     admitted: boolean;
     createdAt: string;
     sourceRef?: string;
+    cure?: PullRequestCure;
   }): void {
     this.db
       .prepare(
         `INSERT INTO work_items (
           id, root_id, parent_id, repository, kind, objective, instructions,
           acceptance_criteria_json, allowed_actions_json, delegable_actions_json,
-          priority, status, admitted, created_by, created_at, updated_at, source_ref
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
+          priority, status, admitted, created_by, created_at, updated_at, source_ref, cure_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.id,
@@ -1064,6 +1106,7 @@ export class QueueStore {
         input.createdAt,
         input.createdAt,
         input.sourceRef ?? null,
+        input.cure ? JSON.stringify(input.cure) : null,
       );
   }
 
@@ -1180,6 +1223,7 @@ function decodeWorkItem(row: Row): WorkItem {
     status: row.status === "queued" && Number(row.admitted) === 0 ? "proposed" : (String(row.status) as WorkStatus),
     createdBy: String(row.created_by),
     sourceRef: row.source_ref == null ? undefined : String(row.source_ref),
+    ...(row.cure_json == null ? {} : { cure: parseJson<PullRequestCure | undefined>(row.cure_json, undefined) }),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     leaseOwner: row.lease_owner == null ? undefined : String(row.lease_owner),
@@ -1212,6 +1256,23 @@ function parseJson<T>(value: SQLInputValue | undefined, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function validateCure(cure: PullRequestCure): void {
+  if (!/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/[1-9][0-9]*$/.test(cure.pullRequestUrl)) {
+    throw new Error("cure pullRequestUrl must be a GitHub pull-request URL");
+  }
+  if (!/^[0-9a-f]{40}$/.test(cure.headSha)) throw new Error("cure headSha must be a 40-hex commit SHA");
+  if (!/^sha256:[0-9a-f]{64}$/.test(cure.patchDigest)) throw new Error("cure patchDigest must be a sha256: digest");
+  if (
+    !Array.isArray(cure.decay) ||
+    cure.decay.length === 0 ||
+    new Set(cure.decay).size !== cure.decay.length ||
+    !cure.decay.every((reason) => (pullRequestDecays as readonly string[]).includes(reason))
+  ) {
+    throw new Error("cure decay must name at least one distinct known reason");
+  }
+  if (cure.originItemId !== undefined && typeof cure.originItemId !== "string") throw new Error("cure originItemId must be a string");
 }
 
 function validateSourceRef(sourceRef: string): void {
@@ -1453,6 +1514,16 @@ const MIGRATIONS: readonly Migration[] = [
     }
     if (!columns.has("previous_results_json")) {
       db.exec("ALTER TABLE work_items ADD COLUMN previous_results_json TEXT NOT NULL DEFAULT '[]'");
+    }
+  },
+  // Rung 5: the pull-request cure a `pr-cure` root is bound to (ADR-0061):
+  // head SHA, patch digest, and decay, typed in one nullable column.
+  (db) => {
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(work_items)").all() as Row[]).map((column) => String(column.name)),
+    );
+    if (!columns.has("cure_json")) {
+      db.exec("ALTER TABLE work_items ADD COLUMN cure_json TEXT");
     }
   },
 ];

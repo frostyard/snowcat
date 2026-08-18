@@ -439,6 +439,48 @@ MCP (rule 41).
     precondition (`--if-updated-at`, status derived from the item's current
     status) and MUST print the item without a lease token. It requires no
     schema change: `result_json` already holds artifacts.
+42. **Pull-request cure (ADR-0061).** `verify-artifacts` MUST, after the rule
+    34 refresh and unless `--no-cure` is given, inspect every pull request
+    that a completed item reported and that is verified `open`
+    (deduplicated by URL), reading its `mergeable_state`, the check runs on
+    its head, its reviews, and the identity of its patch. A head is *decayed*
+    when `mergeable_state` is `dirty` or `behind`, a completed check run's
+    conclusion is `failure`, `timed_out`, `startup_failure`, or
+    `action_required`, or a reviewer's latest non-comment review is
+    `CHANGES_REQUESTED`; a draft or non-open pull request is never decayed.
+    For each decayed head whose patch identity is computable, the pass MUST
+    create exactly one admitted root of kind `pr-cure` with `sourceRef =
+    <pull-request URL>@<head SHA>`, priority inherited from the highest
+    priority item that reported the pull request, `allowedActions` `read,
+    write, run-tests, open-pr, create-followup`, `delegableActions` `read,
+    write, run-tests, open-pr`, and a `cure` record (`pullRequestUrl`,
+    `headSha`, `patchDigest`, `decay`, `originItemId`) recording one
+    `work.queued` event whose payload names the head and decay. The same
+    `sourceRef` MUST never be enqueued twice, whatever the earlier item's
+    status; a pushed head is a new `sourceRef`. A pull request whose patch
+    identity cannot be computed (a text file GitHub serves without a patch,
+    more than 300 files) MUST be reported as skipped, not enqueued. Foreign
+    pull requests (ones no completed item reported) are out of scope in v1.
+43. The **patch identity** of a pull request is `sha256:` over the
+    canonical JSON of its changed files sorted by path, each as its path,
+    status, rename source when present, and the sequence of its added and
+    removed lines from GitHub's per-file patch — hunk headers and context
+    lines excluded — or, for a file GitHub serves without a text patch and
+    with no line changes (binary), its blob SHA. A rebase or merge of the
+    base that leaves the pull request's added and removed lines the same
+    keeps the identity; any edit to them changes it.
+44. `complete_work` on a `pr-cure` item MUST, after rule 33, refuse the
+    completion — leaving the item claimed — unless the reported artifacts
+    include the cure's pull request as a `pull-request` artifact and the pull
+    request's current patch identity equals the cure's `patchDigest`; a pull
+    request merged meanwhile is accepted on the artifact alone. An
+    unavailable or uncomputable answer MUST refuse, never accept: mechanical
+    is a fact Fluent computes, not a claim the worker makes. A `pr-cure`
+    worker that finds curing requires changing the patch MUST propose one
+    `pr-cure-change` child (the substantive fix, admitted by the operator
+    like any proposal, carrying no digest constraint) or block; cure MUST
+    never merge, approve, or dismiss a review. `cure` is stored in one
+    nullable column added by schema rung 5.
 
 ## Derived artifacts
 
@@ -448,6 +490,7 @@ MCP (rule 41).
 | Backup manifest | Derived by `backup` and re-derived by `verify-backup` per rules 28–29 |
 | Issue import | `import-issues` maps labeled open GitHub issues to proposed `issue-resolution` roots per rules 30–31 |
 | Artifact verification | Completion-time, `attach-artifact`, and `verify-artifacts` observations per rules 33–35 and 41; `delivery` derived per rule 35 |
+| Pull-request cure | `verify-artifacts` enqueues `pr-cure` roots per decayed head per rules 42–43; `complete_work` enforces patch identity per rule 44 |
 | MCP worker behavior | Portable `work-fluent-queue` skill constrained by this contract |
 | Testing-gap seed | Deterministic CLI instance of this contract |
 

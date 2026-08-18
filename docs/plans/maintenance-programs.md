@@ -85,17 +85,31 @@ their children may be admitted on creation.
   live once #87 merges and activates), and updex's declaration names the
   programs it actually wants (operator).
 
-## Phase 4 — Pull-request cure (ADR-0061)
+## Phase 4 — Pull-request cure (ADR-0061) — done 2026-08-18 (v1)
 
-- Extend `verify-artifacts` to read mergeability and check-runs for each
-  reported pull request and enqueue `pr-cure` items per head with a patch
-  digest; a `pr-cure` completion is refused when the patch digest changed;
-  `pr-cure-change` proposals carry the substantive fix. Repository opt-in for
-  foreign pull requests. Skill and issue-writing skill describe the kind.
+- `verify-artifacts` runs the cure sweep (`src/queue/pull-request-cure.ts`)
+  after the refresh: for every open reported pull request it reads
+  `mergeable_state`, check runs, reviews, and the patch identity, and
+  enqueues one admitted `pr-cure` root per decayed head (`sourceRef =
+  <url>@<head>`, `cure` record in schema rung 5's `cure_json`); the same head
+  is never enqueued twice; drafts, closed, and uncomputable patches are
+  skipped and reported. `complete_work` refuses a `pr-cure` whose patch
+  identity (added/removed lines per file, hunk headers and context excluded)
+  changed, or that does not report the pull request, or that GitHub cannot
+  confirm; `pr-cure-change` proposals carry substantive fixes. Spec rules
+  42–44, runbook, AGENTS.md, and the `work-fluent-queue` skill describe the
+  kind.
+- Deliberately deferred: foreign pull requests (per-repository opt-in), title
+  lint as its own signal (on updex it is a check run), age threshold,
+  unresolved review threads (GraphQL). Each is a follow-up issue when a week
+  of curing Fluent's own pull requests says it matters.
 - **Done when:** a fixture pull request that falls behind its base yields one
   admitted `pr-cure` item, a mechanical rebase completes with an unchanged
   digest, a conflicting one is refused and yields a `pr-cure-change`
-  proposal, and the same head is not enqueued twice.
+  proposal, and the same head is not enqueued twice. — Met by
+  `test/pull-request-cure.test.ts` (behind → one root; rebased head with the
+  same identity completes; edited patch refused through MCP with the item
+  left claimed; same head skipped, push is a new head).
 
 ## Phase 5 — Conformance and triage (first new programs)
 

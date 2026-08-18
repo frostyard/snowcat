@@ -2,6 +2,7 @@
 
 import { attachVerifiedArtifact, refreshArtifactVerifications, type AttachableArtifactKind } from "./artifact-verification.ts";
 import { queueStoreOptionsFromEnvironment } from "./eligibility.ts";
+import { curePullRequests } from "./pull-request-cure.ts";
 import { importLabeledIssues, importLabeledIssuesForEnrolled } from "./github-issues.ts";
 import { QueueStore, queueDatabasePath, type MutationPrecondition } from "./store.ts";
 import {
@@ -148,10 +149,15 @@ try {
     const intervalSeconds = Math.max(requested, MIN_WATCH_INTERVAL_SECONDS);
     await watchEvents(queue, { repository: flags.repository, intervalSeconds });
   } else if (command === "verify-artifacts") {
-    const flags = parseFlags(args, ["repository", "limit"]);
+    const noCure = args.includes("--no-cure");
+    const flags = parseFlags(args.filter((argument) => argument !== "--no-cure"), ["repository", "limit"]);
     const limit = flags.limit === undefined ? undefined : parseNonNegativeInteger(flags.limit, "limit");
     if (limit !== undefined && (limit < 1 || limit > 100)) throw new Error("limit must be between 1 and 100");
-    print(await refreshArtifactVerifications(queue, { repository: flags.repository, limit }));
+    const refreshed = await refreshArtifactVerifications(queue, { repository: flags.repository, limit });
+    // The same pass detects pull-request decay and enqueues one pr-cure root
+    // per decayed head (ADR-0061); --no-cure runs the refresh alone.
+    const cure = noCure ? undefined : await curePullRequests(queue, { repository: flags.repository, limit });
+    print(cure ? { ...refreshed, cure } : refreshed);
   } else if (command === "metadata") {
     print(queue.metadata());
   } else if (command === "backup") {
@@ -180,7 +186,7 @@ try {
     console.error("       npm run queue -- show <work-item-id>");
     console.error("       npm run queue -- events [--since <sequence>] [--repository <owner/repo>] [--limit <1-500>]");
     console.error("       npm run queue -- watch [--repository <owner/repo>] [--interval <seconds>]");
-    console.error("       npm run queue -- verify-artifacts [--repository <owner/repo>] [--limit <1-100>]");
+    console.error("       npm run queue -- verify-artifacts [--repository <owner/repo>] [--limit <1-100>] [--no-cure]");
     console.error("       npm run queue -- metadata");
     console.error("       npm run queue -- backup <new-file-path>");
     console.error("       npm run queue -- verify-backup <backup-file-path>");

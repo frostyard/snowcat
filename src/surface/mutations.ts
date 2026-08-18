@@ -4,6 +4,7 @@ import {
   refreshArtifactVerifications,
   type ArtifactVerifierOptions,
 } from "../queue/artifact-verification.ts";
+import { curePullRequests } from "../queue/pull-request-cure.ts";
 import { PreconditionMismatchError, type MutationPrecondition, type QueueStore } from "../queue/store.ts";
 import { workStatuses, type WorkStatus } from "../queue/types.ts";
 
@@ -102,14 +103,17 @@ export async function applyVerifyArtifacts(
   queue: QueueStore,
   repository: string,
   verifier: ArtifactVerifierOptions,
-): Promise<MutationOutcome & { checked: number; updated: number; unavailable: number; rejected: number }> {
+): Promise<MutationOutcome & { checked: number; updated: number; unavailable: number; rejected: number; cured: number }> {
   const result = await refreshArtifactVerifications(queue, { ...verifier, repository, actor: WEB_ACTOR });
+  // Same pass as the CLI: decayed pull-request heads become pr-cure roots (ADR-0061).
+  const cure = await curePullRequests(queue, { ...verifier, repository, actor: WEB_ACTOR });
   return {
-    eventType: result.updated.length + result.rejected.length > 0 ? "artifact.verified" : "artifact.unchanged",
+    eventType: cure.enqueued.length > 0 ? "work.queued" : result.updated.length + result.rejected.length > 0 ? "artifact.verified" : "artifact.unchanged",
     checked: result.checked,
     updated: result.updated.length,
     unavailable: result.unavailable.length,
     rejected: result.rejected.length,
+    cured: cure.enqueued.length,
   };
 }
 
