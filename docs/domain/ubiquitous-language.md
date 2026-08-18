@@ -1,14 +1,16 @@
 # Domain language: Fluent
 
 - **Status:** Living
-- **Last updated:** 2026-08-17
+- **Last updated:** 2026-08-18
 
 ## Scope
 
 This is the canonical language for Fluent product behavior. Use these terms in
 normative docs, schemas, APIs, database concepts, UI labels, skills, and worker
-briefs. Definitions describe the accepted target model; current spike code may
-still require an explicit vocabulary migration.
+briefs. Definitions describe the accepted model; the queue store is the v1 work
+engine under
+[ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md), and
+its terms below are v1 vocabulary, not stand-ins awaiting replacement.
 
 Keep entries lean. This file defines words and boundaries, not fields,
 transitions, implementation, or decision history. Follow
@@ -233,6 +235,46 @@ attempts and is not a GitHub issue, PR, worker process, or human decision.
 **Avoid:** task; job; ticket; attempt.
 ([ADR-0003](../adr/0003-separate-work-coordination-from-execution.md),
 [ADR-0005](../adr/0005-admit-worker-created-work-before-claiming.md))
+
+#### Source reference
+
+The stable external origin of an imported work item, such as the GitHub
+issue URL, unique per repository. It makes repeated imports idempotent and
+tells a worker where the work came from; it is not the item's identity.
+
+**Avoid:** issue link; external id; ticket.
+([ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md))
+
+#### Operator note
+
+An operator- or policy-authored annotation carried on a work item to the next
+lease — appended by requeue, deferral, prioritization, or an explicit note. It
+tells a later worker what happened before; it never changes the definition
+and is never written by a worker.
+
+**Avoid:** comment; instruction update; hint from a worker.
+([ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md))
+
+#### Delivery state
+
+The state derived on read from a completed work item's verified pull-request
+artifacts: none, unverified, open, closed, or merged. It records whether the
+reported pull request was merged, not whether the intended outcome was
+achieved.
+
+**Avoid:** delivered (the initiative projection); done; success.
+([ADR-0031](../adr/0031-separate-delivery-from-outcome-achievement.md),
+[ADR-0018](../adr/0018-bind-worker-sessions-and-verify-github-artifacts.md))
+
+#### Claim eligibility
+
+The decision, made at claim time on top of repository opt-in, that a
+repository's admitted work may be leased right now — in v1 supplied by the
+control-plane store as "the repository is enrolled". It filters candidates; it
+does not admit, order, or lease work.
+
+**Avoid:** enrollment (the control-plane fact itself); permission; grant.
+([ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md))
 
 #### Work kind
 
@@ -1308,6 +1350,26 @@ not a work item and cannot be claimed or resolved by a worker.
 **Avoid:** approval task; prompt; generic confirmation dialog.
 ([ADR-0035](../adr/0035-route-human-authority-through-typed-decisions.md))
 
+#### Operator surface
+
+The server-rendered web view over the same store methods the CLI uses —
+inbox, repository board, item page — through which the operator reads the
+queue and makes the CLI's operator decisions. It owns no state, adds no
+transition, and renders no lease token.
+
+**Avoid:** dashboard (as a separate system); admin app; worker UI.
+([ADR-0060](../adr/0060-bring-the-operator-surface-forward-as-a-read-first-inbox.md))
+
+#### Stale-intent precondition
+
+The rendered status and last-updated time a mutation carries so the store can
+refuse a decision made against an item that has since changed. It protects
+the operator from acting on stale facts; it is not a lock or a lease.
+
+**Avoid:** optimistic lock; version check; retry.
+([ADR-0035](../adr/0035-route-human-authority-through-typed-decisions.md),
+[ADR-0060](../adr/0060-bring-the-operator-surface-forward-as-a-read-first-inbox.md))
+
 #### OperatorInbox
 
 The deterministic derived view of pending decision records visible to the
@@ -1329,15 +1391,16 @@ path. ([ADR-0029](../adr/0029-bound-adversarial-review.md),
 
 ## Current implementation divergence
 
-The disposable queue spike uses caller-supplied `worker`, logical `queued`,
-integer `priority`, repository slug identity, one `status`, and a mixed
-`result`. These are local terms of the prototype contract, not aliases for the
-canonical target concepts. Under
-[ADR-0044](../adr/0044-replace-the-queue-spike-database.md), their rows will not
-migrate into session identity, factored scheduling, priority bands, immutable
-repository identity, independent facts, attempt reports, or typed decisions.
-The target vocabulary is implemented cleanly through the
-[control-plane kernel bootstrap](../plans/control-plane-kernel-bootstrap.md).
+The queue store's local vocabulary — a caller-supplied worker identity string,
+integer priority, repository slug identity, one status column plus an
+admission flag, a mixed result, derived delivery state, operator notes, and
+source references — is the v1 vocabulary under
+[ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md). Each
+of those compromises is upgraded in place, by a numbered migration rung, when
+a real repository shows the need; none of them is a stand-in awaiting a
+rewrite. The control-plane store's typed subjects, facts, and decisions are
+the vocabulary of the authority and observation sidecar, coupled to the queue
+only through claim eligibility.
 
 ## References
 

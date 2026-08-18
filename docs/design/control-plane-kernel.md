@@ -55,9 +55,12 @@ ControlPlaneStore ──► code-owned closed registries
       └──► immutable projection shadows ──► atomic active heads
 ```
 
-The queue-spike database remains independent. The kernel uses another path,
-SQLite application ID, schema lineage, and table set and refuses a spike file
-before changing it.
+The queue database — the v1 work engine under
+[ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md) — stays
+independent. The kernel uses another path, SQLite application ID, schema
+lineage, and table set, and refuses a queue file before changing it. The
+kernel is the authority and observation sidecar; its only coupling to the
+queue is the claim-eligibility hook.
 
 ## Design
 
@@ -65,9 +68,9 @@ before changing it.
 
 [`ControlPlaneStore`](../../src/control/store.ts) owns the target database.
 `FLUENT_CONTROL_DB` selects its path and defaults to
-`./data/control-plane.db`; `FLUENT_QUEUE_DB` continues to select the disposable
-spike. The path helper rejects equal resolved paths, while store startup also
-recognizes the spike tables and refuses to initialize over them.
+`./data/control-plane.db`; `FLUENT_QUEUE_DB` selects the queue. The path
+helper rejects equal resolved paths, while store startup also recognizes the
+queue tables and refuses to initialize over them.
 
 The target file identifies itself with SQLite application ID `1179405908`
 (`FLNT`), `PRAGMA user_version = 8`, a server-generated UUIDv7 database-lineage
@@ -394,14 +397,13 @@ work lineage are later slices in the
 
 ## Operational notes
 
-- Do not point `FLUENT_CONTROL_DB` at `FLUENT_QUEUE_DB`. A spike database is an
-  archive or temporary prototype input to humans, never a target initialization
-  input.
+- Do not point `FLUENT_CONTROL_DB` at `FLUENT_QUEUE_DB`. The queue database is
+  the work engine's own store, never a control-plane initialization input.
 - The target file, WAL, and backups must be handled as `restricted` assets even
   though the three initialization occurrences are `organization` class.
-- The production suitability of Node's built-in SQLite binding remains an open
-  plan question. This slice deliberately uses the binding already exercised by
-  the spike and does not settle deployment support.
+- Node's built-in SQLite binding is used here as in the queue store; the
+  single-host deployment is settled in the runbook, and PostgreSQL waits for
+  measured need.
 - A prior schema or registry mismatch is not repaired automatically. Preserve the file for
   diagnosis and use a new empty database during this pre-production slice.
 - Projection repair is narrower than schema repair: it discards only registered

@@ -121,71 +121,100 @@ schema with no upgrade path.
   operator-held transitions are covered by tests through the shared Core
   fixtures.
 
-## Phase 5 — Dogfood on one non-Fluent repository (in progress; first day completed 2026-08-17)
+## Phase 5 — Dogfood on one non-Fluent repository (in progress; two operating days completed)
 
-- Repository chosen 2026-08-17: `frostyard/updex`. Enrollment changes are
-  open as [core#83](https://github.com/frostyard/core/pull/83) (declaration)
-  and [updex#297](https://github.com/frostyard/updex/pull/297) (governance
-  surface). Operate it by the
-  [queue operations runbook](../design/queue-operations.md): opt in, import
-  labeled issues, approve three to five, and run Codex or Claude workers with
-  `open-pr`.
-- Record accepted pull requests per attempt, tokens per accepted outcome, and
-  blocked counts to fill the TBD targets in the
-  [agent fleet PRD](../prd/agent-fleet.md).
+- Repository chosen 2026-08-17: `frostyard/updex`, enrolled through
+  [core#83](https://github.com/frostyard/core/pull/83) and
+  [updex#297](https://github.com/frostyard/updex/pull/297). Fluent enrolled
+  itself the same evening ([core#84](https://github.com/frostyard/core/pull/84),
+  [fluent#3](https://github.com/frostyard/fluent/pull/3)) so its own
+  maintenance runs through the same queue under the same gate.
+- Operate by the [queue operations runbook](../design/queue-operations.md) and,
+  since 2026-08-18, from the [operator surface](../design/operator-surface.md).
 - **Done when:** an operator enrolls a repository, starts an external worker,
   receives one matched item, and sees its lease, report, verified artifact,
   outcome, and every operator decision on one work item and its events — the
   roadmap Phase 5 outcome, achieved on the queue store. **Achieved
-  2026-08-17** on `frostyard/updex`: 7 items completed (4 issue-resolution
-  → PRs #298, #300, #302, #303, all merged and verified; 3 read-only
-  discovery roots → 3 evidence-backed findings, each proposing one child the
-  operator admitted), 0 blocked, 0 refused, 0 lease expiries. Numbers are
-  recorded in the [PRD baseline](../prd/agent-fleet.md#first-dogfood-baseline-2026-08-17-frostyardupdex).
-  The remaining week continues with the three admitted implementation
-  children and the architecture discovery root; a fresh-session run will
-  test whether updex's new `AGENTS.md` rule alone yields conventional PR
-  titles.
+  2026-08-17** and repeated across two days and four client kinds
+  (Claude Code, Codex, Copilot CLI, and a Claude session on a loop):
+  - `frostyard/updex`: 13 items completed (5 issue-resolution, 4 read-only
+    discovery roots, 4 admitted children); 9 pull requests opened, 8 merged
+    and verified, 1 closed unmerged after an external tool landed an
+    overlapping change; 0 refused completions; 1 block (a client permission
+    limit) recovered through a requeue note.
+  - `frostyard/fluent`: 14 items completed, 14 pull requests merged and
+    verified — every Phase 6 item below was built by the queue itself,
+    eight of them overnight on 2026-08-18 with the operator asleep and a
+    merge gate merging on green CI.
+  - Numbers are recorded in the
+    [PRD baseline](../prd/agent-fleet.md#first-dogfood-baseline-2026-08-17-frostyardupdex).
+  - Lessons landed as code the same day: unauthenticated 404 is
+    `unverified` not absence; requeue carries operator notes and prior
+    results; workers check for existing pull requests before starting;
+    conventional-commit titles are enforced in updex; core ADR-0038 scoped
+    the test-name filter to chairlift after two findings contradicted.
+- Still open in this phase: tokens per accepted outcome (clients do not report
+  them to Fluent); a boundary with the Hive scanner, which fixed issues Fluent
+  had already fixed on 2026-08-18 (the `fluent` label as the queue's claim).
 
-## Phase 6 — Operate it like a product (candidates, unscheduled)
+## Phase 6 — Operate it like a product (completed 2026-08-18, first slice)
 
-Lessons from the first day, to be worked as queued Fluent items rather than
-by hand:
+Everything here was queued as Fluent issues written to the
+[`write-fluent-issues` skill](../../.agents/skills/write-fluent-issues/SKILL.md)
+and merged through the queue:
 
-- **Operator-set priority after creation.** Children inherit their parent's
-  priority (0 for discovery roots), so an admitted security fix waits behind
-  any still-queued discovery root. Add an attributed
-  `queue -- prioritize <id> <n>` (operator-only, never a worker tool),
-  keeping priority operator-owned per spec rule 22.
-- **First-class watching.** The operator loop today is a shell loop around
-  `show`. Add `queue -- events [--since <sequence>] [--repository …]` and/or
-  `queue -- watch` that streams new events, so lease renewals, completions,
-  proposals, and verifications are one command.
-- **Deployment story**: decided 2026-08-17 and recorded in the runbook's
-  [Deployment (v1)](../design/queue-operations.md#deployment-v1-decided-2026-08-17)
-  section — one operator host, stdio MCP, loopback listeners reached over
-  SSH or a private mesh, operator-only credentials; remote workers,
-  network MCP, and per-worker grants are knowingly deferred until the first
-  off-host worker is needed, at which point they get their own ADR. Timers
-  for `seed-dogfood`, `verify-artifacts`, and `backup` remain to be written.
-- **Operator surface**: decided in
-  [ADR-0060](../adr/0060-bring-the-operator-surface-forward-as-a-read-first-inbox.md)
-  and designed in [operator surface](../design/operator-surface.md) — a
-  read-first inbox, repository board, and item page over the same store
-  methods, with the CLI's operator mutations carrying stale-intent
-  preconditions; local-first behind `FLUENT_APP_TOKEN`; server-rendered per
-  the `frostyard-design` skill, synchronized from `frostyard/core` by
-  [core#85](https://github.com/frostyard/core/pull/85) →
-  [fluent#4](https://github.com/frostyard/fluent/pull/4).
-  [frostyard/fluent#1](https://github.com/frostyard/fluent/issues/1) and
-  [#2](https://github.com/frostyard/fluent/issues/2) are its prerequisites.
-- **Enrolling Fluent itself** so its own maintenance items are claimable
-  under `FLUENT_CONTROL_DB`: open as
-  [core#84](https://github.com/frostyard/core/pull/84) (declaration) and
-  [fluent#3](https://github.com/frostyard/fluent/pull/3) (governance
-  surface), both merged 2026-08-17; `frostyard/fluent` reconciled as
-  `enrolled` at Core `8f274e2`.
+- Operator-set priority after creation — `queue -- prioritize` (#1 → PR #11).
+- First-class watching — `queue -- events --since` and `queue -- watch`
+  (#2 → PR #5).
+- Operator notes and prior results carried to the next lease; `queue -- note`
+  (#7 → PR #9); workers check for existing work before starting (#8 → PR
+  #10).
+- Scheduling — systemd timers for feeder, `verify-artifacts`, and backup with
+  `seed-dogfood --enrolled` and `import-issues --enrolled` (#12 → PR #14,
+  #21 → PR #28); `npm run check:deploy` verifies units and scripts in CI.
+- Deployment — `deploy/install.sh`, `deploy/upgrade.sh`, `/etc/fluent/env`,
+  the runbook rewritten around them (#13 → PR #15). Decision recorded in the
+  runbook's Deployment section: single host, stdio MCP, loopback listeners,
+  operator-only credentials; remote workers deferred.
+- Operator surface —
+  [ADR-0060](../adr/0060-bring-the-operator-surface-forward-as-a-read-first-inbox.md),
+  designed on the
+  [Fluent Operator Surface canvas](https://claude.ai/code/artifact/86d7da78-b87d-4df4-a725-2d8a34b29384),
+  shipped as inbox + repository board + item page + mutations with
+  stale-intent preconditions + live event stream + repository actions
+  (#16–#19, #23, #24 → PRs #20, #25–#27, #30, #31); operator/policy actor
+  required for every admission and exit (#22 → PR #29).
+- Enrolling Fluent itself (core#84, fluent#3).
+- **Done when:** the operator can run a dogfood day from a browser and the
+  timers keep the queue fed, verified, and backed up without a shell.
+  Achieved 2026-08-18 for the browser; the timers are installed by
+  `deploy/install.sh`, which the operator runs on the host (see Phase 7).
 
+## Phase 7 — Settle in (next)
+
+The next steps, in order; each is a queue item unless it needs the operator's
+hands on the host.
+
+1. **Install on the host** — `sudo deploy/install.sh --user bjk`, first real
+   `systemctl start` of each timer, read the journal; if `npm` cannot write
+   its cache under `ProtectSystem=strict`, fix the unit (likely a
+   `ReadWritePaths` or `npm_config_cache` line) as a queue item. Operator's
+   hands.
+2. **A week of steady state on updex and fluent** — feeder and import on
+   timers, admission from the browser, workers started by the operator or
+   on a loop; record accepted-per-attempt, blocked, and time-to-merge daily
+   into the PRD baseline. Decide the Hive/Fluent boundary (skip `fluent`-
+   labeled issues in Hive) before running both again.
+3. **Second repository** — enroll one more Frostyard Go repository (the
+   `frostyard-go-repo` skill makes it uniform: `policies/agent-governance.json`
+   plus the core declaration) and confirm the surface, timers, and gate work
+   for two repositories at once.
+4. **Surface follow-ups** — decision-record view once ADR-0035 typed
+   decisions exist beyond admission; per-repository event filter on the rail;
+   keyboard-first inbox review. Small queue items, only after (2) shows they
+   matter.
+5. **Runbook and PRD** — fold the week's numbers into targets and change the
+   PRD status from Discovery only through its review path.
 
 ## Later / ideas
 
@@ -193,14 +222,20 @@ by hand:
   additional claim filters once one repository shows contention.
 - Unpark GitHub observation only if on-demand verification demonstrably
   misses state that a maintainer relied on.
-- Authenticated Streamable HTTP for MCP when a worker must run off-host.
+- Remote workers: authenticated Streamable HTTP for MCP, per-worker grants,
+  and per-operator surface auth — the deferred set named in the runbook's
+  Deployment section; their trigger is the first worker that must run
+  off-host, and they get their own ADR.
+- Tokens per accepted outcome, once a client can report them.
 
 ## Open questions
 
-- **First dogfood repository:** the operator chooses before Phase 5 begins;
-  the smallest active Frostyard repository is the default.
-- **Restore procedure:** file copy plus `verify-backup` is enough for v1;
-  revisit if a restore ever has to preserve in-flight leases.
+- **Second dogfood repository:** the operator chooses in Phase 7 step 3;
+  a Go repository already carrying the `frostyard-go-repo` skill is the
+  default.
+- **Hive boundary:** whether Hive skips `fluent`-labeled issues or Fluent
+  imports only issues Hive will not take; decided before both run on one
+  repository again.
 
 ## References
 

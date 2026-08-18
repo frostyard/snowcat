@@ -1,7 +1,7 @@
 # PRD: GitHub Organization Agent Fleet
 
 - **Status:** Discovery
-- **Last updated:** 2026-08-17
+- **Last updated:** 2026-08-18
 - **Owner:** operator
 
 Fluent gives a GitHub organization operator a self-hosted queue of durable,
@@ -75,6 +75,21 @@ worker client, ~1h50m of wall clock. These are baselines, not targets.
 
 Tokens per accepted outcome were not captured on this day; the client does
 not yet report them to Fluent. That column stays open.
+
+### Second operating day (2026-08-17/18, `frostyard/updex` and `frostyard/fluent`)
+
+| Measure | Observed |
+| --- | --- |
+| Client kinds completing work | 4 — Claude Code, Codex, Copilot CLI, and a Claude session on a loop; same MCP contract and skill |
+| `frostyard/updex` | 13 items completed (5 issue-resolution, 4 discovery roots, 4 admitted children); 9 pull requests, 8 merged and verified, 1 closed unmerged after an external tool landed an overlapping change; 0 refused completions; 1 block recovered through a requeue note |
+| `frostyard/fluent` (Fluent building itself) | 14 items completed, 14 pull requests merged and verified; 8 of them overnight with the operator asleep and a merge gate merging on green CI |
+| Duplicate work | 1 (a second lease re-implemented an item before operator notes existed); fixed the same night by carrying notes and prior results and by the skill's check-for-existing-work step |
+| Findings → children → landed | quality, CI, security, architecture: 4 findings, 4 admitted children, 3 merged, 1 superseded; one finding surfaced an org-level contradiction resolved by core ADR-0038 |
+| Operator-control and authority boundaries | 0 violations |
+
+The `bketelsen/fluent` history from the first host-local trial (40 completed
+items, no pull requests) remains in the queue as provenance and is not counted
+above.
 
 ## Users
 
@@ -1551,8 +1566,10 @@ not yet report them to Fluent. That column stays open.
     views. No universal status field MAY own a subject lifecycle.
 329. RepositoryController, FleetController, and ProcessObserver MUST operate on
     the shared typed store rather than private copies of truth. V1 MUST retain
-    SQLite and bootstrap the target control plane in a fresh database. It MUST
-    NOT import, reinterpret, dual-write, or read through queue-spike rows.
+    SQLite. Under ADR-0059 the queue store is the v1 work engine and the
+    control-plane store is the authority and observation sidecar; neither
+    MUST import, reinterpret, dual-write, or read through the other's rows —
+    claim eligibility is the only coupling.
 330. Every subject reference MUST contain both a registered `subject_kind` and
     its kind-specific opaque canonical `subject_id`. General control-plane code
     MUST NOT interpret an untyped ID or infer identity from payload shape.
@@ -1637,10 +1654,10 @@ not yet report them to Fluent. That column stays open.
     dependency edges, revision bindings, output schema, invalidation behavior,
     and named consumers; changed or conflicted inputs MUST make the derivation
     stale rather than rewrite it.
-349. A queue-spike row MUST NOT establish a target fact or reserve a target
-    identity. A still-useful spike objective MUST be re-authored through the
-    current target authority path and receive new identity, provenance, time,
-    and transaction order.
+349. A queue row MUST NOT establish a control-plane fact or reserve a
+    control-plane identity, and a control-plane record MUST NOT create,
+    admit, or lease queue work. Each store's records are truth for its own
+    concern (ADR-0059).
 350. V1 information classes MUST be exactly `public`, `organization`, and
     `restricted`, ordered from least to most restrictive. Unknown classes MUST
     fail closed, and `public` classification MUST NOT itself authorize an
@@ -1755,10 +1772,10 @@ not yet report them to Fluent. That column stays open.
     watermark, freshness, and information behavior. No universal status or
     cached inbox action MAY replace independent facts or current disposition
     authority.
-374. The queue spike's `work_items.status` MUST remain truthful source state for
-    its live prototype contract until coordinated replacement code and spec
-    changes land. Target projection tables or caches MUST NOT become a silent
-    alternate claim path, and target runtime MUST NOT read through spike state.
+374. The queue store's `work_items.status` and admission flag MUST remain the
+    truthful source state for claims under the work-queue contract; no
+    projection, cache, or surface view MAY become an alternate claim path,
+    and the control-plane store MUST NOT read through queue state.
 375. Every committed write transaction creating durable records MUST receive a
     monotonically increasing transaction sequence, and every record within it a
     deterministic transaction position. Their pair MUST be the canonical total
@@ -1816,11 +1833,10 @@ not yet report them to Fluent. That column stays open.
     command version MUST fail. Receipt retention MUST be versioned per command
     and no shorter than the unsafe duplicate-effect window; purging MUST NOT
     permit reuse of domain identity or rewriting prior history.
-389. Queue-spike IDs, events, timestamps, ordering, actors, leases, results, and
-    admission values MUST remain only in a read-only archive or secret-safe
-    export and MUST NOT enter target records. Target records begin at their
-    actual target transaction sequence and MUST NOT fabricate continuity with
-    spike history.
+389. Queue identities, events, leases, results, and admission values are the
+    durable work history and evolve only through the queue's forward-only
+    migration ladder; control-plane records begin at their own transaction
+    sequence and MUST NOT fabricate continuity with queue history.
 
 ## Non-goals
 
@@ -1889,10 +1905,13 @@ The code retains the host-local queue vertical slice described by the
 - optional local-model queue-clerk compatibility outside the control path; and
 - tests for current admission, lease, lineage, concurrency, and MCP boundaries.
 
-That disposable spike does **not** implement the target control plane described
-below. FleetController, ProcessObserver, worker grants, the factored scheduler,
-OperatorInbox, maintenance roles, the feature-delivery pipeline, GitHub
-artifact observation, and outcome fact establishment remain unimplemented.
+Under ADR-0059 that queue is the v1 work engine, not a disposable spike, and
+since 2026-08-18 it also carries operator notes, prior results, source
+references, derived delivery, stale-intent preconditions, and the operator
+surface's first slice of OperatorInbox (ADR-0060). FleetController,
+ProcessObserver, worker grants, the factored scheduler, maintenance roles as
+typed contracts, the feature-delivery pipeline, webhook-based GitHub
+observation, and outcome fact establishment remain unimplemented.
 
 The separate target [control-plane kernel](../design/control-plane-kernel.md)
 now implements clean database identity, a distinct stable implicit local-
@@ -2172,8 +2191,12 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   [ADR-0042](../adr/0042-use-rebuildable-projections-only-as-read-models.md),
   with time and record ordering defined by
   [ADR-0043](../adr/0043-order-records-by-transaction-sequence-not-timestamps.md),
-  with clean replacement of the queue-spike database defined by
-  [ADR-0044](../adr/0044-replace-the-queue-spike-database.md), with canonical
+  with the queue store adopted as the v1 work engine by
+  [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md)
+  (superseding [ADR-0044](../adr/0044-replace-the-queue-spike-database.md))
+  and the operator surface brought forward by
+  [ADR-0060](../adr/0060-bring-the-operator-surface-forward-as-a-read-first-inbox.md),
+  with canonical
   source ownership established by
   [ADR-0045](../adr/0045-host-fluent-under-frostyard.md), with Core source
   freshness separated from admission readiness by

@@ -11,14 +11,31 @@ Fluent's canonical source is `frostyard/fluent` under
 [ADR-0045](../adr/0045-host-fluent-under-frostyard.md). Organization ownership
 does not itself enroll the repository in the fleet.
 
-**Re-sequenced 2026-08-17.** Under
+**Status 2026-08-18.** Under
 [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md) the
-queue store is the v1 work engine and the
-[recovery plan](recover.md) carries the current delivery order. Phases 2–4
-below are no longer prerequisites for a matched work item; Phase 5's "done
-when" was achieved by the recovery plan's Phase 5 on the queue store on
-2026-08-17 (`frostyard/updex`), and Phases 6–10 resume behind it. The phase text below is retained as the accepted
-long-range direction, not the next work.
+queue store is the v1 work engine; the
+[recovery plan](recover.md) carried the delivery order from 2026-08-17 and its
+Phases 0–6 are complete. What that means for the phases below:
+
+| Roadmap phase | Status |
+| --- | --- |
+| 0 language and docs | completed |
+| 1 control-plane kernel | completed as the authority/observation sidecar; not the work path |
+| 2 core authoring contract | repository declarations, surfaces, governance, verification profiles, and Goals published; remaining record kinds open, no longer a prerequisite for work |
+| 3 durable control-plane store | completed for what the sidecar needs; the queue store's own migration ladder is the durable work store |
+| 4 GitHub observation | parked at registry v18 / schema v8; on-demand artifact verification serves v1 |
+| 5 coordinate one repository end to end | **achieved 2026-08-17** on the queue store — enrollment gate, matched items, leases, verified artifacts, decisions, all on one item and its events |
+| 6 dogfood maintenance programs | running: quality, CI, security, and architecture discovery roots on updex, each finding admitted and landed; no restricted-finding storage yet |
+| 7 measure and stop failing processes | not started; the event ledger and `events --since` are its inputs |
+| 8 repository relationships | not started |
+| 9 feature initiative | not started |
+| 10 operate v1 as a product | first slice shipped 2026-08-18 — operator surface (ADR-0060), single-host deployment, timers, backups; fleet views, grants, process health, and restricted views remain |
+
+**Next steps** are the recovery plan's [Phase 7](recover.md#phase-7-settle-in-next):
+install on the host, a week of steady state on two repositories with daily
+numbers, a second enrolled repository, small surface follow-ups, then PRD
+targets. The phase text below is the accepted long-range direction and is
+annotated, not rewritten.
 
 ## Phase 0 — Canonical language and documentation integrity (completed)
 

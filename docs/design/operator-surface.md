@@ -11,6 +11,9 @@ Contract: [work queue](../specs/work-queue.md). Operating context:
 
 ## Overview
 
+Shipped 2026-08-18 through Fluent's own queue (frostyard/fluent#16–#19, #22–#24)
+and running on the operator host; this document describes it as built.
+
 The operator surface is a small server-rendered web application, served by
 Fluent's existing Hono app on the operator host, that shows the queue the way
 the operator thinks about it — *what needs me*, *what is each repository

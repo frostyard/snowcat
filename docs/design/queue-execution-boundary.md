@@ -185,11 +185,13 @@ operator step the guard cannot perform.
   Fluent MCP servers after upgrading; the database triggers and schema-version
   guard turn a forgotten restart into a hard write failure rather than silent
   drift, but only the operator can restart the process.
-- The spike serves MCP over stdio, so the MCP host and Fluent checkout share a
-  machine. Remote Incus clients will need authenticated Streamable HTTP or an
-  equivalent bridge before production use.
-- The spike uses Node's built-in SQLite API. The production runtime and storage
-  support policy remain unresolved.
+- MCP is served over stdio, so the MCP host and Fluent checkout share a
+  machine (containers on that host included). Remote clients need
+  authenticated Streamable HTTP and per-worker grants; that is the deferred
+  set named in the runbook's Deployment section and gets its own ADR when the
+  first off-host worker is needed.
+- The queue uses Node's built-in SQLite API in WAL mode; PostgreSQL waits for
+  measured need (roadmap "Later").
 - The optional Flue HTTP app listens on all interfaces on `PORT` (default
   `3000`). Its `/agents/*` routes fail closed unless `FLUENT_APP_TOKEN` is set
   and require an exact `Authorization: Bearer <token>` header. The unauthenticated
