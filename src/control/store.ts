@@ -7709,8 +7709,12 @@ export class ControlPlaneStore {
         if (surface.result === "valid") {
           try {
             validateRepositoryGovernanceBytes(Buffer.from(canonicalJson(surface.governancePolicy!), "utf8"));
-          } catch {
-            throw new Error(`repository surface governance lineage mismatch: ${String(row.record_id)}`);
+          } catch (error) {
+            // Distinguish a policy that no longer validates from a validator
+            // that could not run (for example a build that did not ship the
+            // bundled schema); both fail closed, but the operator needs the cause.
+            const detail = error instanceof Error ? error.message : String(error);
+            throw new Error(`repository surface governance lineage mismatch: ${String(row.record_id)} (${detail})`);
           }
         }
       }
