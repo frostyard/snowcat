@@ -49,6 +49,7 @@ export function buildQueueMcpServer(
       instructions: [
         "Claim at most one work item unless the operator explicitly requests a loop.",
         "Perform only the allowedActions listed on the claimed item.",
+        "Before changing anything, check whether the work already exists: read operatorNotes when present and look for pull requests that reference the item's sourceRef issue; re-report or block rather than opening a duplicate.",
         "Never broaden child permissions beyond delegableActions.",
         "Complete work with concrete evidence and bounded follow-up items.",
       ].join(" "),
