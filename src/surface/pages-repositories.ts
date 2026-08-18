@@ -1,5 +1,5 @@
 import type { ObservableWorkItem } from "../queue/types.ts";
-import { html, type SafeHtml } from "./html.ts";
+import { html, raw, type SafeHtml } from "./html.ts";
 import { clock, document, itemPath, objective, repositoryPath, shell, type PageContext } from "./pages.ts";
 import type { BoardData, CompletedRow, LeasedRow, RepositoryEnrollment, RepositoryIndexData } from "./repositories.ts";
 import { shortLabel, workerFamily } from "./repositories.ts";
@@ -25,6 +25,34 @@ export function repositoriesPage(context: PageContext, data: RepositoryIndexData
   );
 }
 
+/** The board fragments the live script refetches; each renders one element with that id. */
+export const boardPartials = ["stats", "queued", "leased", "completed"] as const;
+export type BoardPartial = (typeof boardPartials)[number];
+
+export function boardPartial(data: BoardData, partial: BoardPartial): string {
+  switch (partial) {
+    case "stats":
+      return boardStats(data).value;
+    case "queued":
+      return column("Queued · claim order", `${data.queued.length}`, data.queued.map(queuedRow), "Nothing queued.", "queued").value;
+    case "leased":
+      return column("Leased", `${data.leased.length}`, data.leased.map(leasedRow), "No active leases.", "leased").value;
+    case "completed":
+      return column("Completed", `${data.stats.completedToday} today`, data.completed.map(completedRow), "Nothing completed yet.", "completed").value;
+  }
+}
+
+function boardStats(data: BoardData): SafeHtml {
+  const tile = (label: string, value: string | number, caption: string) =>
+    html`<div class="ph-stat"><span>${label}</span><strong>${value}</strong><small>${caption}</small></div>`;
+  return html`<div class="ph-stats" id="stats">
+        ${tile("Queued", data.stats.queued, data.stats.queuedCaption)}
+        ${tile("Leased", data.stats.leased, data.stats.leasedCaption)}
+        ${tile("Completed today", data.stats.completedToday, data.stats.completedTodayCaption)}
+        ${tile("Merged / attempts", `${data.stats.merged} / ${data.stats.attempts}`, data.stats.mergedCaption)}
+      </div>`;
+}
+
 export function boardPage(context: PageContext, data: BoardData): string {
   const enrollment = data.enrollment;
   const facts = enrollment
@@ -37,19 +65,12 @@ export function boardPage(context: PageContext, data: BoardData): string {
   const actions = html`${enrollmentBadge(enrollment, context.controlPlanePath !== undefined)}${enrollment?.held ? html` <span class="ph-badge danger">held</span>` : ""}${
     facts.length > 0 ? html`<span class="fl-facts">${facts.join(" · ")}</span>` : ""
   }<button class="ph-button reject" disabled title="Repository actions land in a later slice">Hold repository</button><button class="ph-button secondary" disabled title="Repository actions land in a later slice">Import issues</button><button class="ph-button secondary" disabled title="Repository actions land in a later slice">Seed dogfood</button>`;
-  const tile = (label: string, value: string | number, caption: string) =>
-    html`<div class="ph-stat"><span>${label}</span><strong>${value}</strong><small>${caption}</small></div>`;
   return document(
     `${data.repository} · Fluent`,
     shell(
       context,
       { title: data.repository, eyebrow: "repository · board", heading: data.repository, active: "repositories", actions, refresh: true, repository: data.repository },
-      html`<div class="ph-stats">
-        ${tile("Queued", data.stats.queued, data.stats.queuedCaption)}
-        ${tile("Leased", data.stats.leased, data.stats.leasedCaption)}
-        ${tile("Completed today", data.stats.completedToday, data.stats.completedTodayCaption)}
-        ${tile("Merged / attempts", `${data.stats.merged} / ${data.stats.attempts}`, data.stats.mergedCaption)}
-      </div>
+      html`${boardStats(data)}
       ${data.truncated.length > 0 ? html`<div class="fl-error">Showing the first 100 rows of: ${data.truncated.join(", ")}. Use the CLI for the full list.</div>` : ""}
       ${
         !data.optedIn
@@ -57,12 +78,12 @@ export function boardPage(context: PageContext, data: BoardData): string {
           : ""
       }
       <div class="fl-board">
-        ${column("Queued · claim order", `${data.queued.length}`, data.queued.map(queuedRow), "Nothing queued.", "queued")}
-        ${column("Leased", `${data.leased.length}`, data.leased.map(leasedRow), "No active leases.", "leased")}
-        ${column("Completed", `${data.stats.completedToday} today`, data.completed.map(completedRow), "Nothing completed yet.", "completed")}
+        ${raw(boardPartial(data, "queued"))}
+        ${raw(boardPartial(data, "leased"))}
+        ${raw(boardPartial(data, "completed"))}
       </div>`,
     ),
-    { refresh: true },
+    { refresh: true, live: { page: repositoryPath(data.repository), partials: boardPartials, repository: data.repository } },
   );
 }
 

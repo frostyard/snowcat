@@ -95,13 +95,27 @@ tokens beyond SameSite cookies and same-origin form posts.
 
 ### Rendering and liveness
 
-Server-rendered HTML through Hono's JSX or a small template layer, styled per
-the `frostyard-design` skill and its assets from `frostyard/design-system`
-(tokens, type, components). No client-side application framework. First
-slice: pages refresh on an interval; second: an event stream from
-`eventsSince` ([frostyard/fluent#2](https://github.com/frostyard/fluent/issues/2))
-drives the inbox and board without reloads. Every page prints the queue and
-control-plane database paths it is reading, the same way `metadata` does.
+Server-rendered HTML through a small template layer (`src/surface/html.ts`),
+styled per the `frostyard-design` skill and its assets from
+`frostyard/design-system` (tokens, type, components). No client-side
+application framework. Liveness comes from `GET /events/stream`
+([frostyard/fluent#23](https://github.com/frostyard/fluent/issues/23)):
+Server-Sent Events, session-guarded like every surface route, that send the
+current last sequence as a `cursor` event on connect, then poll
+`eventsSince(cursor, {limit: 500})` every 2 seconds and emit one `event` per
+ledger event (`sequence`, `type`, `workItemId`, `repository`, `kind`,
+`sourceRef`, `status`, `actor`, `occurredAt` — identifying fields only, never
+the payload or a lease token), with an optional `?repository=` filter and a
+keep-alive comment every 25 seconds; the loop ends when the client goes away.
+The inbox and repository board carry one inline script (no framework, nothing
+loaded from another host) that subscribes with `EventSource`, prepends events
+to the rail (cap 30), and after a `work.*` or `artifact.verified` event
+refetches the page's groups as fragments (`GET /?partial=stats|proposals|
+blocked|unverified`, `GET /repositories/:owner/:name?partial=stats|queued|
+leased|completed`) and swaps them in; the 30-second meta refresh survives only
+inside `<noscript>`, and a browser with scripts but no `EventSource`
+re-inserts it. Every page prints the queue and control-plane database paths
+it is reading, the same way `metadata` does.
 
 ### What it does not do
 
@@ -153,9 +167,10 @@ Phase 10 and later.
   banner. Inline on the inbox: approve/reject, requeue-with-note/cancel,
   re-verify; the item page's *Decide* card offers every action its state
   allows. The board's Hold / Import issues / Seed dogfood remain disabled
-  until [#24](https://github.com/frostyard/fluent/issues/24). The inbox and
-  board refresh with `<meta http-equiv="refresh" content="30">` until the
-  event stream lands. Pages inline their stylesheet (Frostyard tokens and the
+  until [#24](https://github.com/frostyard/fluent/issues/24). The event
+  stream and live inbox/board shipped with
+  [#23](https://github.com/frostyard/fluent/issues/23) (see "Rendering and
+  liveness"); the meta refresh remains only as the `<noscript>` fallback. Pages inline their stylesheet (Frostyard tokens and the
   Pilothouse shell copied into [`src/surface/styles.ts`](../../src/surface/styles.ts));
   nothing is fetched from another host. Every page footer prints the queue
   and control-plane database paths.
