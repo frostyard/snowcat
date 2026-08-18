@@ -1,8 +1,10 @@
 # Fluent feeder: for every repository that is opted in to the queue and
 # `enrolled` in the control-plane store, seeds the standing read-only discovery
 # roots, imports open GitHub issues labeled `fluent` as proposed work (the
-# operator admits them), and sweeps the internal dependency chain (release-
-# needed / dependency-bump proposals). All steps are idempotent; run from
+# operator admits them), sweeps the internal dependency chain (release-
+# needed / dependency-bump proposals), and diffs each repository's GitHub
+# settings against core's contract (settings-drift proposals). All steps are
+# idempotent; run from
 # fluent-feed.timer. ExecStart= lines on a oneshot unit run in order and each
 # runs only if the previous exited 0, so a feeder failure also skips the later
 # steps and the unit reports failed. The import and the sweep need
@@ -12,7 +14,7 @@
 # FLUENT_CONTROL_DB, and FLUENT_GITHUB_TOKEN. `npm` must resolve on systemd's
 # fixed search path (/usr/local/bin or /usr/bin).
 [Unit]
-Description=Fluent: seed discovery roots, import labeled issues, and sweep internal dependencies for enrolled repositories
+Description=Fluent: seed discovery roots, import labeled issues, sweep internal dependencies, and check repository settings for enrolled repositories
 Documentation=https://github.com/frostyard/fluent/blob/main/docs/design/queue-operations.md
 After=network-online.target
 Wants=network-online.target
@@ -23,6 +25,7 @@ EnvironmentFile=/etc/fluent/env
 ExecStart=npm --prefix ${FLUENT_HOME} run --silent queue -- seed-dogfood --enrolled
 ExecStart=npm --prefix ${FLUENT_HOME} run --silent queue -- import-issues --enrolled --label fluent
 ExecStart=npm --prefix ${FLUENT_HOME} run --silent queue -- sweep-dependencies --enrolled
+ExecStart=npm --prefix ${FLUENT_HOME} run --silent queue -- sweep-repository-settings --enrolled
 NoNewPrivileges=yes
 # PrivateTmp gives tsx a writable compile cache under a private /tmp.
 PrivateTmp=yes

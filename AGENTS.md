@@ -197,7 +197,11 @@ removed. -->
   and `control` commands (`seed-dogfood --enrolled`, `import-issues
   --enrolled --label fluent`, then `sweep-dependencies --enrolled` — the
   mechanical release-needed / dependency-bump proposals in
-  [`src/queue/internal-dependencies.ts`](src/queue/internal-dependencies.ts);
+  [`src/queue/internal-dependencies.ts`](src/queue/internal-dependencies.ts)
+  — then `sweep-repository-settings --enrolled` — read-only drift of each
+  repository's GitHub settings against core's repository settings contract
+  (ADR-0040) in [`src/queue/repository-settings.ts`](src/queue/repository-settings.ts),
+  applied only by a human with core's `scripts/apply-repo-settings.sh`;
   `verify-artifacts`; `backup`); never add a
   scheduler, daemon, or MCP tool inside Fluent for
   them. `npm run check:deploy` (part of `check`; needs `shellcheck` and
