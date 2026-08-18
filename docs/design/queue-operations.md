@@ -179,9 +179,9 @@ or was unavailable — reported and skipped while the others still run), and
 works for a repository that is opted in but not enrolled, or for a different
 label.
 
-**Standing maintenance** — one bounded, read-only discovery root per specialty
-(quality, CI, security, architecture), each of which may propose one
-implementation child:
+**Standing maintenance** — one bounded, read-only discovery root per
+maintenance program (quality, CI, security, architecture), each of which may
+propose one implementation child:
 
 ```bash
 npm run --silent queue -- seed-dogfood frostyard/updex                    # cooldown 24 h
@@ -189,13 +189,20 @@ npm run --silent queue -- seed-dogfood frostyard/updex --cooldown-hours 0 # igno
 npm run --silent queue -- seed-dogfood --enrolled                         # every opted-in + enrolled repository
 ```
 
-The feeder is idempotent: a specialty with active lineage is skipped, and one
+The feeder is idempotent: a program with active lineage is skipped, and one
 that just completed with no finding is reported as `cooledKinds` rather than
 re-asked. `--enrolled` requires `FLUENT_CONTROL_DB` (it exits non-zero naming
 the variable otherwise), reads the control-plane store once, and runs the
 feeder in one transaction per repository that is both opted in and `enrolled`,
 printing each repository's result plus any enrolled repository that is not
-opted in (`notOptedIn`). It is the first thing `fluent-feed.timer` runs hourly,
+opted in (`notOptedIn`). **`--enrolled` honors the Core declaration:** each
+repository is seeded only for the programs its `maintenance_programs` lists
+(a repository declaring `["quality","ci"]` gets two roots, not four), and the
+result names the catalog kinds it left out as `undeclaredKinds`. Explicit
+`seed-dogfood <owner/repo>` seeds every program regardless — use it only for
+a repository outside the enrollment gate. (Before 2026-08-18 the feeder
+ignored the list: updex declared `quality, ci` and ran four programs for two
+days.) It is the first thing `fluent-feed.timer` runs hourly,
 followed by the labeled-issue import above (see
 [Deployment](#deployment-v1-decided-2026-08-17)). These roots are admitted
 immediately (they are read-only); their children are not.
@@ -301,8 +308,9 @@ Three more views sit behind the same session:
   *Repository actions* strip under the header runs the CLI's repository-level
   commands as `operator:web`: **Import issues** (label, default `fluent`, and
   optional priority — the same import as `queue -- import-issues`, so a second
-  run creates nothing), **Seed dogfood** (the four discovery roots with the
-  24-hour cooldown), **Verify artifacts** (`verify-artifacts` for that
+  run creates nothing), **Seed dogfood** (the discovery roots for the programs
+  the Core declaration lists — the whole catalog only for an undeclared
+  opt-in — with the 24-hour cooldown), **Verify artifacts** (`verify-artifacts` for that
   repository), and, when `FLUENT_CONTROL_DB` is set and the repository is
   declared, **Hold repository** / **Clear hold** with a reason — the same
   attributed local-operator decision as `repository -- hold | clear-hold`,

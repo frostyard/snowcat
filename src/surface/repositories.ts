@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
+import type { RepositoryMaintenanceProgram } from "../control/registry.ts";
 import { ControlPlaneStore, type RepositoryStatus } from "../control/store.ts";
 import type { QueueStore } from "../queue/store.ts";
 import { withoutLeaseToken, type ObservableWorkItem, type WorkStatus } from "../queue/types.ts";
@@ -22,6 +23,8 @@ export interface RepositoryEnrollment {
   /** The exact repository commit the surface reconciliation read. */
   surfaceCommit?: string;
   held: boolean;
+  /** The Core declaration's `maintenance_programs`; the dogfood feeder seeds only these. */
+  maintenancePrograms: RepositoryMaintenanceProgram[];
 }
 
 export interface RepositoryIndexRow {
@@ -102,6 +105,7 @@ function enrollmentOf(slug: string, status: RepositoryStatus, coreCommit: string
     coreCommit,
     surfaceCommit: status.repositoryCommitId ?? undefined,
     held: status.operatorHold?.choice === "impose",
+    maintenancePrograms: [...status.maintenancePrograms],
   };
 }
 

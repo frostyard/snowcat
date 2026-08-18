@@ -7,6 +7,7 @@ import { importLabeledIssues } from "../queue/github-issues.ts";
 import { enqueueDogfoodBatch } from "../queue/seeds.ts";
 import type { QueueStore } from "../queue/store.ts";
 import { MutationInputError, type MutationOutcome } from "./mutations.ts";
+import type { RepositoryEnrollment } from "./repositories.ts";
 
 /** A repository action that needs the control plane but the host has none configured. */
 export class ControlPlaneUnavailableError extends Error {
@@ -66,17 +67,25 @@ export async function applyImportIssues(
   };
 }
 
-/** Board "Seed dogfood": the standing discovery roots with the default 24-hour no-finding cooldown. */
+/**
+ * Board "Seed dogfood": the standing discovery roots with the default 24-hour
+ * no-finding cooldown. A repository declared in the control plane is seeded
+ * only for the programs its declaration lists — the same narrowing as
+ * `seed-dogfood --enrolled` — while an undeclared opt-in gets the whole
+ * catalog, like `seed-dogfood <owner/repo>`.
+ */
 export function applySeedDogfood(
   queue: QueueStore,
   repository: string,
-): MutationOutcome & { created: string[]; skippedKinds: string[]; cooledKinds: string[] } {
-  const result = enqueueDogfoodBatch(queue, repository);
+  enrollment?: RepositoryEnrollment,
+): MutationOutcome & { created: string[]; skippedKinds: string[]; cooledKinds: string[]; undeclaredKinds: string[] } {
+  const result = enqueueDogfoodBatch(queue, repository, enrollment ? { programs: enrollment.maintenancePrograms } : {});
   return {
     eventType: result.created.length > 0 ? "work.queued" : "seed.unchanged",
     created: result.created.map((item) => item.kind),
     skippedKinds: result.skippedKinds,
     cooledKinds: result.cooledKinds,
+    undeclaredKinds: result.undeclaredKinds,
   };
 }
 

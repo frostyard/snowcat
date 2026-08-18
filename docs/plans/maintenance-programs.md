@@ -18,19 +18,25 @@ operator admits; a worker lands it through one pull request; Fluent verifies
 the artifact. Programs differ in what they look at, how often, and whether
 their children may be admitted on creation.
 
-## Phase 1 — Honor the declaration (small)
+## Phase 1 — Honor the declaration (small) — done 2026-08-18
 
-- `seed-dogfood --enrolled` (and the board's Seed dogfood) seed only the
-  programs the repository's Core declaration lists in `maintenance_programs`
-  (`ControlPlaneStore.repositoryStatuses().maintenancePrograms`); a
-  repository declaring `["quality","ci"]` gets two roots, not four. Explicit
-  `seed-dogfood <owner/repo>` may still seed all four for a repository not
-  under the gate; say so in the runbook.
-- Record the observation that updex declared `quality, ci` and ran four
-  programs for two days because the feeder ignored the list.
+- `seed-dogfood --enrolled` (and the board's Seed dogfood for a declared
+  repository) seed only the programs the repository's Core declaration lists
+  in `maintenance_programs` (`enrolledRepositoryPrograms` in
+  `src/queue/eligibility.ts`, read from
+  `ControlPlaneStore.repositoryStatuses().maintenancePrograms`); a
+  repository declaring `["quality","ci"]` gets two roots, not four, and the
+  result names the omitted kinds as `undeclaredKinds`. Explicit
+  `seed-dogfood <owner/repo>` still seeds all four for a repository not under
+  the gate; the runbook says so.
+- Observation recorded in the runbook: updex declared `quality, ci` and ran
+  four programs for two days (2026-08-16 to 2026-08-18) because the feeder
+  ignored the list.
 - **Done when:** a fixture-enrolled repository declaring two programs receives
   exactly those two roots from `--enrolled`, and the runbook says which
-  command honors the declaration.
+  command honors the declaration. — Met: `test/seeds.test.ts`,
+  `test/cli.test.ts`, and `test/surface.test.ts` assert the two-root result;
+  the [runbook](../design/queue-operations.md) names `--enrolled`.
 
 ## Phase 2 — Program catalog with cadence (small)
 

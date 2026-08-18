@@ -1,17 +1,26 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
+import type { RepositoryMaintenanceProgram } from "../control/registry.ts";
 import { ControlPlaneStore } from "../control/store.ts";
 import type { ClaimEligibility, QueueStoreOptions } from "./store.ts";
 
+export interface EnrolledRepositoryPrograms {
+  /** `owner/name` as Core declares it. */
+  slug: string;
+  /** The declaration's `maintenance_programs`, in declared order. */
+  maintenancePrograms: RepositoryMaintenanceProgram[];
+}
+
 /**
- * The `owner/name` slugs whose effective control-plane state is `enrolled`,
- * which already excludes disabled and paused declarations, unresolved GitHub
- * identity or surfaces, and operator holds. The store is opened fresh per call
- * so a long-lived process always sees the current facts. A missing or
- * unreadable database throws rather than opening or creating anything.
+ * The repositories whose effective control-plane state is `enrolled` — which
+ * already excludes disabled and paused declarations, unresolved GitHub
+ * identity or surfaces, and operator holds — with the maintenance programs
+ * each declaration lists. The store is opened fresh per call so a long-lived
+ * process always sees the current facts. A missing or unreadable database
+ * throws rather than opening or creating anything.
  */
-export function enrolledRepositories(controlPlanePath: string): string[] {
+export function enrolledRepositoryPrograms(controlPlanePath: string): EnrolledRepositoryPrograms[] {
   const path = resolve(controlPlanePath);
   if (!existsSync(path)) {
     throw new Error(`control-plane database does not exist: ${path} (FLUENT_CONTROL_DB); unset it to run on queue opt-in alone`);
@@ -21,10 +30,15 @@ export function enrolledRepositories(controlPlanePath: string): string[] {
     return store
       .repositoryStatuses()
       .filter((status) => status.effectiveState === "enrolled")
-      .map((status) => `${status.owner}/${status.name}`);
+      .map((status) => ({ slug: `${status.owner}/${status.name}`, maintenancePrograms: [...status.maintenancePrograms] }));
   } finally {
     store.close();
   }
+}
+
+/** The `owner/name` slugs of `enrolledRepositoryPrograms`. */
+export function enrolledRepositories(controlPlanePath: string): string[] {
+  return enrolledRepositoryPrograms(controlPlanePath).map((entry) => entry.slug);
 }
 
 /**

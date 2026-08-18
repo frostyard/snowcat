@@ -313,6 +313,31 @@ test("a no-finding assessment cools its kind for the window, while a finding doe
   assert.throws(() => enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { cooldownSeconds: -1 }), /non-negative/);
 });
 
+test("an explicit program list narrows the batch to those programs and reports the rest as undeclared", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-dogfood-programs-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled(DOGFOOD_REPOSITORY, true);
+
+  const narrowed = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { programs: ["architecture"] });
+  assert.deepEqual(narrowed.created.map((item) => item.kind), ["architecture-gap-discovery"]);
+  assert.deepEqual(narrowed.undeclaredKinds, ["quality-gap-discovery", "ci-gap-discovery", "security-gap-discovery"]);
+  assert.deepEqual(narrowed.skippedKinds, []);
+
+  // No programs declared: nothing is offered, and nothing is reported active or cooling.
+  const none = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { programs: [] });
+  assert.deepEqual(none.created, []);
+  assert.deepEqual(none.undeclaredKinds.length, 4);
+  assert.deepEqual(none.skippedKinds, []);
+
+  // Omitting the list is the whole catalog: the architecture lineage is active, the other three are created.
+  const whole = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY);
+  assert.deepEqual(whole.created.map((item) => item.kind).sort(), ["ci-gap-discovery", "quality-gap-discovery", "security-gap-discovery"]);
+  assert.deepEqual(whole.skippedKinds, ["architecture-gap-discovery"]);
+  assert.deepEqual(whole.undeclaredKinds, []);
+  assert.equal(queue.list({ repository: DOGFOOD_REPOSITORY }).length, 4);
+});
+
 test("the enrolled feeder seeds only repositories that are opted in and enrolled, one transaction each", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fluent-dogfood-enrolled-test-"));
   const controlPath = join(directory, "control-plane.db");
@@ -336,15 +361,16 @@ test("the enrolled feeder seeds only repositories that are opted in and enrolled
   queue.setRepositoryEnabled("frostyard/other", true);
   assert.deepEqual(queue.enabledRepositories(), ["FrostYard/Example", "frostyard/other", "frostyard/retired"]);
 
+  // The example declaration lists `quality` and `ci`, so only those two programs are seeded.
   const first = enqueueDogfoodBatchForEnrolled(queue, controlPath);
   assert.deepEqual(first.notOptedIn, []);
   assert.deepEqual(
-    first.seeded.map((entry) => [entry.repository, entry.created.length, entry.skippedKinds, entry.cooledKinds]),
-    [["FrostYard/Example", 4, [], []]],
+    first.seeded.map((entry) => [entry.repository, entry.programs, entry.created.map((item) => item.kind), entry.skippedKinds, entry.cooledKinds, entry.undeclaredKinds]),
+    [["FrostYard/Example", ["quality", "ci"], ["quality-gap-discovery", "ci-gap-discovery"], [], [], ["security-gap-discovery", "architecture-gap-discovery"]]],
   );
   assert.deepEqual(queue.list({ repository: "frostyard/retired" }), []);
   assert.deepEqual(queue.list({ repository: "frostyard/other" }), []);
-  assert.equal(queue.list({ repository: "FrostYard/Example" }).length, 4);
+  assert.equal(queue.list({ repository: "FrostYard/Example" }).length, 2);
 
   // Re-running skips the active lineages; an enrolled repository that is not opted in is reported, not seeded.
   queue.setRepositoryEnabled("FrostYard/Example", false);
@@ -353,8 +379,8 @@ test("the enrolled feeder seeds only repositories that are opted in and enrolled
   assert.deepEqual(second.notOptedIn, ["frostyard/example"]);
   queue.setRepositoryEnabled("FrostYard/Example", true);
   const third = enqueueDogfoodBatchForEnrolled(queue, controlPath);
-  assert.deepEqual(third.seeded.map((entry) => [entry.repository, entry.created.length, entry.skippedKinds.length]), [
-    ["FrostYard/Example", 0, 4],
+  assert.deepEqual(third.seeded.map((entry) => [entry.repository, entry.created.length, entry.skippedKinds.length, entry.undeclaredKinds.length]), [
+    ["FrostYard/Example", 0, 2, 2],
   ]);
 
   // A missing control-plane database throws instead of seeding anything.
