@@ -169,7 +169,8 @@ test("the operator surface requires a session, sets the cookie on the right toke
   assert.match(proposals, /Reconcile updex with ADR-0022: <span>add the ci target and the reserved-prefix filter\.<\/span>/);
   assert.match(proposals, /<div class="fl-finding"><span>Finding<\/span>ADR-0022 requires make ci; updex has no ci target\.<\/div>/);
   assert.match(proposals, /child of architecture-gap-discovery/);
-  assert.match(proposals, /<button class="ph-button" disabled[^>]*>Approve<\/button>/);
+  assert.match(proposals, /<form class="fl-decide" method="post" action="\/items\/[0-9a-f-]+\/approve"><input type="hidden" name="status" value="proposed"><input type="hidden" name="updatedAt" value="[^"]+"><input type="hidden" name="return" value="\/">/);
+  assert.match(proposals, /<button class="ph-button" type="submit">Approve<\/button><button class="ph-button reject" type="submit" formaction="\/items\/[0-9a-f-]+\/reject">Reject<\/button>/);
 
   // Blocked group with the worker's reason.
   const blocked = section(body, "blocked");
@@ -177,7 +178,9 @@ test("the operator surface requires a session, sets the cookie on the right toke
   assert.match(blocked, /<strong><a href="\/items\/[0-9a-f-]+">quality-implementation<\/a><\/strong>/);
   assert.match(blocked, /blocked \d\d:\d\d by copilot-cli:updex:two/);
   assert.match(blocked, /The client environment denied git staging, so no commit or pull request could be created\./);
-  assert.match(blocked, /<textarea class="fl-note" disabled/);
+  assert.match(blocked, /<form class="fl-exit" method="post" action="\/items\/[0-9a-f-]+\/requeue"><input type="hidden" name="status" value="blocked">/);
+  assert.match(blocked, /<textarea class="fl-note" name="reason"/);
+  assert.match(unverifiedSectionPlaceholder(body), /<form class="fl-inline" method="post" action="\/repositories\/frostyard\/example\/verify-artifacts">/);
 
   // Unverified artifacts group.
   const unverified = section(body, "unverified");
@@ -205,8 +208,8 @@ test("the operator surface requires a session, sets the cookie on the right toke
   assert.equal(body.includes(seeded.leaseToken), false);
   assert.equal(body.includes("leaseToken"), false);
 
-  // Read-only: no enabled mutation control on the page.
-  assert.equal(/<button(?![^>]*disabled)[^>]*>(Approve|Reject|Requeue with note|Cancel|Re-verify)</.test(body), false);
+  // Every mutation is a POST form carrying the precondition; nothing mutates on GET.
+  assert.equal(/<form(?![^>]*method="post")/.test(body.replace(/<form class="fl-logout" method="post"/g, "")), false);
 
   // Logout clears the cookie and the inbox is gated again.
   const logout = await app.request("/logout", { method: "POST", headers: { Cookie: cookie } });
@@ -278,6 +281,10 @@ test("a store that cannot be opened renders 503 after authentication, not a stac
   assert.match(body, /The queue database could not be opened: SQLITE_CANTOPEN/);
   assert.equal(body.includes("    at "), false);
 });
+
+function unverifiedSectionPlaceholder(body: string): string {
+  return section(body, "unverified");
+}
 
 function section(body: string, id: string): string {
   const match = new RegExp(`<(?:section|aside) class="fl-group[^"]*" id="${id}">.*?</(?:section|aside)>`, "s").exec(body);
@@ -460,7 +467,12 @@ test("the item page renders the definition, artifacts with verification, operato
 
   // Header: kicker with the id, h1 kind · repository, status and delivery tags, disabled ghost buttons.
   assert.match(body, new RegExp(`<div class="ph-eyebrow"><i></i>item · ${child.id}</div><h1>quality-implementation · frostyard/updex</h1>`));
-  assert.match(body, /<span class="ph-badge ok">completed<\/span><span class="ph-badge ok">delivery · merged<\/span><button class="ph-button secondary" disabled[^>]*>Re-verify<\/button>/);
+  assert.match(body, /<span class="ph-badge ok">completed<\/span><span class="ph-badge ok">delivery · merged<\/span>/);
+  const actions = section(body, "actions");
+  assert.match(actions, /<h2>Decide<\/h2><span>as operator:web · completed<\/span>/);
+  assert.match(actions, /<form class="fl-inline" method="post" action="\/repositories\/frostyard\/updex\/verify-artifacts">/);
+  assert.match(actions, new RegExp(`<form class="fl-decide" method="post" action="/items/${child.id}/note"><input type="hidden" name="status" value="completed"><input type="hidden" name="updatedAt" value="[^"]+"><input type="hidden" name="return" value="/items/${child.id}">`));
+  assert.equal(actions.includes("/approve"), false);
 
   // Definition.
   const definition = section(body, "definition");
@@ -512,4 +524,152 @@ test("the item page renders the definition, artifacts with verification, operato
   const missing = await app.request("/items/00000000-0000-0000-0000-000000000000", { headers: { Cookie: cookie } });
   assert.equal(missing.status, 404);
   assert.match(await missing.text(), /No work item 00000000-0000-0000-0000-000000000000\./);
+});
+
+test("browser mutations are the CLI's operator commands as operator:web, refuse stale intent, require the session, and never leak a lease token", async () => {
+  const seeded = await seededQueue();
+  test.after(() => seeded.queue.close());
+  const queue = seeded.queue;
+  const proposed = queue.list({ status: "proposed" })[0]!;
+  const blocked = queue.list({ status: "blocked" })[0]!;
+  const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue }) });
+  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const post = (path: string, fields: Record<string, string>, headers: Record<string, string> = { Cookie: cookie }) =>
+    app.request(path, { method: "POST", body: new URLSearchParams(fields), headers });
+  const stale = { status: proposed.status, updatedAt: proposed.updatedAt, return: "/" };
+
+  // No session: refused (redirected to /login) and nothing changes.
+  const anonymous = await post(`/items/${proposed.id}/approve`, stale, {});
+  assert.equal(anonymous.status, 303);
+  assert.equal(anonymous.headers.get("Location"), "/login");
+  assert.equal(queue.get(proposed.id)!.status, "proposed");
+
+  // A cross-site post is refused before touching the store.
+  const crossSite = await post(`/items/${proposed.id}/approve`, stale, { Cookie: cookie, "Sec-Fetch-Site": "cross-site" });
+  assert.equal(crossSite.status, 403);
+  assert.equal(queue.get(proposed.id)!.status, "proposed");
+  const foreignOrigin = await post(`/items/${proposed.id}/approve`, stale, { Cookie: cookie, Origin: "https://evil.example", Host: "127.0.0.1:3000" });
+  assert.equal(foreignOrigin.status, 403);
+  assert.equal(queue.get(proposed.id)!.status, "proposed");
+
+  // Approve via POST: proposed → queued, work.approved by operator:web, redirect back with a banner.
+  const approved = await post(`/items/${proposed.id}/approve`, stale, { Cookie: cookie, "Sec-Fetch-Site": "same-origin" });
+  assert.equal(approved.status, 303);
+  assert.equal(approved.headers.get("Location"), "/?done=work.approved");
+  const afterApprove = queue.get(proposed.id)!;
+  assert.equal(afterApprove.status, "queued");
+  const approvedEvent = queue.events(proposed.id).at(-1)!;
+  assert.equal(approvedEvent.type, "work.approved");
+  assert.equal(approvedEvent.actor, "operator:web");
+  const banner = await (await app.request("/?done=work.approved", { headers: { Cookie: cookie } })).text();
+  assert.match(banner, /<div class="fl-banner" role="status">Recorded work\.approved\.<\/div>/);
+
+  // The same POST replayed with the old updatedAt is refused: 409, item unchanged, no event, page says it changed.
+  const eventsBefore = queue.events(proposed.id).length;
+  const replay = await post(`/items/${proposed.id}/approve`, stale);
+  assert.equal(replay.status, 409);
+  const replayBody = await replay.text();
+  assert.match(replayBody, new RegExp(`This item changed since you read it: it is now queued \\(updated ${afterApprove.updatedAt}\\)\\. Nothing was changed`));
+  assert.deepEqual(queue.get(proposed.id), afterApprove);
+  assert.equal(queue.events(proposed.id).length, eventsBefore);
+  assert.match(replayBody, /<h1>contract-reconciliation · frostyard\/updex<\/h1>/); // the item's current state is rendered
+  assert.equal(replayBody.includes(seeded.leaseToken), false);
+
+  // Wrong-state and missing-input errors render the item page with a banner and change nothing.
+  const wrongState = await post(`/items/${proposed.id}/approve`, { status: "queued", updatedAt: afterApprove.updatedAt });
+  assert.equal(wrongState.status, 409);
+  assert.match(await wrongState.text(), /Approve was not applied: work item is not proposed/);
+  const noReason = await post(`/items/${proposed.id}/defer`, { status: "queued", updatedAt: afterApprove.updatedAt });
+  assert.equal(noReason.status, 400);
+  assert.match(await noReason.text(), /Defer was not applied: Enter a deferral reason\./);
+  const noPrecondition = await post(`/items/${proposed.id}/defer`, { reason: "later" });
+  assert.equal(noPrecondition.status, 400);
+  assert.match(await noPrecondition.text(), /status is required/);
+  assert.deepEqual(queue.get(proposed.id), afterApprove);
+
+  // Requeue with note: appends the operator note, moves the block result to previousResults, records work.requeued.
+  const requeued = await post(`/items/${blocked.id}/requeue`, {
+    status: "blocked",
+    updatedAt: blocked.updatedAt,
+    reason: "Reuse the branch; the client now allows git.",
+    return: `/items/${blocked.id}`,
+  });
+  assert.equal(requeued.status, 303);
+  assert.equal(requeued.headers.get("Location"), `/items/${blocked.id}?done=work.requeued`);
+  const afterRequeue = queue.get(blocked.id)!;
+  assert.equal(afterRequeue.status, "queued");
+  assert.equal(afterRequeue.result, undefined);
+  assert.deepEqual(afterRequeue.previousResults.map((result) => result.summary), [blocked.result!.summary]);
+  assert.deepEqual(
+    afterRequeue.operatorNotes.map((note) => [note.actor, note.action, note.reason]),
+    [["operator:web", "requeue", "Reuse the branch; the client now allows git."]],
+  );
+  assert.equal(queue.events(blocked.id).at(-1)!.type, "work.requeued");
+  assert.equal(queue.events(blocked.id).at(-1)!.actor, "operator:web");
+
+  // Prioritize, note, defer, cancel through their forms; each redirects with its event type.
+  const prioritized = await post(`/items/${blocked.id}/prioritize`, { status: "queued", updatedAt: afterRequeue.updatedAt, priority: "7", reason: "front of line" });
+  assert.equal(prioritized.headers.get("Location"), `/items/${blocked.id}?done=work.prioritized`);
+  assert.equal(queue.get(blocked.id)!.priority, 7);
+  const noted = await post(`/items/${blocked.id}/note`, { status: "queued", updatedAt: queue.get(blocked.id)!.updatedAt, reason: "watch the branch name" });
+  assert.equal(noted.headers.get("Location"), `/items/${blocked.id}?done=work.noted`);
+  const deferred = await post(`/items/${blocked.id}/defer`, { status: "queued", updatedAt: queue.get(blocked.id)!.updatedAt, reason: "hold" });
+  assert.equal(deferred.headers.get("Location"), `/items/${blocked.id}?done=work.deferred`);
+  assert.equal(queue.get(blocked.id)!.status, "proposed");
+  const rejected = await post(`/items/${blocked.id}/reject`, { status: "proposed", updatedAt: queue.get(blocked.id)!.updatedAt, reason: "superseded", return: "https://evil.example/x" });
+  assert.equal(rejected.headers.get("Location"), `/items/${blocked.id}?done=work.rejected`); // off-host return ignored
+  assert.equal(queue.get(blocked.id)!.status, "cancelled");
+  assert.equal(queue.events(blocked.id).at(-1)!.actor, "operator:web");
+
+  // Unknown action and unknown item are 404s.
+  assert.equal((await post(`/items/${blocked.id}/explode`, { status: "cancelled", updatedAt: "x" })).status, 404);
+  assert.equal((await post(`/items/00000000-0000-0000-0000-000000000000/note`, { status: "queued", updatedAt: "2026-01-01T00:00:00.000Z", reason: "x" })).status, 404);
+
+  // GET never mutates: the item pages and inbox are unchanged by reads.
+  const snapshot = queue.list({ limit: 100 }).map((item) => [item.id, item.status, item.updatedAt]);
+  await app.request(`/items/${blocked.id}`, { headers: { Cookie: cookie } });
+  await app.request("/", { headers: { Cookie: cookie } });
+  assert.deepEqual(queue.list({ limit: 100 }).map((item) => [item.id, item.status, item.updatedAt]), snapshot);
+});
+
+test("re-verify from the browser refreshes a repository's pending artifacts as operator:web and reports counts", async () => {
+  const seeded = await seededQueue();
+  test.after(() => seeded.queue.close());
+  const queue = seeded.queue;
+  const requests: string[] = [];
+  const fetcher = (async (input: RequestInfo | URL) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    requests.push(url.pathname);
+    if (url.pathname === "/repos/frostyard/example/pulls/5") {
+      return new Response(
+        JSON.stringify({ number: 5, html_url: "https://github.com/frostyard/example/pull/5", state: "closed", merged: true, merged_at: "2026-08-18T01:00:00Z", closed_at: "2026-08-18T01:00:00Z", head: { sha: "abcdef0123456789abcdef0123456789abcdef01" }, base: { repo: { full_name: "frostyard/example" } } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response("{}", { status: 404 });
+  }) as typeof fetch;
+  const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue, verifier: { fetcher, clock: () => new Date("2026-08-18T02:00:00.000Z") } }) });
+  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+
+  const anonymous = await app.request("/repositories/frostyard/example/verify-artifacts", { method: "POST", body: new URLSearchParams({ return: "/" }) });
+  assert.equal(anonymous.status, 303);
+  assert.equal(requests.length, 0);
+
+  const verified = await app.request("/repositories/frostyard/example/verify-artifacts", { method: "POST", body: new URLSearchParams({ return: "/" }), headers: { Cookie: cookie } });
+  assert.equal(verified.status, 303);
+  assert.equal(verified.headers.get("Location"), "/?done=artifact.verified&detail=1+checked%2C+1+updated%2C+0+rejected%2C+0+unavailable");
+  assert.deepEqual(requests, ["/repos/frostyard/example/pulls/5"]);
+  const item = queue.get(seeded.unverifiedSeed.id)!;
+  assert.equal(item.result!.artifacts[0]!.verification!.status, "verified");
+  assert.equal(item.delivery, "merged");
+  const event = queue.events(item.id).at(-1)!;
+  assert.equal(event.type, "artifact.verified");
+  assert.equal(event.actor, "operator:web");
+  const inbox = await (await app.request(verified.headers.get("Location")!, { headers: { Cookie: cookie } })).text();
+  assert.match(inbox, /Recorded artifact\.verified — 1 checked, 1 updated, 0 rejected, 0 unavailable\./);
+  assert.match(inbox, /<span>Unverified artifacts<\/span><strong>0<\/strong>/);
+  assert.equal(inbox.includes(seeded.leaseToken), false);
+
+  const missing = await app.request("/repositories/frostyard/nope/verify-artifacts", { method: "POST", body: new URLSearchParams({}), headers: { Cookie: cookie } });
+  assert.equal(missing.status, 404);
 });

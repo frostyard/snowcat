@@ -243,11 +243,25 @@ proposals awaiting admission (children under their parent's finding), blocked
 items with the worker's reason, and completed items whose issue or pull-request
 artifact is still `unverified` — plus the last 30 ledger events. It reads the
 same rows `list`, `show`, and `events` print, never renders a lease token, and
-refreshes every 30 seconds. Approve, reject, requeue, cancel, and re-verify
-still happen in the CLI above until the mutation slice ships; the browser
-buttons are disabled placeholders until then.
+refreshes every 30 seconds.
 
-Three more read-only views sit behind the same session:
+Decisions happen where you see them: **Approve** / **Reject** (with a reason)
+inline on each proposal, **Requeue with note** / **Cancel** on each blocked
+item (the textarea is the note carried to the next lease, or the cancellation
+reason), and **Re-verify** on each unverified artifact (re-checks that
+repository's pending artifacts). The item page's *Decide* card offers every
+action its state allows, plus **Prioritize** and **Note**. Each is a
+same-origin form attributed `operator:web` that carries the item's `status`
+and `updatedAt` as rendered; if a worker or another shell moved the item
+first, the surface refuses with *this item changed since you read it*, shows
+the current state, and changes nothing ([spec rule 40](../specs/work-queue.md)).
+After a decision you land back where you were with a one-line banner naming
+the event recorded (`Recorded work.approved.`), and `queue -- show` and
+`events` list it exactly like a CLI decision, actor `operator:web`. There
+is no batch action; the board's Hold / Import issues / Seed dogfood buttons
+remain CLI-only for now.
+
+Three more views sit behind the same session:
 
 - `/repositories` — every opted-in (and, with `FLUENT_CONTROL_DB`, declared)
   repository with its enrollment badge and per-status counts, the browser's
@@ -261,8 +275,8 @@ Three more read-only views sit behind the same session:
   `repository -- hold` and `queue -- import-issues | seed-dogfood` commands.
 - `/items/<id>` — `queue -- show <id>` rendered: definition, acceptance
   criteria, result with artifacts and their verification, operator notes,
-  previous results, and the full event timeline. Every row on the inbox and
-  board links here.
+  previous results, the full event timeline, and the *Decide* card. Every
+  row on the inbox and board links here.
 
 ## Run workers
 

@@ -269,6 +269,19 @@ code{font-family:var(--font-mono);color:var(--text-mono-accent)}
 .fl-event-head a{font-size:11px;color:var(--text-body);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px}
 .fl-event-head a:hover{color:var(--ice)}
 .fl-name a{color:inherit;text-decoration:none}.fl-name a:hover{color:var(--ice)}
+/* Mutation forms */
+.fl-decide{display:grid;gap:6px;justify-items:end}
+.fl-decide .fl-actions{align-items:center}
+.fl-input{width:100%;max-width:300px;background:var(--surface-code);border:1px solid var(--line);color:var(--text-body);font:11px var(--font-sans);padding:5px 8px;border-radius:var(--radius-tag)}
+.fl-input:focus,.fl-note:focus{outline:none;border-color:var(--sky)}
+.fl-input-num{width:64px;text-align:right}
+.fl-inline{display:inline}
+.fl-banner{background:var(--state-ok-dim);border:1px solid #47b8ef4d;color:var(--state-ok);font-size:12px;padding:8px 12px;margin-bottom:10px}
+#actions .fl-decide{justify-items:start}
+#actions .fl-input,#actions .fl-note{max-width:none;width:100%}
+#actions .fl-exit{display:grid;gap:6px;justify-content:stretch}
+#actions .fl-note{width:100%}
+
 @media(max-width:1050px){.fl-board{grid-template-columns:1fr}.fl-item{grid-template-columns:1fr}.fl-column{min-height:0}}
 
 

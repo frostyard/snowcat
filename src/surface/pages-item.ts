@@ -3,6 +3,7 @@ import { html, type SafeHtml } from "./html.ts";
 import type { ItemData } from "./item.ts";
 import { artifactLabel, clock, document, itemPath, payloadGist, repositoryPath, shell, type PageContext } from "./pages.ts";
 import { enrollmentBadge } from "./pages-repositories.ts";
+import { admissionForm, deferForm, exitForm, noteForm, prioritizeForm, verifyForm } from "./forms.ts";
 
 export function itemPage(context: PageContext, data: ItemData): string {
   const item = data.item;
@@ -10,7 +11,7 @@ export function itemPage(context: PageContext, data: ItemData): string {
   const deliveryTone = item.delivery === "merged" ? "ok" : item.delivery === "unverified" ? "warn" : "";
   const actions = html`<span class="ph-badge ${statusTone}">${item.status}</span>${
     item.status === "completed" ? html`<span class="ph-badge ${deliveryTone}">delivery · ${item.delivery ?? "none"}</span>` : ""
-  }<button class="ph-button secondary" disabled title="Mutations land in the next slice">Re-verify</button><button class="ph-button secondary" disabled title="Mutations land in the next slice">Note</button>`;
+  }`;
   return document(
     `${item.kind} · ${item.repository} · Fluent`,
     shell(
@@ -28,9 +29,28 @@ export function itemPage(context: PageContext, data: ItemData): string {
         ${item.result ? resultCard(item.result, data) : ""}
         ${notesCard(item)}
         ${previousResultsCard(item)}
-      </div>${eventsCard(data.events)}</div>`,
+      </div><div class="fl-stack">${actionsCard(item)}${eventsCard(data.events)}</div></div>`,
     ),
   );
+}
+
+/**
+ * The decisions this item's state allows, as same-origin forms carrying the
+ * rendered precondition — the CLI's operator commands and nothing else. A
+ * mutation redirects back here with a result banner.
+ */
+function actionsCard(item: ObservableWorkItem): SafeHtml {
+  const here = itemPath(item.id);
+  const forms: SafeHtml[] = [];
+  if (item.status === "proposed") forms.push(admissionForm(item, here));
+  if (item.status === "queued") forms.push(deferForm(item, here));
+  if (item.status === "blocked") forms.push(exitForm(item, here));
+  if (item.status === "proposed" || item.status === "queued" || item.status === "blocked") forms.push(prioritizeForm(item, here));
+  if (item.status === "completed" && (item.result?.artifacts ?? []).some((artifact) => artifact.kind === "issue" || artifact.kind === "pull-request")) {
+    forms.push(html`<div class="fl-decide"><div class="fl-actions">${verifyForm(item.repository, here, { label: "Re-verify repository artifacts" })}</div><small class="fl-sub">Re-checks every pending issue and pull-request artifact in ${item.repository} against GitHub.</small></div>`);
+  }
+  forms.push(noteForm(item, here));
+  return html`<section class="fl-group" id="actions"><div class="fl-group-head"><h2>Decide</h2><span>as operator:web · ${item.status}</span></div><div class="fl-def fl-stack-sm">${forms}</div></section>`;
 }
 
 function definitionCard(data: ItemData): SafeHtml {
