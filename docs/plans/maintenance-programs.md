@@ -111,22 +111,31 @@ their children may be admitted on creation.
   same identity completes; edited patch refused through MCP with the item
   left claimed; same head skipped, push is a new head).
 
-## Phase 5 — Conformance and triage (first new programs)
+## Phase 5 — Conformance and triage (first new programs) — catalog entries landed 2026-08-18
+
+Decided by [ADR-0062](../adr/0062-retire-hive-fluent-owns-conformance.md):
+Hive is retired and Fluent owns conformance and triage.
 
 - **conformance** — does the repository satisfy Core's binding ADRs? Sources:
   `docs/org-adrs.md` versus Core's current ADR set, canonical surfaces
   present and valid, `make ci`, title lint, ACMM criteria (the
   `frostyard-acmm-conformance` skill). Child: one bounded compliance change
   or one Core issue when the ADR is what should move (the ADR-0022 → ADR-0038
-  case). Cadence: on Core-ADR change, else weekly.
+  case). Cadence: weekly in the catalog (`conformance-gap-discovery`);
+  seeding on Core-ADR change is a later refinement — the Core poll already
+  knows when the active snapshot changes.
 - **triage** — stale issues, duplicates, needs-repro, missing labels, issues
   resolved by a merged pull request but still open (#299 stayed open until
   #312). Children are proposals only, because closing or labeling issues is
-  outward-facing; each proposal names the exact issue and action. Cadence:
-  daily.
+  outward-facing; each proposal names the exact issue and action, and its
+  ceiling is `read, open-issue` — never a pull request. Cadence: daily
+  (`triage-discovery`).
+- A repository opts in by declaring the program in Core; the feeder seeds it
+  from the catalog on the next run.
 - **Done when:** both programs produce a valid no-finding or one admitted
   child on updex, and triage's proposals close at least one resolved-but-open
-  issue through the operator's admission.
+  issue through the operator's admission. — Catalog entries, tests, and docs
+  are in; the operational half waits on the first week of runs.
 
 ## Phase 6 — Dependencies and docs drift
 
@@ -167,7 +176,7 @@ their children may be admitted on creation.
   change.
 - **Triage authority:** whether triage children may ever be admitted on
   creation (for example, closing an issue whose fixing pull request merged);
-  start proposal-only and look at the admission rate.
+  start proposal-only (ADR-0062) and look at the admission rate.
 
 ## References
 

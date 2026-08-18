@@ -76,6 +76,7 @@ Docs are split by the question they answer:
 - [0059 — Adopt the queue store as the v1 work engine](adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md)
 - [0060 — Bring the operator surface forward as a read-first inbox](adr/0060-bring-the-operator-surface-forward-as-a-read-first-inbox.md)
 - [0061 — Cure pull requests as bounded per-head work](adr/0061-cure-pull-requests-as-bounded-per-head-work.md)
+- [0062 — Retire Hive; Fluent owns repository conformance and triage](adr/0062-retire-hive-fluent-owns-conformance.md)
 
 ### Domain language
 

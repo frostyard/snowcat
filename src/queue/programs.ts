@@ -32,7 +32,7 @@ const WEEK = 7 * DAY;
 
 /**
  * The maintenance program catalog: one entry per Core `maintenance_programs`
- * value. A program is a read-only discovery root that finds exactly one
+ * value Fluent implements (Core's enum may be wider; ADR-0039). A program is a read-only discovery root that finds exactly one
  * evidence-backed thing and proposes at most one bounded child; the operator
  * admits; a worker lands it through one pull request; Fluent verifies the
  * artifact. Entries differ in what they look at (`discovery`), how often a
@@ -114,6 +114,44 @@ export const maintenancePrograms: readonly MaintenanceProgram[] = [
         "The result identifies exactly one mismatch between live code or instructions and a current documented contract.",
         "Evidence cites both sides of the mismatch.",
         "Any follow-up preserves the distinction between current truth and aspiration.",
+      ],
+      allowedActions: discoveryActions,
+      priority: 0,
+    },
+  },
+  {
+    id: "conformance",
+    cooldownSeconds: WEEK,
+    childCeiling: implementationCeiling,
+    childAdmission: "proposed",
+    discovery: {
+      kind: "conformance-gap-discovery",
+      objective: "Identify one evidence-backed way this repository does not satisfy the organization's binding contracts.",
+      instructions:
+        "Compare the repository with frostyard/core's binding ADRs (its docs/org-adrs.md against Core's current ADR set), the canonical repository surfaces of the surfaces contract (agent instructions, governance file, skills directory, documentation index — present, real content, valid), its `make ci` gate and title lint, and the ACMM criteria (the frostyard-acmm-conformance skill). Identify exactly one current gap; do not treat an aspiration as a binding contract or invent an organization standard. Do not edit files or open a GitHub artifact. Propose one bounded child only when justified: a compliance change in this repository, or — when the ADR is what should move — one bounded item to raise it with Core.",
+      acceptanceCriteria: [
+        "The result identifies exactly one gap between the repository and a named, current, binding organization contract.",
+        "Evidence cites the contract (ADR, surfaces contract entry, ACMM criterion, or gate) and the repository path or output that fails it.",
+        "Any follow-up is one bounded compliance change with a mechanically verifiable check, or one bounded item to raise the contract with Core; never both.",
+      ],
+      allowedActions: discoveryActions,
+      priority: 0,
+    },
+  },
+  {
+    id: "triage",
+    cooldownSeconds: DAY,
+    childCeiling: ["read", "open-issue"],
+    childAdmission: "proposed",
+    discovery: {
+      kind: "triage-discovery",
+      objective: "Identify one open issue that needs a triage action: stale, duplicate, needs reproduction, mislabeled, or resolved but still open.",
+      instructions:
+        "Read the repository's open issues (and, for each candidate, its linked or referencing pull requests). Identify exactly one issue that is stale, a duplicate of another, missing a reproduction the reporter can supply, mislabeled, or resolved by a merged pull request yet still open. Do not edit files or open a GitHub artifact, and do not comment on, label, or close anything. Propose at most one child naming the exact issue and the exact action (close with a reason, label, ask for reproduction, link the duplicate); its actions may be at most read and open-issue, never a pull request. Children of this program are always proposals for the operator to admit.",
+      acceptanceCriteria: [
+        "The result identifies exactly one open issue and the one triage action it needs, with the evidence (the merged pull request, the duplicate, the last activity date, the missing information).",
+        "Any follow-up names the issue URL and the action verbatim, is bounded to that one issue, and grants at most read and open-issue.",
+        "No issue was commented on, labeled, or closed by this item.",
       ],
       allowedActions: discoveryActions,
       priority: 0,
