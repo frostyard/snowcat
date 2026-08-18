@@ -187,7 +187,7 @@ test("the cure sweep enqueues one admitted pr-cure root per decayed head, never 
 
   // Healthy: nothing enqueued.
   const healthy = await curePullRequests(queue, { fetcher: apiFetcher(routesFor({})).fetcher, clock });
-  assert.deepEqual(healthy, { inspected: 1, enqueued: [], healthy: [PR_URL], skipped: [], unavailable: [] });
+  assert.deepEqual(healthy, { inspected: 1, foreign: { listed: 0, inspected: 0 }, enqueued: [], healthy: [PR_URL], skipped: [], unavailable: [] });
 
   // Behind its base and failing a check: one admitted root, keyed by head, carrying the cure record.
   const decayedRoutes = routesFor({ pull: pullRequest({ mergeable_state: "behind" }), checks: [{ name: "Lint", status: "completed", conclusion: "failure" }] });
@@ -250,6 +250,83 @@ test("the cure sweep enqueues one admitted pr-cure root per decayed head, never 
   assert.match((await curePullRequests(other, { fetcher: apiFetcher(draftRoutes).fetcher, clock })).skipped[0]!.reason, /draft/);
   const outage = await curePullRequests(other, { fetcher: apiFetcher({}, { status: 502 }).fetcher, clock });
   assert.equal(outage.unavailable.length, 1);
+});
+
+test("foreign pull requests are cured only for a repository with cureForeign on: one root per head, no originItemId, drafts skipped", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-cure-foreign-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"), clock);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled(REPOSITORY, true);
+  assert.deepEqual(queue.repositoryCureSettings(), [{ repository: REPOSITORY, cureForeign: false }]);
+
+  // A Dependabot-style pull request no Fluent item reported, open and conflicting.
+  const FOREIGN_URL = "https://github.com/frostyard/updex/pull/30";
+  const FOREIGN_PATH = "/repos/frostyard/updex/pulls/30";
+  const foreignPull = (overrides: Record<string, unknown> = {}) =>
+    pullRequest({ number: 30, html_url: FOREIGN_URL, title: "chore(deps): bump x", mergeable_state: "dirty", head: { sha: HEAD_B }, ...overrides });
+  const foreignRoutes = (overrides: Record<string, unknown> = {}) => ({
+    "/repos/frostyard/updex/pulls": [foreignPull(overrides)],
+    [FOREIGN_PATH]: foreignPull(overrides),
+    [`/repos/frostyard/updex/commits/${HEAD_B}/check-runs`]: { check_runs: [] },
+    [`${FOREIGN_PATH}/reviews`]: [],
+    [`${FOREIGN_PATH}/files`]: [FILE_V1],
+  });
+
+  // Off (the default): the listing is never read and the pull request is ignored.
+  const off = apiFetcher(foreignRoutes());
+  const ignored = await curePullRequests(queue, { fetcher: off.fetcher, clock });
+  assert.deepEqual(ignored, { inspected: 0, foreign: { listed: 0, inspected: 0 }, enqueued: [], healthy: [], skipped: [], unavailable: [] });
+  assert.deepEqual(off.requests, []);
+
+  // On: exactly one pr-cure root for that head, priority 0, no originating item, marked foreign for the worker.
+  queue.setRepositoryCureForeign(REPOSITORY, true);
+  assert.deepEqual(queue.repositoryCureSettings(), [{ repository: REPOSITORY, cureForeign: true }]);
+  const on = apiFetcher(foreignRoutes());
+  const first = await curePullRequests(queue, { fetcher: on.fetcher, clock });
+  assert.ok(on.requests.includes("/repos/frostyard/updex/pulls"), "the open pull-request listing is read");
+  assert.equal(first.inspected, 1);
+  assert.deepEqual(first.foreign, { listed: 1, inspected: 1 });
+  assert.equal(first.enqueued.length, 1);
+  assert.deepEqual(first.enqueued[0]!.decay, ["dirty"]);
+  const item = queue.get(first.enqueued[0]!.id)!;
+  assert.equal(item.kind, "pr-cure");
+  assert.equal(item.status, "queued");
+  assert.equal(item.sourceRef, `${FOREIGN_URL}@${HEAD_B}`);
+  assert.equal(item.priority, 0);
+  assert.equal(item.cure!.originItemId, undefined, "a foreign head has no originating item");
+  assert.deepEqual(item.cure, { pullRequestUrl: FOREIGN_URL, headSha: HEAD_B, patchDigest: item.cure!.patchDigest, decay: ["dirty"] });
+  assert.match(item.instructions, /NOT opened by a Fluent worker/);
+  assert.match(item.instructions, /MECHANICAL cure/);
+
+  // A second sweep enqueues nothing: the head is known.
+  const second = await curePullRequests(queue, { fetcher: apiFetcher(foreignRoutes()).fetcher, clock });
+  assert.deepEqual(second.enqueued, []);
+  assert.deepEqual(second.foreign, { listed: 1, inspected: 1 });
+  assert.match(second.skipped[0]!.reason, /already has a cure item/);
+  assert.equal(queue.list({ kind: "pr-cure" }).length, 1);
+
+  // A draft foreign pull request is skipped with a reason and never inspected.
+  const draft = apiFetcher(foreignRoutes({ draft: true, head: { sha: HEAD_A } }));
+  const drafts = await curePullRequests(queue, { fetcher: draft.fetcher, clock });
+  assert.deepEqual(drafts.enqueued, []);
+  assert.deepEqual(drafts.foreign, { listed: 1, inspected: 0 });
+  assert.deepEqual(drafts.skipped, [{ url: FOREIGN_URL, reason: "draft pull requests are not cured" }]);
+  assert.ok(!draft.requests.includes(FOREIGN_PATH), "a draft is dropped from the listing without a health read");
+
+  // --repository restricts the foreign listing to that repository; another opted-in one is not listed.
+  const scoped = apiFetcher(foreignRoutes());
+  await curePullRequests(queue, { fetcher: scoped.fetcher, clock, repository: "frostyard/lodge" });
+  assert.deepEqual(scoped.requests, []);
+
+  // Off again: the listing stops; the existing item is untouched.
+  queue.setRepositoryCureForeign(REPOSITORY, false);
+  const after = apiFetcher(foreignRoutes());
+  assert.deepEqual((await curePullRequests(queue, { fetcher: after.fetcher, clock })).foreign, { listed: 0, inspected: 0 });
+  assert.deepEqual(after.requests, []);
+  assert.equal(queue.get(item.id)!.status, "queued");
+
+  // The setting is repository-level and requires opt-in.
+  assert.throws(() => queue.setRepositoryCureForeign("frostyard/lodge", true), /not opted in/);
 });
 
 test("a pr-cure completion is refused when the patch changed, when the pull request is not reported, or when GitHub cannot answer", async () => {
@@ -352,5 +429,5 @@ test("enqueueCureRoot validates its cure record and kind", async () => {
   const created = queue.enqueueCureRoot(REPOSITORY, { ...base, allowedActions: [...base.allowedActions], delegableActions: [...base.delegableActions], cure });
   assert.equal(created?.status, "queued");
   assert.equal(queue.enqueueCureRoot(REPOSITORY, { ...base, allowedActions: [...base.allowedActions], delegableActions: [...base.delegableActions], cure }), undefined);
-  assert.equal(queue.metadata().schemaVersion, 5);
+  assert.equal(queue.metadata().schemaVersion, 6, "rung 5 carries cure_json; rung 6 the repository cure_foreign setting");
 });

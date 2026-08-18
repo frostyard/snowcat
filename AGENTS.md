@@ -179,7 +179,9 @@ removed. -->
   ([`src/queue/pull-request-cure.ts`](src/queue/pull-request-cure.ts),
   ADR-0061): one admitted `pr-cure` root per decayed head, mechanical cure
   only, and `complete_work` refuses a `pr-cure` whose patch identity changed;
-  substantive fixes are `pr-cure-change` proposals. When
+  substantive fixes are `pr-cure-change` proposals. Pull requests no item
+  reported are cured only for a repository with `queue -- cure-foreign
+  <owner/repo> on` (schema rung 6, off by default). When
   `FLUENT_CONTROL_DB` is set, `claim_work` also requires the repository to be
   `enrolled` in the control-plane store
   ([`src/queue/eligibility.ts`](src/queue/eligibility.ts)); the hook is the

@@ -505,7 +505,20 @@ or blocks. The same head is never enqueued twice; a push is a new head. Cure
 never merges, approves, or dismisses — those stay yours. `--no-cure` runs the
 refresh alone; the board's **Verify artifacts** button runs both and reports
 `N cure items queued`. Pull requests no Fluent item reported are not cured
-in v1 (a per-repository opt-in is planned).
+unless the repository opts in (next paragraph).
+
+**Foreign pull requests.** Dependabot, other tools, and people open pull
+requests Fluent never reported, and on updex those routinely sit `behind` or
+`dirty` until someone notices. Per repository, opt in with
+`npm run queue -- cure-foreign <owner/repo> on` (`off` to stop; the
+repository must already be opted in, and the flag is off by default). With
+it on, the same pass also lists the repository's open pull requests from
+GitHub (up to 300; more is reported as skipped), drops drafts and anything a
+completed item already reported, and inspects the rest through the same
+decay read: one `pr-cure` root per decayed head, priority 0, no originating
+item, and an extra instruction telling the worker the pull request was not
+opened by a Fluent worker so it reads the description first. The `cure`
+output's `foreign` counter shows how many were `listed` and `inspected`.
 
 When you carried a change the last mile yourself — a follow-up whose proposal
 said "leave the change on a local branch; do not open a pull request", so the
