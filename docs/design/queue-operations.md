@@ -606,7 +606,10 @@ Fluent v1 runs on **one operator host** and stays there deliberately:
   ([queue execution boundary](queue-execution-boundary.md)).
 - Anything with a listener — the operator surface, the Flue app — binds to
   loopback and is reached over SSH or a private mesh (Tailscale or
-  equivalent), never exposed directly.
+  equivalent), never exposed directly. (Proposed change:
+  [ADR-0063](../adr/0063-authenticate-people-through-cloudflare-access-and-mint-mcp-tokens.md)
+  publishes both through a Cloudflare Tunnel behind Access, with a
+  Streamable HTTP MCP endpoint and Fluent-minted worker tokens.)
 - Feeder, `verify-artifacts`, and `backup` run from three systemd timers on
   the host, shipped in [`deploy/systemd/`](../../deploy/systemd/) and linted
   by `npm run check:deploy`:

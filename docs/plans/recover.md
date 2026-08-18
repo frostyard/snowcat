@@ -231,7 +231,12 @@ hands on the host.
 - Remote workers: authenticated Streamable HTTP for MCP, per-worker grants,
   and per-operator surface auth — the deferred set named in the runbook's
   Deployment section; their trigger is the first worker that must run
-  off-host, and they get their own ADR.
+  off-host, and they get their own ADR — proposed 2026-08-18 as
+  [ADR-0063](../adr/0063-authenticate-people-through-cloudflare-access-and-mint-mcp-tokens.md)
+  (Cloudflare Access at the edge, Fluent-minted MCP tokens, identity-
+  attributed actors; grants still deferred).
+- The name: proposed 2026-08-18 as
+  [ADR-0064](../adr/0064-adopt-the-name-snowcat.md) (Snowcat).
 - Tokens per accepted outcome, once a client can report them.
 
 ## Open questions
