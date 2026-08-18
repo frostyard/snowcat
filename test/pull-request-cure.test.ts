@@ -446,7 +446,9 @@ test("foreign pull requests are cured only for a repository with cureForeign on:
 test("a pr-cure completion is refused when the patch changed, when the pull request is not reported, or when GitHub cannot answer", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fluent-cure-complete-test-"));
   const path = join(directory, "queue.db");
-  const queue = new QueueStore(path, clock);
+  // Wall clock on purpose: the MCP server below opens its own store on real
+  // time, so a frozen clock here would make the lease look expired to it.
+  const queue = new QueueStore(path);
   await completedWithOpenPr(queue);
   const decayedRoutes = routesFor({ pull: pullRequest({ mergeable_state: "behind" }) });
   const swept = await curePullRequests(queue, { fetcher: apiFetcher(decayedRoutes).fetcher, clock });
