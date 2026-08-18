@@ -888,10 +888,10 @@ export interface ControlPlaneBackupVerification {
 }
 
 export function controlPlaneDatabasePath(): string {
-  const target = process.env.FLUENT_CONTROL_DB ?? resolve("./data/control-plane.db");
+  const target = process.env.SNOWCAT_CONTROL_DB ?? resolve("./data/control-plane.db");
   if (target === ":memory:") return target;
   const resolvedTarget = resolve(target);
-  const spike = resolve(process.env.FLUENT_QUEUE_DB ?? "./data/queue.db");
+  const spike = resolve(process.env.SNOWCAT_QUEUE_DB ?? "./data/queue.db");
   if (resolvedTarget === spike) throw new Error("control-plane database path must differ from the queue-spike path");
   return resolvedTarget;
 }
@@ -923,7 +923,7 @@ export class ControlPlaneStore {
         this.initialize();
       } else {
         if (applicationId !== CONTROL_PLANE_APPLICATION_ID) {
-          const detail = tables.some((table) => SPIKE_TABLES.has(table)) ? "queue-spike database" : "non-Fluent database";
+          const detail = tables.some((table) => SPIKE_TABLES.has(table)) ? "queue-spike database" : "non-Snowcat database";
           throw new Error(`refusing to open ${detail} as the control-plane database`);
         }
         this.db.exec("PRAGMA journal_mode = WAL");
@@ -1706,7 +1706,7 @@ export class ControlPlaneStore {
              transaction_id, command_kind, command_schema_version, principal_kind,
              principal_id, session_id, idempotency_key, payload_digest,
              evaluation_time, recorded_at
-           ) VALUES (?, 'repository.materialize-core-authority', 1, 'fluent-system', 'kernel', NULL, ?, ?, ?, ?)`,
+           ) VALUES (?, 'repository.materialize-core-authority', 1, 'snowcat-system', 'kernel', NULL, ?, ?, ?, ?)`,
         )
         .run(transactionId, idempotencyKey, commandPayloadDigest, evaluationTime, evaluationTime);
       const sequence = Number(transaction.lastInsertRowid);
@@ -1887,7 +1887,7 @@ export class ControlPlaneStore {
              transaction_id, command_kind, command_schema_version, principal_kind,
              principal_id, session_id, idempotency_key, payload_digest,
              evaluation_time, recorded_at
-           ) VALUES (?, 'repository.record-github-identity', 1, 'fluent-system', 'kernel', NULL, ?, ?, ?, ?)`,
+           ) VALUES (?, 'repository.record-github-identity', 1, 'snowcat-system', 'kernel', NULL, ?, ?, ?, ?)`,
         )
         .run(transactionId, idempotencyKey, commandPayloadDigest, evaluationTime, evaluationTime);
       const sequence = Number(transaction.lastInsertRowid);
@@ -2007,7 +2007,7 @@ export class ControlPlaneStore {
            transaction_id, command_kind, command_schema_version, principal_kind,
            principal_id, session_id, idempotency_key, payload_digest,
            evaluation_time, recorded_at
-         ) VALUES (?, 'github.record-installation-reconciliation', 1, 'fluent-system',
+         ) VALUES (?, 'github.record-installation-reconciliation', 1, 'snowcat-system',
                    'github-observer', NULL, ?, ?, ?, ?)`,
       ).run(
         uuidV7(new Date(recordedAt)),
@@ -2017,7 +2017,7 @@ export class ControlPlaneStore {
         recordedAt,
       );
       const sequence = Number(transaction.lastInsertRowid);
-      const sourceKind = inspection.kind === "unavailable" ? "fluent-system" : "github-api";
+      const sourceKind = inspection.kind === "unavailable" ? "snowcat-system" : "github-api";
       const sourceId = inspection.kind === "unavailable" ? "github-observer" : "api.github.com";
       const sourceRevisionKind = inspection.kind === "unavailable" ? undefined : "github-installation-response-sha256";
       const sourceRevisionValue = inspection.kind === "unavailable" ? undefined : inspection.responseDigest;
@@ -2452,7 +2452,7 @@ export class ControlPlaneStore {
              transaction_id, command_kind, command_schema_version, principal_kind,
              principal_id, session_id, idempotency_key, payload_digest,
              evaluation_time, recorded_at
-           ) VALUES (?, 'github.record-pull-request-delivery-repair', 1, 'fluent-system',
+           ) VALUES (?, 'github.record-pull-request-delivery-repair', 1, 'snowcat-system',
                      'github-observer', NULL, ?, ?, ?, ?)`,
         )
         .run(transactionId, idempotencyKey, commandPayloadDigest, observedAt, observedAt);
@@ -3077,7 +3077,7 @@ export class ControlPlaneStore {
              transaction_id, command_kind, command_schema_version, principal_kind,
              principal_id, session_id, idempotency_key, payload_digest,
              evaluation_time, recorded_at
-           ) VALUES (?, 'repository.record-canonical-surfaces', 1, 'fluent-system', 'kernel', NULL, ?, ?, ?, ?)`,
+           ) VALUES (?, 'repository.record-canonical-surfaces', 1, 'snowcat-system', 'kernel', NULL, ?, ?, ?, ?)`,
         )
         .run(transactionId, idempotencyKey, commandPayloadDigest, evaluationTime, evaluationTime);
       const sequence = Number(transaction.lastInsertRowid);
@@ -3246,7 +3246,7 @@ export class ControlPlaneStore {
              transaction_id, command_kind, command_schema_version, principal_kind,
              principal_id, session_id, idempotency_key, payload_digest,
              evaluation_time, recorded_at
-           ) VALUES (?, 'repository.establish-enrollment', 1, 'fluent-system', 'kernel', NULL, ?, ?, ?, ?)`,
+           ) VALUES (?, 'repository.establish-enrollment', 1, 'snowcat-system', 'kernel', NULL, ?, ?, ?, ?)`,
         )
         .run(transactionId, idempotencyKey, commandPayloadDigest, enrolledAt, enrolledAt);
       const sequence = Number(transaction.lastInsertRowid);
@@ -3809,7 +3809,7 @@ export class ControlPlaneStore {
     const sourcePath = resolve(manifest.backupPath);
     const targetPath = resolve(targetPathInput);
     if (targetPath === sourcePath) throw new Error("restore target must differ from the backup path");
-    if (targetPath === resolve(process.env.FLUENT_QUEUE_DB ?? "./data/queue.db")) {
+    if (targetPath === resolve(process.env.SNOWCAT_QUEUE_DB ?? "./data/queue.db")) {
       throw new Error("restore target must differ from the queue-spike path");
     }
     if (existsSync(targetPath)) throw new Error(`restore target already exists: ${targetPath}`);
@@ -4054,7 +4054,7 @@ export class ControlPlaneStore {
              transaction_id, command_kind, command_schema_version, principal_kind,
              principal_id, session_id, idempotency_key, payload_digest,
              evaluation_time, recorded_at
-           ) VALUES (?, 'control-plane.check-integrity', 1, 'fluent-system', 'kernel', NULL, ?, ?, ?, ?)`,
+           ) VALUES (?, 'control-plane.check-integrity', 1, 'snowcat-system', 'kernel', NULL, ?, ?, ?, ?)`,
         )
         .run(transactionId, input.idempotencyKey, commandPayloadDigest, evaluationTime, evaluationTime);
       const sequence = Number(transaction.lastInsertRowid);
@@ -4064,7 +4064,7 @@ export class ControlPlaneStore {
         subjectId: metadata.databaseLineageId,
         revisionKind: "transaction-sequence",
         revisionValue: String(metadata.lastTransactionSequence),
-        sourceKind: "fluent-system",
+        sourceKind: "snowcat-system",
         sourceId: "kernel",
         informationClass: "organization" as const,
         informationScopeJson,
@@ -4250,7 +4250,7 @@ export class ControlPlaneStore {
              transaction_id, command_kind, command_schema_version, principal_kind,
              principal_id, session_id, idempotency_key, payload_digest,
              evaluation_time, recorded_at
-           ) VALUES (?, 'core.activate-snapshot', 1, 'fluent-system', 'kernel', NULL, ?, ?, ?, ?)`,
+           ) VALUES (?, 'core.activate-snapshot', 1, 'snowcat-system', 'kernel', NULL, ?, ?, ?, ?)`,
         )
         .run(transactionId, idempotencyKey, commandPayloadDigest, evaluationTime, evaluationTime);
       const sequence = Number(transaction.lastInsertRowid);
@@ -4870,7 +4870,7 @@ export class ControlPlaneStore {
              transaction_id, command_kind, command_schema_version, principal_kind,
              principal_id, session_id, idempotency_key, payload_digest,
              evaluation_time, recorded_at
-           ) VALUES (?, 'core.record-source-check-eligible', 1, 'fluent-system', 'kernel', NULL, ?, ?, ?, ?)`,
+           ) VALUES (?, 'core.record-source-check-eligible', 1, 'snowcat-system', 'kernel', NULL, ?, ?, ?, ?)`,
         )
         .run(transactionId, idempotencyKey, commandPayloadDigest, checkedAt, checkedAt);
       const sequence = Number(transaction.lastInsertRowid);
@@ -5344,7 +5344,7 @@ export class ControlPlaneStore {
              transaction_id, command_kind, command_schema_version, principal_kind,
              principal_id, session_id, idempotency_key, payload_digest,
              evaluation_time, recorded_at
-           ) VALUES (?, 'core.prune-check-detail', 1, 'fluent-system', 'kernel', NULL, ?, ?, ?, ?)`,
+           ) VALUES (?, 'core.prune-check-detail', 1, 'snowcat-system', 'kernel', NULL, ?, ?, ?, ?)`,
         )
         .run(transactionId, idempotencyKey, commandPayloadDigest, evaluatedAt, evaluatedAt);
       const sequence = Number(transaction.lastInsertRowid);
@@ -5354,7 +5354,7 @@ export class ControlPlaneStore {
         subjectId: metadata.databaseLineageId,
         revisionKind: "transaction-sequence",
         revisionValue: String(input.expectedLastTransactionSequence),
-        sourceKind: "fluent-system",
+        sourceKind: "snowcat-system",
         sourceId: "kernel",
         informationClass: "organization" as const,
         informationScopeJson,
@@ -5500,7 +5500,7 @@ export class ControlPlaneStore {
              transaction_id, command_kind, command_schema_version, principal_kind,
              principal_id, session_id, idempotency_key, payload_digest,
              evaluation_time, recorded_at
-           ) VALUES (?, 'core.record-candidate-rejection', 1, 'fluent-system', 'kernel', NULL, ?, ?, ?, ?)`,
+           ) VALUES (?, 'core.record-candidate-rejection', 1, 'snowcat-system', 'kernel', NULL, ?, ?, ?, ?)`,
         )
         .run(transactionId, idempotencyKey, commandPayloadDigest, observedAt, observedAt);
       const sequence = Number(transaction.lastInsertRowid);
@@ -5733,7 +5733,7 @@ export class ControlPlaneStore {
            transaction_id, command_kind, command_schema_version, principal_kind,
            principal_id, session_id, idempotency_key, payload_digest,
            evaluation_time, recorded_at
-         ) VALUES (?, ?, ?, 'fluent-system', 'github-observer', NULL, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, 'snowcat-system', 'github-observer', NULL, ?, ?, ?, ?)`,
       )
       .run(
         uuidV7(new Date(input.evaluationTime)),
@@ -5775,7 +5775,7 @@ export class ControlPlaneStore {
       subjectId: input.repositoryId,
       revisionKind: input.revisionKind,
       revisionValue: input.revisionValue,
-      sourceKind: "fluent-system",
+      sourceKind: "snowcat-system",
       sourceId: "github-observer",
       informationClass: "organization",
       informationScopeJson: input.scopeJson,
@@ -5866,7 +5866,7 @@ export class ControlPlaneStore {
              transaction_id, command_kind, command_schema_version, principal_kind,
              principal_id, session_id, idempotency_key, payload_digest,
              evaluation_time, recorded_at
-           ) VALUES (?, 'control-plane.initialize', 1, 'fluent-system', 'kernel', NULL, NULL, ?, ?, ?)`,
+           ) VALUES (?, 'control-plane.initialize', 1, 'snowcat-system', 'kernel', NULL, NULL, ?, ?, ?)`,
         )
         .run(transactionId, payloadDigest, evaluationTime, evaluationTime);
       const sequence = Number(transaction.lastInsertRowid);
@@ -5893,7 +5893,7 @@ export class ControlPlaneStore {
         subjectId: lineageId,
         revisionKind: "sha256",
         revisionValue: payloadDigest,
-        sourceKind: "fluent-system",
+        sourceKind: "snowcat-system",
         sourceId: "kernel",
         informationClass: "organization",
         informationScopeJson,
@@ -5916,7 +5916,7 @@ export class ControlPlaneStore {
         subjectId: operatorPrincipalId,
         revisionKind: "sha256",
         revisionValue: principalPayloadDigest,
-        sourceKind: "fluent-system",
+        sourceKind: "snowcat-system",
         sourceId: "kernel",
         informationClass: "organization",
         informationScopeJson,
@@ -5936,7 +5936,7 @@ export class ControlPlaneStore {
         subjectId: lineageId,
         revisionKind: "sha256",
         revisionValue: payloadDigest,
-        sourceKind: "fluent-system",
+        sourceKind: "snowcat-system",
         sourceId: "kernel",
         informationClass: "organization",
         informationScopeJson,
@@ -6813,7 +6813,7 @@ export class ControlPlaneStore {
         if (
           typeof row.idempotency_key !== "string" ||
           !/^core-activate:[1-9][0-9]*:[0-9a-f]{40}$/.test(row.idempotency_key) ||
-          row.principal_kind !== "fluent-system" ||
+          row.principal_kind !== "snowcat-system" ||
           row.principal_id !== "kernel" ||
           receiptCount !== 1
         ) {
@@ -6844,7 +6844,7 @@ export class ControlPlaneStore {
         if (
           typeof row.idempotency_key !== "string" ||
           !/^core-source-check:[0-9a-f-]{36}$/.test(row.idempotency_key) ||
-          row.principal_kind !== "fluent-system" ||
+          row.principal_kind !== "snowcat-system" ||
           row.principal_id !== "kernel" ||
           receiptCount !== 1
         ) {
@@ -6870,7 +6870,7 @@ export class ControlPlaneStore {
         if (
           typeof row.idempotency_key !== "string" ||
           !/^core-prune-check-detail:[1-9][0-9]*$/.test(row.idempotency_key) ||
-          row.principal_kind !== "fluent-system" ||
+          row.principal_kind !== "snowcat-system" ||
           row.principal_id !== "kernel" ||
           receiptCount !== 1
         ) {
@@ -6883,7 +6883,7 @@ export class ControlPlaneStore {
         if (
           typeof row.idempotency_key !== "string" ||
           !/^repo-core:[0-9a-f-]{36}:[1-9][0-9]{0,19}$/.test(row.idempotency_key) ||
-          row.principal_kind !== "fluent-system" ||
+          row.principal_kind !== "snowcat-system" ||
           row.principal_id !== "kernel" ||
           receiptCount !== 1 ||
           !outputs.every((output) => output.payload_digest === outputs[0]!.payload_digest)
@@ -6894,7 +6894,7 @@ export class ControlPlaneStore {
         if (
           typeof row.idempotency_key !== "string" ||
           !/^repo-gh:[0-9a-f-]{36}:(?:initial|[0-9a-f-]{36}):[0-9a-f]{64}$/.test(row.idempotency_key) ||
-          row.principal_kind !== "fluent-system" ||
+          row.principal_kind !== "snowcat-system" ||
           row.principal_id !== "kernel" ||
           receiptCount !== 1 ||
           !outputs.every((output) => output.payload_digest === outputs[0]!.payload_digest)
@@ -6905,7 +6905,7 @@ export class ControlPlaneStore {
         if (
           typeof row.idempotency_key !== "string" ||
           !/^repo-surfaces:[0-9a-f-]{36}:(?:initial|[0-9a-f-]{36}):[0-9a-f]{64}$/.test(row.idempotency_key) ||
-          row.principal_kind !== "fluent-system" ||
+          row.principal_kind !== "snowcat-system" ||
           row.principal_id !== "kernel" ||
           receiptCount !== 1 ||
           !outputs.every((output) => output.payload_digest === outputs[0]!.payload_digest)
@@ -6916,7 +6916,7 @@ export class ControlPlaneStore {
         if (
           typeof row.idempotency_key !== "string" ||
           !/^repo-enroll:[0-9a-f-]{36}$/.test(row.idempotency_key) ||
-          row.principal_kind !== "fluent-system" ||
+          row.principal_kind !== "snowcat-system" ||
           row.principal_id !== "kernel" ||
           receiptCount !== 1 ||
           !outputs.every((output) => output.payload_digest === outputs[0]!.payload_digest)
@@ -6939,7 +6939,7 @@ export class ControlPlaneStore {
         if (
           typeof row.idempotency_key !== "string" ||
           !/^github-installation:[1-9][0-9]{0,19}:[1-9][0-9]{0,19}:[0-9a-f]{64}$/.test(row.idempotency_key) ||
-          row.principal_kind !== "fluent-system" || row.principal_id !== "github-observer" ||
+          row.principal_kind !== "snowcat-system" || row.principal_id !== "github-observer" ||
           receiptCount !== 1 || !outputs.every((output) => output.payload_digest === outputs[0]!.payload_digest)
         ) throw new Error(`GitHub installation reconciliation transaction shape is invalid: ${String(row.sequence)}`);
       } else if (
@@ -6957,7 +6957,7 @@ export class ControlPlaneStore {
           !new RegExp(`^${prefix}:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`).test(
             row.idempotency_key,
           ) ||
-          row.principal_kind !== "fluent-system" ||
+          row.principal_kind !== "snowcat-system" ||
           row.principal_id !== "github-observer" ||
           receiptCount !== 1 ||
           (row.command_kind !== "github.repair-source-gap" &&
@@ -7372,7 +7372,7 @@ export class ControlPlaneStore {
             ? String(row.source_kind) !== "github-api" || String(row.source_id) !== "api.github.com" ||
               String(row.source_revision_kind) !== "github-installation-response-sha256" ||
               String(row.source_revision_value) !== installation.responseDigest
-            : String(row.source_kind) !== "fluent-system" || String(row.source_id) !== "github-observer" ||
+            : String(row.source_kind) !== "snowcat-system" || String(row.source_id) !== "github-observer" ||
               row.source_revision_kind != null || row.source_revision_value != null) ||
           String(transaction.payload_digest) !== sha256(canonicalJson(commandInput as unknown as JsonValue))
         ) throw new Error(`GitHub installation reconciliation lineage mismatch: ${String(row.record_id)}`);
@@ -7582,7 +7582,7 @@ export class ControlPlaneStore {
         if (
           !transaction ||
           String(transaction.command_kind) !== "github.record-pull-request-delivery-repair" ||
-          String(transaction.principal_kind) !== "fluent-system" ||
+          String(transaction.principal_kind) !== "snowcat-system" ||
           String(transaction.principal_id) !== "github-observer" ||
           outputs.length !== 3 ||
           String(row.record_id) !== audit.auditRecordId ||
@@ -7867,7 +7867,7 @@ export class ControlPlaneStore {
       !transaction ||
       !enrollment ||
       String(row.subject_kind) !== "github-repository" ||
-      String(row.source_kind) !== "fluent-system" ||
+      String(row.source_kind) !== "snowcat-system" ||
       String(row.source_id) !== "github-observer" ||
       row.source_revision_kind != null ||
       row.source_revision_value != null ||
@@ -9199,7 +9199,7 @@ export class ControlPlaneStore {
     if (path === ":memory:") throw new Error(`${label} path must be a filesystem path`);
     const artifactPath = resolve(path);
     if (artifactPath === this.databasePath) throw new Error(`${label} path must differ from the live database path`);
-    if (artifactPath === resolve(process.env.FLUENT_QUEUE_DB ?? "./data/queue.db")) {
+    if (artifactPath === resolve(process.env.SNOWCAT_QUEUE_DB ?? "./data/queue.db")) {
       throw new Error(`${label} path must differ from the queue-spike path`);
     }
     if (existsSync(artifactPath)) throw new Error(`${label} path already exists: ${artifactPath}`);

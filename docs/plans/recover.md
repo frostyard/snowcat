@@ -1,8 +1,8 @@
 # Plan: Recover a working engine
 
-This plan promotes the queue store and its MCP contract to Fluent's v1 work
+This plan promotes the queue store and its MCP contract to Snowcat's v1 work
 engine under [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md)
-and drives it to the first reviewed pull request on a real, non-Fluent
+and drives it to the first reviewed pull request on a real, non-Snowcat
 repository. It supersedes the delivery order of the
 [product foundation roadmap](product-foundation-roadmap.md) wherever that
 roadmap requires the control-plane store to hand out work; the roadmap's later
@@ -39,7 +39,7 @@ schema with no upgrade path.
   host sanity check. Restore is an operator file operation documented in the
   [queue execution boundary](../design/queue-execution-boundary.md); the CLI
   never overwrites a live path.
-- Resolve `FLUENT_QUEUE_DB` to an absolute path and document the single-host
+- Resolve `SNOWCAT_QUEUE_DB` to an absolute path and document the single-host
   layout: absolute database path, MCP over stdio from the operator host, restart
   MCP servers after upgrade, backup cadence and secret handling.
 - **Done when:** the live queue database opens under the new ladder with its
@@ -90,7 +90,7 @@ schema with no upgrade path.
 ## Phase 4 — Wire Core enrollment as a claim filter (completed 2026-08-17)
 
 - Add an injectable claim-eligibility hook to `QueueStore.claim()`. When
-  `FLUENT_CONTROL_DB` is configured, the CLI and MCP server wire it to
+  `SNOWCAT_CONTROL_DB` is configured, the CLI and MCP server wire it to
   "enrolled per `ControlPlaneStore.repositoryStatuses()` and not under an
   operator hold"; otherwise it is the existing repository opt-in.
 - Recreate the orphaned local control-plane database rather than blocking on
@@ -105,29 +105,29 @@ schema with no upgrade path.
   repository goes first and is not made from this repository. Resolved
   2026-08-17: [core#83](https://github.com/frostyard/core/pull/83) and
   [updex#297](https://github.com/frostyard/updex/pull/297) merged; a fresh
-  control plane at `/var/lib/fluent/control-plane.db` activated Core `main`
+  control plane at `/var/lib/snowcat/control-plane.db` activated Core `main`
   (`ee59e66`) and reconciled `frostyard/updex` as `enrolled` (identity
   matched, surfaces at `ac1d899`), and an admitted updex item was claimed
-  with `FLUENT_CONTROL_DB` set. The operator queue moved to
-  `/var/lib/fluent/queue.db` through a verified backup, and updex's three
+  with `SNOWCAT_CONTROL_DB` set. The operator queue moved to
+  `/var/lib/snowcat/queue.db` through a verified backup, and updex's three
   `testing`-labeled issues are imported as proposed work.
 - **Done when:** a held or unenrolled repository's queued items are not
   claimable while the control-plane database is configured, and the same
   items are claimable when it is not. Verified 2026-08-17: the orphaned local
   control-plane database was set aside, a fresh one activated Core `main`
   (`bbf196e`) and reconciled `frostyard/core` as `disabled`; with
-  `FLUENT_CONTROL_DB` set, a queued `frostyard/core` item was not claimable,
+  `SNOWCAT_CONTROL_DB` set, a queued `frostyard/core` item was not claimable,
   and the same item was claimed with the variable unset. Enrolled and
   operator-held transitions are covered by tests through the shared Core
   fixtures.
 
-## Phase 5 — Dogfood on one non-Fluent repository (in progress; two operating days completed)
+## Phase 5 — Dogfood on one non-Snowcat repository (in progress; two operating days completed)
 
 - Repository chosen 2026-08-17: `frostyard/updex`, enrolled through
   [core#83](https://github.com/frostyard/core/pull/83) and
-  [updex#297](https://github.com/frostyard/updex/pull/297). Fluent enrolled
+  [updex#297](https://github.com/frostyard/updex/pull/297). Snowcat enrolled
   itself the same evening ([core#84](https://github.com/frostyard/core/pull/84),
-  [fluent#3](https://github.com/frostyard/fluent/pull/3)) so its own
+  [snowcat#3](https://github.com/frostyard/snowcat/pull/3)) so its own
   maintenance runs through the same queue under the same gate.
 - Operate by the [queue operations runbook](../design/queue-operations.md) and,
   since 2026-08-18, from the [operator surface](../design/operator-surface.md).
@@ -142,7 +142,7 @@ schema with no upgrade path.
     and verified, 1 closed unmerged after an external tool landed an
     overlapping change; 0 refused completions; 1 block (a client permission
     limit) recovered through a requeue note.
-  - `frostyard/fluent`: 14 items completed, 14 pull requests merged and
+  - `frostyard/snowcat`: 14 items completed, 14 pull requests merged and
     verified — every Phase 6 item below was built by the queue itself,
     eight of them overnight on 2026-08-18 with the operator asleep and a
     merge gate merging on green CI.
@@ -154,13 +154,13 @@ schema with no upgrade path.
     conventional-commit titles are enforced in updex; core ADR-0038 scoped
     the test-name filter to chairlift after two findings contradicted.
 - Still open in this phase: tokens per accepted outcome (clients do not report
-  them to Fluent); a boundary with the Hive scanner, which fixed issues Fluent
-  had already fixed on 2026-08-18 (the `fluent` label as the queue's claim).
+  them to Snowcat); a boundary with the Hive scanner, which fixed issues Snowcat
+  had already fixed on 2026-08-18 (the `snowcat` label as the queue's claim).
 
 ## Phase 6 — Operate it like a product (completed 2026-08-18, first slice)
 
-Everything here was queued as Fluent issues written to the
-[`write-fluent-issues` skill](../../.agents/skills/write-fluent-issues/SKILL.md)
+Everything here was queued as Snowcat issues written to the
+[`write-snowcat-issues` skill](../../.agents/skills/write-snowcat-issues/SKILL.md)
 and merged through the queue:
 
 - Operator-set priority after creation — `queue -- prioritize` (#1 → PR #11).
@@ -172,19 +172,19 @@ and merged through the queue:
 - Scheduling — systemd timers for feeder, `verify-artifacts`, and backup with
   `seed-dogfood --enrolled` and `import-issues --enrolled` (#12 → PR #14,
   #21 → PR #28); `npm run check:deploy` verifies units and scripts in CI.
-- Deployment — `deploy/install.sh`, `deploy/upgrade.sh`, `/etc/fluent/env`,
+- Deployment — `deploy/install.sh`, `deploy/upgrade.sh`, `/etc/snowcat/env`,
   the runbook rewritten around them (#13 → PR #15). Decision recorded in the
   runbook's Deployment section: single host, stdio MCP, loopback listeners,
   operator-only credentials; remote workers deferred.
 - Operator surface —
   [ADR-0060](../adr/0060-bring-the-operator-surface-forward-as-a-read-first-inbox.md),
   designed on the
-  [Fluent Operator Surface canvas](https://claude.ai/code/artifact/86d7da78-b87d-4df4-a725-2d8a34b29384),
+  [Snowcat Operator Surface canvas](https://claude.ai/code/artifact/86d7da78-b87d-4df4-a725-2d8a34b29384),
   shipped as inbox + repository board + item page + mutations with
   stale-intent preconditions + live event stream + repository actions
   (#16–#19, #23, #24 → PRs #20, #25–#27, #30, #31); operator/policy actor
   required for every admission and exit (#22 → PR #29).
-- Enrolling Fluent itself (core#84, fluent#3).
+- Enrolling Snowcat itself (core#84, snowcat#3).
 - **Done when:** the operator can run a dogfood day from a browser and the
   timers keep the queue fed, verified, and backed up without a shell.
   Achieved 2026-08-18 for the browser; the timers are installed by
@@ -200,10 +200,10 @@ hands on the host.
    its cache under `ProtectSystem=strict`, fix the unit (likely a
    `ReadWritePaths` or `npm_config_cache` line) as a queue item. Operator's
    hands.
-2. **A week of steady state on updex and fluent** — feeder and import on
+2. **A week of steady state on updex and snowcat** — feeder and import on
    timers, admission from the browser, workers started by the operator or
    on a loop; record accepted-per-attempt, blocked, and time-to-merge daily
-   into the PRD baseline. (The Hive/Fluent boundary was decided 2026-08-18:
+   into the PRD baseline. (The Hive/Snowcat boundary was decided 2026-08-18:
    Hive retired, ADR-0062.)
 3. **Second repository** — enroll one more Frostyard Go repository (the
    `frostyard-go-repo` skill makes it uniform: `policies/agent-governance.json`
@@ -233,7 +233,7 @@ hands on the host.
   Deployment section; their trigger is the first worker that must run
   off-host, and they get their own ADR — proposed 2026-08-18 as
   [ADR-0063](../adr/0063-authenticate-people-through-cloudflare-access-and-mint-mcp-tokens.md)
-  (Cloudflare Access at the edge, Fluent-minted MCP tokens, identity-
+  (Cloudflare Access at the edge, Snowcat-minted MCP tokens, identity-
   attributed actors; grants still deferred).
 - The name: proposed 2026-08-18 as
   [ADR-0064](../adr/0064-adopt-the-name-snowcat.md) (Snowcat).
@@ -246,7 +246,7 @@ hands on the host.
   default.
 - **Hive boundary:** resolved 2026-08-18 by
   [ADR-0062](../adr/0062-retire-hive-fluent-owns-conformance.md) — Hive is
-  retired; Fluent's `conformance` and `triage` programs own what it did.
+  retired; Snowcat's `conformance` and `triage` programs own what it did.
 
 ## References
 

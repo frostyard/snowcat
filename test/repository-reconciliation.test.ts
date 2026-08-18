@@ -44,7 +44,7 @@ import {
 } from "./helpers/core-fixtures.ts";
 
 test("active Core authority materializes separately from GitHub identity and enrollment", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-repository-authority-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-repository-authority-test-"));
   let now = new Date("2026-08-16T18:00:00.000Z");
   const store = new ControlPlaneStore(join(directory, "control.db"), () => now);
   const candidate = await activationCandidate(enabledDeclaration(), "1".repeat(40), "2".repeat(40));
@@ -142,7 +142,7 @@ test("active Core authority materializes separately from GitHub identity and enr
 });
 
 test("verified GitHub pull-request deliveries are enrollment-bound, replayable, and projection-safe", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-github-delivery-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-github-delivery-test-"));
   const path = join(directory, "control.db");
   let now = new Date("2026-08-17T12:00:00.000Z");
   const store = new ControlPlaneStore(path, () => now);
@@ -256,7 +256,7 @@ test("verified GitHub pull-request deliveries are enrollment-bound, replayable, 
 });
 
 test("GitHub delivery-API repair records audit provenance without manufacturing a webhook receipt", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-github-delivery-repair-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-github-delivery-repair-test-"));
   const path = join(directory, "control.db");
   let now = new Date("2026-08-17T13:30:00.000Z");
   const store = new ControlPlaneStore(path, () => now);
@@ -389,7 +389,7 @@ test("GitHub delivery-API repair records audit provenance without manufacturing 
 });
 
 test("GitHub pull-request delivery rejects forks and closed-state test merge identities", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-github-delivery-shape-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-github-delivery-shape-test-"));
   const store = new ControlPlaneStore(
     join(directory, "control.db"),
     () => new Date("2026-08-17T13:00:00.000Z"),
@@ -438,7 +438,7 @@ test("GitHub pull-request delivery rejects forks and closed-state test merge ide
 });
 
 test("GitHub observer installation reconciliation is enrollment-bound, replayable, and source-distinct", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-github-installation-reconciliation-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-github-installation-reconciliation-test-"));
   const path = join(directory, "control.db");
   let now = new Date("2026-08-17T13:40:00.000Z");
   const store = new ControlPlaneStore(path, () => now);
@@ -492,7 +492,7 @@ test("GitHub observer installation reconciliation is enrollment-bound, replayabl
     },
   });
   assert.equal(unavailable.access, "unavailable");
-  assert.equal(store.occurrences().at(-3)?.sourceKind, "fluent-system");
+  assert.equal(store.occurrences().at(-3)?.sourceKind, "snowcat-system");
   assert.equal(
     store.githubInstallationReconciliation("github.com:9001", "4567")?.access,
     "unavailable",
@@ -511,7 +511,7 @@ test("GitHub observer installation reconciliation is enrollment-bound, replayabl
 });
 
 test("GitHub delivery-audit checkpoints lower-bound gaps and close them only through complete repair", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-github-coverage-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-github-coverage-test-"));
   const path = join(directory, "control.db");
   let now = new Date("2026-08-17T14:00:00.000Z");
   const store = new ControlPlaneStore(path, () => now);
@@ -776,7 +776,7 @@ test("GitHub delivery-audit checkpoints lower-bound gaps and close them only thr
 });
 
 test("GitHub reconciliation classifies mismatch precedence and preserves declaration authority", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-repository-mismatch-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-repository-mismatch-test-"));
   let now = new Date("2026-08-16T19:00:00.000Z");
   const store = new ControlPlaneStore(join(directory, "control.db"), () => now);
   const candidate = await activationCandidate(enabledDeclaration(), "3".repeat(40), "4".repeat(40));
@@ -824,7 +824,7 @@ test("GitHub reconciliation classifies mismatch precedence and preserves declara
 });
 
 test("the RepositoryReconciler skips external lookup for narrowed declarations and converges", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-repository-controller-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-repository-controller-test-"));
   let now = new Date("2026-08-16T20:00:00.000Z");
   const store = new ControlPlaneStore(join(directory, "control.db"), () => now);
   const disabled = await activationCandidate(
@@ -859,7 +859,7 @@ test("the RepositoryReconciler skips external lookup for narrowed declarations a
 });
 
 test("enabled repository reconciliation converges across store handles without duplicate facts", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-repository-convergence-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-repository-convergence-test-"));
   const path = join(directory, "control.db");
   const now = new Date("2026-08-16T20:30:00.000Z");
   const firstStore = new ControlPlaneStore(path, () => now);
@@ -1253,7 +1253,7 @@ test("repository declaration removal fails validation while disabled retention r
 });
 
 test("automatic Core synchronization records declaration removal as candidate-invalid", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-repository-retention-sync-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-repository-retention-sync-test-"));
   const store = new ControlPlaneStore(
     join(directory, "control.db"),
     () => new Date("2026-08-16T21:00:00.000Z"),
@@ -1288,7 +1288,7 @@ test("the GitHub adapter retains only selected metadata and bounds failures", as
     { owner: "frostyard", name: "example" },
     async (input, init) => {
       assert.equal(input, "https://api.github.com/repos/frostyard/example");
-      assert.equal((init?.headers as Record<string, string>)["User-Agent"], "frostyard-fluent");
+      assert.equal((init?.headers as Record<string, string>)["User-Agent"], "frostyard-snowcat");
       assert.equal(init?.redirect, "manual");
       return new Response(
         JSON.stringify({

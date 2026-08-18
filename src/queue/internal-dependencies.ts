@@ -83,7 +83,7 @@ export async function sweepInternalDependencies(
     if (!repository) throw new Error(`repository is not opted in: ${options.repository}`);
     targets = [repository];
   } else {
-    if (!controlPlanePath) throw new Error("sweep-dependencies --enrolled requires FLUENT_CONTROL_DB to name the control-plane database");
+    if (!controlPlanePath) throw new Error("sweep-dependencies --enrolled requires SNOWCAT_CONTROL_DB to name the control-plane database");
     targets = [];
     for (const slug of [...enrolledRepositories(controlPlanePath)].sort()) {
       const repository = optedIn.get(slug.toLowerCase());
@@ -286,7 +286,7 @@ function releaseNeededProposal(repository: string, release: RepositoryRelease, s
     kind: RELEASE_NEEDED_KIND,
     objective: `Cut a release of ${repository}: ${release.aheadBy} commit${release.aheadBy === 1 ? "" : "s"} on ${release.defaultBranch} since ${tag} (suggested ${suggestedBump})`,
     instructions: [
-      `${repository}'s ${release.defaultBranch} (${release.headSha}) is ${release.aheadBy} commit${release.aheadBy === 1 ? "" : "s"} ahead of its latest release tag ${tag}${types ? ` (${types})` : ""}. Fluent computed this from GitHub tags and the branch comparison; it is a fact, not a judgment about whether a release is warranted.`,
+      `${repository}'s ${release.defaultBranch} (${release.headSha}) is ${release.aheadBy} commit${release.aheadBy === 1 ? "" : "s"} ahead of its latest release tag ${tag}${types ? ` (${types})` : ""}. Snowcat computed this from GitHub tags and the branch comparison; it is a fact, not a judgment about whether a release is warranted.`,
       "Prepare the release without cutting it: confirm the repository's checks are green on the default branch, review the unreleased changes and the suggested next version (svu semantics: breaking → major unless v0, feat → minor, else patch), and land in ONE pull request whatever the repository's release convention requires before a tag — changelog or release-notes entries, version references in docs or manifests, a migration note for a breaking change. If nothing needs to change before tagging, complete this item with that evidence and no pull request.",
       "Do NOT create the tag, run `make bump`, publish a release, or push to the default branch: the tag is the operator's act, and the repository's release workflow publishes on the tag push. Say in the result exactly which version the operator should tag and why.",
     ].join(" "),
@@ -307,7 +307,7 @@ function dependencyBumpProposal(repository: string, module: string, from: string
     kind: DEPENDENCY_BUMP_KIND,
     objective: `Bump ${module} from ${from} to ${to} in ${repository}`,
     instructions: [
-      `${repository} requires ${module} ${from}; ${upstream} has released ${to}. Fluent computed this from the repository's go.mod and the upstream's release tags.`,
+      `${repository} requires ${module} ${from}; ${upstream} has released ${to}. Snowcat computed this from the repository's go.mod and the upstream's release tags.`,
       `Update the requirement to exactly ${to} (\`go get ${module}@${to} && go mod tidy\`), adapt to any API change the upstream's release notes describe, run the repository's own checks (\`make check\` or equivalent), and open ONE pull request titled like \`chore(deps): bump ${module} to ${to}\` that names the upstream release and what changed. Do not bump anything else in the same pull request; do not bump to an unreleased commit.`,
     ].join(" "),
     acceptanceCriteria: [

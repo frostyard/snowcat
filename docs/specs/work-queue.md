@@ -1,6 +1,6 @@
 # Spec: Work queue
 
-This contract governs durable maintenance items exchanged between Fluent and
+This contract governs durable maintenance items exchanged between Snowcat and
 operator-started capable agents. The CLI seeds administrative work; MCP clients
 claim, renew, and resolve it.
 
@@ -41,7 +41,7 @@ An artifact has a `kind` (`issue`, `pull-request`, `commit`, `report`, or
 request, and commit artifacts MUST name the work item's repository and use the
 path shape for their kind. This validates the claim's scope, not the artifact's
 existence. Issue and pull-request artifacts additionally carry a
-`verification`, Fluent's own observation of the artifact through the GitHub
+`verification`, Snowcat's own observation of the artifact through the GitHub
 API: `{ status: "verified", verifiedAt, number, state: open | closed | merged,
 headSha?, mergedAt?, closedAt? }` or `{ status: "unverified", attemptedAt,
 reason }`. Workers never supply it. A completion result has a non-empty
@@ -226,7 +226,7 @@ MCP (rule 41).
     completion. An accepted child MUST inherit its parent's exact `priority`
     at creation; an operator MAY change it afterwards only through rule 38.
 23. The principal namespaces `operator:`, `policy:`, and `system:` (and the
-    bare identity `system`) are reserved for Fluent's own operator, policy,
+    bare identity `system`) are reserved for Snowcat's own operator, policy,
     and lease-expiry actors. A worker identity supplied to `claim_work`,
     `heartbeat_work`, `complete_work`, `block_work`, or `release_work` MUST be
     rejected, case-insensitively, when it uses a reserved namespace, at both
@@ -326,8 +326,8 @@ MCP (rule 41).
     GitHub is unavailable, returns a non-200 answer other than not-found, or
     an unreadable body, the completion MUST be accepted with
     `verification.status = "unverified"` and the reason, never refused for
-    that cause. A not-found answer MUST count as absence only when Fluent
-    presented `FLUENT_GITHUB_TOKEN`; unauthenticated, GitHub answers 404 for
+    that cause. A not-found answer MUST count as absence only when Snowcat
+    presented `SNOWCAT_GITHUB_TOKEN`; unauthenticated, GitHub answers 404 for
     private repositories exactly as for missing ones, so the completion MUST
     be accepted as `unverified` naming the missing token. The MCP artifact
     schema MUST reject a worker-supplied `verification` as an unknown key
@@ -353,7 +353,7 @@ MCP (rule 41).
     (asked once per claim, per candidate repository), MUST keep the single-row
     atomic selection among them, and MUST fail closed — leasing nothing — when
     the hook throws. Host processes MUST wire the control-plane hook only when
-    `FLUENT_CONTROL_DB` is explicitly configured; that hook MUST accept a
+    `SNOWCAT_CONTROL_DB` is explicitly configured; that hook MUST accept a
     repository only while the control-plane store reports its effective state
     as `enrolled` (which excludes disabled, paused, unresolved, and
     operator-held repositories), MUST open the store per decision without
@@ -482,7 +482,7 @@ MCP (rule 41).
     drop drafts (skipped with a reason) and URLs already among the reported
     candidates, and inspect the rest through the same health read and
     enqueue path with priority 0, no `originItemId`, and one added
-    instruction sentence saying the pull request was not opened by a Fluent
+    instruction sentence saying the pull request was not opened by a Snowcat
     worker. The result's `foreign` counter reports `listed` and `inspected`.
 43. The **patch identity** of a pull request is `sha256:` over the
     canonical JSON of its changed files sorted by path, each as its path,
@@ -498,7 +498,7 @@ MCP (rule 41).
     request's current patch identity equals the cure's `patchDigest`; a pull
     request merged meanwhile is accepted on the artifact alone. An
     unavailable or uncomputable answer MUST refuse, never accept: mechanical
-    is a fact Fluent computes, not a claim the worker makes. A `pr-cure`
+    is a fact Snowcat computes, not a claim the worker makes. A `pr-cure`
     worker that finds curing requires changing the patch MUST propose one
     `pr-cure-change` child (the substantive fix, admitted by the operator
     like any proposal, carrying no digest constraint) or block; cure MUST
@@ -521,7 +521,7 @@ MCP (rule 41).
     tag, run `make bump`, publish a release, or push the default branch, and
     a `dependency-bump` MUST NOT target an unreleased commit. Failures MUST
     be reported per repository, never abort the sweep. `--enrolled` requires
-    `FLUENT_CONTROL_DB` and skips enrolled repositories not opted in.
+    `SNOWCAT_CONTROL_DB` and skips enrolled repositories not opted in.
 46. **Repository settings conformance (core ADR-0040).** `sweep-repository-
     settings <owner/repo> | --enrolled` MUST read the repository settings
     contract from the active Core snapshot's retained files (and MUST report
@@ -539,7 +539,7 @@ MCP (rule 41).
     every drift as expected/observed and naming core's
     `scripts/apply-repo-settings.sh` as the way to apply; a repeat of the
     same drift set MUST create nothing and a changed set MUST create a new
-    proposal. Fluent MUST NOT change any repository setting.
+    proposal. Snowcat MUST NOT change any repository setting.
 
 47. `rename-repository <old owner/repo> <new owner/repo>` MUST, in one
     transaction attributed to an `operator:` or `policy:` actor, carry the
@@ -562,7 +562,7 @@ MCP (rule 41).
 | Pull-request cure | `verify-artifacts` enqueues `pr-cure` roots per decayed head per rules 42–43; `complete_work` enforces patch identity per rule 44 |
 | Internal dependency chain | `sweep-dependencies` maps tags, branch comparison, and `go.mod` to `release-needed` and `dependency-bump` proposals per rule 45 |
 | Repository settings drift | `sweep-repository-settings` diffs live GitHub settings against core's contract into `settings-drift` proposals per rule 46 |
-| MCP worker behavior | Portable `work-fluent-queue` skill constrained by this contract |
+| MCP worker behavior | Portable `work-snowcat-queue` skill constrained by this contract |
 | Testing-gap seed | Deterministic CLI instance of this contract |
 
 ## References

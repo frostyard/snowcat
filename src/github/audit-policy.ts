@@ -9,7 +9,7 @@ const INCOMPLETE_RETRY_SECONDS = [60, 300, 900] as const;
 export function parseGitHubDeliveryAuditInterval(value: string | undefined): number {
   if (value === undefined) return GITHUB_DELIVERY_AUDIT_DEFAULT_INTERVAL_SECONDS;
   if (!/^[1-9][0-9]*$/.test(value)) {
-    throw new Error("FLUENT_GITHUB_DELIVERY_AUDIT_INTERVAL_SECONDS must be one canonical positive integer");
+    throw new Error("SNOWCAT_GITHUB_DELIVERY_AUDIT_INTERVAL_SECONDS must be one canonical positive integer");
   }
   const interval = Number(value);
   assertGitHubDeliveryAuditInterval(interval);

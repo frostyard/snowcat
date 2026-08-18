@@ -3,7 +3,7 @@
 This contract governs the typed control-plane transactions that either turn one
 successfully verified `frostyard/core` candidate into the current retained Core
 snapshot or record a bounded rejection observation when activation cannot
-begin or commit. It is consumed by the host-local Core CLI and internal Fluent
+begin or commit. It is consumed by the host-local Core CLI and internal Snowcat
 code. The activation transaction itself does not create repository enrollment,
 reconcile GitHub, or admit work; after an accepted source check the host command
 invokes the separate repository reconciliation contract.
@@ -18,10 +18,10 @@ npm run --silent core -- rollback <expected-control-plane-sequence> <target-comm
 npm run --silent core -- rejections [limit]
 ```
 
-It uses the same `FLUENT_CORE_URL`, `FLUENT_CORE_REF`, and
-`FLUENT_CORE_MIRROR` source contract as
+It uses the same `SNOWCAT_CORE_URL`, `SNOWCAT_CORE_REF`, and
+`SNOWCAT_CORE_MIRROR` source contract as
 [Core snapshot verification](core-snapshot-verification.md), plus
-`FLUENT_CONTROL_DB` from the
+`SNOWCAT_CONTROL_DB` from the
 [control-plane kernel](control-plane-kernel.md). The expected sequence is a
 positive canonical safe integer that optimistically binds the new transaction
 to the operator's observed target state.
@@ -30,7 +30,7 @@ The underlying accepted activation result has this shape:
 
 | Field | Type | Constraint |
 | --- | --- | --- |
-| `snapshotId` | UUIDv7 | New Fluent-native `core-snapshot` subject |
+| `snapshotId` | UUIDv7 | New Snowcat-native `core-snapshot` subject |
 | `definitionRecordId` | UUIDv7 | `core.snapshot-definition` at position `0` |
 | `activeFactRecordId` | UUIDv7 | `core.snapshot-active` at position `1` |
 | `eventRecordId` | UUIDv7 | `core.snapshot-activated` at position `2` |

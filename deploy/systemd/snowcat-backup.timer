@@ -1,12 +1,12 @@
 # Daily backup; Persistent=true runs a missed backup at the next boot. Enable
-# with `systemctl enable --now fluent-backup.timer`.
+# with `systemctl enable --now snowcat-backup.timer`.
 [Unit]
-Description=Fluent: back up the databases daily
+Description=Snowcat: back up the databases daily
 
 [Timer]
 OnCalendar=daily
 Persistent=true
-Unit=fluent-backup.service
+Unit=snowcat-backup.service
 
 [Install]
 WantedBy=timers.target

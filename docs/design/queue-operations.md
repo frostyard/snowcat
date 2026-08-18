@@ -11,7 +11,7 @@ Contract: [work queue](../specs/work-queue.md). Architecture:
 
 ## Overview
 
-This is the operator runbook for running Fluent's v1 work engine on one host,
+This is the operator runbook for running Snowcat's v1 work engine on one host,
 in the order you do it: install the host, enroll a repository, fill the queue,
 admit work, run coding agents against it, watch what they produce, and keep
 the database safe (upgrade, back up, restore). It
@@ -19,9 +19,9 @@ follows the [recovery plan](../plans/recover.md) and is written for the first
 dogfood repository, `frostyard/updex`; every command applies to any opted-in
 repository.
 
-Fluent never starts, sandboxes, or authenticates a worker. You start Codex,
+Snowcat never starts, sandboxes, or authenticates a worker. You start Codex,
 Claude, Copilot, or another MCP-capable client yourself and tell it to work the
-queue; Fluent decides what it may claim, records what it reports, and checks
+queue; Snowcat decides what it may claim, records what it reports, and checks
 reported GitHub artifacts under its own credential.
 
 ```text
@@ -38,18 +38,18 @@ seed-dogfood ──────────────────► queued   
   installer finds `npm` on your `PATH`), and `sudo`. `npm run check` — which
   `deploy/upgrade.sh` runs — also needs `shellcheck` and `systemd-analyze`
   on the host, because `check:deploy` lints the units and scripts.
-- A GitHub token for `FLUENT_GITHUB_TOKEN` (`gh auth token` works). Optional
+- A GitHub token for `SNOWCAT_GITHUB_TOKEN` (`gh auth token` works). Optional
   for public repositories but strongly recommended: it lifts the API rate limit
-  and lets Fluent verify artifacts on private repositories.
-- **Two checkouts.** The operator's checkout (`FLUENT_HOME`, e.g.
-  `/opt/fluent`) is the one the timers, the CLI, and `deploy/upgrade.sh` use;
+  and lets Snowcat verify artifacts on private repositories.
+- **Two checkouts.** The operator's checkout (`SNOWCAT_HOME`, e.g.
+  `/opt/snowcat`) is the one the timers, the CLI, and `deploy/upgrade.sh` use;
   it stays on `main` and is only ever moved by `git pull --ff-only`. A worker
-  that maintains `frostyard/fluent` itself works in a *different* clone —
-  never in `FLUENT_HOME`. (On 2026-08-17 a worker left the operator checkout
+  that maintains `frostyard/snowcat` itself works in a *different* clone —
+  never in `SNOWCAT_HOME`. (On 2026-08-17 a worker left the operator checkout
   on a feature branch; the timers then ran that branch's code.)
 
-State lives in `/var/lib/fluent/{queue,control-plane}.db`, configuration in
-`/etc/fluent/env`, backups in `/var/backups/fluent`, all created by the
+State lives in `/var/lib/snowcat/{queue,control-plane}.db`, configuration in
+`/etc/snowcat/env`, backups in `/var/backups/snowcat`, all created by the
 installer below. Without the installer the defaults are `./data/queue.db` and
 `./data/control-plane.db` relative to the process working directory. Every
 command below is `npm run --silent queue -- <command>` unless it names
@@ -61,21 +61,21 @@ Run once on a clean host, and again whenever `deploy/` changes (it is
 idempotent and reports what it created and what it kept):
 
 ```bash
-sudo install -d -o "$USER" -g "$(id -gn)" /opt/fluent
-git clone https://github.com/frostyard/fluent.git /opt/fluent
-cd /opt/fluent && npm ci
-sudo deploy/install.sh --user "$USER"      # dirs, /etc/fluent/env, units, timers
-"${EDITOR:-vi}" /etc/fluent/env            # FLUENT_GITHUB_TOKEN=<gh auth token>
-set -a; . /etc/fluent/env; set +a          # load it into this shell
-npm run --silent queue -- metadata         # databasePath: /var/lib/fluent/queue.db
-systemctl list-timers 'fluent-*'           # three timers, next run times
+sudo install -d -o "$USER" -g "$(id -gn)" /opt/snowcat
+git clone https://github.com/frostyard/snowcat.git /opt/snowcat
+cd /opt/snowcat && npm ci
+sudo deploy/install.sh --user "$USER"      # dirs, /etc/snowcat/env, units, timers
+"${EDITOR:-vi}" /etc/snowcat/env            # SNOWCAT_GITHUB_TOKEN=<gh auth token>
+set -a; . /etc/snowcat/env; set +a          # load it into this shell
+npm run --silent queue -- metadata         # databasePath: /var/lib/snowcat/queue.db
+systemctl list-timers 'snowcat-*'           # three timers, next run times
 ```
 
-[`deploy/install.sh`](../../deploy/install.sh) creates `/var/lib/fluent` and
-`/var/backups/fluent` (0750, owned by `--user`, default the sudo caller);
-writes `/etc/fluent/env` (0600, same owner) from
-[`deploy/env.example`](../../deploy/env.example) with `FLUENT_HOME` set to
-the checkout and the database paths under `/var/lib/fluent` — **only if the
+[`deploy/install.sh`](../../deploy/install.sh) creates `/var/lib/snowcat` and
+`/var/backups/snowcat` (0750, owned by `--user`, default the sudo caller);
+writes `/etc/snowcat/env` (0600, same owner) from
+[`deploy/env.example`](../../deploy/env.example) with `SNOWCAT_HOME` set to
+the checkout and the database paths under `/var/lib/snowcat` — **only if the
 file is absent**, so your token and edits survive re-runs; installs the six
 units from [`deploy/systemd/`](../../deploy/systemd/) into
 `/etc/systemd/system/` with one drop-in per service (`10-install.conf`:
@@ -84,40 +84,40 @@ shell resolves — a plain login shell first, then an interactive one (Homebrew'
 `brew shellenv` usually sits in `~/.bashrc` behind an "if not interactive,
 return" guard), then the installer's own `PATH`, then the well-known Homebrew
 prefixes; `sudo` resets `PATH`, so override with
-`sudo env FLUENT_NPM=/path/to/npm FLUENT_NODE=/path/to/node deploy/install.sh`
+`sudo env SNOWCAT_NPM=/path/to/npm SNOWCAT_NODE=/path/to/node deploy/install.sh`
 if it still picks the wrong one — a `PATH=` that lets that npm find `node`, and
-`ReadWritePaths=` for the real `FLUENT_HOME`) — systemd's fixed search path
+`ReadWritePaths=` for the real `SNOWCAT_HOME`) — systemd's fixed search path
 does not include Homebrew, nvm, or similar, so the drop-in is what makes the
 timers work on such hosts; then
 `daemon-reload` and `enable --now` on the three timers. It never runs
 `core -- activate` and never opens or moves a database. Set
-`FLUENT_INSTALL_ROOT=<dir>` to dry-run it into a directory without root
-(`systemctl` is skipped unless `FLUENT_SYSTEMCTL` names a substitute); that
+`SNOWCAT_INSTALL_ROOT=<dir>` to dry-run it into a directory without root
+(`systemctl` is skipped unless `SNOWCAT_SYSTEMCTL` names a substitute); that
 is what `npm run check:deploy` does, twice, asserting the second run changes
 nothing.
 
-`/etc/fluent/env` is the single source of the host configuration. Every
+`/etc/snowcat/env` is the single source of the host configuration. Every
 shell in which you run the CLI, and every shell from which you start a worker
 client, loads it first:
 
 ```bash
-set -a; . /etc/fluent/env; set +a
+set -a; . /etc/snowcat/env; set +a
 ```
 
 Timers get it through `EnvironmentFile=`; nothing else does — a client
-started from a shell that did not source it sees no `FLUENT_*` variables.
+started from a shell that did not source it sees no `SNOWCAT_*` variables.
 
 ## One-time: enroll a repository
 
 Enrollment is optional for the queue itself (repository opt-in is enough to
-run) but required if you set `FLUENT_CONTROL_DB`, because then `claim_work`
+run) but required if you set `SNOWCAT_CONTROL_DB`, because then `claim_work`
 only leases items whose repository is `enrolled` in the control plane.
 
 1. In `frostyard/core`, declare the repository with `fleet_state: enabled`
    under `organization/repositories/<owner>/<name>.json`
    ([core#83](https://github.com/frostyard/core/pull/83) does this for
    updex). Validate before merging:
-   `npm run --silent core -- verify` after pointing `FLUENT_CORE_REF` at the
+   `npm run --silent core -- verify` after pointing `SNOWCAT_CORE_REF` at the
    branch reports the catalog, or fails with the exact reason.
 2. In the repository, make sure the four canonical surfaces exist:
    `AGENTS.md`, `policies/agent-governance.json`, `.agents/skills/`, and
@@ -151,17 +151,17 @@ step after the Core declaration is renamed and activated — the opt-in and
 every item move; history keeps the strings it was recorded with:
 
 ```bash
-npm run --silent queue -- rename-repository frostyard/fluent frostyard/snowcat
+npm run --silent queue -- rename-repository frostyard/snowcat frostyard/snowcat
 ```
 
 **From GitHub issues** — write them per the
-[`write-fluent-issues` skill](../../.agents/skills/write-fluent-issues/SKILL.md)
+[`write-snowcat-issues` skill](../../.agents/skills/write-snowcat-issues/SKILL.md)
 (conventional title, evidence, bounded scope, at least one acceptance
-criterion observable on the PR itself), label them (any label; `fluent` is a
+criterion observable on the PR itself), label them (any label; `snowcat` is a
 good convention), then:
 
 ```bash
-npm run --silent queue -- import-issues frostyard/updex --label fluent --priority 10
+npm run --silent queue -- import-issues frostyard/updex --label snowcat --priority 10
 ```
 
 Each open labeled issue becomes one `proposed` item of kind `issue-resolution`
@@ -170,14 +170,14 @@ imported once — even if its item was later rejected or completed — is never
 imported again. Higher `--priority` claims first (ties by creation time).
 Priority is operator-owned; workers cannot change it.
 
-The label convention is **`fluent`**: labeling an issue `fluent` is the
-queue's claim on it, and the operator host imports it for you. `fluent-feed.timer`
-runs `import-issues --enrolled --label fluent` hourly, right after the dogfood
+The label convention is **`snowcat`**: labeling an issue `snowcat` is the
+queue's claim on it, and the operator host imports it for you. `snowcat-feed.timer`
+runs `import-issues --enrolled --label snowcat` hourly, right after the dogfood
 feeder, for every repository that is opted in **and** `enrolled` in the
 control-plane store:
 
 ```bash
-npm run --silent queue -- import-issues --enrolled --label fluent [--priority <n>]
+npm run --silent queue -- import-issues --enrolled --label snowcat [--priority <n>]
 ```
 
 It reads the control-plane store once, runs the same import in one transaction
@@ -185,8 +185,8 @@ per repository, and prints `imported` (per repository: `fetched`, `created`,
 `skippedSourceRefs`), `failed` (a repository whose GitHub listing returned 5xx
 or was unavailable — reported and skipped while the others still run), and
 `notOptedIn` (enrolled but not opted in). It exits non-zero only when
-`FLUENT_CONTROL_DB` is unset or every repository failed, and it needs
-`FLUENT_GITHUB_TOKEN` to list private repositories. Imported items stay
+`SNOWCAT_CONTROL_DB` is unset or every repository failed, and it needs
+`SNOWCAT_GITHUB_TOKEN` to list private repositories. Imported items stay
 `proposed` until you admit them; hand-run `import-issues <owner/repo>` still
 works for a repository that is opted in but not enrolled, or for a different
 label.
@@ -213,8 +213,8 @@ module@tag`, one pull request, nothing else bumped). A bump is never proposed
 before the upstream release exists, so the chain orders itself. Bounds: at
 most one non-terminal `release-needed` per repository; a `release-needed`
 you rejected is not re-asked for the same tag for seven days; a repository
-with no release tag is reported, not asked. `fluent-feed.timer` runs the
-sweep hourly after the import; it needs `FLUENT_GITHUB_TOKEN` for private
+with no release tag is reported, not asked. `snowcat-feed.timer` runs the
+sweep hourly after the import; it needs `SNOWCAT_GITHUB_TOKEN` for private
 repositories and reports `swept`, `releaseNeeded`, `dependencyBumps`,
 `skipped`, `failed`, and `notOptedIn`.
 
@@ -234,14 +234,14 @@ Actions token permissions, security features, active rulesets on the default
 branch and on `v*` tags, classic protection, labels — and creates one
 **`settings-drift`** proposal per repository per distinct drift set (same
 drift again: nothing; drift changed: a new proposal, reject the old one). The
-proposal lists every drift as expected/observed. Fluent never changes a
+proposal lists every drift as expected/observed. Snowcat never changes a
 setting: you apply the contract with core's
 `scripts/apply-repo-settings.sh <owner/repo>` (dry-run first; pass the
 repository's required-check names) and a worker completing the item only
 verifies, read-only, that the settings now match. Settings the token cannot
 read (admin-only fields) are reported as `unreadable`, not drift; give the
 token admin read on the fleet repositories for full coverage.
-`fluent-feed.timer` runs it hourly as its fourth step.
+`snowcat-feed.timer` runs it hourly as its fourth step.
 
 **Standing maintenance** — the maintenance program catalog in
 [`src/queue/programs.ts`](../../src/queue/programs.ts): one bounded, read-only
@@ -266,7 +266,7 @@ npm run --silent queue -- seed-dogfood --enrolled                         # ever
 The feeder is idempotent: a program with active lineage is skipped, and one
 that just completed with no finding is reported as `cooledKinds` rather than
 re-asked until its cadence elapses (`--cooldown-hours <n>` overrides every
-program's cadence for that run). `--enrolled` requires `FLUENT_CONTROL_DB` (it exits non-zero naming
+program's cadence for that run). `--enrolled` requires `SNOWCAT_CONTROL_DB` (it exits non-zero naming
 the variable otherwise), reads the control-plane store once, and runs the
 feeder in one transaction per repository that is both opted in and `enrolled`,
 printing each repository's result plus any enrolled repository that is not
@@ -277,7 +277,7 @@ result names the catalog kinds it left out as `undeclaredKinds`. Explicit
 `seed-dogfood <owner/repo>` seeds every program regardless — use it only for
 a repository outside the enrollment gate. (Before 2026-08-18 the feeder
 ignored the list: updex declared `quality, ci` and ran four programs for two
-days.) It is the first thing `fluent-feed.timer` runs hourly,
+days.) It is the first thing `snowcat-feed.timer` runs hourly,
 followed by the labeled-issue import above (see
 [Deployment](#deployment-v1-decided-2026-08-17)). These roots are admitted
 immediately (they are read-only); their children are not.
@@ -337,12 +337,12 @@ operator host runs the surface
 ([design](operator-surface.md#operational-notes)):
 
 ```bash
-FLUENT_APP_TOKEN=… FLUENT_QUEUE_DB=/var/lib/fluent/queue.db \
-FLUENT_CONTROL_DB=/var/lib/fluent/control-plane.db \
+SNOWCAT_APP_TOKEN=… SNOWCAT_QUEUE_DB=/var/lib/snowcat/queue.db \
+SNOWCAT_CONTROL_DB=/var/lib/snowcat/control-plane.db \
 npm run build && npm run serve        # binds 127.0.0.1:3000; HOST/PORT override
 ```
 
-Sign in with the host's `FLUENT_APP_TOKEN`; the inbox shows what needs you —
+Sign in with the host's `SNOWCAT_APP_TOKEN`; the inbox shows what needs you —
 proposals awaiting admission (children under their parent's finding), blocked
 items with the worker's reason, and completed items whose issue or pull-request
 artifact is still `unverified` — plus the last 30 ledger events. It reads the
@@ -374,7 +374,7 @@ remain CLI-only for now.
 
 Three more views sit behind the same session:
 
-- `/repositories` — every opted-in (and, with `FLUENT_CONTROL_DB`, declared)
+- `/repositories` — every opted-in (and, with `SNOWCAT_CONTROL_DB`, declared)
   repository with its enrollment badge and per-status counts, the browser's
   `list --repository` at a glance.
 - `/repositories/<owner>/<name>` — the board: queued work in claim order with
@@ -383,13 +383,13 @@ Three more views sit behind the same session:
   work with its `delivery` state; the header shows the enrollment state, Core
   and surface commits, and repository id from the control plane. The
   *Repository actions* strip under the header runs the CLI's repository-level
-  commands as `operator:web`: **Import issues** (label, default `fluent`, and
+  commands as `operator:web`: **Import issues** (label, default `snowcat`, and
   optional priority — the same import as `queue -- import-issues`, so a second
   run creates nothing), **Seed dogfood** (the catalog's discovery roots for
   the programs the Core declaration lists — the whole catalog only for an
   undeclared opt-in — each with its program's cadence, which the button's
   note spells out), **Verify artifacts** (`verify-artifacts` for that
-  repository), and, when `FLUENT_CONTROL_DB` is set and the repository is
+  repository), and, when `SNOWCAT_CONTROL_DB` is set and the repository is
   declared, **Hold repository** / **Clear hold** with a reason — the same
   attributed local-operator decision as `repository -- hold | clear-hold`,
   recorded against the control plane's current sequence (if it moved
@@ -403,23 +403,23 @@ Three more views sit behind the same session:
 
 ## Run workers
 
-Configure an MCP server named `fluent` in the client you start and let it
+Configure an MCP server named `snowcat` in the client you start and let it
 inherit the host configuration from the shell that launched it — `set -a; .
-/etc/fluent/env; set +a` first, then start the client. Claude Code
+/etc/snowcat/env; set +a` first, then start the client. Claude Code
 (`.mcp.json`; the committed one in this repository has the same shape) expands
 `${VAR}` and `${VAR:-default}`:
 
 ```json
 {
   "mcpServers": {
-    "fluent": {
+    "snowcat": {
       "type": "stdio",
       "command": "npm",
-      "args": ["--prefix", "/opt/fluent", "run", "--silent", "mcp"],
+      "args": ["--prefix", "/opt/snowcat", "run", "--silent", "mcp"],
       "env": {
-        "FLUENT_QUEUE_DB": "${FLUENT_QUEUE_DB:-/var/lib/fluent/queue.db}",
-        "FLUENT_CONTROL_DB": "${FLUENT_CONTROL_DB:-/var/lib/fluent/control-plane.db}",
-        "FLUENT_GITHUB_TOKEN": "${FLUENT_GITHUB_TOKEN:-}"
+        "SNOWCAT_QUEUE_DB": "${SNOWCAT_QUEUE_DB:-/var/lib/snowcat/queue.db}",
+        "SNOWCAT_CONTROL_DB": "${SNOWCAT_CONTROL_DB:-/var/lib/snowcat/control-plane.db}",
+        "SNOWCAT_GITHUB_TOKEN": "${SNOWCAT_GITHUB_TOKEN:-}"
       }
     }
   }
@@ -430,10 +430,10 @@ Codex (`~/.codex/config.toml`) does not expand variables in values; whitelist
 them for pass-through instead:
 
 ```toml
-[mcp_servers.fluent]
+[mcp_servers.snowcat]
 command = "npm"
-args = ["--prefix", "/opt/fluent", "run", "--silent", "mcp"]
-env_vars = ["FLUENT_QUEUE_DB", "FLUENT_CONTROL_DB", "FLUENT_GITHUB_TOKEN"]
+args = ["--prefix", "/opt/snowcat", "run", "--silent", "mcp"]
+env_vars = ["SNOWCAT_QUEUE_DB", "SNOWCAT_CONTROL_DB", "SNOWCAT_GITHUB_TOKEN"]
 ```
 
 Other clients have equivalents; the rule is the same — the three variables
@@ -441,24 +441,24 @@ come from the launching shell, so a token never has to live in a client
 config file.
 
 `npm --prefix` lets the client run from any directory — typically a checkout
-of the target repository — while the server code comes from the Fluent
+of the target repository — while the server code comes from the Snowcat
 checkout. Start the client with whatever credentials and sandbox you want it
-to have — Fluent grants none — and ask it to work the queue. The portable
-[`work-fluent-queue` skill](../../.agents/skills/work-fluent-queue/SKILL.md)
+to have — Snowcat grants none — and ask it to work the queue. The portable
+[`work-snowcat-queue` skill](../../.agents/skills/work-snowcat-queue/SKILL.md)
 tells it to claim one item, do only the item's `allowedActions`, report
 evidence and artifacts, and stop. The skill lives in this repository, so a
 client started in another checkout needs it installed where that client looks
 for skills — for Claude Code, symlink or copy
-`.agents/skills/work-fluent-queue` into `~/.claude/skills/`; other clients
+`.agents/skills/work-snowcat-queue` into `~/.claude/skills/`; other clients
 have equivalent user-level skill directories. The MCP server's own
 `instructions` carry the four essential rules even without the skill.
 
 Prompts that work:
 
-- "Work the Fluent queue." — claims the highest-priority eligible item.
-- "Work the Fluent queue for frostyard/updex, issue-resolution items only." —
+- "Work the Snowcat queue." — claims the highest-priority eligible item.
+- "Work the Snowcat queue for frostyard/updex, issue-resolution items only." —
   the skill passes `repository` and `kinds` to `claim_work`.
-- "Keep working the Fluent queue until it is empty, then stop." — an explicit
+- "Keep working the Snowcat queue until it is empty, then stop." — an explicit
   loop; the skill otherwise stops after one item.
 
 Restart every MCP server (i.e. the client) after `deploy/upgrade.sh`: an
@@ -508,21 +508,21 @@ Filters: `list [status] [--repository <owner/repo>] [--kind <kind>]
 Every completed item shows `delivery`: `none` (no pull request reported),
 `unverified` (GitHub could not be asked at completion time), `open`, `closed`,
 or `merged`. When a worker completes an item citing an issue or pull request,
-Fluent has already checked it exists in that repository; a wrong URL is refused
+Snowcat has already checked it exists in that repository; a wrong URL is refused
 and the worker is told to fix it. To refresh state after review and merges:
 
 ```bash
 npm run --silent queue -- verify-artifacts --repository frostyard/updex
 ```
 
-`fluent-verify.timer` runs this every 15 minutes with the default limit. It
+`snowcat-verify.timer` runs this every 15 minutes with the default limit. It
 records `artifact.verified` events and leaves anything alone while GitHub is
 unavailable.
 
 **Pull-request cure** ([ADR-0061](../adr/0061-cure-pull-requests-as-bounded-per-head-work.md)).
 The same pass then looks at every open pull request a completed item reported
 — its `mergeable_state`, the check runs on its head, its reviews, its review
-threads (read through GraphQL, so `FLUENT_GITHUB_TOKEN` must be set), and the
+threads (read through GraphQL, so `SNOWCAT_GITHUB_TOKEN` must be set), and the
 identity of its patch — and, for each head that has *decayed* (`dirty` or
 `behind`, a failing check, a reviewer's latest review requesting changes, a
 review thread that is neither resolved nor outdated — decay
@@ -535,7 +535,7 @@ says why; the REST signals still decide. A cure item tells the worker to do
 only a *mechanical* cure — rebase or merge the base when it resolves cleanly,
 retitle for the title lint, re-run checks, reply to review threads or resolve
 one a later commit already addressed (a thread asking for a code change
-becomes the `pr-cure-change` proposal) — and Fluent enforces that on
+becomes the `pr-cure-change` proposal) — and Snowcat enforces that on
 `complete_work` by recomputing the pull request's
 patch identity (its added and removed lines per file, so a clean rebase keeps
 it): a changed patch is refused and the item stays claimed. When curing needs
@@ -543,11 +543,11 @@ a code change the worker proposes one `pr-cure-change` child for you to admit,
 or blocks. The same head is never enqueued twice; a push is a new head. Cure
 never merges, approves, or dismisses — those stay yours. `--no-cure` runs the
 refresh alone; the board's **Verify artifacts** button runs both and reports
-`N cure items queued`. Pull requests no Fluent item reported are not cured
+`N cure items queued`. Pull requests no Snowcat item reported are not cured
 unless the repository opts in (next paragraph).
 
 **Foreign pull requests.** Dependabot, other tools, and people open pull
-requests Fluent never reported, and on updex those routinely sit `behind` or
+requests Snowcat never reported, and on updex those routinely sit `behind` or
 `dirty` until someone notices. Per repository, opt in with
 `npm run queue -- cure-foreign <owner/repo> on` (`off` to stop; the
 repository must already be opted in, and the flag is off by default). With
@@ -556,7 +556,7 @@ GitHub (up to 300; more is reported as skipped), drops drafts and anything a
 completed item already reported, and inspects the rest through the same
 decay read: one `pr-cure` root per decayed head, priority 0, no originating
 item, and an extra instruction telling the worker the pull request was not
-opened by a Fluent worker so it reads the description first. The `cure`
+opened by a Snowcat worker so it reads the description first. The `cure`
 output's `foreign` counter shows how many were `listed` and `inspected`.
 
 When you carried a change the last mile yourself — a follow-up whose proposal
@@ -569,7 +569,7 @@ pull request (or an issue) against the completed item with:
 npm run --silent queue -- attach-artifact <id> https://github.com/frostyard/updex/pull/326 --description "opened by the operator from the local branch"
 ```
 
-Fluent checks the URL against GitHub first exactly as it checks a worker's
+Snowcat checks the URL against GitHub first exactly as it checks a worker's
 report: another repository, a wrong number, or a missing pull request is
 refused and nothing is written; a GitHub outage attaches it `unverified` and
 the next `verify-artifacts` pass promotes it. The kind follows the URL path
@@ -601,15 +601,15 @@ back.
 
 ## Deployment (v1, decided 2026-08-17)
 
-Fluent v1 runs on **one operator host** and stays there deliberately:
+Snowcat v1 runs on **one operator host** and stays there deliberately:
 
-- The checkout, `/var/lib/fluent/{queue,control-plane}.db`, and every worker
+- The checkout, `/var/lib/snowcat/{queue,control-plane}.db`, and every worker
   client live on the same machine. MCP is stdio only; a worker started in an
   Incus or other container *on that host* still works because the client
   and `npm run mcp` share the machine.
 - The only credentials in the system are the operator's: the shell that
-  starts a client, `FLUENT_GITHUB_TOKEN`, and `FLUENT_APP_TOKEN` for the
-  operator surface. Fluent issues no worker credentials and trusts the
+  starts a client, `SNOWCAT_GITHUB_TOKEN`, and `SNOWCAT_APP_TOKEN` for the
+  operator surface. Snowcat issues no worker credentials and trusts the
   self-declared worker identity only as provenance, never as authorization
   ([queue execution boundary](queue-execution-boundary.md)).
 - Anything with a listener — the operator surface, the Flue app — binds to
@@ -617,42 +617,42 @@ Fluent v1 runs on **one operator host** and stays there deliberately:
   equivalent), never exposed directly. (Proposed change:
   [ADR-0063](../adr/0063-authenticate-people-through-cloudflare-access-and-mint-mcp-tokens.md)
   publishes both through a Cloudflare Tunnel behind Access, with a
-  Streamable HTTP MCP endpoint and Fluent-minted worker tokens.)
+  Streamable HTTP MCP endpoint and Snowcat-minted worker tokens.)
 - Feeder, `verify-artifacts`, and `backup` run from three systemd timers on
   the host, shipped in [`deploy/systemd/`](../../deploy/systemd/) and linted
   by `npm run check:deploy`:
 
   | Timer | Cadence | Runs |
   | --- | --- | --- |
-  | `fluent-feed.timer` | hourly (`OnCalendar=hourly`, `RandomizedDelaySec=300`) | `queue -- seed-dogfood --enrolled`, then `queue -- import-issues --enrolled --label fluent`, then `queue -- sweep-dependencies --enrolled`, then `queue -- sweep-repository-settings --enrolled` (four `ExecStart=` lines; each runs only if the previous exited 0) |
-  | `fluent-verify.timer` | every 15 minutes (`OnCalendar=*:0/15`) | `queue -- verify-artifacts` (default limit) |
-  | `fluent-backup.timer` | daily (`OnCalendar=daily`, `Persistent=true`) | [`deploy/bin/fluent-backup`](../../deploy/bin/fluent-backup) |
+  | `snowcat-feed.timer` | hourly (`OnCalendar=hourly`, `RandomizedDelaySec=300`) | `queue -- seed-dogfood --enrolled`, then `queue -- import-issues --enrolled --label snowcat`, then `queue -- sweep-dependencies --enrolled`, then `queue -- sweep-repository-settings --enrolled` (four `ExecStart=` lines; each runs only if the previous exited 0) |
+  | `snowcat-verify.timer` | every 15 minutes (`OnCalendar=*:0/15`) | `queue -- verify-artifacts` (default limit) |
+  | `snowcat-backup.timer` | daily (`OnCalendar=daily`, `Persistent=true`) | [`deploy/bin/snowcat-backup`](../../deploy/bin/snowcat-backup) |
 
-  Each service is `Type=oneshot`, reads `EnvironmentFile=/etc/fluent/env`
-  (`FLUENT_HOME`, `FLUENT_QUEUE_DB`, `FLUENT_CONTROL_DB`,
-  `FLUENT_GITHUB_TOKEN`, `FLUENT_BACKUP_RETAIN_DAYS`), and runs
-  `npm --prefix ${FLUENT_HOME} run --silent …` with `NoNewPrivileges=yes`,
+  Each service is `Type=oneshot`, reads `EnvironmentFile=/etc/snowcat/env`
+  (`SNOWCAT_HOME`, `SNOWCAT_QUEUE_DB`, `SNOWCAT_CONTROL_DB`,
+  `SNOWCAT_GITHUB_TOKEN`, `SNOWCAT_BACKUP_RETAIN_DAYS`), and runs
+  `npm --prefix ${SNOWCAT_HOME} run --silent …` with `NoNewPrivileges=yes`,
   `PrivateTmp=yes`, and `ProtectSystem=strict`, writable only under
-  `/var/lib/fluent`, `/var/backups/fluent` (backup only), and the checkout's
+  `/var/lib/snowcat`, `/var/backups/snowcat` (backup only), and the checkout's
   `data/`. [`deploy/install.sh`](../../deploy/install.sh) installs them and
   writes the per-service drop-in (`User=`, absolute `ExecStart=`, `PATH=`,
-  `ReadWritePaths=` for the real `FLUENT_HOME`) — see
+  `ReadWritePaths=` for the real `SNOWCAT_HOME`) — see
   [Install the host](#install-the-host). Until it has run, run the three
   commands by hand as above.
 - The timers do not reach worker clients: an MCP client still gets its
   environment from the shell that launches it (`.mcp.json` `env` or the
-  operator's login shell), never from `/etc/fluent/env`, because systemd's
+  operator's login shell), never from `/etc/snowcat/env`, because systemd's
   `EnvironmentFile=` applies only to the units it starts.
 
 **Upgrade.** In the operator checkout, as the operator user:
 
 ```bash
-cd /opt/fluent && deploy/upgrade.sh
+cd /opt/snowcat && deploy/upgrade.sh
 ```
 
 [`deploy/upgrade.sh`](../../deploy/upgrade.sh) refuses a dirty checkout, then
 `git pull --ff-only`, `npm ci`, `npm run check`, `systemctl daemon-reload`,
-and restarts the three timers (via `sudo` when not root; `FLUENT_SYSTEMCTL`
+and restarts the three timers (via `sudo` when not root; `SNOWCAT_SYSTEMCTL`
 overrides). If `check` fails it exits non-zero, does not restart the timers,
 and leaves the checkout on the new commit for inspection — roll back with
 `git checkout <previous>` and re-run, or fix forward. If the pull changed
@@ -676,19 +676,19 @@ token becomes per-operator auth at the same time. Until then, do not expose
 ## Keep the database safe
 
 ```bash
-set -a; . /etc/fluent/env; set +a
+set -a; . /etc/snowcat/env; set +a
 npm run --silent queue -- metadata                                     # path, database_id, version, counts
-sudo systemctl start fluent-backup.service                             # a backup right now, same as the daily timer
-ls -l /var/backups/fluent/                                             # queue-<stamp>.db, control-plane-<stamp>.db, *.manifest.json
-npm run --silent queue -- verify-backup /var/backups/fluent/queue-<stamp>.db
+sudo systemctl start snowcat-backup.service                             # a backup right now, same as the daily timer
+ls -l /var/backups/snowcat/                                             # queue-<stamp>.db, control-plane-<stamp>.db, *.manifest.json
+npm run --silent queue -- verify-backup /var/backups/snowcat/queue-<stamp>.db
 ```
 
-`fluent-backup.timer` runs [`deploy/bin/fluent-backup`](../../deploy/bin/fluent-backup)
-daily: one queue and one control-plane copy under `/var/backups/fluent` (or
-`FLUENT_BACKUP_DIR`) as `queue-<UTC stamp>.db` and
+`snowcat-backup.timer` runs [`deploy/bin/snowcat-backup`](../../deploy/bin/snowcat-backup)
+daily: one queue and one control-plane copy under `/var/backups/snowcat` (or
+`SNOWCAT_BACKUP_DIR`) as `queue-<UTC stamp>.db` and
 `control-plane-<UTC stamp>.db`, each with its manifest as
 `<name>.manifest.json` beside it, then it deletes only those backup files older
-than `FLUENT_BACKUP_RETAIN_DAYS` (default 14, from `/etc/fluent/env`) and never
+than `SNOWCAT_BACKUP_RETAIN_DAYS` (default 14, from `/etc/snowcat/env`) and never
 touches the live databases. Start the service by hand before an upgrade or a
 risky operator action. Backups contain lease tokens and are created mode
 `0600` in a `0750` directory; keep them as private as the live files. Do not
@@ -696,23 +696,23 @@ open a backup with a queue command before verifying it — opening migrates it
 to WAL and changes its digest.
 
 **Restore** is a file copy to a *new* path plus a change to
-`/etc/fluent/env`; no command overwrites a live database:
+`/etc/snowcat/env`; no command overwrites a live database:
 
 ```bash
-sudo systemctl stop fluent-feed.timer fluent-verify.timer fluent-backup.timer   # and stop every MCP client
-set -a; . /etc/fluent/env; set +a
-npm run --silent queue -- verify-backup /var/backups/fluent/queue-<stamp>.db      # compare with queue-<stamp>.manifest.json
-install -m 0600 /var/backups/fluent/queue-<stamp>.db /var/lib/fluent/queue-restored-<stamp>.db
-npm run --silent control -- verify-backup /var/backups/fluent/control-plane-<stamp>.manifest.json <database-lineage-id> <minimum-sequence>
-npm run --silent control -- stage-restore /var/backups/fluent/control-plane-<stamp>.manifest.json /var/lib/fluent/control-plane-restored-<stamp>.db <database-lineage-id> <minimum-sequence>
-"${EDITOR:-vi}" /etc/fluent/env            # FLUENT_QUEUE_DB= and/or FLUENT_CONTROL_DB= → the restored paths
-set -a; . /etc/fluent/env; set +a
+sudo systemctl stop snowcat-feed.timer snowcat-verify.timer snowcat-backup.timer   # and stop every MCP client
+set -a; . /etc/snowcat/env; set +a
+npm run --silent queue -- verify-backup /var/backups/snowcat/queue-<stamp>.db      # compare with queue-<stamp>.manifest.json
+install -m 0600 /var/backups/snowcat/queue-<stamp>.db /var/lib/snowcat/queue-restored-<stamp>.db
+npm run --silent control -- verify-backup /var/backups/snowcat/control-plane-<stamp>.manifest.json <database-lineage-id> <minimum-sequence>
+npm run --silent control -- stage-restore /var/backups/snowcat/control-plane-<stamp>.manifest.json /var/lib/snowcat/control-plane-restored-<stamp>.db <database-lineage-id> <minimum-sequence>
+"${EDITOR:-vi}" /etc/snowcat/env            # SNOWCAT_QUEUE_DB= and/or SNOWCAT_CONTROL_DB= → the restored paths
+set -a; . /etc/snowcat/env; set +a
 npm run --silent queue -- metadata         # databasePath is the restored file
-sudo systemctl start fluent-feed.timer fluent-verify.timer fluent-backup.timer
+sudo systemctl start snowcat-feed.timer snowcat-verify.timer snowcat-backup.timer
 ```
 
 Then restart the MCP clients from a shell that sourced the new
-`/etc/fluent/env`. The previous live files stay where they were; remove them
+`/etc/snowcat/env`. The previous live files stay where they were; remove them
 only after the restored database has been in use and backed up. Restore only
 what failed: the queue and control-plane databases are independent, and each
 keeps its own lineage identity that the verify commands check.
@@ -739,25 +739,25 @@ Approved. During the dogfood week keep, per repository:
   request, or a URL that does not exist. The item is still leased to that
   worker; it should fix the report and complete again.
 - **A completion on a private repository comes back `unverified` with
-  "without FLUENT_GITHUB_TOKEN"** — the MCP server was started without the
+  "without SNOWCAT_GITHUB_TOKEN"** — the MCP server was started without the
   token, so GitHub answered 404 for a repository it could not see. Export
-  `FLUENT_GITHUB_TOKEN` in the shell that starts the client (the committed
-  `.mcp.json` passes it through as `${FLUENT_GITHUB_TOKEN:-}`; never write
+  `SNOWCAT_GITHUB_TOKEN` in the shell that starts the client (the committed
+  `.mcp.json` passes it through as `${SNOWCAT_GITHUB_TOKEN:-}`; never write
   the token into that file), restart the client, and run `verify-artifacts`
   to record the real state.
 - **`claim_work` returns `null` but `list queued` shows items** — with
-  `FLUENT_CONTROL_DB` set, the repository is not `enrolled`; check
+  `SNOWCAT_CONTROL_DB` set, the repository is not `enrolled`; check
   `repository -- status`. Or the items are `proposed` (not admitted), or the
   worker filtered on a repository or kind that has nothing queued.
 - **"schema version N is newer than the supported version"** — the database
   was migrated by newer code; restart this process from the current checkout.
-- **"control-plane database does not exist"** on claim — `FLUENT_CONTROL_DB`
+- **"control-plane database does not exist"** on claim — `SNOWCAT_CONTROL_DB`
   points at nothing; fix the path or unset the variable to claim on opt-in
   alone.
-- **The MCP client cannot see the `fluent` server** — check the `--prefix`
+- **The MCP client cannot see the `snowcat` server** — check the `--prefix`
   path and that `--silent` is present: the server must print nothing but
   protocol on stdout. Test by hand with
-  `npm --prefix /path/to/fluent run --silent mcp` and an `initialize` line on
+  `npm --prefix /path/to/snowcat run --silent mcp` and an `initialize` line on
   stdin.
 
 ## Operational notes
@@ -768,16 +768,16 @@ Approved. During the dogfood week keep, per repository:
 - Feeder, `verify-artifacts`, and `backup` are idempotent and cheap; the
   three timers in `deploy/systemd/` (hourly, every 15 minutes, daily) are the
   intended cadence, and running any of them by hand in between is harmless.
-- `FLUENT_CONTROL_DB` is the only coupling between the queue and the control
+- `SNOWCAT_CONTROL_DB` is the only coupling between the queue and the control
   plane. Leave it unset until `repository -- status` shows the repositories you
   care about as `enrolled`, or workers will find nothing to claim.
-  `deploy/install.sh` writes it into `/etc/fluent/env` from the start;
+  `deploy/install.sh` writes it into `/etc/snowcat/env` from the start;
   comment it out there while enrollment is pending if you want claims to run
   on queue opt-in alone.
 
 ## References
 
-- Overview for the team: [how Fluent works](how-fluent-works.md)
+- Overview for the team: [how Snowcat works](how-snowcat-works.md)
 - Rationale: [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md),
   [ADR-0003](../adr/0003-separate-work-coordination-from-execution.md),
   [ADR-0005](../adr/0005-admit-worker-created-work-before-claiming.md),

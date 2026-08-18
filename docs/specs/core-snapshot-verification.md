@@ -4,7 +4,7 @@ This contract governs the read-only candidate verifier that consumes the
 supported `organization/` tree in `frostyard/core`. It produces a deterministic
 report for operators and the implemented
 [snapshot activation command](core-snapshot-activation.md); it creates no
-Fluent authority by itself.
+Snowcat authority by itself.
 
 ## Interface
 
@@ -18,9 +18,9 @@ It accepts no additional arguments. Configuration is read from:
 
 | Variable | Default | Constraint |
 | --- | --- | --- |
-| `FLUENT_CORE_URL` | `https://github.com/frostyard/core.git` | Exact HTTPS, SCP-style SSH, or `ssh://` form for `frostyard/core`; credentials in URLs are not accepted |
-| `FLUENT_CORE_REF` | `refs/heads/main` | Canonical full `refs/heads/*` name without traversal, reflog syntax, empty component, or trailing slash/dot |
-| `FLUENT_CORE_MIRROR` | `./data/core.git` | Filesystem path to a new or existing bare Git repository without object alternates |
+| `SNOWCAT_CORE_URL` | `https://github.com/frostyard/core.git` | Exact HTTPS, SCP-style SSH, or `ssh://` form for `frostyard/core`; credentials in URLs are not accepted |
+| `SNOWCAT_CORE_REF` | `refs/heads/main` | Canonical full `refs/heads/*` name without traversal, reflog syntax, empty component, or trailing slash/dot |
+| `SNOWCAT_CORE_MIRROR` | `./data/core.git` | Filesystem path to a new or existing bare Git repository without object alternates |
 
 Success emits one JSON object with these fields:
 
@@ -70,9 +70,9 @@ nonzero.
    [verification-profile ingestion contract](verification-profile-ingestion.md).
    The optional Goal-capable extension MUST satisfy the
    [Goal ingestion contract](goal-ingestion.md).
-   Every present schema blob MUST match Fluent's exact expected SHA-256 digest
+   Every present schema blob MUST match Snowcat's exact expected SHA-256 digest
    before its fetched content is used for parity comparison.
-8. Fluent MUST compile its bundled schemas, not dynamically trust a changed
+8. Snowcat MUST compile its bundled schemas, not dynamically trust a changed
    fetched schema. The bundled and fetched parsed schema content MUST be
    canonically equal.
 9. Every JSON document interpreted by the contract MUST be strict UTF-8 JSON
@@ -86,7 +86,7 @@ nonzero.
 12. The catalog digest MUST cover every recognized tree entry's path, regular
     mode, Git object ID, byte size, and SHA-256 content digest in deterministic
     path order.
-13. Verification MUST NOT initialize or mutate `FLUENT_CONTROL_DB`, activate a
+13. Verification MUST NOT initialize or mutate `SNOWCAT_CONTROL_DB`, activate a
     Core snapshot, create enrollment, reconcile GitHub, or create work.
 14. Re-running verification of unchanged Git objects MUST return the same
     commit, tree, catalog, schema, and declaration content identities.

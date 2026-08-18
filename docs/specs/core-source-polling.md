@@ -19,7 +19,7 @@ npm run --silent core -- poll-state
 attempts one due run and exits; a not-due or actively leased result is success
 with no Git work. `poll-state` is read-only.
 
-`FLUENT_CORE_POLL_INTERVAL_SECONDS` is optional. Its default is `900`; when
+`SNOWCAT_CORE_POLL_INTERVAL_SECONDS` is optional. Its default is `900`; when
 present it MUST be a canonical integer from `60` through `3600`.
 
 The operational state has this exact logical shape:

@@ -1,6 +1,6 @@
 # Plan: Maintenance programs
 
-This plan takes Fluent's standing maintenance from the four hard-coded
+This plan takes Snowcat's standing maintenance from the four hard-coded
 discovery kinds (quality, CI, security, architecture) to a catalog of programs
 that Core declares per repository, that run on their own cadences, and that
 include curing pull requests. It is the record of every program discussed on
@@ -14,7 +14,7 @@ assessments), [ADR-0009](../adr/0009-apply-goals-through-discovery-and-admission
 
 Every program keeps the shape that worked: a read-only discovery root finds
 exactly one evidence-backed thing and proposes at most one bounded child; the
-operator admits; a worker lands it through one pull request; Fluent verifies
+operator admits; a worker lands it through one pull request; Snowcat verifies
 the artifact. Programs differ in what they look at, how often, and whether
 their children may be admitted on creation.
 
@@ -68,20 +68,20 @@ their children may be admitted on creation.
   core PR #87), not a v2 schema; all five values at once (`conformance`,
   `triage`, `dependencies`, `docs`, `release`), `maxItems: 9`; no cadence
   field in the declaration (catalog stays the cadence source of truth until
-  a repository shows a need); Fluent ships the new bundled schema bytes and
+  a repository shows a need); Snowcat ships the new bundled schema bytes and
   digest and keeps the superseded revision bundled (so retained snapshots,
   rollback, and either merge order keep working — the first attempt without
   it locked the control-plane store on the operator host for a few minutes on
-  2026-08-18). Fluent's `REPOSITORY_MAINTENANCE_PROGRAMS`
+  2026-08-18). Snowcat's `REPOSITORY_MAINTENANCE_PROGRAMS`
   (`src/control/registry.ts`) is the widened closed vocabulary; the feeder
   reports declared programs the catalog does not implement yet as
   `unsupportedPrograms` and seeds nothing for them.
-- Still the operator's: merge order (Fluent PR, then core PR #87, then
+- Still the operator's: merge order (Snowcat PR, then core PR #87, then
   `core -- activate`), and which repositories declare which programs (updex
   ran `security` and `architecture` productively for two days; `conformance`
-  waits on the Hive/Fluent boundary decision).
+  waits on the Hive/Snowcat boundary decision).
 - **Done when:** a repository declaration listing `conformance` validates in
-  Core and in Fluent (met by `test/core-source.test.ts` on the bundled schema;
+  Core and in Snowcat (met by `test/core-source.test.ts` on the bundled schema;
   live once #87 merges and activates), and updex's declaration names the
   programs it actually wants (operator).
 
@@ -97,7 +97,7 @@ their children may be admitted on creation.
   identity (added/removed lines per file, hunk headers and context excluded)
   changed, or that does not report the pull request, or that GitHub cannot
   confirm; `pr-cure-change` proposals carry substantive fixes. Spec rules
-  42–44, runbook, AGENTS.md, and the `work-fluent-queue` skill describe the
+  42–44, runbook, AGENTS.md, and the `work-snowcat-queue` skill describe the
   kind.
 - Foreign pull requests (ones no item reported) are cured per repository
   opt-in since 2026-08-18: `queue -- cure-foreign <owner/repo> on` (schema
@@ -106,7 +106,7 @@ their children may be admitted on creation.
   through the same path (priority 0, no `originItemId`).
 - Deliberately deferred: title lint as its own signal (on updex it is a
   check run), age threshold. Each is a follow-up issue when a week of curing
-  Fluent's own pull requests says it matters. Unresolved review threads
+  Snowcat's own pull requests says it matters. Unresolved review threads
   (GraphQL `reviewThreads`) landed as the `unresolved-threads` decay on
   2026-08-18.
 - **Done when:** a fixture pull request that falls behind its base yields one
@@ -120,7 +120,7 @@ their children may be admitted on creation.
 ## Phase 5 — Conformance and triage (first new programs) — catalog entries landed 2026-08-18
 
 Decided by [ADR-0062](../adr/0062-retire-hive-fluent-owns-conformance.md):
-Hive is retired and Fluent owns conformance and triage.
+Hive is retired and Snowcat owns conformance and triage.
 
 - **conformance** — does the repository satisfy Core's binding ADRs? Sources:
   `docs/org-adrs.md` versus Core's current ADR set, canonical surfaces
@@ -162,7 +162,7 @@ Hive is retired and Fluent owns conformance and triage.
   exist; this covers what a reader runs). The `frostyard-repo-docs` skill is
   the procedure.
 - **Internal dependency chain (landed 2026-08-18):** `sweep-dependencies`
-  (`src/queue/internal-dependencies.ts`, third step of `fluent-feed`) — a
+  (`src/queue/internal-dependencies.ts`, third step of `snowcat-feed`) — a
   mechanical sweep, no model, over enrolled repositories' `go.mod`, tags,
   and tag→branch comparison: one `release-needed` proposal on a repository
   whose default branch is ahead of its latest `vX.Y.Z` tag (svu-style
@@ -195,14 +195,14 @@ Hive is retired and Fluent owns conformance and triage.
   hardening-gap discovery only.
 - **Programs as Core records** — once the catalog is stable, publish it from
   Core so program text, cadence, and ceilings are organization authority
-  rather than Fluent code.
+  rather than Snowcat code.
 
 ## Open questions
 
 - **Cure for foreign pull requests by default?** Off by default, per
   repository (`cure-foreign`, Phase 4); revisit after a week of curing
-  Fluent's own.
-- **Cadence source of truth:** catalog default in Fluent now; per-repository
+  Snowcat's own.
+- **Cadence source of truth:** catalog default in Snowcat now; per-repository
   override in the Core declaration later — decide with Phase 3's schema
   change.
 - **Triage authority:** whether triage children may ever be admitted on
@@ -211,7 +211,7 @@ Hive is retired and Fluent owns conformance and triage.
 
 ## References
 
-- Overview for the team: [how Fluent works](../design/how-fluent-works.md)
+- Overview for the team: [how Snowcat works](../design/how-snowcat-works.md)
 - Implements: [queue execution boundary](../design/queue-execution-boundary.md),
   [work queue](../specs/work-queue.md),
   [queue operations runbook](../design/queue-operations.md)

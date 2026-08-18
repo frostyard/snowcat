@@ -59,7 +59,7 @@ Docs are split by the question they answer:
 - [0042 — Use rebuildable projections only as read models](adr/0042-use-rebuildable-projections-only-as-read-models.md)
 - [0043 — Order records by transaction sequence, not timestamps](adr/0043-order-records-by-transaction-sequence-not-timestamps.md)
 - [0044 — Replace the queue spike database](adr/0044-replace-the-queue-spike-database.md)
-- [0045 — Host Fluent under the Frostyard organization](adr/0045-host-fluent-under-frostyard.md)
+- [0045 — Host Snowcat under the Frostyard organization](adr/0045-host-fluent-under-frostyard.md)
 - [0046 — Separate Core source freshness from admission readiness](adr/0046-separate-core-source-freshness-from-admission-readiness.md)
 - [0047 — Cap stale-source overrides at 24 hours](adr/0047-cap-stale-source-overrides-at-24-hours.md)
 - [0048 — Retain Core check detail for 30 days](adr/0048-retain-core-check-detail-for-30-days.md)
@@ -76,17 +76,17 @@ Docs are split by the question they answer:
 - [0059 — Adopt the queue store as the v1 work engine](adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md)
 - [0060 — Bring the operator surface forward as a read-first inbox](adr/0060-bring-the-operator-surface-forward-as-a-read-first-inbox.md)
 - [0061 — Cure pull requests as bounded per-head work](adr/0061-cure-pull-requests-as-bounded-per-head-work.md)
-- [0062 — Retire Hive; Fluent owns repository conformance and triage](adr/0062-retire-hive-fluent-owns-conformance.md)
+- [0062 — Retire Hive; Snowcat owns repository conformance and triage](adr/0062-retire-hive-fluent-owns-conformance.md)
 - [0063 — Authenticate people through Cloudflare Access; mint MCP tokens so the ledger says who](adr/0063-authenticate-people-through-cloudflare-access-and-mint-mcp-tokens.md)
 - [0064 — Adopt the name Snowcat](adr/0064-adopt-the-name-snowcat.md)
 
 ### Domain language
 
-- [Fluent ubiquitous language](domain/ubiquitous-language.md)
+- [Snowcat ubiquitous language](domain/ubiquitous-language.md)
 
 ### Design
 
-- [How Fluent works](design/how-fluent-works.md) — start here: the team-facing map of core, Fluent, repositories, and workers
+- [How Snowcat works](design/how-snowcat-works.md) — start here: the team-facing map of core, Snowcat, repositories, and workers
 - [Queue execution boundary](design/queue-execution-boundary.md)
 - [Control-plane kernel](design/control-plane-kernel.md)
 - [Core snapshot ingestion](design/core-snapshot-ingestion.md)

@@ -1,9 +1,9 @@
 ---
-name: model-fluent-domain
-description: Build and sharpen Fluent's canonical ubiquitous language, challenge ambiguous or conflicting terms, and reconcile vocabulary with ADRs, code, APIs, schemas, UI, skills, and docs. Use whenever a Fluent design introduces or changes a domain concept, a word does multiple jobs, adjacent states or authority acts are being confused, or a review needs to check terminology before implementation.
+name: model-snowcat-domain
+description: Build and sharpen Snowcat's canonical ubiquitous language, challenge ambiguous or conflicting terms, and reconcile vocabulary with ADRs, code, APIs, schemas, UI, skills, and docs. Use whenever a Snowcat design introduces or changes a domain concept, a word does multiple jobs, adjacent states or authority acts are being confused, or a review needs to check terminology before implementation.
 ---
 
-# Model Fluent Domain
+# Model Snowcat Domain
 
 Maintain precise shared language while design happens. The canonical file is
 [`docs/domain/ubiquitous-language.md`](../../../docs/domain/ubiquitous-language.md);
@@ -15,7 +15,7 @@ root `CONTEXT.md` is a compatibility symlink and must not be edited separately.
    is absent, read the nearest adjacent terms before proposing one.
 2. Search current code and docs for the word and its likely synonyms. Quote the
    contradictory usages that make the boundary matter.
-3. Stress-test the distinction with one concrete Fluent scenario. State what
+3. Stress-test the distinction with one concrete Snowcat scenario. State what
    each candidate meaning would cause the controller, worker, schema, API, or
    operator to do differently.
 4. Classify the result:

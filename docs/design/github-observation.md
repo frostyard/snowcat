@@ -13,7 +13,7 @@ Adjacent contracts:
 
 ## Overview
 
-Fluent observes GitHub through an authenticated webhook ingress plus a
+Snowcat observes GitHub through an authenticated webhook ingress plus a
 read-only reconciliation controller. Webhooks preserve transient source state
 and trigger low-latency work. Polling verifies current state, completes pages,
 and repairs recent missed deliveries. Durable typed observations feed
@@ -62,7 +62,7 @@ The source adapter stays unregistered until that complete path is executable.
 | `github-required-checks:v1` | Build one closed evidence population from retained rules, revisions, checks, statuses, and coverage | Query GitHub during evaluation or shrink the denominator to returned runs |
 | Projections | Operator status, lag, gaps, and reconciliation views | Become source authority or evidence sufficiency |
 
-Worker GitHub credentials remain outside Fluent. The observer App is a separate
+Worker GitHub credentials remain outside Snowcat. The observer App is a separate
 identity and has no repository write permission.
 
 ### App installation and events
@@ -104,14 +104,14 @@ discarded. `active` requires the exact v1 read-only permissions and subscribed
 events above; absence, suspension, a permission/event mismatch, and source
 unavailability remain distinct. The typed store command durably reconciles the
 result as an observation, outcome fact, and event rooted in prior enrollment.
-It keeps source-backed outcomes distinct from Fluent-observed unavailability
+It keeps source-backed outcomes distinct from Snowcat-observed unavailability
 and never changes enrollment.
 
 ### Webhook ingress
 
 The ingress is one POST-only HTTPS route. A reverse proxy or tunnel may
 terminate public TLS, but it forwards the exact request body and signature
-headers to Fluent over a protected local connection. Health, administration,
+headers to Snowcat over a protected local connection. Health, administration,
 MCP, and operator APIs are different listeners or routes and are not exposed by
 the webhook boundary.
 
@@ -172,7 +172,7 @@ App is trusted.
 Direct deliveries use source `github-app-webhook` and an exact body revision;
 API acquisitions use `github-api` and the applicable canonical response
 revision. Checkpoints and gaps use deterministic source
-`fluent-system/github-observer` with no caller-selected source revision: their
+`snowcat-system/github-observer` with no caller-selected source revision: their
 own checkpoint or gap digest binds the repository subject, but is not
 misrepresented as a revision issued by GitHub.
 
@@ -335,10 +335,10 @@ by v1 before this resolution path.
 ### Delivery audit and recovery horizon
 
 The App-level delivery API is a repair surface, not a permanent event log.
-Fluent compares recent GitHub delivery GUIDs with its receipts, fetches locally
+Snowcat compares recent GitHub delivery GUIDs with its receipts, fetches locally
 missing deliveries, and normalizes the parsed payload through a registered
 App-API acquisition path. The result cites a delivery-audit observation and
-does not fabricate the absent exact-body digest or HMAC verification. Fluent
+does not fabricate the absent exact-body digest or HMAC verification. Snowcat
 does not ask GitHub to redeliver or treat a successful HTTP status in GitHub's
 history as proof that local normalization committed.
 

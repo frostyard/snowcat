@@ -1,16 +1,21 @@
-# Fluent (working name)
+# Snowcat
 
 <!-- One paragraph: what this project is and who it serves. Point at
 docs/README.md as the entry point for everything else. Keep this file under
 ~200 lines — it is loaded into every agent session; long files dilute the
 rules that matter. -->
 
-Fluent is a self-hosted coordination service and durable work queue for
+Snowcat is a self-hosted coordination service and durable work queue for
 operator-started workers maintaining opted-in GitHub repositories. Start at
 [docs/README.md](docs/README.md); the product definition remains a discovery
-draft and the name is not final.
+draft. The product was named Fluent until 2026-08-18
+([ADR-0064](docs/adr/0064-adopt-the-name-snowcat.md)): `SNOWCAT_*`
+environment variables are the names now and `FLUENT_*` is read for one release
+(every entry point calls `adoptLegacyEnvironment()` from
+[`src/env-compat.ts`](src/env-compat.ts) first); accepted ADRs before 0064
+still say Fluent.
 
-Use the canonical [Fluent ubiquitous language](docs/domain/ubiquitous-language.md)
+Use the canonical [Snowcat ubiquitous language](docs/domain/ubiquitous-language.md)
 for domain terms. Root `CONTEXT.md` is a compatibility symlink to that file;
 edit only the canonical path.
 
@@ -30,11 +35,11 @@ Add a skill whenever you find yourself re-explaining a multi-step procedure.
 Start from .agents/skills/TEMPLATE/SKILL.md. -->
 
 - **Claim and resolve one queued repository work item** →
-  [.agents/skills/work-fluent-queue/SKILL.md](.agents/skills/work-fluent-queue/SKILL.md).
-- **Write or review a GitHub issue destined for the Fluent queue** →
-  [.agents/skills/write-fluent-issues/SKILL.md](.agents/skills/write-fluent-issues/SKILL.md).
-- **Resolve or review Fluent domain terminology** →
-  [.agents/skills/model-fluent-domain/SKILL.md](.agents/skills/model-fluent-domain/SKILL.md).
+  [.agents/skills/work-snowcat-queue/SKILL.md](.agents/skills/work-snowcat-queue/SKILL.md).
+- **Write or review a GitHub issue destined for the Snowcat queue** →
+  [.agents/skills/write-snowcat-issues/SKILL.md](.agents/skills/write-snowcat-issues/SKILL.md).
+- **Resolve or review Snowcat domain terminology** →
+  [.agents/skills/model-snowcat-domain/SKILL.md](.agents/skills/model-snowcat-domain/SKILL.md).
 
 ## Code conventions (live — the code exists)
 
@@ -50,7 +55,7 @@ every structural rule. Rules that remove a degree of freedom are the
 valuable ones: every choice an agent doesn't have to make is a failure mode
 removed. -->
 
-- Keep native coding-agent processes outside Fluent. They consume work through
+- Keep native coding-agent processes outside Snowcat. They consume work through
   the MCP contract in [`src/mcp/server.ts`](src/mcp/server.ts) and own their
   execution isolation, credentials, and tools.
 - Keep GitHub webhook ingress disabled by default until a hosting lifecycle
@@ -80,7 +85,7 @@ removed. -->
   `frostyard/core` authority candidate through the bare-mirror boundary in
   [`src/core/git-source.ts`](src/core/git-source.ts). Verification is read-only
   with respect to the control plane: it never activates a Core snapshot,
-  creates enrollment, or writes `FLUENT_CONTROL_DB`.
+  creates enrollment, or writes `SNOWCAT_CONTROL_DB`.
 - Keep live Core Goals behind the closed verification-mechanism registry in
   [`src/core/validator.ts`](src/core/validator.ts). Goal fixtures validate
   without implementations; a live Goal fails activation until every referenced
@@ -126,7 +131,7 @@ removed. -->
 - Use `npm run --silent core -- poll` for the leased long-running
   `CoreSourceController`, `poll-once` for one due attempt, and `poll-state` for
   its read-only operational state. The healthy interval defaults to 15 minutes;
-  configure only through `FLUENT_CORE_POLL_INTERVAL_SECONDS`.
+  configure only through `SNOWCAT_CORE_POLL_INTERVAL_SECONDS`.
 - Use `npm run --silent repository -- reconcile` to resume one bounded
   declaration/identity/surface/enrollment convergence pass and `repository --
   status` for its read-only effective states. Identity match is only
@@ -151,7 +156,7 @@ removed. -->
   unavailability remain distinct from repository enrollment.
 - Persist that result only through
   `ControlPlaneStore.recordGitHubInstallationReconciliation`. Source-backed
-  outcomes retain the exact response revision; `unavailable` is a Fluent
+  outcomes retain the exact response revision; `unavailable` is a Snowcat
   acquisition outcome with no invented GitHub revision. The command never
   changes repository enrollment.
 - The queue store in [`src/queue/store.ts`](src/queue/store.ts) and the MCP
@@ -182,7 +187,7 @@ removed. -->
   substantive fixes are `pr-cure-change` proposals. Pull requests no item
   reported are cured only for a repository with `queue -- cure-foreign
   <owner/repo> on` (schema rung 6, off by default). When
-  `FLUENT_CONTROL_DB` is set, `claim_work` also requires the repository to be
+  `SNOWCAT_CONTROL_DB` is set, `claim_work` also requires the repository to be
   `enrolled` in the control-plane store
   ([`src/queue/eligibility.ts`](src/queue/eligibility.ts)); the hook is the
   only coupling between the two databases.
@@ -193,9 +198,9 @@ removed. -->
   record or fact mutation surface, and do not add control-plane registry or
   schema versions that no recovery-plan phase consumes.
 - Keep host scheduling in [`deploy/`](deploy/): three systemd timer/service
-  pairs plus `deploy/bin/fluent-backup` call the existing idempotent `queue`
+  pairs plus `deploy/bin/snowcat-backup` call the existing idempotent `queue`
   and `control` commands (`seed-dogfood --enrolled`, `import-issues
-  --enrolled --label fluent`, then `sweep-dependencies --enrolled` — the
+  --enrolled --label snowcat`, then `sweep-dependencies --enrolled` — the
   mechanical release-needed / dependency-bump proposals in
   [`src/queue/internal-dependencies.ts`](src/queue/internal-dependencies.ts)
   — then `sweep-repository-settings --enrolled` — read-only drift of each
@@ -203,7 +208,7 @@ removed. -->
   (ADR-0040) in [`src/queue/repository-settings.ts`](src/queue/repository-settings.ts),
   applied only by a human with core's `scripts/apply-repo-settings.sh`;
   `verify-artifacts`; `backup`); never add a
-  scheduler, daemon, or MCP tool inside Fluent for
+  scheduler, daemon, or MCP tool inside Snowcat for
   them. `npm run check:deploy` (part of `check`; needs `shellcheck` and
   `systemd-analyze` locally) runs `systemd-analyze verify` against a stub
   root, `shellcheck` on `deploy/bin/*` and `deploy/*.sh`, and a double
@@ -212,18 +217,18 @@ removed. -->
   [docs/design/queue-operations.md](docs/design/queue-operations.md).
 - Install and upgrade the single operator host only through
   [`deploy/install.sh`](deploy/install.sh) (idempotent: directories,
-  `/etc/fluent/env` from `deploy/env.example` only if absent, units plus a
+  `/etc/snowcat/env` from `deploy/env.example` only if absent, units plus a
   per-service drop-in with `User=`, absolute npm `ExecStart=`, and
   `ReadWritePaths=`, then enable the timers) and
   [`deploy/upgrade.sh`](deploy/upgrade.sh) (`git pull --ff-only`, `npm ci`,
   `npm run check`, restart timers, remind to restart MCP clients). Neither
-  activates Core or opens a database. `/etc/fluent/env` is host state — never
-  commit one — and the operator's `FLUENT_HOME` checkout is not a worker's
+  activates Core or opens a database. `/etc/snowcat/env` is host state — never
+  commit one — and the operator's `SNOWCAT_HOME` checkout is not a worker's
   checkout.
 - Keep the operator surface in [`src/surface/`](src/surface/) a view over
   the same `QueueStore` and `ControlPlaneStore` methods the CLI uses: no new
   state transitions, no worker-facing route, no lease token in a template
-  (use `withoutLeaseToken`), and every route behind the `FLUENT_APP_TOKEN`
+  (use `withoutLeaseToken`), and every route behind the `SNOWCAT_APP_TOKEN`
   cookie session. `npm run serve` binds `127.0.0.1` unless `HOST` says
   otherwise; exposure is a deployment decision. Pages inline their
   stylesheet from [`src/surface/styles.ts`](src/surface/styles.ts) (copied
@@ -238,7 +243,7 @@ removed. -->
 
 `policies/agent-governance.json` is this repository's canonical
 agent-governance surface under the frostyard/core repository-surfaces
-contract v1; Fluent reads it (from GitHub, at the observed default-branch
+contract v1; Snowcat reads it (from GitHub, at the observed default-branch
 head) when enrolling this repository in its own fleet. Deny by default; read,
 write, and run-tests allowed; issues, pull requests, and follow-ups
 review-required; workflows, GitHub-facing code, and the MCP/authorization

@@ -53,7 +53,7 @@ export interface DogfoodBatchResult {
   undeclaredKinds: string[];
   /**
    * Declared programs the catalog has no entry for yet (Core's enum is wider
-   * than Fluent's catalog): reported, never refused, and nothing is seeded
+   * than Snowcat's catalog): reported, never refused, and nothing is seeded
    * for them.
    */
   unsupportedPrograms: RepositoryMaintenanceProgram[];

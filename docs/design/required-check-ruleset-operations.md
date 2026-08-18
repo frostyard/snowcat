@@ -8,15 +8,15 @@ Adjacent contract:
 ## Overview
 
 This is the operator runbook for making a repository's default-branch checks
-both enforceable by GitHub and observable by Fluent. It defines the narrow v1
+both enforceable by GitHub and observable by Snowcat. It defines the narrow v1
 configuration that `github-required-checks:v1` will accept. It does not grant
-Fluent permission to edit repository rules, register the still-unimplemented
+Snowcat permission to edit repository rules, register the still-unimplemented
 source adapter, or open a measurement window.
 
 The deployment must first satisfy the authenticated ingress and reconciliation
 boundary in the
 [GitHub observation design](github-observation.md). Ruleset activation without
-that observer still enforces CI, but it cannot create retrospective Fluent
+that observer still enforces CI, but it cannot create retrospective Snowcat
 coverage.
 
 Enabling this ruleset changes the delivery path: direct pushes to the default
@@ -57,7 +57,7 @@ name or integration ID can block every merge.
 
 | Repository | Default branch | Required contexts | Expected source |
 | --- | --- | --- | --- |
-| `frostyard/fluent` | `main` | `check (node 24)`, `check (node 26)` | GitHub Actions, integration ID `15368` |
+| `frostyard/snowcat` | `main` | `check (node 24)`, `check (node 26)` | GitHub Actions, integration ID `15368` |
 | `frostyard/core` | `main` | `docs-gate`, `scaffold-e2e` | GitHub Actions, integration ID `15368` |
 
 Both repositories currently allow merge commits, squash merges, and rebase
@@ -115,7 +115,7 @@ Perform these checks immediately before creating or changing a ruleset.
 
 1. Open **Repository → Settings → Rules → Rulesets** and choose
    **New branch ruleset**.
-2. Name it `fluent-default-branch-required-checks-v1` (or replace `fluent`
+2. Name it `snowcat-default-branch-required-checks-v1` (or replace `snowcat`
    with the repository name) and initially set enforcement to **Disabled**.
 3. Leave the bypass list empty.
 4. Under target branches, add **Include default branch**.
@@ -136,13 +136,13 @@ rather than falling back to **Any source**.
 ## Enable through the GitHub API
 
 The API is useful for a reviewed, repeatable rollout. This exact example is for
-`frostyard/fluent`; regenerate the contexts and integration IDs from preflight
-before use. Save it as `fluent-ruleset.json` outside the repository unless the
+`frostyard/snowcat`; regenerate the contexts and integration IDs from preflight
+before use. Save it as `snowcat-ruleset.json` outside the repository unless the
 organization later adopts a canonical ruleset-as-code location.
 
 ```json
 {
-  "name": "fluent-default-branch-required-checks-v1",
+  "name": "snowcat-default-branch-required-checks-v1",
   "target": "branch",
   "enforcement": "disabled",
   "bypass_actors": [],
@@ -188,12 +188,12 @@ action prevents an unreviewed payload from immediately blocking the branch.
 ```bash
 gh api --method POST \
   -H "X-GitHub-Api-Version: 2026-03-10" \
-  repos/frostyard/fluent/rulesets \
-  --input fluent-ruleset.json
+  repos/frostyard/snowcat/rulesets \
+  --input snowcat-ruleset.json
 ```
 
 ```bash
-gh api repos/frostyard/fluent/rulesets/RULESET_ID
+gh api repos/frostyard/snowcat/rulesets/RULESET_ID
 ```
 
 For `frostyard/core`, change the name and replace the two required contexts
@@ -232,7 +232,7 @@ After activation:
    operator change record.
 
 The repository is enforcement-ready after these checks. It is not yet
-measurement-ready: Fluent must first implement and register
+measurement-ready: Snowcat must first implement and register
 `github-required-checks:v1`, retain a complete baseline, and explicitly open a
 new observation window. Historical merges before that baseline do not count.
 
@@ -262,7 +262,7 @@ new observation window. Historical merges before that baseline do not count.
 | More rules apply than expected | Inspect both repository and organization rulesets plus classic branch protection; GitHub aggregates overlapping rules. |
 | Direct push is rejected | This is the intended pull-request-only boundary. Open a pull request. |
 | Operator must bypass urgently | Disable the ruleset with an attributed incident record and invalidate the measurement window; do not add a silent permanent bypass. |
-| Merge queue blocks checks | Keep merge queue disabled in v1; supporting it requires `merge_group` workflow triggers and a new Fluent adapter contract. |
+| Merge queue blocks checks | Keep merge queue disabled in v1; supporting it requires `merge_group` workflow triggers and a new Snowcat adapter contract. |
 
 ## Operational notes
 

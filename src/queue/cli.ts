@@ -13,6 +13,10 @@ import {
   enqueueTestingGap,
 } from "./seeds.ts";
 import { withoutLeaseToken, workStatuses, type WorkStatus } from "./types.ts";
+import { adoptLegacyEnvironment } from "../env-compat.ts";
+
+// FLUENT_* is read for one release (Snowcat ADR-0064); every entry point adopts it first.
+adoptLegacyEnvironment();
 
 const DEFAULT_WATCH_INTERVAL_SECONDS = 10;
 const MIN_WATCH_INTERVAL_SECONDS = 2;
@@ -32,7 +36,7 @@ try {
     print({ repository, enabled: false });
   } else if (command === "cure-foreign") {
     // Repository-level setting like opt-in: whether the cure sweep also lists
-    // and inspects open pull requests no Fluent item reported (ADR-0061).
+    // and inspects open pull requests no Snowcat item reported (ADR-0061).
     const repository = required(args[0], "repository");
     const value = required(args[1], "on|off");
     if (value !== "on" && value !== "off") throw new Error(`cure-foreign expects on or off, got ${value}`);
@@ -56,9 +60,9 @@ try {
     if (repository !== undefined) {
       print(enqueueDogfoodBatch(queue, repository, { cooldownSeconds }));
     } else {
-      const controlPlanePath = process.env.FLUENT_CONTROL_DB;
+      const controlPlanePath = process.env.SNOWCAT_CONTROL_DB;
       if (!controlPlanePath || controlPlanePath === ":memory:") {
-        throw new Error("seed-dogfood --enrolled requires FLUENT_CONTROL_DB to name the control-plane database");
+        throw new Error("seed-dogfood --enrolled requires SNOWCAT_CONTROL_DB to name the control-plane database");
       }
       print(enqueueDogfoodBatchForEnrolled(queue, controlPlanePath, { cooldownSeconds }));
     }
@@ -72,9 +76,9 @@ try {
       const result = await importLabeledIssues(queue, repository, label, { priority });
       print({ ...result, created: result.created.map(withoutLeaseToken) });
     } else {
-      const controlPlanePath = process.env.FLUENT_CONTROL_DB;
+      const controlPlanePath = process.env.SNOWCAT_CONTROL_DB;
       if (!controlPlanePath || controlPlanePath === ":memory:") {
-        throw new Error("import-issues --enrolled requires FLUENT_CONTROL_DB to name the control-plane database");
+        throw new Error("import-issues --enrolled requires SNOWCAT_CONTROL_DB to name the control-plane database");
       }
       const result = await importLabeledIssuesForEnrolled(queue, controlPlanePath, label, { priority });
       print({
@@ -170,9 +174,9 @@ try {
     // module's latest release. Proposals only; the operator admits.
     const enrolled = args[0] === "--enrolled";
     const repository = enrolled ? undefined : required(args[0], "repository");
-    const controlPlanePath = process.env.FLUENT_CONTROL_DB;
+    const controlPlanePath = process.env.SNOWCAT_CONTROL_DB;
     if (enrolled && (!controlPlanePath || controlPlanePath === ":memory:")) {
-      throw new Error("sweep-dependencies --enrolled requires FLUENT_CONTROL_DB to name the control-plane database");
+      throw new Error("sweep-dependencies --enrolled requires SNOWCAT_CONTROL_DB to name the control-plane database");
     }
     print(await sweepInternalDependencies(queue, controlPlanePath, repository ? { repository } : {}));
   } else if (command === "sweep-repository-settings") {
@@ -181,9 +185,9 @@ try {
     // active Core snapshot; one settings-drift proposal per drift set.
     const enrolled = args[0] === "--enrolled";
     const repository = enrolled ? undefined : required(args[0], "repository");
-    const controlPlanePath = process.env.FLUENT_CONTROL_DB;
+    const controlPlanePath = process.env.SNOWCAT_CONTROL_DB;
     if (!controlPlanePath || controlPlanePath === ":memory:") {
-      throw new Error("sweep-repository-settings requires FLUENT_CONTROL_DB to name the control-plane database (the contract lives in the active Core snapshot)");
+      throw new Error("sweep-repository-settings requires SNOWCAT_CONTROL_DB to name the control-plane database (the contract lives in the active Core snapshot)");
     }
     print(await sweepRepositorySettings(queue, controlPlanePath, repository ? { repository } : {}));
   } else if (command === "verify-artifacts") {
@@ -211,9 +215,9 @@ try {
     console.error("       npm run queue -- cure-foreign <owner/repo> on|off");
     console.error("       npm run queue -- seed-testing-gap <owner/repo>");
     console.error("       npm run queue -- seed-dogfood <owner/repo> [--cooldown-hours <n>]");
-    console.error("       npm run queue -- seed-dogfood --enrolled [--cooldown-hours <n>]   (requires FLUENT_CONTROL_DB)");
+    console.error("       npm run queue -- seed-dogfood --enrolled [--cooldown-hours <n>]   (requires SNOWCAT_CONTROL_DB)");
     console.error("       npm run queue -- import-issues <owner/repo> --label <label> [--priority <n>]");
-    console.error("       npm run queue -- import-issues --enrolled --label <label> [--priority <n>]   (requires FLUENT_CONTROL_DB; FLUENT_GITHUB_TOKEN in practice)");
+    console.error("       npm run queue -- import-issues --enrolled --label <label> [--priority <n>]   (requires SNOWCAT_CONTROL_DB; SNOWCAT_GITHUB_TOKEN in practice)");
     console.error("       npm run queue -- approve <work-item-id> [--if-updated-at <iso>]");
     console.error("       npm run queue -- reject <work-item-id> <reason> [--if-updated-at <iso>]");
     console.error("       npm run queue -- defer <work-item-id> <reason> [--if-updated-at <iso>]");
@@ -227,8 +231,8 @@ try {
     console.error("       npm run queue -- events [--since <sequence>] [--repository <owner/repo>] [--limit <1-500>]");
     console.error("       npm run queue -- watch [--repository <owner/repo>] [--interval <seconds>]");
     console.error("       npm run queue -- sweep-dependencies <owner/repo>");
-    console.error("       npm run queue -- sweep-dependencies --enrolled   (requires FLUENT_CONTROL_DB; FLUENT_GITHUB_TOKEN in practice)");
-    console.error("       npm run queue -- sweep-repository-settings <owner/repo> | --enrolled   (requires FLUENT_CONTROL_DB; FLUENT_GITHUB_TOKEN with admin read)");
+    console.error("       npm run queue -- sweep-dependencies --enrolled   (requires SNOWCAT_CONTROL_DB; SNOWCAT_GITHUB_TOKEN in practice)");
+    console.error("       npm run queue -- sweep-repository-settings <owner/repo> | --enrolled   (requires SNOWCAT_CONTROL_DB; SNOWCAT_GITHUB_TOKEN with admin read)");
     console.error("       npm run queue -- verify-artifacts [--repository <owner/repo>] [--limit <1-100>] [--no-cure]");
     console.error("       npm run queue -- metadata");
     console.error("       npm run queue -- backup <new-file-path>");

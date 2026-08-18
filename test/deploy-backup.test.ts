@@ -9,11 +9,11 @@ import test from "node:test";
 import { ControlPlaneStore, type ControlPlaneBackupManifest } from "../src/control/store.ts";
 import { QueueStore, type QueueBackupManifest } from "../src/queue/store.ts";
 
-const SCRIPT = join(process.cwd(), "deploy", "bin", "fluent-backup");
+const SCRIPT = join(process.cwd(), "deploy", "bin", "snowcat-backup");
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-test("deploy/bin/fluent-backup writes verified queue and control-plane backups with manifests and prunes only expired backups", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-deploy-backup-test-"));
+test("deploy/bin/snowcat-backup writes verified queue and control-plane backups with manifests and prunes only expired backups", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-deploy-backup-test-"));
   const queuePath = join(directory, "live", "queue.db");
   const controlPath = join(directory, "live", "control-plane.db");
   const backupDir = join(directory, "backups");
@@ -48,11 +48,11 @@ test("deploy/bin/fluent-backup writes verified queue and control-plane backups w
     encoding: "utf8",
     env: {
       ...stringEnvironment(process.env),
-      FLUENT_HOME: process.cwd(),
-      FLUENT_QUEUE_DB: queuePath,
-      FLUENT_CONTROL_DB: controlPath,
-      FLUENT_BACKUP_DIR: backupDir,
-      FLUENT_BACKUP_RETAIN_DAYS: "14",
+      SNOWCAT_HOME: process.cwd(),
+      SNOWCAT_QUEUE_DB: queuePath,
+      SNOWCAT_CONTROL_DB: controlPath,
+      SNOWCAT_BACKUP_DIR: backupDir,
+      SNOWCAT_BACKUP_RETAIN_DAYS: "14",
     },
   });
   assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
@@ -104,32 +104,32 @@ test("deploy/bin/fluent-backup writes verified queue and control-plane backups w
   reopened.close();
 });
 
-test("deploy/bin/fluent-backup refuses to run without its required environment and leaves no partial manifest", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-deploy-backup-env-test-"));
+test("deploy/bin/snowcat-backup refuses to run without its required environment and leaves no partial manifest", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-deploy-backup-env-test-"));
   const base = stringEnvironment(process.env);
-  for (const name of ["FLUENT_HOME", "FLUENT_QUEUE_DB", "FLUENT_CONTROL_DB", "FLUENT_BACKUP_DIR", "FLUENT_BACKUP_RETAIN_DAYS"]) {
+  for (const name of ["SNOWCAT_HOME", "SNOWCAT_QUEUE_DB", "SNOWCAT_CONTROL_DB", "SNOWCAT_BACKUP_DIR", "SNOWCAT_BACKUP_RETAIN_DAYS"]) {
     delete base[name];
   }
   const missingHome = spawnSync("bash", [SCRIPT], { cwd: directory, encoding: "utf8", env: base });
   assert.notEqual(missingHome.status, 0);
-  assert.match(missingHome.stderr, /FLUENT_HOME/);
-  const missingQueue = spawnSync("bash", [SCRIPT], { cwd: directory, encoding: "utf8", env: { ...base, FLUENT_HOME: process.cwd() } });
+  assert.match(missingHome.stderr, /SNOWCAT_HOME/);
+  const missingQueue = spawnSync("bash", [SCRIPT], { cwd: directory, encoding: "utf8", env: { ...base, SNOWCAT_HOME: process.cwd() } });
   assert.notEqual(missingQueue.status, 0);
-  assert.match(missingQueue.stderr, /FLUENT_QUEUE_DB/);
+  assert.match(missingQueue.stderr, /SNOWCAT_QUEUE_DB/);
   const badRetention = spawnSync("bash", [SCRIPT], {
     cwd: directory,
     encoding: "utf8",
     env: {
       ...base,
-      FLUENT_HOME: process.cwd(),
-      FLUENT_QUEUE_DB: join(directory, "queue.db"),
-      FLUENT_CONTROL_DB: join(directory, "control-plane.db"),
-      FLUENT_BACKUP_DIR: join(directory, "backups"),
-      FLUENT_BACKUP_RETAIN_DAYS: "two weeks",
+      SNOWCAT_HOME: process.cwd(),
+      SNOWCAT_QUEUE_DB: join(directory, "queue.db"),
+      SNOWCAT_CONTROL_DB: join(directory, "control-plane.db"),
+      SNOWCAT_BACKUP_DIR: join(directory, "backups"),
+      SNOWCAT_BACKUP_RETAIN_DAYS: "two weeks",
     },
   });
   assert.notEqual(badRetention.status, 0);
-  assert.match(badRetention.stderr, /FLUENT_BACKUP_RETAIN_DAYS/);
+  assert.match(badRetention.stderr, /SNOWCAT_BACKUP_RETAIN_DAYS/);
   assert.equal(existsSync(join(directory, "backups")), false);
 
   // A failing backup command (queue and control-plane paths collide) leaves no partial manifest behind.
@@ -140,10 +140,10 @@ test("deploy/bin/fluent-backup refuses to run without its required environment a
     encoding: "utf8",
     env: {
       ...base,
-      FLUENT_HOME: process.cwd(),
-      FLUENT_QUEUE_DB: collide,
-      FLUENT_CONTROL_DB: collide,
-      FLUENT_BACKUP_DIR: join(directory, "backups"),
+      SNOWCAT_HOME: process.cwd(),
+      SNOWCAT_QUEUE_DB: collide,
+      SNOWCAT_CONTROL_DB: collide,
+      SNOWCAT_BACKUP_DIR: join(directory, "backups"),
     },
   });
   assert.notEqual(failed.status, 0);

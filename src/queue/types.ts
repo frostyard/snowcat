@@ -12,7 +12,7 @@ export const allowedActions = [
 export type AllowedAction = (typeof allowedActions)[number];
 
 /**
- * Fluent's own observation of a reported issue or pull request, taken through
+ * Snowcat's own observation of a reported issue or pull request, taken through
  * the GitHub API at completion time and refreshed by `verify-artifacts`.
  * Workers never supply it; the MCP boundary rejects it as input.
  */

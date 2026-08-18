@@ -76,7 +76,7 @@ export interface QueueMetadata {
 }
 
 /**
- * Principal namespaces written only by Fluent itself (operator CLI, feeders,
+ * Principal namespaces written only by Snowcat itself (operator CLI, feeders,
  * lease expiry). Worker identities may not use them, so createdBy and event
  * actors cannot be spoofed to look operator- or system-authored.
  */
@@ -151,7 +151,7 @@ export interface QueueStoreOptions {
 }
 
 export function queueDatabasePath(): string {
-  const configured = process.env.FLUENT_QUEUE_DB;
+  const configured = process.env.SNOWCAT_QUEUE_DB;
   if (configured === ":memory:") return configured;
   return resolve(configured ?? "./data/queue.db");
 }
@@ -302,7 +302,7 @@ export class QueueStore {
   /**
    * The pull-request cure setting of every opted-in repository, in slug order:
    * `cureForeign` says whether the cure sweep also lists and inspects open
-   * pull requests no Fluent item reported (ADR-0061's per-repository opt-in).
+   * pull requests no Snowcat item reported (ADR-0061's per-repository opt-in).
    */
   /**
    * Renames a repository slug in place — the opt-in row and every work item
@@ -1574,7 +1574,7 @@ const MIGRATIONS: readonly Migration[] = [
     }
   },
   // Rung 6: per-repository opt-in to curing foreign pull requests — ones no
-  // Fluent item reported (ADR-0061). Off for every existing row.
+  // Snowcat item reported (ADR-0061). Off for every existing row.
   (db) => {
     const columns = new Set(
       (db.prepare("PRAGMA table_info(repositories)").all() as Row[]).map((column) => String(column.name)),

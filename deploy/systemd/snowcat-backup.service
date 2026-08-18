@@ -1,0 +1,19 @@
+# Snowcat daily backup: copies the queue and control-plane databases to
+# /var/backups/snowcat (or SNOWCAT_BACKUP_DIR) with their manifests through the
+# existing `queue -- backup` and `control -- backup` commands, then prunes
+# backups older than SNOWCAT_BACKUP_RETAIN_DAYS (default 14). Never writes to
+# the live databases. Configure `User=` and, when SNOWCAT_HOME is not
+# /opt/snowcat, `ReadWritePaths=` in a drop-in.
+[Unit]
+Description=Snowcat: back up the queue and control-plane databases
+Documentation=https://github.com/frostyard/snowcat/blob/main/docs/design/queue-operations.md
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/snowcat/env
+ExecStart=/bin/bash ${SNOWCAT_HOME}/deploy/bin/snowcat-backup
+NoNewPrivileges=yes
+# PrivateTmp gives tsx a writable compile cache under a private /tmp.
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/snowcat /var/backups/snowcat -/opt/snowcat/data

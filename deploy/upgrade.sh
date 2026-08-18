@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Upgrade the operator's Fluent checkout in place and restart the timers.
+# Upgrade the operator's Snowcat checkout in place and restart the timers.
 #
 #   deploy/upgrade.sh          (as the operator user; timers restart via sudo
-#                               when not root — set FLUENT_SYSTEMCTL to override)
+#                               when not root — set SNOWCAT_SYSTEMCTL to override)
 #
 # Steps: `git pull --ff-only`, `npm ci`, `npm run check`, restart the three
 # timers, then remind you to restart every MCP client. If `check` fails the
@@ -11,16 +11,16 @@
 # deploy/systemd/ or deploy/env.example, it tells you to re-run
 # `sudo deploy/install.sh` so /etc/systemd/system matches the checkout.
 #
-# Run this only in the operator's checkout named by FLUENT_HOME in
-# /etc/fluent/env — never in a worker's checkout, and never with a feature
+# Run this only in the operator's checkout named by SNOWCAT_HOME in
+# /etc/snowcat/env — never in a worker's checkout, and never with a feature
 # branch checked out: `git pull --ff-only` refuses to move a diverged branch.
 set -euo pipefail
 
-fluent_home="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-cd "$fluent_home"
+snowcat_home="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$snowcat_home"
 
-if [[ -n ${FLUENT_SYSTEMCTL:-} ]]; then
-  read -r -a systemctl <<< "$FLUENT_SYSTEMCTL"
+if [[ -n ${SNOWCAT_SYSTEMCTL:-} ]]; then
+  read -r -a systemctl <<< "$SNOWCAT_SYSTEMCTL"
 elif [[ $EUID -eq 0 ]]; then
   systemctl=(systemctl)
 else
@@ -29,7 +29,7 @@ fi
 
 branch="$(git rev-parse --abbrev-ref HEAD)"
 before="$(git rev-parse HEAD)"
-echo "upgrade: $fluent_home on $branch at ${before:0:12}"
+echo "upgrade: $snowcat_home on $branch at ${before:0:12}"
 if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
   echo "upgrade: the checkout has local modifications; commit, stash, or discard them first" >&2
   exit 1
@@ -50,17 +50,17 @@ if ! npm run check; then
   exit 1
 fi
 
-timers=(fluent-feed.timer fluent-verify.timer fluent-backup.timer)
+timers=(snowcat-feed.timer snowcat-verify.timer snowcat-backup.timer)
 "${systemctl[@]}" daemon-reload
 "${systemctl[@]}" restart "${timers[@]}"
 echo "upgrade: restarted ${timers[*]}"
 
 if [[ $before != "$after" ]] && [[ -n "$(git diff --name-only "$before" "$after" -- deploy/systemd deploy/env.example deploy/install.sh)" ]]; then
-  echo "upgrade: deploy/ changed in this upgrade — run 'sudo $fluent_home/deploy/install.sh' to refresh the installed units and drop-ins."
+  echo "upgrade: deploy/ changed in this upgrade — run 'sudo $snowcat_home/deploy/install.sh' to refresh the installed units and drop-ins."
 fi
 
 cat <<'REMINDER'
 upgrade: done. Now restart every MCP client (Claude Code, Codex, ...) that has the
-upgrade: fluent server open: an already-running server refuses its next write once
+upgrade: snowcat server open: an already-running server refuses its next write once
 upgrade: the queue schema moves forward (work-queue spec, rule 21).
 REMINDER

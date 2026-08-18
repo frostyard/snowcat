@@ -18,6 +18,10 @@ import {
 import { uuidV7 } from "../control/encoding.ts";
 import { reconcileRepositories } from "../repository/controller.ts";
 import { CoreValidationError } from "./validator.ts";
+import { adoptLegacyEnvironment } from "../env-compat.ts";
+
+// FLUENT_* is read for one release (Snowcat ADR-0064); every entry point adopts it first.
+adoptLegacyEnvironment();
 
 const [command, ...args] = process.argv.slice(2);
 
@@ -110,7 +114,7 @@ try {
       store.close();
     }
   } else if (command === "poll-once" && args.length === 0) {
-    const healthyIntervalSeconds = parseCorePollInterval(process.env.FLUENT_CORE_POLL_INTERVAL_SECONDS);
+    const healthyIntervalSeconds = parseCorePollInterval(process.env.SNOWCAT_CORE_POLL_INTERVAL_SECONDS);
     const store = new ControlPlaneStore(controlPlaneDatabasePath());
     try {
       const result = await runCorePollOnce(
@@ -126,7 +130,7 @@ try {
       store.close();
     }
   } else if (command === "poll" && args.length === 0) {
-    const healthyIntervalSeconds = parseCorePollInterval(process.env.FLUENT_CORE_POLL_INTERVAL_SECONDS);
+    const healthyIntervalSeconds = parseCorePollInterval(process.env.SNOWCAT_CORE_POLL_INTERVAL_SECONDS);
     const store = new ControlPlaneStore(controlPlaneDatabasePath());
     let stopping = false;
     const stop = () => {

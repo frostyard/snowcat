@@ -4,9 +4,9 @@
 - **Last updated:** 2026-08-18
 - **Owner:** operator
 
-Fluent gives a GitHub organization operator a self-hosted queue of durable,
+Snowcat gives a GitHub organization operator a self-hosted queue of durable,
 bounded maintenance and approved feature-delivery work. The operator chooses
-and starts a capable coding agent to perform each item; Fluent preserves
+and starts a capable coding agent to perform each item; Snowcat preserves
 repository context, organizational direction, authority limits, lineage, and
 outcomes across those independent runs.
 
@@ -20,7 +20,7 @@ Its implementation also assumes Claude-specific surfaces that do not govern
 Codex, Copilot, OpenCode, or locally hosted models.
 
 The operator already has useful Codex, Claude, and Copilot subscriptions, plus
-an inexpensive local Lemonade server. Making Fluent launch those clients would
+an inexpensive local Lemonade server. Making Snowcat launch those clients would
 pull rapidly changing login, short-lived token refresh, tools, and sandboxing
 into the control plane. Making the weaker local model perform architectural or
 large repository work would save subscription usage at the expense of outcome
@@ -52,7 +52,7 @@ targets are required before this PRD can become Approved.
 | Improve opted-in repositories | Versioned readiness, CI, security, and quality trend per repository | TBD |
 | Coordinate shared outcomes | Multi-repository initiatives completed without contract-breaking intermediate states | TBD |
 | Preserve traceability | Items with source, lease history, evidence, artifacts, and complete lineage | TBD |
-| Preserve operator control | Merge, release, deploy, or non-opted-in repository authorization by Fluent | 0 |
+| Preserve operator control | Merge, release, deploy, or non-opted-in repository authorization by Snowcat | 0 |
 | Keep authority deterministic | State transitions authorized solely by model output | 0 |
 
 ### First dogfood baseline (2026-08-17, `frostyard/updex`)
@@ -65,29 +65,29 @@ worker client, ~1h50m of wall clock. These are baselines, not targets.
 | Measure | Observed |
 | --- | --- |
 | Items completed / claimed | 7 / 7 (4 issue-resolution, 3 read-only discovery) |
-| Pull requests opened → merged by maintainer | 4 → 4, all Fluent-verified (`delivery: merged`) |
+| Pull requests opened → merged by maintainer | 4 → 4, all Snowcat-verified (`delivery: merged`) |
 | Runs with no useful result | 0; blocked 0; refused completions 0; lease expiries 0 |
 | Wall time claim → complete | issue items 8m27s, 6m00s, 4m27s, 4m42s; discovery 2m01s, 1m23s, 2m19s |
 | Discovery findings → proposed children | 3 → 3, each with file-level evidence; all admitted by the operator |
 | Worker-filed side artifacts | 1 issue (#299), verified |
 | Traceability | every item carries source (`sourceRef` or seed), lease events, evidence, verified artifacts, and lineage; every human decision is an attributed event |
-| Operator-control and authority boundaries | 0 violations: no merge/release/deploy by Fluent, no non-opted-in repository, no transition authorized by model output |
+| Operator-control and authority boundaries | 0 violations: no merge/release/deploy by Snowcat, no non-opted-in repository, no transition authorized by model output |
 
 Tokens per accepted outcome were not captured on this day; the client does
-not yet report them to Fluent. That column stays open.
+not yet report them to Snowcat. That column stays open.
 
-### Second operating day (2026-08-17/18, `frostyard/updex` and `frostyard/fluent`)
+### Second operating day (2026-08-17/18, `frostyard/updex` and `frostyard/snowcat`)
 
 | Measure | Observed |
 | --- | --- |
 | Client kinds completing work | 4 — Claude Code, Codex, Copilot CLI, and a Claude session on a loop; same MCP contract and skill |
 | `frostyard/updex` | 13 items completed (5 issue-resolution, 4 discovery roots, 4 admitted children); 9 pull requests, 8 merged and verified, 1 closed unmerged after an external tool landed an overlapping change; 0 refused completions; 1 block recovered through a requeue note |
-| `frostyard/fluent` (Fluent building itself) | 14 items completed, 14 pull requests merged and verified; 8 of them overnight with the operator asleep and a merge gate merging on green CI |
+| `frostyard/snowcat` (Snowcat building itself) | 14 items completed, 14 pull requests merged and verified; 8 of them overnight with the operator asleep and a merge gate merging on green CI |
 | Duplicate work | 1 (a second lease re-implemented an item before operator notes existed); fixed the same night by carrying notes and prior results and by the skill's check-for-existing-work step |
 | Findings → children → landed | quality, CI, security, architecture: 4 findings, 4 admitted children, 3 merged, 1 superseded; one finding surfaced an org-level contradiction resolved by core ADR-0038 |
 | Operator-control and authority boundaries | 0 violations |
 
-The `bketelsen/fluent` history from the first host-local trial (40 completed
+The `bketelsen/snowcat` history from the first host-local trial (40 completed
 items, no pull requests) remains in the queue as provenance and is not counted
 above.
 
@@ -96,7 +96,7 @@ above.
 - The initial operator enrolls repositories, creates or approves work, starts
   capable agents, reviews outcomes, and resolves blocked items.
 - Repository maintainers review issues and pull requests produced by workers,
-  even when they do not operate Fluent.
+  even when they do not operate Snowcat.
 - Named organization members may participate later under explicit roles and
   permissions that have not yet been designed.
 - A worker is any operator-started Codex, Claude, Copilot, OpenCode, Qwen, or
@@ -106,7 +106,7 @@ above.
 
 ### Enrollment and RepositoryControllers
 
-1. The operator MUST explicitly opt each repository into Fluent. GitHub
+1. The operator MUST explicitly opt each repository into Snowcat. GitHub
    organization membership MUST NOT imply enrollment.
 2. Each opted-in repository MUST have one durable logical
    RepositoryController containing goals, observations, queued work, outcome
@@ -119,17 +119,17 @@ above.
 
 ### Coordination and execution boundary
 
-5. Fluent MUST expose durable work that a manually started capable agent can
+5. Snowcat MUST expose durable work that a manually started capable agent can
    list, inspect, claim, renew, complete, block, and release through an
    agent-portable interface. V1 uses MCP.
-6. Fluent MUST NOT launch, supervise, authenticate, refresh credentials for, or
+6. Snowcat MUST NOT launch, supervise, authenticate, refresh credentials for, or
    sandbox Codex, Claude, Copilot, or other capable worker processes.
 7. The worker client and operator environment MUST own provider selection,
    subscription login, tools, process lifecycle, and execution isolation.
-8. Fluent MUST still enforce repository opt-in, per-item action authorization,
+8. Snowcat MUST still enforce repository opt-in, per-item action authorization,
    delegation ceilings, leases, and provenance. Client-owned sandboxing MUST
    NOT be interpreted as removing the underlying security requirement.
-9. One "work the Fluent queue" invocation MUST claim at most one item by
+9. One "work the Snowcat queue" invocation MUST claim at most one item by
    default. Processing multiple items requires an explicit operator request.
 10. Claims MUST be leased and recoverable. A stale client MUST NOT retain
     authority after its lease is reclaimed.
@@ -167,7 +167,7 @@ above.
 
 ### Maintenance program
 
-20. Fluent MUST support these initial maintenance work kinds:
+20. Snowcat MUST support these initial maintenance work kinds:
     continuous quality improvement, CI maintenance, security, and architecture.
 21. Continuous quality improvement in v1 MUST improve existing software quality
     and MUST NOT introduce product features.
@@ -187,10 +187,10 @@ above.
 26. V1 MUST recognize exactly five structured organization record kinds in
     `frostyard/core`: goal, policy, knowledge, criteria set, and exception.
     Records MUST have a common machine-readable identity, lifecycle, ownership,
-    and applicability envelope at a merged Git revision. Fluent MUST NOT
+    and applicability envelope at a merged Git revision. Snowcat MUST NOT
     interpret arbitrary repository prose or its present layout as an
     authoritative schema.
-27. Fluent MUST retain the source record identity and exact Git revision for
+27. Snowcat MUST retain the source record identity and exact Git revision for
     organization context that influences admitted work. Workers MUST be able to
     consult that context and propose contributions, but an observation,
     database row, or unmerged change MUST NOT become accepted guidance or
@@ -225,7 +225,7 @@ above.
 34. A worker MAY propose goal references and explain the expected contribution,
     but MUST NOT set priority. Initial operator admission MUST confirm or remove
     proposed goal references before they influence scheduling.
-35. On initial admission or operator-authored seeding, Fluent MUST derive a
+35. On initial admission or operator-authored seeding, Snowcat MUST derive a
     default queue priority deterministically from the highest accepted goal
     band; multiple goals MUST NOT add priority together. Work without a goal
     MUST retain its maintenance-program or operator default. An operator MAY
@@ -235,7 +235,7 @@ above.
     pause, completion, cancellation, or expiry MUST affect future work only and
     MUST NOT silently rewrite, reorder, or cancel admitted work.
 37. Goal measures MAY inform progress reporting but MUST NOT automatically
-    change goal lifecycle. Fluent MUST surface conflicting applicable goals for
+    change goal lifecycle. Snowcat MUST surface conflicting applicable goals for
     operator resolution rather than delegate precedence to a model.
 
 ### Policy and exception enforcement
@@ -244,16 +244,16 @@ above.
     lifecycle, owner, applicability, effective date, rationale, required
     evidence, and applicable queue checkpoints.
 39. Every policy requirement MUST use either a named, versioned deterministic
-    verifier or an explicit attestation by an authorized reviewer. Fluent MUST
+    verifier or an explicit attestation by an authorized reviewer. Snowcat MUST
     fail closed when a required verifier is unknown, receives invalid input, or
     errors. A worker or model report MUST NOT satisfy a review requirement by
     itself.
-40. At each protected transition, Fluent MUST produce an explainable policy
+40. At each protected transition, Snowcat MUST produce an explainable policy
     decision citing the applicable requirements, verification or attestation
     results, exceptions, and exact `frostyard/core` revision.
 41. Policy MUST be monotonic with respect to authority: it MAY remove actions,
     add obligations, or reject a transition, but MUST NOT grant authority beyond
-    repository enrollment, Fluent's platform ceiling, root authority, parent
+    repository enrollment, Snowcat's platform ceiling, root authority, parent
     delegation, or another applicable policy. The most restrictive result MUST
     win, and unresolved conflicts MUST require operator action.
 42. An exception MUST name one exact policy requirement or versioned criteria
@@ -261,7 +261,7 @@ above.
     inclusive start and end dates, and compensating controls. Its scope MUST be
     no broader than its target, and it MUST NOT waive opt-in, platform, root, or
     parent authority limits or unrelated requirements.
-43. Fluent MUST re-evaluate exception validity at admission, claim, and lease
+43. Snowcat MUST re-evaluate exception validity at admission, claim, and lease
     renewal. A lease relying on an exception MUST NOT extend beyond its end
     time. Expiry or revocation MUST make affected unclaimed work ineligible and
     prevent renewal without deleting its history or authorizing follow-ups.
@@ -274,7 +274,7 @@ above.
 
 45. A knowledge record MUST declare its owner, applicability, concise claim or
     guidance, supporting sources and their verification state, known
-    limitations, lifecycle, review date, and `review_after` date. Fluent MUST
+    limitations, lifecycle, review date, and `review_after` date. Snowcat MUST
     NOT replace that provenance with a scalar confidence score.
 46. Active knowledge past its `review_after` date MUST remain searchable and
     historically citeable but MUST be labeled stale and excluded from default
@@ -290,7 +290,7 @@ above.
     review path.
 49. Knowledge MUST remain advisory: it MUST NOT authorize actions, admit or
     prioritize work, waive policy, satisfy a verifier by itself, or change a
-    readiness result. Fluent MUST surface conflicting active knowledge for
+    readiness result. Snowcat MUST surface conflicting active knowledge for
     review rather than ask a model to select the truth.
 
 ### Readiness criteria and assessments
@@ -311,7 +311,7 @@ above.
     deterministic applicability or authorized attestation; `excepted` MUST
     identify a currently valid exception for that exact criterion version; and
     neither result MUST be stored as `pass`.
-54. Fluent MUST derive a level from all applicable criteria at that level and
+54. Snowcat MUST derive a level from all applicable criteria at that level and
     every preceding level. `Unknown` and `error` MUST NOT satisfy a level. A
     level relying on one or more valid exceptions MUST display the exception
     count and waived criteria and MUST NOT appear as an unqualified result.
@@ -328,7 +328,7 @@ above.
 57. `frostyard/core` MUST store strict JSON records under `organization/`, with
     fixed directories for goals, policies, knowledge, versioned criteria sets,
     exceptions, and immutable versioned JSON Schemas. Records MUST NOT live in
-    a Fluent-specific directory or require a hand-maintained manifest. An
+    a Snowcat-specific directory or require a hand-maintained manifest. An
     implementing core ADR MUST explicitly permit organization-governed records
     scoped to individual repositories.
 58. Every record MUST use a versioned common envelope containing `kind`,
@@ -339,16 +339,16 @@ above.
 59. Core CI MUST validate the complete organization tree with a pinned,
     standards-conforming JSON Schema Draft 2020-12 implementation plus
     duplicate-key, path, identity, reference, lifecycle, applicability, and
-    bounded-input checks. Core and Fluent MUST share valid and invalid
+    bounded-input checks. Core and Snowcat MUST share valid and invalid
     conformance fixtures while retaining independent validator implementations.
-60. Fluent MUST import from a configured Git repository and branch through a
+60. Snowcat MUST import from a configured Git repository and branch through a
     read-only bare mirror. It MUST read Git trees and blobs only and MUST NOT
     check out files, follow source symlinks, execute hooks or scripts, or load
     validator code from `frostyard/core`.
-61. Fluent MUST recognize only schema versions bundled with its release. A
+61. Snowcat MUST recognize only schema versions bundled with its release. A
     fetched schema MUST NOT redefine an existing version, and an unknown version
-    MUST fail closed until Fluent explicitly supports it. Fetched recognized
-    schemas MUST match Fluent's bundled expected digests.
+    MUST fail closed until Snowcat explicitly supports it. Fetched recognized
+    schemas MUST match Snowcat's bundled expected digests.
 62. A core commit MUST activate atomically only after the entire bounded tree,
     every record, every reference, and every cross-record invariant validates
     and the immutable snapshot is durably stored. Failure MUST retain the last
@@ -377,7 +377,7 @@ above.
     block new organization-dependent discovery and admission immediately, and
     the override MUST relax only elapsed-time staleness.
 67. Organization policy MUST complement rather than replace repository-local
-    policy and CI enforcement. Fluent MUST apply the most restrictive result
+    policy and CI enforcement. Snowcat MUST apply the most restrictive result
     from both layers and MUST NOT overwrite local policy files during import or
     synchronization.
 
@@ -386,21 +386,21 @@ above.
 68. Initial enrollment MUST require a strict JSON repository declaration under
     `organization/repositories/<owner>/<repository>.json` in a PR merged to the
     configured `frostyard/core` branch. GitHub organization membership, topics,
-    Fluent controls, repository-local files, workers, and models MUST NOT enable
+    Snowcat controls, repository-local files, workers, and models MUST NOT enable
     an undeclared repository.
 69. A declaration MUST identify both the GitHub `owner/name` and immutable
     repository ID, accountable owners, fleet state, enabled maintenance
-    programs, and an action ceiling no broader than Fluent's platform ceiling.
+    programs, and an action ceiling no broader than Snowcat's platform ceiling.
     It MUST NOT contain credentials, provider or worker configuration, or
     repository-local implementation details.
 70. Activating the validated core snapshot containing a new `enabled`
     declaration MUST make that exact declaration eligible for deterministic
     repository reconciliation. Only after its immutable GitHub identity and
-    required canonical surfaces match MAY Fluent establish enrollment, create
+    required canonical surfaces match MAY Snowcat establish enrollment, create
     the durable RepositoryController and enrollment event, and it MUST do so
-    without creating work. Fluent MUST retain the source snapshot and PR or
+    without creating work. Snowcat MUST retain the source snapshot and PR or
     commit attribution when available.
-71. Fluent MUST reconcile the declaration with GitHub and place only the
+71. Snowcat MUST reconcile the declaration with GitHub and place only the
     affected repository on hold when the slug is missing, renamed, transferred,
     or archived, the immutable ID differs, or required local policy is
     unavailable. A hold MUST prevent discovery, admission, claims, and renewal
@@ -409,7 +409,7 @@ above.
     claims, and lease renewal while retaining all repository history. Existing
     leases MUST NOT be lengthened; late terminal reports MAY be retained as
     provenance but MUST NOT restore authority or admit follow-ups.
-73. An enrolled declaration MUST be changed to `disabled`, not deleted. Fluent
+73. An enrolled declaration MUST be changed to `disabled`, not deleted. Snowcat
     MUST reject removal of a declaration present in its active snapshot. A later
     core PR MAY re-enable it. Held work MUST require attributed operator
     reconciliation before becoming claimable, except that work held solely by transient
@@ -424,7 +424,7 @@ above.
     repository, add programs, raise ceilings, or survive as hidden state after
     it is cleared.
 75. Core branch protection, CODEOWNERS, and review roles MUST govern who may
-    merge enrollment changes. Fluent MUST display the active declaration,
+    merge enrollment changes. Snowcat MUST display the active declaration,
     snapshot, GitHub reconciliation state, local hold, and effective
     intersection as separate facts.
 
@@ -447,21 +447,21 @@ above.
     be a real Git tree. Legacy and provider-specific paths MAY be relative
     symlinks pointing to canonical content, but the canonical path MUST NOT be a
     symlink, submodule, generated artifact, or alias chain.
-80. Fluent MUST read only the canonical path declared by the selected surface
+80. Snowcat MUST read only the canonical path declared by the selected surface
     contract. It MUST NOT search fallback locations, normalize arbitrary
     JSON/YAML, follow compatibility aliases, or allow enrollment declarations
     to select arbitrary paths.
-81. Fluent MUST validate repository governance at an exact repository commit
+81. Snowcat MUST validate repository governance at an exact repository commit
     with its bundled schema and retain the commit, surface-contract and schema
     versions, content hash, parsed policy, and resulting policy decision. A
     missing, wrong-type, invalid, unknown-version, or digest-incompatible
     required surface MUST place only that repository on hold. For automated
-    enrollment, Fluent MUST resolve the observed GitHub default branch once and
+    enrollment, Snowcat MUST resolve the observed GitHub default branch once and
     pin its head commit before loading any canonical path. A surface result and
     repository enrollment MUST remain separate durable transitions; valid
     surfaces alone MUST NOT create work.
 82. Existing repositories MUST migrate to the canonical schema rather than
-    receive permanent Fluent adapters. Snosi and lab are the closest schema
+    receive permanent Snowcat adapters. Snosi and lab are the closest schema
     precursors; updex MUST move and adapt its policy. Pilothouse's structural
     manifest and chairlift's quality tuning MUST remain distinct artifact types
     and MUST NOT be interpreted as agent-governance policy.
@@ -473,12 +473,12 @@ above.
     boundaries, change controls, exception controls, and risk classification;
     it MUST reject unknown fields. Decisions MUST combine monotonically as
     `deny` over `review-required` over `allow`, with omission treated as deny.
-84. Fluent's grantable v1 actions MUST remain `read`, `write`, `run-tests`,
+84. Snowcat's grantable v1 actions MUST remain `read`, `write`, `run-tests`,
     `open-issue`, `open-pr`, and `create-followup`. The shared policy vocabulary
     MUST additionally recognize `approve-pr`, `merge-pr`,
     `push-protected-branch`, `publish-artifact`, `publish-release`, `deploy`,
     `modify-protected-environment`, and `manage-credentials`, all of which the
-    Fluent v1 platform policy MUST deny.
+    Snowcat v1 platform policy MUST deny.
 85. V1 protected boundaries MUST be `authentication`,
     `credentials-and-sensitive-data`, `cryptographic-trust`,
     `destructive-data`, `installation-and-update`,
@@ -504,7 +504,7 @@ above.
     and `critical`, select the highest applicable tier, and classify uncertain
     impact at the higher plausible tier. Local policy MAY raise but MUST NOT
     lower core boundary minimums or define another scale.
-90. Fluent work and resulting pull-request provenance MUST retain risk tier,
+90. Snowcat work and resulting pull-request provenance MUST retain risk tier,
     rationale, affected boundaries, required evidence, and the policy decision
     that produced them. Worker-supplied classification MUST remain untrusted
     until admission and changed-path review confirm it.
@@ -516,7 +516,7 @@ above.
 
 ### Worker identity and GitHub reconciliation
 
-92. Fluent MUST record the initiating operator or named-member principal,
+92. Snowcat MUST record the initiating operator or named-member principal,
     server-assigned worker session, work attempt, expected GitHub actor, actual
     GitHub actor, and descriptive client, provider, and model metadata as
     distinct provenance. Provider, model, Git author, Git committer, and other
@@ -530,9 +530,9 @@ above.
     containing its item, attempt, and nonce; the marker MUST NOT contain a lease
     token, credential, prompt, evidence payload, or private host detail.
 95. Workers MUST use GitHub write credentials owned by their client and
-    operator environment. Fluent MUST NOT receive, mint, refresh, proxy, store,
+    operator environment. Snowcat MUST NOT receive, mint, refresh, proxy, store,
     or distribute those credentials.
-96. Fluent MUST reconcile artifacts through a separate least-privilege,
+96. Snowcat MUST reconcile artifacts through a separate least-privilege,
     read-only GitHub identity. V1 MUST use a GitHub App installation for any
     repository whose merge or required-check history can affect authority, and
     MUST combine authenticated inbound App webhooks with bounded read-only
@@ -600,7 +600,7 @@ above.
     leases and lineage, independently reconcile reported artifacts, and perform
     or schedule the specialist contract's later re-evaluation. A completion
     report or existing pull request MUST NOT by itself resolve the finding.
-111. Fluent MUST expose operational state, context freshness and validity,
+111. Snowcat MUST expose operational state, context freshness and validity,
     per-program conditions, finding lifecycle and verification, artifact
     reconciliation, and versioned readiness as separate facts. A calculated
     health presentation MUST NOT conceal or replace those facts.
@@ -696,7 +696,7 @@ above.
 ### Security-maintenance workflow
 
 132. The `security` specialist MUST identify and reduce evidence-backed
-    security risk without disclosing sensitive material through Fluent. It MUST
+    security risk without disclosing sensitive material through Snowcat. It MUST
     own vulnerable dependencies, authentication and authorization defects,
     secret exposure, unsafe input and command handling, excessive permissions,
     cryptographic and trust problems, supply-chain weakness, security
@@ -786,7 +786,7 @@ above.
 
 ### FleetController and cross-repository coordination
 
-152. One Fluent fleet MUST have one logical FleetController composed of
+152. One Snowcat fleet MUST have one logical FleetController composed of
     deterministic code and durable state. It MUST coordinate enrolled
     RepositoryControllers and MUST NOT be an LLM, prompt, conversation,
     provider session, or worker process.
@@ -805,7 +805,7 @@ above.
     references, compatibility policy, and immutable GitHub repository IDs.
 156. The producer repository MUST own its canonical published contract and each
     consumer MUST own its canonical expectation or compatibility test. Core
-    MUST declare intent and MUST NOT copy those artifacts. Fluent MUST read them
+    MUST declare intent and MUST NOT copy those artifacts. Snowcat MUST read them
     only through versioned canonical repository surfaces at exact commits.
 157. A missing, invalid, unsupported, or mismatched relationship artifact MUST
     hold only that relationship. A relationship MUST NOT enroll a repository,
@@ -827,7 +827,7 @@ above.
     introduce a backward-compatible producer contract, adopt it in consumers,
     verify adoption, and remove deprecated behavior only in a later change.
 162. Independent slices MAY proceed concurrently, but dependent work MUST wait
-    for its independently observed predecessor signal. Fluent MUST NOT present
+    for its independently observed predecessor signal. Snowcat MUST NOT present
     pull requests in separate repositories as an atomic change.
 163. Aggregate fleet health MUST remain a projection over separate repository,
     relationship, initiative, context, finding, artifact, and readiness states.
@@ -836,9 +836,9 @@ above.
 
 ### Feature initiative intake
 
-164. Every feature initiative Fluent may plan MUST have one canonical Markdown
+164. Every feature initiative Snowcat may plan MUST have one canonical Markdown
     PRD in `frostyard/core` at `docs/prd/<initiative-id>.md`. Repository-local
-    PRDs MUST NOT grant Fluent v1 delivery authority; repository implementation
+    PRDs MUST NOT grant Snowcat v1 delivery authority; repository implementation
     plans and code MUST remain in the repositories they serve.
 165. Each PRD MUST be paired at the same core commit with a strict declaration
     at `organization/initiatives/<initiative-id>.json`, validated by
@@ -852,7 +852,7 @@ above.
     program, and any declaration-level scope narrowing.
 167. The PRD MUST be a regular Git blob under its ID-matching canonical path in
     the same core tree. It MUST NOT be a symlink, submodule, generated artifact,
-    remote URL, mutable branch reference, or worker-selected path. Fluent MUST
+    remote URL, mutable branch reference, or worker-selected path. Snowcat MUST
     retain exact commit, blob, raw bytes, digest, declaration, and validation.
 168. The canonical PRD template MUST require problem, desired outcomes, users or
     beneficiaries, scope, non-goals, constraints, success measures, affected
@@ -876,7 +876,7 @@ above.
 173. PRDs and declarations MUST NOT contain credentials, secrets, private keys,
     provider tokens, exploit payloads, or unrestricted sensitive logs. A core-
     side ADR MUST add the PRD category, permit fleet-authorized product
-    direction, and establish initiative validation and review before Fluent
+    direction, and establish initiative validation and review before Snowcat
     activates this intake contract.
 
 ### Delivery planning and approval
@@ -905,14 +905,14 @@ above.
     actions, expected artifacts, validation and review evidence, proposed risk
     and boundaries, and applicable compatibility and rollback obligations.
 179. Requested actions, risk, and boundaries MUST remain untrusted planning
-    inputs. Core and Fluent MUST independently validate identities, source
+    inputs. Core and Snowcat MUST independently validate identities, source
     digests, unique IDs, dependency existence and acyclicity, bounded sizes and
     vocabularies, and MUST intersect every slice with current effective policy.
 180. Slices MUST represent outcomes rather than arbitrary file groups, prompt
     fragments, context chunks, or token estimates. One slice MUST produce at
     most one pull request by default; inseparable work MUST declare a safe
     intermediate compatibility mechanism or remain one slice.
-181. The read-only planner MUST return its proposal to Fluent and MUST NOT push
+181. The read-only planner MUST return its proposal to Snowcat and MUST NOT push
     it to core. An operator or separately admitted publication worker MUST open
     a core PR adding the immutable plan and updating the initiative's
     `active_plan` version and digest without modifying prior versions.
@@ -935,7 +935,7 @@ above.
 
 ### Bounded adversarial review
 
-186. Fluent MUST define one capable `adversarial-reviewer` role with separate
+186. Snowcat MUST define one capable `adversarial-reviewer` role with separate
     versioned `prd`, `delivery-plan`, and `pull-request` profiles. Review MUST be
     read-only and MUST NOT grant edit, GitHub-review, approval, merge, admission,
     policy-waiver, or scope-expansion authority.
@@ -988,7 +988,7 @@ above.
 198. Any reviewed PRD or plan byte change and any reviewed PR head-SHA change
     MUST invalidate the applicable pass. A bounded re-review MAY run when budget
     remains; otherwise human adjudication MUST be required.
-199. `block` MUST conservatively stop Fluent progression but remain an untrusted
+199. `block` MUST conservatively stop Snowcat progression but remain an untrusted
     semantic claim. `pass` MUST satisfy only the adversarial gate and MUST NOT
     prove correctness, approve core or GitHub artifacts, accept risk, or replace
     maintainer review.
@@ -1022,7 +1022,7 @@ above.
 206. Within effective authority, an implementer MAY modify its client-owned
     worktree, run validation, commit, push one non-protected branch, and open or
     update one PR targeting the normal base branch. The PR MUST carry safe
-    Fluent correlation and cite initiative, plan, and slice.
+    Snowcat correlation and cite initiative, plan, and slice.
 207. One slice MUST have one PR lineage and at most one open PR by default.
     Corrective pushes MUST update that PR; a replacement MUST require attributed
     reconciliation of the prior artifact.
@@ -1030,7 +1030,7 @@ above.
     limitations, and drift or follow-up proposals. It MUST NOT establish
     artifact existence, CI success, review pass, maintainer acceptance, merge,
     or outcome verification.
-209. Fluent MUST store dependency eligibility, attempts and repair budget,
+209. Snowcat MUST store dependency eligibility, attempts and repair budget,
     artifact reconciliation, CI, adversarial review, maintainer review, merge or
     closure, and outcome verification as separate facts. A derived delivery
     stage MUST NOT replace them.
@@ -1091,7 +1091,7 @@ above.
     embedded schema. The profile plus parameters MUST be the v1 decision rule;
     scripts, generic expressions, and parallel prose rules MUST be rejected.
     Automation MUST be preferred only when it measures the actual requirement;
-    Fluent MUST NOT substitute a convenient proxy for a semantic outcome.
+    Snowcat MUST NOT substitute a convenient proxy for a semantic outcome.
 222. A `deterministic` criterion MUST use a versioned evaluator over trusted
     repository, CI, artifact, or system facts and retain reproducible inputs,
     evaluator version, and result.
@@ -1107,7 +1107,7 @@ above.
     an untrusted claim. Only a deterministic evaluator, completed observational
     rule over trusted facts, or authorized human attestation MAY advance an
     authoritative criterion state.
-226. Fluent MUST retain state and evidence for every criterion. A slice MUST
+226. Snowcat MUST retain state and evidence for every criterion. A slice MUST
     reach `outcome-verified` only when all required criteria are satisfied for
     the declared subject and no hold or invalidation applies; a derived slice
     status MUST NOT replace the underlying facts.
@@ -1116,7 +1116,7 @@ above.
     be retained. Missing or materially confounded evidence MUST produce
     `unable`, not a fabricated pass or fail.
 228. Failed or unable verification MUST NOT mutate the approved slice, erase
-    its merge, or authorize repair. Fluent MAY create bounded proposed repair,
+    its merge, or authorize repair. Snowcat MAY create bounded proposed repair,
     rollback, investigation, or plan-amendment work carrying the exact failed
     criteria and evidence; normal admission and plan approval MUST still apply.
 229. The FleetController MUST distinguish `implementation-complete` when every
@@ -1137,13 +1137,13 @@ above.
     NOT silently weaken, replace, or omit a PRD measure; unmeasurable required
     outcomes MUST block planning pending resolution.
 232. Every derived initiative state MUST expose its exact plan, slices,
-    criteria, measures, evidence, and source revisions. Fluent MUST NOT infer
+    criteria, measures, evidence, and source revisions. Snowcat MUST NOT infer
     business success from PR count, merge count, CI status, issue closure,
     worker confidence, or elapsed time.
 
 ### Worker grants and deterministic routing
 
-233. Fluent MUST route work through a short-lived immutable `worker grant`
+233. Snowcat MUST route work through a short-lived immutable `worker grant`
     stored in durable operational state and bound to one authenticated
     principal and server-assigned worker session. A grant MUST NOT be a provider
     credential, core organization record, reusable persona, or worker-authored
@@ -1169,11 +1169,11 @@ above.
     information-access class, and independence constraints. Admission or an
     authorized deterministic controller MUST fix these fields; workers MUST NOT
     select or weaken them.
-239. Capability names MUST use one versioned Fluent vocabulary. In v1, an
+239. Capability names MUST use one versioned Snowcat vocabulary. In v1, an
     authorized operator MUST assign capability profiles. Provider, model,
     client, tool, environment, self-description, and work history MUST remain
     metadata and MUST NOT automatically add or broaden a capability or grant.
-240. Before listing a brief or granting a claim, Fluent MUST verify the current
+240. Before listing a brief or granting a claim, Snowcat MUST verify the current
     session-bound grant; explicit enrolled repository; required role and every
     capability; risk, action, and information ceilings; current policy and
     holds; independence and dependency rules; admission; and work-specific
@@ -1203,7 +1203,7 @@ above.
 
 ### Process observation and improvement
 
-247. Each Fluent deployment MUST have one logical `ProcessObserver` implemented
+247. Each Snowcat deployment MUST have one logical `ProcessObserver` implemented
     as deterministic code plus durable state. It MUST observe but not replace
     RepositoryController, FleetController, queue, review, verification, and
     routing source facts, and MUST NOT be a model, worker, prompt, or free-form
@@ -1270,7 +1270,7 @@ above.
     thresholds, guardrails, or recovery rules, and an analyst MUST NOT review
     or approve its own change. A profile revision MUST start a new comparison
     lineage without rewriting prior calculations.
-261. Fluent MUST allow at most one active andon and one active improvement
+261. Snowcat MUST allow at most one active andon and one active improvement
     lineage per signal fingerprint, subject version, and scope. Repeated events
     MUST update that lineage; a closed no-change investigation MUST enter a
     declared cooldown until material evidence or governing versions change.
@@ -1285,14 +1285,14 @@ above.
     by RepositoryControllers and FleetController. It MUST NOT be a model,
     specialist worker, persistent agent, or independent source of product
     intent.
-264. Fluent MUST retain source authorization and current eligibility facts,
+264. Snowcat MUST retain source authorization and current eligibility facts,
     bounded ready candidate projection, work-attempt fact, and active lease
     operational state separately. `authorized` MUST mean a recognized source
     permits work to exist; `eligible` that current gates pass; `ready` that one
     projection generation selected it for claim consideration; and `claimed`
     only a display summary of the attempt and active lease. A display status or
     ready row MUST NOT replace those records or authorize claim.
-265. Fluent MUST NOT preassign a separate `scheduled` state to an external
+265. Snowcat MUST NOT preassign a separate `scheduled` state to an external
     process. Selection and lease creation MUST be one atomic claim; a ready item
     MUST remain available to any compatible grant until claimed, held,
     invalidated, or withdrawn.
@@ -1303,7 +1303,7 @@ above.
     their accepted contracts permit.
 267. An empty authorized or eligible inventory MUST be valid. A ready target,
     idle client, active grant, organizational goal, or model suggestion MUST
-    NOT authorize Fluent to invent work.
+    NOT authorize Snowcat to invent work.
 268. Versioned scheduling policy MUST independently limit total ready and
     claimed inventory, active lineages per repository, ready and active work per
     program or role, parallel initiative slices, open implementation PRs
@@ -1341,7 +1341,7 @@ above.
 276. Continuous consumption MUST be an explicit operator-started client mode
     that claims and resolves one item at a time. Grant expiry or revocation, an
     andon, budget exhaustion, or no eligible work MUST end normal consumption.
-    A wait or event stream MAY reduce polling but MUST NOT make Fluent manage
+    A wait or event stream MAY reduce polling but MUST NOT make Snowcat manage
     the client process.
 277. Authorized or eligible work without a compatible active grant MUST produce
     a capacity gap naming missing repository scope, role, capability, risk
@@ -1359,7 +1359,7 @@ above.
     adapter.
 280. Durable organization scheduling constraints, weights, and cadence bounds
     MUST be canonical core policy. Runtime pins, holds, drains, and capacity
-    reductions MUST be attributed Fluent operational state; pins, drains, and
+    reductions MUST be attributed Snowcat operational state; pins, drains, and
     capacity reductions MUST expire, while holds MUST persist until their
     accepted recovery or clearing rule succeeds. Runtime state MUST NOT relax a
     core maximum or prohibition.
@@ -1387,7 +1387,7 @@ above.
     NOT add a choice or action, change scope, waive an undeclared constraint, or
     become instructions to a worker.
 286. Submission MUST repeat the exact subject and authority versions shown to
-    the principal. Fluent MUST transactionally recheck identity, role, subject,
+    the principal. Snowcat MUST transactionally recheck identity, role, subject,
     evidence, policy, holds, state, and invalidators; changed binding facts MUST
     reject the choice as `stale` and MUST NOT transfer it to refreshed facts.
 287. Decision state MUST distinguish at least `pending`, `resolved`, `expired`,
@@ -1407,15 +1407,15 @@ above.
 290. Each decision type MUST retain its own authority, choices, effects, and
     invalidation rules. Presence in OperatorInbox MUST NOT imply that the
     current principal can take every displayed action.
-291. Core-owned organization decisions MUST remain Git decisions. Fluent MAY
+291. Core-owned organization decisions MUST remain Git decisions. Snowcat MAY
     dismiss, request a bounded PR proposal, or link a core PR, but MUST remain
     `waiting-external` until independently observing the authorized merge in a
     valid core snapshot. Local approval MUST NOT mutate core-owned records or
     lifecycles.
 292. Repository-owned decisions MUST remain canonical repository or GitHub
-    acts. Fluent MUST independently observe maintainer review, repository PRs,
+    acts. Snowcat MUST independently observe maintainer review, repository PRs,
     merge, and artifact state; an inbox choice MUST NOT forge those acts or
-    authorize Fluent to merge, release, or deploy.
+    authorize Snowcat to merge, release, or deploy.
 293. Restricted security decisions MUST use their private access and disclosure
     path. Unauthorized principals MUST NOT see existence or metadata when it
     would leak sensitive information, and v1 batch decisions MUST exclude
@@ -1431,7 +1431,7 @@ above.
     but presentation state MUST NOT carry authority.
 296. Every rendered decision MUST identify whether resolution is local,
     requires a core PR, requires a repository or GitHub act, or requires the
-    private security path. Fluent MUST present the consequences and remaining
+    private security path. Snowcat MUST present the consequences and remaining
     obligations of every offered choice before submission.
 297. Pending decisions MUST NOT default to approval. Expiry MUST apply the
     decision contract's fail-closed result, normally retaining the hold or
@@ -1444,7 +1444,7 @@ above.
 
 ### Canonical domain language
 
-299. Fluent MUST maintain one canonical human-reviewed ubiquitous language at
+299. Snowcat MUST maintain one canonical human-reviewed ubiquitous language at
     `docs/domain/ubiquitous-language.md`, with root `CONTEXT.md` as a
     compatibility symlink rather than a second editable source.
 300. A canonical term MUST have a lean one- or two-sentence definition, rejected
@@ -1474,13 +1474,13 @@ above.
     declaration MAY enable for an opted-in repository. It MUST NOT be deferred
     to an unspecified future product version or enabled implicitly by ACMM
     level, repository maturity, an existing issue, a PRD, or a model.
-306. Fluent MUST accept a human-authorized PRD at an exact source revision and
+306. Snowcat MUST accept a human-authorized PRD at an exact source revision and
     coordinate its decomposition into bounded, ordered implementation work. A
     PRD or planning-model output MUST NOT directly create claimable work before
     the versioned plan and approval contract is defined and satisfied.
 307. Approved feature work MUST remain within effective repository policy and
     the v1 action ceiling: capable workers MAY open the ordered pull requests,
-    but Fluent MUST NOT authorize merge, release, or deployment. Scope or plan
+    but Snowcat MUST NOT authorize merge, release, or deployment. Scope or plan
     amendments MUST NOT silently inherit prior approval.
 308. Discovery and implementation planning MUST define the detailed feature-
     delivery workflow after the RepositoryController and maintenance-agent
@@ -1490,16 +1490,16 @@ above.
 ### Authority, hosting, and product surface
 
 309. V1 action authority MUST stop at reading/writing code, running tests,
-    opening issues, opening pull requests, and creating follow-up work. Fluent
+    opening issues, opening pull requests, and creating follow-up work. Snowcat
     MUST NOT authorize merge, release, or deploy.
 310. The system MUST be fully self-hosted on the operator's server and initially
     support a single live operator. Initial spikes MUST run directly on the
     host. Incus, Podman, or Docker MAY host clients later, but that is an
-    operator deployment choice outside Fluent's process model.
+    operator deployment choice outside Snowcat's process model.
 311. The single-host control plane SHOULD use SQLite until measured operational
     needs justify a database server.
 312. Subscription credentials and short-lived provider tokens MUST NOT enter
-    Fluent's database, transcripts, logs, work items, or knowledge base.
+    Snowcat's database, transcripts, logs, work items, or knowledge base.
 313. Worker transport MUST support authentication before it is exposed beyond a
     local stdio boundary.
 314. Every user-facing surface MUST use the Frostyard design system after
@@ -1517,7 +1517,7 @@ above.
 
 ### Control-plane records and event ledger
 
-318. Fluent MUST use a fact-oriented relational control-plane store with a
+318. Snowcat MUST use a fact-oriented relational control-plane store with a
     separate append-only event ledger. Event replay MUST NOT be the sole source
     of current authority.
 319. Every durable subject MUST have a registered subject kind and stable
@@ -1551,7 +1551,7 @@ above.
     and typed payload. Invariant evaluation, accepted writes, and event
     insertion MUST be transactional, with optimistic concurrency and
     deterministic idempotent replay behavior.
-326. Fluent MAY mutate operational state in place only for current concurrency
+326. Snowcat MAY mutate operational state in place only for current concurrency
     and delivery mechanics such as leases, cursors, fairness credits, retry
     schedules, and WIP counters. The same transaction MUST record attributable
     history, and mutable operational state MUST NOT become retrospective
@@ -1578,7 +1578,7 @@ above.
     adapters or commands, and display-locator behavior. Unknown kinds, schemes,
     revisions, and malformed IDs MUST fail closed at ingestion and authority
     boundaries.
-332. New Fluent-native subjects MUST receive server-generated UUIDv7 identity.
+332. New Snowcat-native subjects MUST receive server-generated UUIDv7 identity.
     Definitions imported from authoritative sources and external observations
     MUST retain their valid source-native identity rather than being rewritten
     as UUIDv7.
@@ -1588,7 +1588,7 @@ above.
     objects use repository and algorithm-qualified object IDs; and core records
     use declared kind and ID qualified by immutable core repository identity.
 334. If an external source cannot provide stable identity sufficient for an
-    authority act, Fluent MUST retain the available observation but MUST NOT
+    authority act, Snowcat MUST retain the available observation but MUST NOT
     mint a substitute or pass the affected gate without an accepted
     reconciliation mechanism.
 335. Every durable record occurrence MUST have a record identity distinct from
@@ -1608,7 +1608,7 @@ above.
     deletion, supersession, or access loss MUST NOT free identity for reuse;
     apparent replacement or conflict MUST produce mismatch or hold for
     reconciliation rather than an in-place identity rewrite.
-339. Fluent MUST maintain a closed versioned predicate-contract registry as the
+339. Snowcat MUST maintain a closed versioned predicate-contract registry as the
     sole semantic owner of authoritative proposition families. No public,
     administrative, MCP, plugin, controller, worker, model, import, or migration
     surface MAY provide a generic fact-writing operation.
@@ -1713,7 +1713,7 @@ above.
     separation MUST NOT be claimed as a host boundary; a future requirement for
     separate host administrators or keys MUST receive a new architecture
     decision.
-362. Fluent MUST maintain a closed versioned projection-contract registry.
+362. Snowcat MUST maintain a closed versioned projection-contract registry.
     Projections MUST remain disposable read models for display, filtering,
     coordination, scheduling, search, and observation; they MUST NOT establish
     facts, grant access or actions, satisfy evidence, own operational state, or
@@ -1735,7 +1735,7 @@ above.
 366. Every full rebuild MUST create an immutable projection generation with
     identity, contract and transformation versions, evaluation and build time,
     source watermarks and digests, information-handling version, counts,
-    invariant results, and outcome. Fluent MUST validate a shadow generation
+    invariant results, and outcome. Snowcat MUST validate a shadow generation
     and atomically activate it without disturbing the prior generation on
     failure.
 367. Incremental projection maintenance MUST be semantically equivalent to full
@@ -1780,11 +1780,11 @@ above.
     monotonically increasing transaction sequence, and every record within it a
     deterministic transaction position. Their pair MUST be the canonical total
     order of accepted record occurrences across the control-plane store.
-376. Transaction order MUST mean only Fluent persistence order and MUST NOT
+376. Transaction order MUST mean only Snowcat persistence order and MUST NOT
     imply external occurrence, causality, supersession, or greater authority.
     Gaps MUST be valid, and backup restore and migration MUST prevent reuse of a
     sequence already visible in that database lineage.
-377. Fluent MUST distinguish server-assigned recorded time, source-domain
+377. Snowcat MUST distinguish server-assigned recorded time, source-domain
     effective time, server-assigned observation time, source occurrence time,
     and server-assigned command evaluation time. Persisted instants MUST use
     unambiguous UTC while retaining original source precision when needed for
@@ -1803,7 +1803,7 @@ above.
 381. External I/O and model work MUST NOT run while the writer transaction is
     held. A command exceeding its transaction-duration bound MUST abort rather
     than commit using stale evaluation time.
-382. Fluent MUST persist and monitor a control-time watermark. Material backward
+382. Snowcat MUST persist and monitor a control-time watermark. Material backward
     clock movement MUST fail closed for new or renewed time-sensitive authority;
     forward movement MAY expire authority early but MUST NOT extend it. Clock
     skew and recovery MUST produce visible operational evidence without editing
@@ -1841,7 +1841,7 @@ above.
 ## Non-goals
 
 - Automatically enrolling every repository in the GitHub organization.
-- Fluent-managed coding-agent processes, credentials, token refresh, or
+- Snowcat-managed coding-agent processes, credentials, token refresh, or
   sandboxes.
 - Requiring model inference for enrollment, queue operation, authorization, or
   provenance recording.
@@ -1851,7 +1851,7 @@ above.
   plan, plus all merge, release, or deployment in v1.
 - Self-modifying observation, review, validation, workflow, skill, criteria, or
   agent-role definitions outside their canonical review and approval paths.
-- A universal approval action or a Fluent-local substitute for required core,
+- A universal approval action or a Snowcat-local substitute for required core,
   repository, GitHub, or restricted-security decisions.
 - Treating one vendor's settings, instructions, skills, or credential format as
   the fleet-wide standard.
@@ -1870,7 +1870,7 @@ contract or code exists.
 
 | Area | Accepted direction | Primary decisions |
 | --- | --- | --- |
-| Coordination boundary | Fluent coordinates durable work but does not manage capable-agent processes, credentials, sandboxes, or provider sessions; model output stays outside deterministic authority | [ADR-0003](../adr/0003-separate-work-coordination-from-execution.md), [ADR-0004](../adr/0004-keep-models-outside-the-control-path.md) |
+| Coordination boundary | Snowcat coordinates durable work but does not manage capable-agent processes, credentials, sandboxes, or provider sessions; model output stays outside deterministic authority | [ADR-0003](../adr/0003-separate-work-coordination-from-execution.md), [ADR-0004](../adr/0004-keep-models-outside-the-control-path.md) |
 | Admission and lineage | Worker-created follow-ups begin as proposals, admission is database-enforced, and attempts and GitHub artifacts retain distinct verified lineage | [ADR-0005](../adr/0005-admit-worker-created-work-before-claiming.md), [ADR-0006](../adr/0006-enforce-admission-in-the-database.md), [ADR-0018](../adr/0018-bind-worker-sessions-and-verify-github-artifacts.md) |
 | Organization authority | `frostyard/core` owns canonical strict JSON organization records, enrollment, goals, policy, knowledge, versioned criteria, exceptions, relationships, initiatives, and immutable delivery-plan approval | [ADR-0007](../adr/0007-use-frostyard-core-as-the-organization-authority.md) through [ADR-0017](../adr/0017-standardize-actions-boundaries-and-risk.md), plus [ADR-0026](../adr/0026-coordinate-enrolled-repositories-with-fleetcontroller.md) through [ADR-0028](../adr/0028-approve-immutable-delivery-plans-in-core.md) |
 | Repository maintenance | Deterministic RepositoryControllers run bounded quality, CI, security, and architecture maintenance workflows against canonical repository surfaces | [ADR-0020](../adr/0020-call-the-repository-coordinator-repositorycontroller.md) through [ADR-0025](../adr/0025-ground-architecture-in-accepted-direction.md) |
@@ -1878,7 +1878,7 @@ contract or code exists.
 | Worker routing and capacity | Operator-issued grants route repository-dedicated and fleet-specialist sessions; bounded fair scheduling applies WIP limits and reports capacity gaps | [ADR-0032](../adr/0032-route-work-with-operator-issued-grants.md), [ADR-0034](../adr/0034-schedule-a-bounded-ready-inventory.md) |
 | Process improvement | Deterministic ProcessObserver uses mature versioned baselines, scoped andons, and governed analyst proposals without a self-modifying loop | [ADR-0033](../adr/0033-observe-processes-and-pull-scoped-andons.md) |
 | Human authority | Typed optimistic-concurrency decisions feed OperatorInbox while core, repository, GitHub, and restricted-security acts remain in their canonical authority systems | [ADR-0035](../adr/0035-route-human-authority-through-typed-decisions.md) |
-| Domain language | One canonical lean ubiquitous language distinguishes controllers, workers, work state, evidence, governance, delivery, intervention, and decisions for humans and capable workers | [ADR-0036](../adr/0036-maintain-a-canonical-domain-language.md), [Fluent ubiquitous language](../domain/ubiquitous-language.md) |
+| Domain language | One canonical lean ubiquitous language distinguishes controllers, workers, work state, evidence, governance, delivery, intervention, and decisions for humans and capable workers | [ADR-0036](../adr/0036-maintain-a-canonical-domain-language.md), [Snowcat ubiquitous language](../domain/ubiquitous-language.md) |
 | Control-plane persistence | Typed authoritative records and current operational state answer authority; a separate event ledger supports audit and ProcessObserver without full event sourcing | [ADR-0037](../adr/0037-store-facts-with-a-separate-event-ledger.md) |
 | Lifecycle and runtime intervention | Core owns pause lifecycle; typed runtime holds block named gates and drains stop new claims while permitting in-flight reporting | [ADR-0038](../adr/0038-separate-lifecycle-pause-from-runtime-interventions.md) |
 | Subject identity | Typed source-native subject identity remains separate from server-generated record identity, mutable display locators, and kind-specific revision bindings | [ADR-0039](../adr/0039-use-typed-source-native-subject-identities.md) |
@@ -1900,7 +1900,7 @@ The code retains the host-local queue vertical slice described by the
 - deterministic opt-in, testing-gap and dogfood seeds, proposal approval,
   deferral, rejection, blocked-work requeue, and cancellation through the CLI;
 - stdio MCP listing, claim, heartbeat, completion, block, and release;
-- the portable `work-fluent-queue` skill;
+- the portable `work-snowcat-queue` skill;
 - artifact URL scope validation while worker evidence remains unverified;
 - optional local-model queue-clerk compatibility outside the control path; and
 - tests for current admission, lease, lineage, concurrency, and MCP boundaries.
@@ -2059,7 +2059,7 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   UX, target-owner review rules, and old-plan reconciliation transitions finish
   the approved delivery-plan contract?
 - Beyond the implemented `conclusive-run-rate:v1` evaluator, which initial
-  verification profiles and closed Fluent mechanism versions ship for
+  verification profiles and closed Snowcat mechanism versions ship for
   delivery, which named roles satisfy attestation policies, and what evidence
   retention, expiry, and confounding rules apply to each profile?
 - What exact registered record schemas, command outputs, pagination proof, and
@@ -2224,7 +2224,7 @@ elapsed source freshness from the stricter new-admission gate. Its durable
   with authenticated webhook ingress and polling reconciliation required by
   [ADR-0057](../adr/0057-require-webhook-ingress-for-github-observation.md),
   and the
-  [Fluent ubiquitous language](../domain/ubiquitous-language.md)
+  [Snowcat ubiquitous language](../domain/ubiquitous-language.md)
 - Designs: [queue execution boundary](../design/queue-execution-boundary.md),
   [control-plane kernel](../design/control-plane-kernel.md), and
   [core snapshot ingestion](../design/core-snapshot-ingestion.md), plus

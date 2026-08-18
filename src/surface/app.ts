@@ -36,14 +36,14 @@ import { clearedSessionCookie, hasValidSession, sessionCookie, tokenMatches } fr
 
 export interface SurfaceStores {
   queue: QueueStore;
-  /** `FLUENT_CONTROL_DB` when configured; the sidebar then shows enrollment states. */
+  /** `SNOWCAT_CONTROL_DB` when configured; the sidebar then shows enrollment states. */
   controlPlanePath?: string;
-  /** GitHub fetcher/clock for re-verification; production uses the defaults (and `FLUENT_GITHUB_TOKEN`). */
+  /** GitHub fetcher/clock for re-verification; production uses the defaults (and `SNOWCAT_GITHUB_TOKEN`). */
   verifier?: ArtifactVerifierOptions;
 }
 
 export interface SurfaceOptions {
-  /** `FLUENT_APP_TOKEN`; when absent every surface route answers 503, like `/agents/*`. */
+  /** `SNOWCAT_APP_TOKEN`; when absent every surface route answers 503, like `/agents/*`. */
   appToken?: string;
   /**
    * Opens (or returns the already-open) stores. Called per request after the
@@ -57,7 +57,7 @@ export interface SurfaceOptions {
 
 /**
  * The read-first operator surface (ADR-0060): a cookie session over
- * `FLUENT_APP_TOKEN`, then server-rendered pages over the same `QueueStore`
+ * `SNOWCAT_APP_TOKEN`, then server-rendered pages over the same `QueueStore`
  * methods the CLI uses. No route mutates the queue in this slice.
  */
 export function createSurfaceApp(options: SurfaceOptions): Hono {
@@ -68,7 +68,7 @@ export function createSurfaceApp(options: SurfaceOptions): Hono {
   // `/` never shadows `/health` or an unmatched `/agents/*` path.
   const requireConfigured: MiddlewareHandler = async (context, next) => {
     if (!options.appToken) {
-      return context.html(unavailablePage("FLUENT_APP_TOKEN is not configured on this host, so the operator surface is disabled."), 503);
+      return context.html(unavailablePage("SNOWCAT_APP_TOKEN is not configured on this host, so the operator surface is disabled."), 503);
     }
     await next();
   };
@@ -105,7 +105,7 @@ export function createSurfaceApp(options: SurfaceOptions): Hono {
     const body = await context.req.parseBody();
     const submitted = typeof body.token === "string" ? body.token : "";
     if (!tokenMatches(submitted, options.appToken!)) {
-      return context.html(loginPage({ error: "That token does not match FLUENT_APP_TOKEN." }), 401);
+      return context.html(loginPage({ error: "That token does not match SNOWCAT_APP_TOKEN." }), 401);
     }
     context.header("Set-Cookie", sessionCookie(options.appToken!, isSecure(context.req.url)));
     return context.redirect("/", 303);

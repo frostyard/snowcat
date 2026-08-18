@@ -10,7 +10,7 @@ import { PreconditionMismatchError, QueueStore, SCHEMA_VERSION } from "../src/qu
 import type { FollowUpInput } from "../src/queue/types.ts";
 
 test("seed work requires an opted-in repository and preserves child lineage", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-queue-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-queue-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
 
@@ -64,7 +64,7 @@ test("seed work requires an opted-in repository and preserves child lineage", as
 });
 
 test("expired leases can be reclaimed without accepting the old token", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-lease-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-lease-test-"));
   let now = new Date("2026-08-14T12:00:00.000Z");
   const queue = new QueueStore(join(directory, "queue.db"), () => now);
   test.after(() => queue.close());
@@ -103,7 +103,7 @@ test("expired leases can be reclaimed without accepting the old token", async ()
 });
 
 test("released work clears its lease, invalidates the old token, and can be reclaimed", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-release-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-release-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/chairlift", true);
@@ -146,7 +146,7 @@ test("released work clears its lease, invalidates the old token, and can be recl
 });
 
 test("a worker cannot grant follow-up actions above the delegation ceiling", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-ceiling-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-ceiling-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/core", true);
@@ -187,7 +187,7 @@ test("a worker cannot grant follow-up actions above the delegation ceiling", asy
 });
 
 test("completion artifacts are rejected when the matching action is not allowed", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-artifact-deny-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-artifact-deny-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/lodge", true);
@@ -254,7 +254,7 @@ test("completion artifacts are rejected when the matching action is not allowed"
 });
 
 test("completion stores a pull-request artifact when open-pr is allowed", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-artifact-allow-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-artifact-allow-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/lodge", true);
@@ -291,7 +291,7 @@ test("completion stores a pull-request artifact when open-pr is allowed", async 
 });
 
 test("GitHub artifact claims must match the work repository and declared kind", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-artifact-scope-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-artifact-scope-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/lodge", true);
@@ -365,7 +365,7 @@ test("GitHub artifact claims must match the work repository and declared kind", 
 });
 
 test("artifact URLs reject credentials before provenance is stored", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-artifact-credentials-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-artifact-credentials-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/lodge", true);
@@ -401,7 +401,7 @@ test("artifact URLs reject credentials before provenance is stored", async () =>
 });
 
 test("rejected proposals remain auditable and cannot be claimed", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-rejection-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-rejection-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/core", true);
@@ -436,7 +436,7 @@ test("rejected proposals remain auditable and cannot be claimed", async () => {
 });
 
 test("an operator can defer admitted work and later approve it again", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-defer-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-defer-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/core", true);
@@ -475,7 +475,7 @@ test("an operator can defer admitted work and later approve it again", async () 
 });
 
 test("follow-up count and lineage depth are hard bounded", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-runaway-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-runaway-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/core", true);
@@ -551,7 +551,7 @@ test("follow-up count and lineage depth are hard bounded", async () => {
 });
 
 test("the database itself refuses to claim or create claimable proposals through legacy SQL", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-admission-trigger-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-admission-trigger-test-"));
   const path = join(directory, "queue.db");
   const queue = new QueueStore(path);
   const legacy = new DatabaseSync(path);
@@ -648,7 +648,7 @@ test("the database itself refuses to claim or create claimable proposals through
 });
 
 test("a queue store refuses databases newer than its schema version, even after opening", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-schema-version-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-schema-version-test-"));
   const path = join(directory, "queue.db");
   const queue = new QueueStore(path);
   const other = new DatabaseSync(path);
@@ -680,7 +680,7 @@ test("a queue store refuses databases newer than its schema version, even after 
 });
 
 test("two stores on one database file both write, and a writer waits out another connection's lock", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-busy-timeout-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-busy-timeout-test-"));
   const path = join(directory, "queue.db");
   const first = new QueueStore(path);
   const second = new QueueStore(path);
@@ -726,7 +726,7 @@ test("two stores on one database file both write, and a writer waits out another
 });
 
 test("queue startup installs its busy timeout before journal-mode negotiation", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-startup-timeout-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-startup-timeout-test-"));
   const path = join(directory, "queue.db");
   const bootstrap = new DatabaseSync(path);
   bootstrap.exec("CREATE TABLE bootstrap_marker (value INTEGER NOT NULL)");
@@ -761,7 +761,7 @@ test("queue startup installs its busy timeout before journal-mode negotiation", 
 });
 
 test("scheduling priority is operator-owned: workers cannot set it and children inherit it", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-priority-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-priority-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/core", true);
@@ -837,7 +837,7 @@ test("scheduling priority is operator-owned: workers cannot set it and children 
 });
 
 test("blocking stores the reason as the item's result and clears the lease", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-block-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-block-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/core", true);
@@ -866,7 +866,7 @@ test("blocking stores the reason as the item's result and clears the lease", asy
 });
 
 test("an operator can requeue blocked work and a different worker can claim it", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-requeue-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-requeue-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/core", true);
@@ -923,7 +923,7 @@ test("an operator can requeue blocked work and a different worker can claim it",
 });
 
 test("an operator can prioritize proposed, queued, or blocked work, and only an operator can", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-prioritize-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-prioritize-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/updex", true);
@@ -1003,7 +1003,7 @@ test("an operator can prioritize proposed, queued, or blocked work, and only an 
 });
 
 test("an operator note appends to the item without changing its status, and workers cannot write one", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-note-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-note-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/core", true);
@@ -1048,7 +1048,7 @@ test("an operator note appends to the item without changing its status, and work
 });
 
 test("cancelling the final blocked descendant makes its specialty inactive", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-cancel-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cancel-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/core", true);
@@ -1089,7 +1089,7 @@ test("cancelling the final blocked descendant makes its specialty inactive", asy
 });
 
 test("opening an up-to-date database performs no schema writes, and unversioned databases migrate once", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-migration-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-migration-test-"));
   const path = join(directory, "queue.db");
   const first = new QueueStore(path);
   const raw = new DatabaseSync(path);
@@ -1129,7 +1129,7 @@ test("opening an up-to-date database performs no schema writes, and unversioned 
 });
 
 test("worker identities cannot use reserved principal namespaces", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-principal-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-principal-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/updex", true);
@@ -1171,7 +1171,7 @@ test("worker identities cannot use reserved principal namespaces", async () => {
   assert.equal(queue.get(seed.id)?.leaseOwner, "codex:updex:one");
   assert.equal(queue.list({ repository: "frostyard/updex" }).length, 1);
 
-  // Fluent's own principals still write their reserved names.
+  // Snowcat's own principals still write their reserved names.
   const completion = queue.complete(attempt("codex:updex:one"));
   const approved = queue.approve(completion.followUps[0]!.id, "operator:cli");
   assert.equal(approved.status, "queued");
@@ -1186,7 +1186,7 @@ test("worker identities cannot use reserved principal namespaces", async () => {
 });
 
 test("operator mutations honor a status/updatedAt precondition and refuse stale intent without changing anything", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-precondition-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-precondition-test-"));
   let now = new Date("2026-08-18T00:00:00.000Z");
   const tick = () => {
     now = new Date(now.getTime() + 1000);
@@ -1313,7 +1313,7 @@ test("operator mutations honor a status/updatedAt precondition and refuse stale 
 });
 
 test("approve, reject, and cancel accept only operator or policy actors and change nothing for anyone else", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-admission-actor-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-admission-actor-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/core", true);
@@ -1381,7 +1381,7 @@ function seedTestingGap(queue: QueueStore, repository: string) {
 }
 
 test("eventsSince reads the ledger across items in global order with joined item fields and no lease token", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-events-since-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-events-since-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   for (const repository of ["frostyard/updex", "frostyard/lodge"]) queue.setRepositoryEnabled(repository, true);
@@ -1471,13 +1471,13 @@ test("eventsSince reads the ledger across items in global order with joined item
 });
 
 test("rename-repository carries the opt-in and every item to the new slug and leaves history alone", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-rename-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-rename-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
-  queue.setRepositoryEnabled("frostyard/fluent", true);
-  queue.setRepositoryCureForeign("frostyard/fluent", true);
+  queue.setRepositoryEnabled("frostyard/before", true);
+  queue.setRepositoryCureForeign("frostyard/before", true);
   const root = queue.enqueueSeed({
-    repository: "frostyard/fluent",
+    repository: "frostyard/before",
     kind: "quality-gap-discovery",
     objective: "Find one gap.",
     instructions: "Read only.",
@@ -1486,9 +1486,9 @@ test("rename-repository carries the opt-in and every item to the new slug and le
     delegableActions: [],
     createdBy: "operator:test",
   });
-  const imported = queue.enqueueProposedRoots("frostyard/fluent", [
+  const imported = queue.enqueueProposedRoots("frostyard/before", [
     {
-      sourceRef: "https://github.com/frostyard/fluent/issues/7",
+      sourceRef: "https://github.com/frostyard/before/issues/7",
       kind: "issue-resolution",
       objective: "Resolve #7",
       instructions: "Do it.",
@@ -1498,19 +1498,20 @@ test("rename-repository carries the opt-in and every item to the new slug and le
       createdBy: "operator:test",
     },
   ]);
-  assert.throws(() => queue.renameRepository("frostyard/fluent", "frostyard/fluent", "operator:test"), /different slug/);
-  assert.throws(() => queue.renameRepository("frostyard/nope", "frostyard/snowcat", "operator:test"), /not known/);
-  assert.throws(() => queue.renameRepository("frostyard/fluent", "frostyard/snowcat", "claude:worker"), /operator: or policy:/);
-  const renamed = queue.renameRepository("frostyard/fluent", "frostyard/snowcat", "operator:test");
-  assert.deepEqual(renamed, { from: "frostyard/fluent", to: "frostyard/snowcat", items: 2 });
-  assert.deepEqual(queue.enabledRepositories(), ["frostyard/snowcat"]);
-  assert.deepEqual(queue.repositoryCureSettings(), [{ repository: "frostyard/snowcat", cureForeign: true }]);
-  assert.equal(queue.get(root.id)?.repository, "frostyard/snowcat");
-  assert.equal(queue.get(imported.created[0]!.id)?.sourceRef, "https://github.com/frostyard/fluent/issues/7", "history keeps the recorded string");
-  assert.equal(queue.list({ repository: "frostyard/fluent" }).length, 0);
-  assert.equal(queue.list({ repository: "frostyard/snowcat" }).length, 2);
-  assert.throws(() => queue.renameRepository("frostyard/snowcat", "frostyard/snowcat2", "operator:test") && queue.renameRepository("frostyard/snowcat2", "frostyard/snowcat2", "operator:test"), /different slug/);
+  assert.throws(() => queue.renameRepository("frostyard/before", "frostyard/before", "operator:test"), /different slug/);
+  assert.throws(() => queue.renameRepository("frostyard/nope", "frostyard/after", "operator:test"), /not known/);
+  assert.throws(() => queue.renameRepository("frostyard/before", "frostyard/after", "claude:worker"), /operator: or policy:/);
+  const renamed = queue.renameRepository("frostyard/before", "frostyard/after", "operator:test");
+  assert.deepEqual(renamed, { from: "frostyard/before", to: "frostyard/after", items: 2 });
+  assert.deepEqual(queue.enabledRepositories(), ["frostyard/after"]);
+  assert.deepEqual(queue.repositoryCureSettings(), [{ repository: "frostyard/after", cureForeign: true }]);
+  assert.equal(queue.get(root.id)?.repository, "frostyard/after");
+  assert.equal(queue.get(imported.created[0]!.id)?.sourceRef, "https://github.com/frostyard/before/issues/7", "history keeps the recorded string");
+  assert.equal(queue.list({ repository: "frostyard/before" }).length, 0);
+  assert.equal(queue.list({ repository: "frostyard/after" }).length, 2);
+  assert.throws(() => queue.renameRepository("frostyard/after", "frostyard/after", "operator:test"), /different slug/);
+  queue.renameRepository("frostyard/after", "frostyard/after2", "operator:test");
   // Claiming under the new slug works; the old slug is gone.
-  assert.equal(queue.claim({ worker: "claude:rename-test", repository: "frostyard/snowcat2" })?.id, root.id);
+  assert.equal(queue.claim({ worker: "claude:rename-test", repository: "frostyard/after2" })?.id, root.id);
 });
 

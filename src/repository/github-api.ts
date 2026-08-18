@@ -27,7 +27,7 @@ export async function githubApiJson(
  * size cap, and redirect handling as `githubApiJson`. The `value` of a
  * `response` is GitHub's raw envelope (`{ data, errors }`); callers decide
  * what a partial answer means. GitHub's GraphQL endpoint requires a token:
- * without `FLUENT_GITHUB_TOKEN` it answers 401, a `response`, not a throw.
+ * without `SNOWCAT_GITHUB_TOKEN` it answers 401, a `response`, not a throw.
  */
 export async function githubGraphql(
   query: string,
@@ -55,7 +55,7 @@ async function githubJson(
     "X-GitHub-Api-Version": GITHUB_API_VERSION,
   };
   if (options.contentType) headers["Content-Type"] = options.contentType;
-  const token = process.env.FLUENT_GITHUB_TOKEN;
+  const token = process.env.SNOWCAT_GITHUB_TOKEN;
   if (token) headers.Authorization = `Bearer ${token}`;
   const request = (url: string) =>
     fetcher(url, { method: options.method, headers, redirect: "manual", signal, ...(options.body === undefined ? {} : { body: options.body }) });

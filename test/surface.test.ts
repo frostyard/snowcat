@@ -19,7 +19,7 @@ const TOKEN = "surface-test-token";
  * item whose lease token must never appear in a page.
  */
 async function seededQueue() {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-surface-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-surface-test-"));
   const path = join(directory, "queue.db");
   const queue = new QueueStore(path);
   queue.setRepositoryEnabled("frostyard/example", true);
@@ -91,7 +91,7 @@ async function seededQueue() {
         {
           kind: "pull-request",
           url: "https://github.com/frostyard/example/pull/5",
-          verification: { status: "unverified", attemptedAt: "2026-08-17T20:36:00.000Z", reason: "GitHub returned 404 without FLUENT_GITHUB_TOKEN" },
+          verification: { status: "unverified", attemptedAt: "2026-08-17T20:36:00.000Z", reason: "GitHub returned 404 without SNOWCAT_GITHUB_TOKEN" },
         },
       ],
     },
@@ -132,7 +132,7 @@ test("the operator surface requires a session, sets the cookie on the right toke
   const wrong = await app.request("/login", { method: "POST", body: new URLSearchParams({ token: "nope" }) });
   assert.equal(wrong.status, 401);
   assert.equal(wrong.headers.get("Set-Cookie"), null);
-  assert.match(await wrong.text(), /does not match FLUENT_APP_TOKEN/);
+  assert.match(await wrong.text(), /does not match SNOWCAT_APP_TOKEN/);
 
   // Right token: HttpOnly SameSite=Strict cookie carrying the HMAC digest, not the token.
   const right = await app.request("/login", { method: "POST", body: new URLSearchParams({ token: TOKEN }) });
@@ -158,7 +158,7 @@ test("the operator surface requires a session, sets the cookie on the right toke
   assert.match(body, /<script>\(function \(\) \{\s*var cfg = \{"page":"\/","partials":\["stats","proposals","blocked","unverified"\],"repository":null,"refresh":30\};/);
   assert.equal(/<script[^>]*src=/.test(body), false); // nothing loaded from elsewhere
   assert.match(body, /<aside class="ph-sidebar">/);
-  assert.match(body, /class="ph-eyebrow"><i><\/i>fluent · operator inbox<\/div><h1>Needs you<\/h1>/);
+  assert.match(body, /class="ph-eyebrow"><i><\/i>snowcat · operator inbox<\/div><h1>Needs you<\/h1>/);
   assert.match(body, /<div class="ph-stats" id="stats">/);
   assert.match(body, /<span>Proposals<\/span><strong>1<\/strong>/);
   assert.match(body, /<span>Blocked<\/span><strong>1<\/strong>/);
@@ -189,7 +189,7 @@ test("the operator surface requires a session, sets the cookie on the right toke
   assert.match(unverified, /<h2>Unverified artifacts<\/h2>/);
   assert.match(unverified, /Resolve frostyard\/example#2: <span>events --since and watch<\/span>/);
   assert.match(unverified, /<span class="ph-version">PR #5<\/span>/);
-  assert.match(unverified, /GitHub returned 404 without FLUENT_GITHUB_TOKEN/);
+  assert.match(unverified, /GitHub returned 404 without SNOWCAT_GITHUB_TOKEN/);
 
   // Events rail: newest first, with the "since <sequence>" caption.
   const events = section(body, "events");
@@ -228,7 +228,7 @@ test("the operator surface requires a session, sets the cookie on the right toke
   assert.equal(agents.status, 401);
 });
 
-test("the sidebar lists control-plane repositories with their effective states when FLUENT_CONTROL_DB is configured", async () => {
+test("the sidebar lists control-plane repositories with their effective states when SNOWCAT_CONTROL_DB is configured", async () => {
   const seeded = await seededQueue();
   test.after(() => seeded.queue.close());
   const controlPlanePath = join(seeded.directory, "control-plane.db");
@@ -248,7 +248,7 @@ test("the sidebar lists control-plane repositories with their effective states w
   assert.equal(body.includes(seeded.leaseToken), false);
 });
 
-test("with FLUENT_APP_TOKEN unset every surface route returns 503 and never opens the store", async () => {
+test("with SNOWCAT_APP_TOKEN unset every surface route returns 503 and never opens the store", async () => {
   let opened = 0;
   const app = createApp({
     appToken: undefined,
@@ -265,7 +265,7 @@ test("with FLUENT_APP_TOKEN unset every surface route returns 503 and never open
   ] as Array<[string, RequestInit | undefined]>) {
     const response = await app.request(path, init);
     assert.equal(response.status, 503, path);
-    assert.match(await response.text(), /FLUENT_APP_TOKEN is not configured/);
+    assert.match(await response.text(), /SNOWCAT_APP_TOKEN is not configured/);
   }
   assert.equal(opened, 0);
 });
@@ -299,7 +299,7 @@ function escapeRegExp(value: string): string {
 }
 
 test("the repository board shows queued, leased, and completed columns with the control-plane enrollment badge; the index lists counts", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-surface-board-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-surface-board-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/example", true);
@@ -404,7 +404,7 @@ test("the repository board shows queued, leased, and completed columns with the 
 });
 
 test("the item page renders the definition, artifacts with verification, operator notes, previous results, and the event timeline for a requeued-then-completed item", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-surface-item-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-surface-item-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/updex", true);
@@ -927,7 +927,7 @@ test("?partial= returns one inbox group or one board column as a fragment, and r
 
 test("board actions import labeled issues, seed dogfood, verify artifacts, and impose/clear the operator hold as operator:web behind the session", async () => {
   const { controlPlaneClaimEligibility } = await import("../src/queue/eligibility.ts");
-  const directory = await mkdtemp(join(tmpdir(), "fluent-surface-actions-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-surface-actions-test-"));
   const controlPlanePath = join(directory, "control-plane.db");
   const control = new ControlPlaneStore(controlPlanePath);
   await enrollExampleRepository(control);
@@ -939,8 +939,8 @@ test("board actions import labeled issues, seed dogfood, verify artifacts, and i
 
   const github: Record<string, unknown> = {
     "/repos/frostyard/example/issues": [
-      { number: 1, title: "First labeled issue", body: "Body one.", html_url: "https://github.com/frostyard/example/issues/1", state: "open", labels: [{ name: "fluent" }] },
-      { number: 2, title: "Second labeled issue", body: "", html_url: "https://github.com/frostyard/example/issues/2", state: "open", labels: [{ name: "fluent" }] },
+      { number: 1, title: "First labeled issue", body: "Body one.", html_url: "https://github.com/frostyard/example/issues/1", state: "open", labels: [{ name: "snowcat" }] },
+      { number: 2, title: "Second labeled issue", body: "", html_url: "https://github.com/frostyard/example/issues/2", state: "open", labels: [{ name: "snowcat" }] },
     ],
     "/repos/frostyard/example/pulls/12": {
       number: 12,
@@ -975,7 +975,7 @@ test("board actions import labeled issues, seed dogfood, verify artifacts, and i
   assert.equal(queue.list({ limit: 100 }).length, 0);
 
   // Import issues: two proposals, banner with counts; a second import creates nothing.
-  const imported = await post("import-issues", { label: "fluent", priority: "7" });
+  const imported = await post("import-issues", { label: "snowcat", priority: "7" });
   assert.equal(imported.status, 303);
   assert.equal(imported.headers.get("Location"), "/repositories/frostyard/example?done=work.proposed&detail=2+fetched%2C+2+created%2C+0+already+imported");
   assert.deepEqual(requests.splice(0), ["/repos/frostyard/example/issues"]);
@@ -1105,9 +1105,9 @@ test("hold from the board needs a control plane, and an unknown repository or ac
   const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
   const withoutControlPlane = await app.request("/repositories/frostyard/example/hold", { method: "POST", body: new URLSearchParams({ reason: "x" }), headers: { Cookie: cookie } });
   assert.equal(withoutControlPlane.status, 503);
-  assert.match(await withoutControlPlane.text(), /Hold is unavailable: FLUENT_CONTROL_DB is not configured/);
+  assert.match(await withoutControlPlane.text(), /Hold is unavailable: SNOWCAT_CONTROL_DB is not configured/);
   const board = await (await app.request("/repositories/frostyard/example", { headers: { Cookie: cookie } })).text();
-  assert.match(board, /<span class="fl-action-label">Hold<\/span><small class="fl-sub">Needs FLUENT_CONTROL_DB\.<\/small>/);
+  assert.match(board, /<span class="fl-action-label">Hold<\/span><small class="fl-sub">Needs SNOWCAT_CONTROL_DB\.<\/small>/);
   const unknownRepository = await app.request("/repositories/frostyard/nope/seed-dogfood", { method: "POST", body: new URLSearchParams({}), headers: { Cookie: cookie } });
   assert.equal(unknownRepository.status, 404);
   const unknownAction = await app.request("/repositories/frostyard/example/explode", { method: "POST", body: new URLSearchParams({}), headers: { Cookie: cookie } });

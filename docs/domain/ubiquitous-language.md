@@ -1,11 +1,12 @@
-# Domain language: Fluent
+# Domain language: Snowcat
 
 - **Status:** Living
 - **Last updated:** 2026-08-18
 
 ## Scope
 
-This is the canonical language for Fluent product behavior. Use these terms in
+This is the canonical language for Snowcat product behavior (the product was
+named Fluent until 2026-08-18; ADR-0064). Use these terms in
 normative docs, schemas, APIs, database concepts, UI labels, skills, and worker
 briefs. Definitions describe the accepted model; the queue store is the v1 work
 engine under
@@ -31,7 +32,7 @@ name. ([ADR-0018](../adr/0018-bind-worker-sessions-and-verify-github-artifacts.m
 
 #### Operator
 
-The initial principal who runs Fluent and holds the v1 human authorities
+The initial principal who runs Snowcat and holds the v1 human authorities
 explicitly assigned by product policy. Operator does not mean repository
 maintainer, GitHub actor, or owner of every canonical decision.
 
@@ -51,7 +52,7 @@ descriptive metadata and never authority or proof of capability.
 #### Worker
 
 An operator-started external capable client that performs one authorized work
-item through Fluent's portable protocol. Fluent does not launch, supervise,
+item through Snowcat's portable protocol. Snowcat does not launch, supervise,
 authenticate to the provider for, or sandbox the worker.
 
 **Avoid:** RepositoryController; fleet agent; daemon; provider.
@@ -118,7 +119,7 @@ capability.
 #### Agent
 
 Informal product language for the broad category of coding-agent tools. Agent is
-not a normative Fluent domain type; use worker, worker role, worker session,
+not a normative Snowcat domain type; use worker, worker role, worker session,
 provider, skill, or the exact deterministic controller.
 
 **Avoid:** agent as a schema type, authority, controller, or ambiguous actor.
@@ -161,7 +162,7 @@ substitute for record identity.
 #### Display locator
 
 A mutable human-facing or routing alias for a subject, such as a repository
-slug, URL, path, branch name, or label. Fluent retains locator history but never
+slug, URL, path, branch name, or label. Snowcat retains locator history but never
 uses a locator alone for an authority join.
 
 **Avoid:** subject identity; authoritative slug; stable URL; canonical path as
@@ -180,7 +181,7 @@ observation profile.
 
 #### Transaction sequence
 
-The monotonically increasing order assigned to one committed Fluent write
+The monotonically increasing order assigned to one committed Snowcat write
 transaction; transaction position orders its records. The pair orders accepted
 record occurrences but does not imply causality, external occurrence, or
 semantic precedence.
@@ -217,7 +218,7 @@ expired when evaluation time equals its expiry.
 
 #### As-known boundary
 
-The transaction sequence through which Fluent had accepted records for a
+The transaction sequence through which Snowcat had accepted records for a
 historical query, decision, or explanation. It keeps later-arriving information
 from being presented as knowledge available to an earlier authority act.
 
@@ -228,7 +229,7 @@ from being presented as knowledge available to an earlier authority act.
 
 #### Work item
 
-The durable bounded unit Fluent coordinates, with one objective, acceptance
+The durable bounded unit Snowcat coordinates, with one objective, acceptance
 criteria, authority, repository scope, and lineage. A work item persists across
 attempts and is not a GitHub issue, PR, worker process, or human decision.
 
@@ -425,7 +426,7 @@ evaluation but does not establish truth.
 #### Observation
 
 A reading obtained from a named source about an exact subject. It distinguishes
-Fluent's server-assigned observation time from optional source occurrence time,
+Snowcat's server-assigned observation time from optional source occurrence time,
 retains verification state, and may conflict with another observation without
 either being silently erased.
 
@@ -436,7 +437,7 @@ either being silently erased.
 
 #### GitHub delivery receipt
 
-The durable observation-class account that Fluent authenticated and processed
+The durable observation-class account that Snowcat authenticated and processed
 one directly received GitHub App webhook delivery, bound to its delivery GUID
 and exact-body digest. It proves ingress handling, not the truth or completeness
 of GitHub state, and cannot be reconstructed from a later delivery-API read.
@@ -480,9 +481,9 @@ before or after it.
 
 #### Source gap
 
-A registered source scope and lower-bounded interval for which Fluent cannot
+A registered source scope and lower-bounded interval for which Snowcat cannot
 establish required coverage. Its end remains open until exact repair evidence
-bounds it; repair never erases the gap occurrence or what Fluent knew when it
+bounds it; repair never erases the gap occurrence or what Snowcat knew when it
 was recorded. A delivery-content gap names the affected source identities and
 requires matching repaired observations plus restored interval coverage; an
 interval-only gap carries no invented source identity.
@@ -675,7 +676,7 @@ remain distinct from merged artifacts and slice acceptance.
 #### Verification profile
 
 An immutable versioned Core contract binding one evidence mode to closed
-versioned Fluent mechanism identifiers and a strict parameter schema. A profile
+versioned Snowcat mechanism identifiers and a strict parameter schema. A profile
 supplies reusable verification mechanics but is not an organization record,
 measure, policy, fact, or executable script from Core.
 
@@ -775,7 +776,7 @@ authority record, or freshness event.
 #### Core check detail
 
 The bounded diagnostic occurrences and retry receipt for one eligible Core
-source check or candidate rejection. Fluent may prune ordinary detail after 30
+source check or candidate rejection. Snowcat may prune ordinary detail after 30
 days or beyond the eligible count limit, but a current-readiness anchor or
 evidence cited by a retained decision remains protected.
 
@@ -829,7 +830,7 @@ database transaction.
 #### Core snapshot
 
 One atomic validated import of the canonical `frostyard/core` organization
-records at an exact Git revision. Fluent either activates the whole snapshot or
+records at an exact Git revision. Snowcat either activates the whole snapshot or
 retains the prior one; individual files never become authority independently.
 
 **Avoid:** latest branch contents; arbitrary core prose; partial import.
@@ -838,7 +839,7 @@ retains the prior one; individual files never become authority independently.
 #### Core snapshot activation
 
 The authority act that selects one retained Core snapshot as the current
-organization authority for one Fluent deployment. Activation is distinct from
+organization authority for one Snowcat deployment. Activation is distinct from
 fetching, validation, importing bytes, following the latest branch, and
 repository enrollment.
 
@@ -925,7 +926,7 @@ never erases the underlying policy or creates a general precedent.
 #### Enrollment
 
 The core-authorized lifecycle connecting one immutable GitHub repository
-identity to Fluent programs, ceilings, and organization context. Organization
+identity to Snowcat programs, ceilings, and organization context. Organization
 membership or local configuration alone does not enroll a repository.
 
 **Avoid:** opt-in flag as sole authority; discovery; GitHub organization
@@ -963,7 +964,7 @@ is correct. ([ADR-0053](../adr/0053-resume-only-unchanged-transient-held-work.md
 
 #### Canonical surface
 
-The one declared path and format from which Fluent reads a type of repository or
+The one declared path and format from which Snowcat reads a type of repository or
 organization information. Compatibility symlinks may point to it, but alternate
 copies and vendor-specific files do not become competing authority.
 
@@ -1075,7 +1076,7 @@ intent.
 
 #### ProcessObserver
 
-The single durable deterministic observer of Fluent's own operational funnels,
+The single durable deterministic observer of Snowcat's own operational funnels,
 baselines, and versioned process performance. It may pull a scoped andon under
 accepted rules but never modifies or approves the process it measures.
 
@@ -1267,7 +1268,7 @@ review, and recovery conditions—not a free-form model alarm.
 
 A lifecycle state authored by a canonical core record whose schema defines
 `paused`. Activating a later authorized core revision is the only way to enter
-or leave that state; Fluent runtime state cannot impersonate it.
+or leave that state; Snowcat runtime state cannot impersonate it.
 
 **Avoid:** runtime pause; local toggle; hold; drain; defer.
 ([ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md),

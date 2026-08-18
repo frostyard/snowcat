@@ -1,8 +1,8 @@
 # Plan: Queue vertical spike
 
 This plan proves one recursively decomposable maintenance item can travel from
-deterministic intent through Fluent to a manually started capable client,
-without Fluent managing that client or its credentials.
+deterministic intent through Snowcat to a manually started capable client,
+without Snowcat managing that client or its credentials.
 
 ## Phase 1 — Durable contract (completed)
 
@@ -17,7 +17,7 @@ without Fluent managing that client or its credentials.
 
 - Expose the [queue execution boundary](../design/queue-execution-boundary.md)
   with stdio MCP tools.
-- Add a portable `work-fluent-queue` skill that claims one item, protects its
+- Add a portable `work-snowcat-queue` skill that claims one item, protects its
   lease, reports evidence, and stops.
 - Exercise the MCP server with the official client transport in an automated
   integration test.
@@ -38,19 +38,19 @@ without Fluent managing that client or its credentials.
 ## Phase 4 — Host-local real repository trial (completed)
 
 - Opt in the current repository or another explicitly selected repository.
-- Run Fluent directly on the operator host; containerization and remote worker
+- Run Snowcat directly on the operator host; containerization and remote worker
   transport are deliberately deferred.
 - Have the operator start one capable client on that host and say "work the
-  Fluent queue."
+  Snowcat queue."
 - Review the testing-gap evidence before permitting its implementation child.
 - Record token use, elapsed time, lease behavior, result quality, and any
   GitHub artifact created.
 - **Done when:** one host-local, operator-started client produces a reviewable
   discovery result and a second invocation completes or deliberately blocks
-  its child, with full queue lineage and no Fluent-managed client process.
+  its child, with full queue lineage and no Snowcat-managed client process.
 
-Observed on 2026-08-14 with the then-current `bketelsen/fluent` locator; the
-same repository identity moved to canonical `frostyard/fluent` on 2026-08-16
+Observed on 2026-08-14 with the then-current `bketelsen/snowcat` locator; the
+same repository identity moved to canonical `frostyard/snowcat` on 2026-08-16
 under [ADR-0045](../adr/0045-host-fluent-under-frostyard.md):
 
 - Discovery completed in about 44 seconds and created one bounded child.
@@ -146,7 +146,7 @@ that implement it. Restarting stale processes remains an operator action.
 ## Phase 10 — Operational queue hardening (completed)
 
 - Keep scheduling and provenance operator-owned: worker proposals inherit
-  priority, and worker identities cannot use Fluent's reserved `operator:`,
+  priority, and worker identities cannot use Snowcat's reserved `operator:`,
   `policy:`, or `system:` principal namespaces.
 - Add actor-attributed operator exits for deferred admission and blocked work:
   `defer`, `requeue`, and `cancel` remain outside the worker MCP surface.
@@ -156,7 +156,7 @@ that implement it. Restarting stale processes remains an operator action.
 - Harden routine operation with SQLite lock waiting, transactional idempotent
   migration, strict CLI status parsing, shell-independent test discovery, and
   a Node 22/24 CI matrix that runs the same `npm run check` gate as local work.
-- Fail the optional HTTP agent routes closed without `FLUENT_APP_TOKEN`, require
+- Fail the optional HTTP agent routes closed without `SNOWCAT_APP_TOKEN`, require
   bearer authentication when configured, and keep unauthenticated health data
   free of queue counts.
 - **Done when:** [work queue rules 22–26](../specs/work-queue.md#rules) and the
@@ -181,7 +181,7 @@ release, stale-token rejection, and reclaim by another worker. The full Node
 ## Open questions
 
 - **Remote transport:** choose authentication and client identity before the
-  first worker runs outside the Fluent host.
+  first worker runs outside the Snowcat host.
 - **Production SQLite binding:** choose a supported Node runtime or database
   binding before treating the spike store as production.
 - **Future automatic admission:** dogfood begins with operator admission for

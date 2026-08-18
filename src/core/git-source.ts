@@ -10,8 +10,8 @@ import {
 } from "./validator.ts";
 import { CORE_POLL_GIT_TIMEOUT_MS } from "./poll-policy.ts";
 
-const CANDIDATE_REF = "refs/fluent/core-candidate";
-const ROLLBACK_CANDIDATE_REF = "refs/fluent/core-rollback-candidate";
+const CANDIDATE_REF = "refs/snowcat/core-candidate";
+const ROLLBACK_CANDIDATE_REF = "refs/snowcat/core-rollback-candidate";
 const MAX_TREE_ENTRIES = 256;
 const MAX_FILE_BYTES = 1_048_576;
 const MAX_TREE_BYTES = 8_388_608;
@@ -76,9 +76,9 @@ export class CoreSourceContinuityError extends Error {
 
 export function coreGitSourceConfig(): CoreGitSourceConfig {
   return {
-    sourceUrl: process.env.FLUENT_CORE_URL ?? "https://github.com/frostyard/core.git",
-    ref: process.env.FLUENT_CORE_REF ?? "refs/heads/main",
-    mirrorPath: resolve(process.env.FLUENT_CORE_MIRROR ?? "./data/core.git"),
+    sourceUrl: process.env.SNOWCAT_CORE_URL ?? "https://github.com/frostyard/core.git",
+    ref: process.env.SNOWCAT_CORE_REF ?? "refs/heads/main",
+    mirrorPath: resolve(process.env.SNOWCAT_CORE_MIRROR ?? "./data/core.git"),
   };
 }
 

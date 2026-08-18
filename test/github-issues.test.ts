@@ -16,7 +16,7 @@ function issue(number: number, overrides: Record<string, unknown> = {}): Record<
     body: `Body of issue ${number}.`,
     html_url: `https://github.com/frostyard/updex/issues/${number}`,
     state: "open",
-    labels: [{ name: "fluent" }],
+    labels: [{ name: "snowcat" }],
     ...overrides,
   };
 }
@@ -43,7 +43,7 @@ test("labeled open issues are listed across pages, pull requests dropped, malfor
     1: full,
     2: [issue(101), issue(102, { pull_request: { url: "https://api.github.com/repos/frostyard/updex/pulls/102" } }), issue(103)],
   });
-  const result = await fetchLabeledOpenIssues(REPOSITORY, "fluent", fetcher);
+  const result = await fetchLabeledOpenIssues(REPOSITORY, "snowcat", fetcher);
   assert.equal(result.kind, "issues");
   if (result.kind !== "issues") return;
   assert.equal(result.pages, 2);
@@ -51,7 +51,7 @@ test("labeled open issues are listed across pages, pull requests dropped, malfor
   assert.equal(result.issues.length, 102);
   assert.equal(result.issues.some((item) => item.number === 102), false);
   assert.equal(requests.length, 2);
-  assert.match(requests[0]!, /^\/repos\/frostyard\/updex\/issues\?state=open&labels=fluent&per_page=100&page=1/);
+  assert.match(requests[0]!, /^\/repos\/frostyard\/updex\/issues\?state=open&labels=snowcat&per_page=100&page=1/);
 
   // Any malformed entry (wrong repository in html_url, closed state, missing number) poisons the whole listing.
   for (const bad of [
@@ -60,20 +60,20 @@ test("labeled open issues are listed across pages, pull requests dropped, malfor
     issue(7, { number: "7" }),
     issue(8, { title: "   " }),
   ]) {
-    const poisoned = await fetchLabeledOpenIssues(REPOSITORY, "fluent", pagedFetcher({ 1: [issue(1), bad] }).fetcher);
+    const poisoned = await fetchLabeledOpenIssues(REPOSITORY, "snowcat", pagedFetcher({ 1: [issue(1), bad] }).fetcher);
     assert.equal(poisoned.kind, "unavailable");
   }
 
-  assert.equal((await fetchLabeledOpenIssues(REPOSITORY, "fluent", pagedFetcher({}, { status: 404 }).fetcher)).kind, "missing");
-  assert.deepEqual(await fetchLabeledOpenIssues(REPOSITORY, "fluent", pagedFetcher({}, { status: 403 }).fetcher), {
+  assert.equal((await fetchLabeledOpenIssues(REPOSITORY, "snowcat", pagedFetcher({}, { status: 404 }).fetcher)).kind, "missing");
+  assert.deepEqual(await fetchLabeledOpenIssues(REPOSITORY, "snowcat", pagedFetcher({}, { status: 403 }).fetcher), {
     kind: "response",
     status: 403,
   });
   assert.equal(
-    (await fetchLabeledOpenIssues(REPOSITORY, "fluent", pagedFetcher({}, { status: 200, body: "not json" }).fetcher)).kind,
+    (await fetchLabeledOpenIssues(REPOSITORY, "snowcat", pagedFetcher({}, { status: 200, body: "not json" }).fetcher)).kind,
     "unavailable",
   );
-  await assert.rejects(fetchLabeledOpenIssues("bad repo", "fluent", fetcher), /owner\/name/);
+  await assert.rejects(fetchLabeledOpenIssues("bad repo", "snowcat", fetcher), /owner\/name/);
   await assert.rejects(fetchLabeledOpenIssues(REPOSITORY, "a,b", fetcher), /one non-empty GitHub label/);
 });
 
@@ -83,7 +83,7 @@ test("an issue becomes one proposed root with the body quoted as untrusted conte
     title: "Retry flaky upload",
     body: "x".repeat(20_000),
     htmlUrl: "https://github.com/frostyard/updex/issues/12",
-    labels: ["fluent"],
+    labels: ["snowcat"],
   }, { priority: 7 });
   assert.equal(candidate.sourceRef, "https://github.com/frostyard/updex/issues/12");
   assert.equal(candidate.kind, ISSUE_WORK_KIND);
@@ -99,15 +99,15 @@ test("an issue becomes one proposed root with the body quoted as untrusted conte
 });
 
 test("importing proposes each labeled issue once, needs admission, and never partially imports", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-import-issues-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-import-issues-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
 
   const { fetcher } = pagedFetcher({ 1: [issue(1), issue(2, { body: null })] });
-  await assert.rejects(importLabeledIssues(queue, REPOSITORY, "fluent", { fetcher }), /not opted in/);
+  await assert.rejects(importLabeledIssues(queue, REPOSITORY, "snowcat", { fetcher }), /not opted in/);
   queue.setRepositoryEnabled(REPOSITORY, true);
 
-  const first = await importLabeledIssues(queue, REPOSITORY, "fluent", { fetcher, priority: 5 });
+  const first = await importLabeledIssues(queue, REPOSITORY, "snowcat", { fetcher, priority: 5 });
   assert.equal(first.fetched, 2);
   assert.equal(first.created.length, 2);
   assert.deepEqual(first.skippedSourceRefs, []);
@@ -123,7 +123,7 @@ test("importing proposes each labeled issue once, needs admission, and never par
   assert.equal(queue.claim({ worker: "claude:import-test" }), undefined, "proposed roots are not claimable");
 
   // Re-running creates nothing, and a second issue on a new page still dedupes against the first.
-  const second = await importLabeledIssues(queue, REPOSITORY, "fluent", { fetcher });
+  const second = await importLabeledIssues(queue, REPOSITORY, "snowcat", { fetcher });
   assert.deepEqual(second.created, []);
   assert.deepEqual(second.skippedSourceRefs, first.created.map((item) => item.sourceRef));
 
@@ -134,16 +134,16 @@ test("importing proposes each labeled issue once, needs admission, and never par
   assert.equal(claimed?.id, admitted.id);
   assert.equal(claimed?.sourceRef, admitted.sourceRef);
   queue.reject(first.created[1]!.id, "operator:test", "Duplicate.");
-  const third = await importLabeledIssues(queue, REPOSITORY, "fluent", { fetcher });
+  const third = await importLabeledIssues(queue, REPOSITORY, "snowcat", { fetcher });
   assert.deepEqual(third.created, []);
 
   // A failed listing imports nothing.
   await assert.rejects(
-    importLabeledIssues(queue, REPOSITORY, "fluent", { fetcher: pagedFetcher({}, { status: 500 }).fetcher }),
+    importLabeledIssues(queue, REPOSITORY, "snowcat", { fetcher: pagedFetcher({}, { status: 500 }).fetcher }),
     /HTTP 500; nothing imported/,
   );
   await assert.rejects(
-    importLabeledIssues(queue, "frostyard/missing", "fluent", { fetcher: pagedFetcher({}, { status: 404 }).fetcher }),
+    importLabeledIssues(queue, "frostyard/missing", "snowcat", { fetcher: pagedFetcher({}, { status: 404 }).fetcher }),
     /not opted in|not found/,
   );
   assert.equal(queue.list({ repository: REPOSITORY, limit: 100 }).length, 2);
@@ -162,7 +162,7 @@ test("import-issues --enrolled imports only opted-in enrolled repositories, is i
   const { importLabeledIssuesForEnrolled } = await import("../src/queue/github-issues.ts");
   const { reconcileRepositories } = await import("../src/repository/controller.ts");
   const { activationCandidate, disabledDeclaration, enabledDeclaration, validSurfaceProbe } = await import("./helpers/core-fixtures.ts");
-  const directory = await mkdtemp(join(tmpdir(), "fluent-import-enrolled-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-import-enrolled-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   const controlPath = join(directory, "control-plane.db");
@@ -210,9 +210,9 @@ test("import-issues --enrolled imports only opted-in enrolled repositories, is i
     return new Response(JSON.stringify(served[url.pathname] ?? []), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
 
-  const first = await importLabeledIssuesForEnrolled(queue, controlPath, "fluent", { priority: 4, fetcher });
+  const first = await importLabeledIssuesForEnrolled(queue, controlPath, "snowcat", { priority: 4, fetcher });
   assert.deepEqual(requests, ["/repos/frostyard/example/issues", "/repos/frostyard/second/issues"]); // only the enrolled repositories, in slug order
-  assert.equal(first.label, "fluent");
+  assert.equal(first.label, "snowcat");
   assert.deepEqual(first.failed, []);
   assert.deepEqual(first.notOptedIn, []);
   assert.deepEqual(
@@ -228,7 +228,7 @@ test("import-issues --enrolled imports only opted-in enrolled repositories, is i
   assert.equal(queue.list({ repository: "frostyard/updex" }).length, 0);
 
   // A second run creates nothing: every source ref is skipped.
-  const second = await importLabeledIssuesForEnrolled(queue, controlPath, "fluent", { fetcher });
+  const second = await importLabeledIssuesForEnrolled(queue, controlPath, "snowcat", { fetcher });
   assert.deepEqual(second.imported.map((entry) => entry.created.length), [0, 0]);
   assert.deepEqual(second.imported[0]!.skippedSourceRefs.sort(), [
     "https://github.com/frostyard/example/issues/1",
@@ -239,7 +239,7 @@ test("import-issues --enrolled imports only opted-in enrolled repositories, is i
   // A 503 listing for one repository is reported under failed while the other still runs; the call itself does not throw.
   failPath = "/repos/frostyard/example/issues";
   served["/repos/frostyard/second/issues"]!.push({ ...issue(8), html_url: "https://github.com/frostyard/second/issues/8" });
-  const failed = await importLabeledIssuesForEnrolled(queue, controlPath, "fluent", { fetcher });
+  const failed = await importLabeledIssuesForEnrolled(queue, controlPath, "snowcat", { fetcher });
   assert.deepEqual(failed.failed.map((entry) => entry.repository), ["frostyard/example"]);
   assert.match(failed.failed[0]!.reason, /returned HTTP 503; nothing imported/);
   assert.deepEqual(failed.imported.map((entry) => [entry.repository, entry.created.length]), [["frostyard/second", 1]]);
@@ -248,7 +248,7 @@ test("import-issues --enrolled imports only opted-in enrolled repositories, is i
 
   // An enrolled repository that is not opted in is reported, not imported.
   queue.setRepositoryEnabled("frostyard/example", false);
-  const skipped = await importLabeledIssuesForEnrolled(queue, controlPath, "fluent", { fetcher });
+  const skipped = await importLabeledIssuesForEnrolled(queue, controlPath, "snowcat", { fetcher });
   assert.deepEqual(skipped.notOptedIn, ["frostyard/example"]);
   assert.deepEqual(skipped.imported.map((entry) => entry.repository), ["frostyard/second"]);
 

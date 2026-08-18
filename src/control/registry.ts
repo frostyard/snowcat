@@ -18,7 +18,7 @@ export const recordClasses = [
 export type RecordClass = (typeof recordClasses)[number];
 
 export interface SubjectKindContract {
-  authoritySystem: "fluent" | "github";
+  authoritySystem: "snowcat" | "github";
   idScheme: "uuidv7" | "github-qualified-numeric-id";
   revisionKinds: readonly string[];
   validateId: (value: string) => boolean;
@@ -26,19 +26,19 @@ export interface SubjectKindContract {
 
 export const subjectKindRegistry = {
   "control-plane-database": {
-    authoritySystem: "fluent",
+    authoritySystem: "snowcat",
     idScheme: "uuidv7",
     revisionKinds: ["sha256", "transaction-sequence"],
     validateId: isUuidV7,
   },
   "operator-principal": {
-    authoritySystem: "fluent",
+    authoritySystem: "snowcat",
     idScheme: "uuidv7",
     revisionKinds: ["sha256"],
     validateId: isUuidV7,
   },
   "core-snapshot": {
-    authoritySystem: "fluent",
+    authoritySystem: "snowcat",
     idScheme: "uuidv7",
     revisionKinds: ["core-catalog-sha256"],
     validateId: isUuidV7,
@@ -143,7 +143,7 @@ export const revisionKindRegistry = {
 } as const;
 
 export const sourceKindRegistry = {
-  "fluent-system": {
+  "snowcat-system": {
     validateId: (value: string) => value === "kernel" || value === "github-observer",
     revisionKinds: [] as const,
   },
@@ -854,7 +854,7 @@ export interface CoreRollbackActivatedPayload extends Record<string, JsonValue> 
 export type RepositoryFleetState = "enabled" | "paused" | "disabled";
 /**
  * Core `maintenance_programs` values, exactly the enum in the bundled
- * `repository.schema.json` (widened within v1 by core ADR-0039). Fluent's
+ * `repository.schema.json` (widened within v1 by core ADR-0039). Snowcat's
  * program catalog (`src/queue/programs.ts`) implements a subset; a declared
  * program without a catalog entry is reported by the feeder, not refused.
  */

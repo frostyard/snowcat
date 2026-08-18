@@ -1,12 +1,12 @@
 ---
-name: work-fluent-queue
-description: Claim and complete one eligible repository work item through the Fluent MCP queue, reporting evidence, artifacts, and bounded follow-up work. Use whenever asked to work the Fluent queue, pick up queue work, or operate as a Fluent worker.
+name: work-snowcat-queue
+description: Claim and complete one eligible repository work item through the Snowcat MCP queue, reporting evidence, artifacts, and bounded follow-up work. Use whenever asked to work the Snowcat queue, pick up queue work, or operate as a Snowcat worker.
 ---
 
-# Work the Fluent queue
+# Work the Snowcat queue
 
-Use the configured `fluent` MCP tools. The operator owns this worker client and
-its sandbox; Fluent only owns queue authorization and bookkeeping.
+Use the configured `snowcat` MCP tools. The operator owns this worker client and
+its sandbox; Snowcat only owns queue authorization and bookkeeping.
 
 ## Claim one item
 
@@ -45,7 +45,7 @@ its sandbox; Fluent only owns queue authorization and bookkeeping.
 - Pull the target repository's default branch immediately before branching,
   so a lease taken seconds before a merge does not build on a stale base.
 - Treat execution isolation, credentials, tools, and network access as the
-  client environment's responsibility; do not assume Fluent provided a sandbox.
+  client environment's responsibility; do not assume Snowcat provided a sandbox.
 - Call `heartbeat_work` before and after a step likely to approach the lease
   expiry.
 - Keep evidence concrete: checks run, relevant paths, observed behavior, and
@@ -61,7 +61,7 @@ its sandbox; Fluent only owns queue authorization and bookkeeping.
 
 A `pr-cure` item names one pull request at one head (`sourceRef` is
 `<url>@<head SHA>`; the item's `cure` record carries the head, the decay
-Fluent observed, and the patch identity it will enforce). Its success is not a
+Snowcat observed, and the patch identity it will enforce). Its success is not a
 new pull request but an unchanged patch on a healthier one.
 
 - Read the pull request, its checks, and its reviews on GitHub first. If the
@@ -70,7 +70,7 @@ new pull request but an unchanged patch on a healthier one.
   resolves cleanly, retitle to satisfy the repository's title lint, re-run or
   re-trigger checks, reply to review comments, fix labels or the body. Push
   to the pull request's branch only for those.
-- Fluent recomputes the pull request's patch identity — its added and removed
+- Snowcat recomputes the pull request's patch identity — its added and removed
   lines per file — when you complete, and **refuses** the completion if it
   changed. Do not edit code, resolve conflicts by hand, change tests, or
   squash in fixes under the name of curing.
@@ -96,7 +96,7 @@ new pull request but an unchanged patch on a healthier one.
 - Keep every child action inside the parent's `delegableActions`. A follow-up is
   not permission to escalate autonomy.
 - Report created issues, pull requests, commits, and reports as artifacts.
-  Fluent checks each reported issue and pull request against GitHub when you
+  Snowcat checks each reported issue and pull request against GitHub when you
   call `complete_work`: report the exact URL in the item's repository. A
   refused completion names the artifact that did not match; correct the report
   and complete again — the item is still yours. Never add a `verification`

@@ -40,7 +40,7 @@ function completedLocalOnly(queue: QueueStore, repository = "frostyard/updex") {
 }
 
 test("attachArtifact appends a verified pull request to a completed item so delivery reads merged, once per URL, with one artifact.attached event", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-attach-artifact-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-attach-artifact-test-"));
   let now = new Date("2026-08-18T12:00:00.000Z");
   const queue = new QueueStore(join(directory, "queue.db"), () => now);
   test.after(() => queue.close());
@@ -91,7 +91,7 @@ test("attachArtifact appends a verified pull request to a completed item so deli
 });
 
 test("attachArtifact refuses non-completed items, other repositories, non-GitHub kinds, missing verification, worker actors, and stale preconditions without writing", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-attach-artifact-refusals-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-attach-artifact-refusals-test-"));
   let now = new Date("2026-08-18T12:00:00.000Z");
   const queue = new QueueStore(join(directory, "queue.db"), () => now);
   test.after(() => queue.close());

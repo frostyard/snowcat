@@ -1,33 +1,33 @@
 #!/usr/bin/env bash
-# Install or refresh the Fluent v1 single-host deployment. Idempotent: run it
+# Install or refresh the Snowcat v1 single-host deployment. Idempotent: run it
 # again after `git pull` or to repair a host; it reports what it created and
 # what it kept.
 #
 #   sudo deploy/install.sh [--user OPERATOR]
 #
 # What it does (and nothing else):
-#   1. creates /var/lib/fluent and /var/backups/fluent (0750, owned by the
+#   1. creates /var/lib/snowcat and /var/backups/snowcat (0750, owned by the
 #      operator user — --user, else the sudo caller, else the invoking user);
-#   2. writes /etc/fluent/env (0600) from deploy/env.example ONLY IF ABSENT,
-#      with FLUENT_HOME set to this checkout and the database paths under
-#      /var/lib/fluent; an existing file is never modified;
+#   2. writes /etc/snowcat/env (0600) from deploy/env.example ONLY IF ABSENT,
+#      with SNOWCAT_HOME set to this checkout and the database paths under
+#      /var/lib/snowcat; an existing file is never modified;
 #   3. installs deploy/systemd/*.service and *.timer into /etc/systemd/system
 #      plus one drop-in per service (10-install.conf) that sets User=, an
 #      absolute ExecStart= for the npm found on PATH (systemd's fixed search
 #      path does not include version managers such as Homebrew or nvm), a
 #      PATH= that lets that npm find its node, and ReadWritePaths= for the
-#      real FLUENT_HOME;
+#      real SNOWCAT_HOME;
 #   4. `systemctl daemon-reload`, then enables and starts the three timers.
 #
 # It never runs `core -- activate`, never opens or moves a database, and never
 # touches the operator's shell configuration.
 #
 # Knobs:
-#   FLUENT_NPM=/path/to/npm    npm to run from the units (default: the operator
-#   FLUENT_NODE=/path/to/node  user's login-shell `command -v npm`/`node`)
-#   FLUENT_INSTALL_ROOT=<dir>  install under <dir> instead of / (no root needed;
-#                              systemctl is skipped unless FLUENT_SYSTEMCTL is set)
-#   FLUENT_SYSTEMCTL=<cmd>     command used instead of systemctl (e.g. `true`)
+#   SNOWCAT_NPM=/path/to/npm    npm to run from the units (default: the operator
+#   SNOWCAT_NODE=/path/to/node  user's login-shell `command -v npm`/`node`)
+#   SNOWCAT_INSTALL_ROOT=<dir>  install under <dir> instead of / (no root needed;
+#                              systemctl is skipped unless SNOWCAT_SYSTEMCTL is set)
+#   SNOWCAT_SYSTEMCTL=<cmd>     command used instead of systemctl (e.g. `true`)
 set -euo pipefail
 
 usage() {
@@ -48,11 +48,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-fluent_home="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-root="${FLUENT_INSTALL_ROOT:-}"
+snowcat_home="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+root="${SNOWCAT_INSTALL_ROOT:-}"
 root="${root%/}"
 if [[ -z $root && $EUID -ne 0 ]]; then
-  echo "install: run as root (sudo deploy/install.sh) or set FLUENT_INSTALL_ROOT for a dry run" >&2
+  echo "install: run as root (sudo deploy/install.sh) or set SNOWCAT_INSTALL_ROOT for a dry run" >&2
   exit 1
 fi
 if [[ -z $install_user ]]; then
@@ -97,34 +97,34 @@ resolve_tool() {
     fi
   done
   if [[ -z $found ]]; then
-    echo "install: cannot find an executable $name for user $install_user; install Node 24+ or set FLUENT_${name^^}=/path/to/$name" >&2
+    echo "install: cannot find an executable $name for user $install_user; install Node 24+ or set SNOWCAT_${name^^}=/path/to/$name" >&2
     exit 1
   fi
   printf '%s\n' "$found"
 }
-npm_path="$(resolve_tool npm "${FLUENT_NPM:-}")"
-node_path="$(resolve_tool node "${FLUENT_NODE:-}")"
+npm_path="$(resolve_tool npm "${SNOWCAT_NPM:-}")"
+node_path="$(resolve_tool node "${SNOWCAT_NODE:-}")"
 npm_dir="$(dirname "$npm_path")"
 node_dir="$(dirname "$node_path")"
 service_path="$npm_dir"
 [[ $node_dir == "$npm_dir" ]] || service_path="$npm_dir:$node_dir"
 service_path="$service_path:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-if [[ -n ${FLUENT_SYSTEMCTL:-} ]]; then
-  read -r -a systemctl <<< "$FLUENT_SYSTEMCTL"
+if [[ -n ${SNOWCAT_SYSTEMCTL:-} ]]; then
+  read -r -a systemctl <<< "$SNOWCAT_SYSTEMCTL"
 elif [[ -n $root ]]; then
   systemctl=()
 else
   systemctl=(systemctl)
 fi
 
-state_dir="$root/var/lib/fluent"
-backup_dir="$root/var/backups/fluent"
-env_dir="$root/etc/fluent"
+state_dir="$root/var/lib/snowcat"
+backup_dir="$root/var/backups/snowcat"
+env_dir="$root/etc/snowcat"
 env_file="$env_dir/env"
 unit_dir="$root/etc/systemd/system"
-env_example="$fluent_home/deploy/env.example"
-units_source="$fluent_home/deploy/systemd"
+env_example="$snowcat_home/deploy/env.example"
+units_source="$snowcat_home/deploy/systemd"
 
 # Owner arguments only when we can actually change ownership.
 chown_args=()
@@ -159,6 +159,39 @@ install_file() {
   fi
 }
 
+# 0. Snowcat ADR-0064: a host installed under the old name (Fluent) is
+# migrated in place, once — directories are MOVED (never copied), the env
+# file is rewritten with SNOWCAT_* keys and the new paths, and the old timers
+# are stopped and their unit files removed after the new ones exist. Nothing
+# happens when the legacy paths are absent or the new ones already exist.
+legacy_state_dir="$root/var/lib/fluent"
+legacy_backup_dir="$root/var/backups/fluent"
+legacy_env_file="$root/etc/fluent/env"
+legacy_migrated=0
+if [[ -d $legacy_state_dir && ! -e $state_dir ]]; then
+  mv "$legacy_state_dir" "$state_dir"
+  report "moved $legacy_state_dir -> $state_dir (Fluent -> Snowcat)"
+  legacy_migrated=1
+fi
+if [[ -d $legacy_backup_dir && ! -e $backup_dir ]]; then
+  mv "$legacy_backup_dir" "$backup_dir"
+  report "moved $legacy_backup_dir -> $backup_dir"
+  legacy_migrated=1
+fi
+if [[ -f $legacy_env_file && ! -e $env_file ]]; then
+  ensure_dir "$env_dir" 0755
+  rendered="$(mktemp)"
+  sed -e 's/^FLUENT_/SNOWCAT_/' \
+    -e "s|/var/lib/fluent|/var/lib/snowcat|g" \
+    -e "s|/var/backups/fluent|/var/backups/snowcat|g" \
+    -e "s|/etc/fluent|/etc/snowcat|g" \
+    "$legacy_env_file" > "$rendered"
+  install -m 0600 "${chown_args[@]}" "$rendered" "$env_file"
+  rm -f "$rendered"
+  report "migrated $legacy_env_file -> $env_file (SNOWCAT_* keys, new paths; the old file is kept until you remove it)"
+  legacy_migrated=1
+fi
+
 # 1. Data directories.
 ensure_dir "$state_dir" 0750 owned
 ensure_dir "$backup_dir" 0750 owned
@@ -170,13 +203,13 @@ if [[ -e $env_file ]]; then
 else
   rendered="$(mktemp)"
   sed \
-    -e "s|^FLUENT_HOME=.*|FLUENT_HOME=$fluent_home|" \
-    -e "s|^FLUENT_QUEUE_DB=.*|FLUENT_QUEUE_DB=$state_dir/queue.db|" \
-    -e "s|^FLUENT_CONTROL_DB=.*|FLUENT_CONTROL_DB=$state_dir/control-plane.db|" \
+    -e "s|^SNOWCAT_HOME=.*|SNOWCAT_HOME=$snowcat_home|" \
+    -e "s|^SNOWCAT_QUEUE_DB=.*|SNOWCAT_QUEUE_DB=$state_dir/queue.db|" \
+    -e "s|^SNOWCAT_CONTROL_DB=.*|SNOWCAT_CONTROL_DB=$state_dir/control-plane.db|" \
     "$env_example" > "$rendered"
   install -m 0600 "${chown_args[@]}" "$rendered" "$env_file"
   rm -f "$rendered"
-  report "created $env_file from deploy/env.example — fill in FLUENT_GITHUB_TOKEN"
+  report "created $env_file from deploy/env.example — fill in SNOWCAT_GITHUB_TOKEN"
 fi
 
 # 3. Units and per-service drop-ins.
@@ -200,7 +233,7 @@ write_dropin() {
   local rendered
   rendered="$(mktemp)"
   cat > "$rendered" <<DROPIN
-# Written by deploy/install.sh for FLUENT_HOME=$fluent_home; re-run it to
+# Written by deploy/install.sh for SNOWCAT_HOME=$snowcat_home; re-run it to
 # regenerate. Edit deploy/systemd/ in the checkout, not this file.
 [Service]
 User=$install_user
@@ -213,32 +246,56 @@ DROPIN
   rm -f "$rendered"
 }
 
-write_dropin fluent-feed.service \
-  "$state_dir -$fluent_home/data" \
-  "$npm_path --prefix $fluent_home run --silent queue -- seed-dogfood --enrolled" \
-  "$npm_path --prefix $fluent_home run --silent queue -- import-issues --enrolled --label fluent" \
-  "$npm_path --prefix $fluent_home run --silent queue -- sweep-dependencies --enrolled" \
-  "$npm_path --prefix $fluent_home run --silent queue -- sweep-repository-settings --enrolled"
-write_dropin fluent-verify.service \
-  "$state_dir -$fluent_home/data" \
-  "$npm_path --prefix $fluent_home run --silent queue -- verify-artifacts"
-write_dropin fluent-backup.service \
-  "$state_dir $backup_dir -$fluent_home/data" \
-  "/bin/bash $fluent_home/deploy/bin/fluent-backup"
+write_dropin snowcat-feed.service \
+  "$state_dir -$snowcat_home/data" \
+  "$npm_path --prefix $snowcat_home run --silent queue -- seed-dogfood --enrolled" \
+  "$npm_path --prefix $snowcat_home run --silent queue -- import-issues --enrolled --label snowcat" \
+  "$npm_path --prefix $snowcat_home run --silent queue -- sweep-dependencies --enrolled" \
+  "$npm_path --prefix $snowcat_home run --silent queue -- sweep-repository-settings --enrolled"
+write_dropin snowcat-verify.service \
+  "$state_dir -$snowcat_home/data" \
+  "$npm_path --prefix $snowcat_home run --silent queue -- verify-artifacts"
+write_dropin snowcat-backup.service \
+  "$state_dir $backup_dir -$snowcat_home/data" \
+  "/bin/bash $snowcat_home/deploy/bin/snowcat-backup"
+
+# 3b. Retire the Fluent-named units this installer used to write, after the
+# Snowcat ones exist: stop and disable, then remove the unit files and their
+# drop-ins. Only files under this installer's control are touched.
+legacy_units=()
+for legacy in fluent-feed fluent-verify fluent-backup; do
+  for suffix in timer service; do
+    if [[ -e $unit_dir/$legacy.$suffix ]]; then legacy_units+=("$legacy.$suffix"); fi
+  done
+done
+if [[ ${#legacy_units[@]} -gt 0 ]]; then
+  if [[ ${#systemctl[@]} -gt 0 ]]; then
+    "${systemctl[@]}" disable --now fluent-feed.timer fluent-verify.timer fluent-backup.timer 2>/dev/null || true
+  fi
+  for legacy in "${legacy_units[@]}"; do
+    rm -f "$unit_dir/$legacy"
+    rm -rf "$unit_dir/$legacy.d"
+  done
+  report "removed legacy units ${legacy_units[*]} (replaced by the snowcat-* units)"
+  legacy_migrated=1
+fi
 
 # 4. Reload and enable the timers.
-timers=(fluent-feed.timer fluent-verify.timer fluent-backup.timer)
+timers=(snowcat-feed.timer snowcat-verify.timer snowcat-backup.timer)
 if [[ ${#systemctl[@]} -eq 0 ]]; then
-  report "skipped systemctl (FLUENT_INSTALL_ROOT is set and FLUENT_SYSTEMCTL is not)"
+  report "skipped systemctl (SNOWCAT_INSTALL_ROOT is set and SNOWCAT_SYSTEMCTL is not)"
 else
   "${systemctl[@]}" daemon-reload
   "${systemctl[@]}" enable --now "${timers[@]}"
   report "enabled and started ${timers[*]}"
 fi
+if [[ $legacy_migrated -eq 1 ]]; then
+  report "Fluent -> Snowcat migration done: restart any MCP client and the operator surface; export SNOWCAT_* in your shell (FLUENT_* is read for one more release)"
+fi
 
 cat <<NEXT
-install: done. FLUENT_HOME=$fluent_home, units run as $install_user, npm=$npm_path
+install: done. SNOWCAT_HOME=$snowcat_home, units run as $install_user, npm=$npm_path
 install: next: set -a; . $env_file; set +a
-install:       npm --prefix $fluent_home run --silent queue -- metadata
-install:       systemctl list-timers 'fluent-*'
+install:       npm --prefix $snowcat_home run --silent queue -- metadata
+install:       systemctl list-timers 'snowcat-*'
 NEXT

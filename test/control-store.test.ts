@@ -16,7 +16,7 @@ import { ControlPlaneStore } from "../src/control/store.ts";
 import { QueueStore } from "../src/queue/store.ts";
 
 test("a fresh control-plane database initializes ordered database, operator, and event occurrences", async (context) => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-control-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-control-test-"));
   const path = join(directory, "control-plane.db");
   const recordedAt = "2026-08-16T12:00:00.000Z";
   const store = new ControlPlaneStore(path, () => new Date(recordedAt));
@@ -70,7 +70,7 @@ test("a fresh control-plane database initializes ordered database, operator, and
 });
 
 test("reopening a current target database performs no schema writes", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-control-reopen-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-control-reopen-test-"));
   const path = join(directory, "control-plane.db");
   const first = new ControlPlaneStore(path, () => new Date("2026-08-16T12:00:00.000Z"));
   const lineage = first.metadata().databaseLineageId;
@@ -93,7 +93,7 @@ test("reopening a current target database performs no schema writes", async () =
 });
 
 test("the target store refuses a queue-spike database without modifying it", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-control-spike-refusal-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-control-spike-refusal-test-"));
   const path = join(directory, "queue.db");
   const queue = new QueueStore(path);
   queue.close();
@@ -107,7 +107,7 @@ test("the target store refuses a queue-spike database without modifying it", asy
 });
 
 test("unknown persisted kinds and sequence-watermark damage fail closed on open", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-control-corruption-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-control-corruption-test-"));
   const unknownKindPath = join(directory, "unknown-kind.db");
   const unknownKind = new ControlPlaneStore(unknownKindPath);
   unknownKind.close();
@@ -126,7 +126,7 @@ test("unknown persisted kinds and sequence-watermark damage fail closed on open"
 });
 
 test("the registered integrity command is atomic, ordered, optimistic, and idempotent", async (context) => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-control-command-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-control-command-test-"));
   const path = join(directory, "control-plane.db");
   let now = new Date("2026-08-16T12:00:00.000Z");
   const store = new ControlPlaneStore(path, () => now);
@@ -187,7 +187,7 @@ test("the registered integrity command is atomic, ordered, optimistic, and idemp
 });
 
 test("a failure after sequence allocation rolls back the transaction and its receipt", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-control-rollback-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-control-rollback-test-"));
   const path = join(directory, "control-plane.db");
   let now = new Date("2026-08-16T12:00:00.000Z");
   const store = new ControlPlaneStore(path, () => now, (point) => {
@@ -217,7 +217,7 @@ test("a failure after sequence allocation rolls back the transaction and its rec
 });
 
 test("concurrent processes replay one idempotent command and serialize conflicting commands", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-control-concurrency-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-control-concurrency-test-"));
   const path = join(directory, "control-plane.db");
   const setup = new ControlPlaneStore(path);
   setup.close();
@@ -247,7 +247,7 @@ test("concurrent processes replay one idempotent command and serialize conflicti
 });
 
 test("startup rejects a receipt whose valid-looking result no longer matches its outputs", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-control-receipt-tamper-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-control-receipt-tamper-test-"));
   const path = join(directory, "control-plane.db");
   const store = new ControlPlaneStore(path);
   store.checkIntegrity({ expectedLastTransactionSequence: 1, idempotencyKey: "integrity:tamper" });
@@ -268,7 +268,7 @@ test("startup rejects a receipt whose valid-looking result no longer matches its
 });
 
 test("fresh projection generations filter by information class and deployment scope", async (context) => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-control-projection-access-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-control-projection-access-test-"));
   const path = join(directory, "control-plane.db");
   const store = new ControlPlaneStore(path, () => new Date("2026-08-16T12:00:00.000Z"));
   context.after(() => store.close());
@@ -314,7 +314,7 @@ test("fresh projection generations filter by information class and deployment sc
 });
 
 test("full rebuild publishes immutable current generations while stale generations remain conservative", async (context) => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-control-projection-rebuild-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-control-projection-rebuild-test-"));
   const path = join(directory, "control-plane.db");
   let now = new Date("2026-08-16T12:00:00.000Z");
   const store = new ControlPlaneStore(path, () => now);
@@ -359,7 +359,7 @@ test("full rebuild publishes immutable current generations while stale generatio
 });
 
 test("a failed shadow rebuild leaves prior projection heads and rows active", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-control-projection-rollback-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-control-projection-rollback-test-"));
   const path = join(directory, "control-plane.db");
   let now = new Date("2026-08-16T12:00:00.000Z");
   const store = new ControlPlaneStore(path, () => now, (point) => {
@@ -383,7 +383,7 @@ test("a failed shadow rebuild leaves prior projection heads and rows active", as
 });
 
 test("projection repair rebuilds deleted disposable rows without changing authoritative history", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-control-projection-repair-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-control-projection-repair-test-"));
   const path = join(directory, "control-plane.db");
   let now = new Date("2026-08-16T12:00:00.000Z");
   const store = new ControlPlaneStore(path, () => now);
@@ -415,7 +415,7 @@ test("projection repair rebuilds deleted disposable rows without changing author
 });
 
 test("projection corruption fails its read closed without becoming command authority", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-control-projection-corruption-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-control-projection-corruption-test-"));
   const path = join(directory, "control-plane.db");
   let now = new Date("2026-08-16T12:00:00.000Z");
   const store = new ControlPlaneStore(path, () => now);
@@ -451,7 +451,7 @@ test("projection corruption fails its read closed without becoming command autho
 });
 
 test("online backup and staged restore preserve lineage, content, and next transaction sequence", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-control-backup-restore-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-control-backup-restore-test-"));
   const path = join(directory, "control-plane.db");
   const backupPath = join(directory, "backup", "control-plane.db");
   const restorePath = join(directory, "restore", "control-plane.db");
@@ -497,7 +497,7 @@ test("online backup and staged restore preserve lineage, content, and next trans
 });
 
 test("restore verification refuses an older sequence or another lineage", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-control-backup-fence-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-control-backup-fence-test-"));
   const path = join(directory, "control-plane.db");
   const backupPath = join(directory, "control-plane-backup.db");
   let now = new Date("2026-08-16T12:00:00.000Z");
@@ -528,7 +528,7 @@ test("restore verification refuses an older sequence or another lineage", async 
 });
 
 test("backup and restore paths are create-only and manifests bind exact content", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-control-backup-safety-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-control-backup-safety-test-"));
   const path = join(directory, "control-plane.db");
   const existingBackupPath = join(directory, "existing-backup.db");
   const backupPath = join(directory, "control-plane-backup.db");

@@ -46,7 +46,7 @@ the identity states.
    most one validated same-origin redirect per request, bounded response bytes,
    and no repository code execution.
 3. The selected contract and governance schema MUST come from retained bytes of
-   the active Core snapshot and remain digest-compatible with Fluent's bundled
+   the active Core snapshot and remain digest-compatible with Snowcat's bundled
    v1 contracts.
 4. `AGENTS.md`, `policies/agent-governance.json`, and `docs/README.md` MUST be
    regular Git blobs. `.agents/skills` MUST be a Git tree. A symlink, submodule,

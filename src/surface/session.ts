@@ -1,12 +1,12 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 export const SESSION_COOKIE = "fluent_session";
-const SESSION_PURPOSE = "fluent.operator-surface.session.v1";
+const SESSION_PURPOSE = "snowcat.operator-surface.session.v1";
 
 /**
  * The cookie value for a valid session: an HMAC-SHA256 keyed by the operator
  * token over a fixed purpose string. The browser holds a one-way digest, never
- * the token; rotating `FLUENT_APP_TOKEN` invalidates every cookie at once.
+ * the token; rotating `SNOWCAT_APP_TOKEN` invalidates every cookie at once.
  */
 export function sessionDigest(appToken: string): string {
   return createHmac("sha256", appToken).update(SESSION_PURPOSE).digest("hex");

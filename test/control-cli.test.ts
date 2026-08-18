@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 test("the local control CLI exposes kernel diagnostics and typed integrity execution", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-control-cli-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-control-cli-test-"));
   const path = join(directory, "control-plane.db");
   const run = controlRunner(path);
 
@@ -38,7 +38,7 @@ test("the local control CLI exposes kernel diagnostics and typed integrity execu
 });
 
 test("the local control CLI carries a backup manifest through verification and restore staging", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-control-cli-backup-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-control-cli-backup-test-"));
   const livePath = join(directory, "control-plane.db");
   const backupPath = join(directory, "backup", "control-plane.db");
   const manifestPath = join(directory, "backup-manifest.json");
@@ -93,7 +93,7 @@ test("the local control CLI carries a backup manifest through verification and r
 });
 
 test("the local control CLI repairs only disposable projection rows", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-control-cli-repair-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-control-cli-repair-test-"));
   const path = join(directory, "control-plane.db");
   const run = controlRunner(path);
   const metadata = JSON.parse(run("metadata").stdout) as Record<string, unknown>;
@@ -122,7 +122,7 @@ test("the local control CLI repairs only disposable projection rows", async () =
 });
 
 function controlRunner(path: string) {
-  const env = stringEnvironment({ ...process.env, FLUENT_CONTROL_DB: path });
+  const env = stringEnvironment({ ...process.env, SNOWCAT_CONTROL_DB: path });
   return (...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/control/cli.ts", ...args], {
       cwd: process.cwd(),

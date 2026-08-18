@@ -17,7 +17,7 @@ import { QueueStore } from "../src/queue/store.ts";
 import { enrollExampleRepository } from "./helpers/core-fixtures.ts";
 
 const clock = () => new Date("2026-08-18T20:00:00.000Z");
-process.env.FLUENT_GITHUB_TOKEN ??= "test-token";
+process.env.SNOWCAT_GITHUB_TOKEN ??= "test-token";
 const HEAD = "1".repeat(40);
 const TAG_SHA = "2".repeat(40);
 
@@ -83,7 +83,7 @@ test("go.mod parsing, frostyard module mapping, semver, and the svu-style sugges
 });
 
 test("the sweep proposes a release for an upstream ahead of its tag and a bump for a downstream behind the latest release, once each", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-dependency-sweep-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-dependency-sweep-test-"));
   const queue = new QueueStore(join(directory, "queue.db"), clock);
   test.after(() => queue.close());
   for (const slug of ["frostyard/clix", "frostyard/std", "frostyard/updex"]) queue.setRepositoryEnabled(slug, true);
@@ -162,7 +162,7 @@ test("the sweep proposes a release for an upstream ahead of its tag and a bump f
 });
 
 test("the enrolled sweep reads the control plane and skips enrolled repositories that are not opted in", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-dependency-enrolled-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-dependency-enrolled-test-"));
   const controlPath = join(directory, "control-plane.db");
   const store = new ControlPlaneStore(controlPath, clock);
   test.after(() => store.close());
@@ -179,5 +179,5 @@ test("the enrolled sweep reads the control plane and skips enrolled repositories
   assert.equal(swept.releaseNeeded.length, 1);
   assert.equal(swept.releaseNeeded[0]!.suggestedBump, "v1.0.1 (patch)");
   assert.deepEqual(swept.dependencyBumps.map((entry) => [entry.module, entry.from, entry.to]), [["github.com/frostyard/std", "v0.1.0", "v0.2.0"]]);
-  await assert.rejects(sweepInternalDependencies(queue, undefined, { fetcher: apiFetcher(routes).fetcher, clock }), /FLUENT_CONTROL_DB/);
+  await assert.rejects(sweepInternalDependencies(queue, undefined, { fetcher: apiFetcher(routes).fetcher, clock }), /SNOWCAT_CONTROL_DB/);
 });

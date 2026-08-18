@@ -32,9 +32,9 @@ const WEEK = 7 * DAY;
 
 /**
  * The maintenance program catalog: one entry per Core `maintenance_programs`
- * value Fluent implements (Core's enum may be wider; ADR-0039). A program is a read-only discovery root that finds exactly one
+ * value Snowcat implements (Core's enum may be wider; ADR-0039). A program is a read-only discovery root that finds exactly one
  * evidence-backed thing and proposes at most one bounded child; the operator
- * admits; a worker lands it through one pull request; Fluent verifies the
+ * admits; a worker lands it through one pull request; Snowcat verifies the
  * artifact. Entries differ in what they look at (`discovery`), how often a
  * no-finding answer suppresses re-asking (`cooldownSeconds`), how wide a child
  * may be (`childCeiling`), and how children enter the queue (`childAdmission`,

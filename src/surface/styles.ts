@@ -177,7 +177,7 @@ body{margin:0;background-color:var(--ink);background-image:var(--gradient-page);
 a{color:var(--link)}a:hover{color:var(--link-hover)}
 button{font-family:inherit}
 code{font-family:var(--font-mono);color:var(--text-mono-accent)}
-/* Fluent surface additions (fl-*), values lifted from the Inbox artboard */
+/* Snowcat surface additions (fl-*), values lifted from the Inbox artboard */
 .fl-host{display:grid;gap:4px;margin:0 6px 4px;padding-bottom:12px;border-bottom:1px solid var(--line)}
 .fl-host span{color:#7cbddc;font:700 9.5px var(--font-mono);letter-spacing:.14em;text-transform:uppercase}
 .fl-host code{background:var(--surface-code);border:1px solid var(--line);color:var(--text-body);font-size:12px;font-family:var(--font-sans);padding:6px 8px;border-radius:var(--radius-tag);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

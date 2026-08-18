@@ -1,13 +1,13 @@
 ---
-name: write-fluent-issues
-description: Write a GitHub issue that Fluent can import as one bounded, verifiable work item — objective, scope, evidence-shaped acceptance criteria, and constraints a worker cannot misread. Use whenever asked to file, refine, or review an issue that will be labeled for the Fluent queue, or to turn a discovery finding into an implementation item.
+name: write-snowcat-issues
+description: Write a GitHub issue that Snowcat can import as one bounded, verifiable work item — objective, scope, evidence-shaped acceptance criteria, and constraints a worker cannot misread. Use whenever asked to file, refine, or review an issue that will be labeled for the Snowcat queue, or to turn a discovery finding into an implementation item.
 ---
 
-# Write an issue for the Fluent queue
+# Write an issue for the Snowcat queue
 
 Produce an issue that `npm run queue -- import-issues <owner/repo> --label
 <label>` turns into one `issue-resolution` item a worker can claim, finish in
-one lease, and complete with evidence Fluent can verify. Done looks like: a
+one lease, and complete with evidence Snowcat can verify. Done looks like: a
 worker reads only the issue, does exactly one thing, opens one conventional
 pull request, and `complete_work` is accepted on the first try.
 
@@ -49,7 +49,7 @@ requests before starting. Write for that reader.
    ask" if the decision is the operator's. If the fix is really an
    organization decision (a core ADR), say so and stop; do not ask a worker
    to choose.
-6. **Add the trigger label** (`fluent`, or the repository's convention) and
+6. **Add the trigger label** (`snowcat`, or the repository's convention) and
    nothing else the queue needs. Set priority at import (`--priority N`),
    not in the issue. One issue = one item; if it is two changes, it is two
    issues.
@@ -74,7 +74,7 @@ requests before starting. Write for that reader.
 - **Body over 16,000 characters** → truncated in the item; move detail into
   a linked doc or gist.
 - **Forgetting the private-repository token** → completions come back
-  `unverified`; make sure the MCP server has `FLUENT_GITHUB_TOKEN`
+  `unverified`; make sure the MCP server has `SNOWCAT_GITHUB_TOKEN`
   ([runbook](../../../docs/design/queue-operations.md)).
 
 ## Worked examples (2026-08-17)
@@ -90,9 +90,9 @@ requests before starting. Write for that reader.
   ci-implementation → #308).
 - **Good — scoped negative constraints:** "No `SCHEMA_VERSION`/rung change;
   do **not** add an MCP tool" kept a queue feature inside the boundary
-  (frostyard/fluent#2 → #5, #1 → #11).
+  (frostyard/snowcat#2 → #5, #1 → #11).
 - **Weak, fixed by later items:** a requeue whose reason lived only in an
   event; the next worker never saw it and opened a duplicate PR
-  (frostyard/fluent#2 → #6). Fixed by `operatorNotes` (#7) and the skill
+  (frostyard/snowcat#2 → #6). Fixed by `operatorNotes` (#7) and the skill
   rule to check for existing work (#8) — but the lesson for issue authors
   stands: assume the reader has *only* the issue and the item.

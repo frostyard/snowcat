@@ -1,13 +1,13 @@
 {
   "mcpServers": {
-    "fluent": {
+    "snowcat": {
       "type": "stdio",
       "command": "/home/linuxbrew/.linuxbrew/bin/npm",
       "args": ["run", "--silent", "mcp"],
       "env": {
-        "FLUENT_QUEUE_DB": "${FLUENT_QUEUE_DB:-/var/lib/fluent/queue.db}",
-        "FLUENT_CONTROL_DB": "${FLUENT_CONTROL_DB:-/var/lib/fluent/control-plane.db}",
-        "FLUENT_GITHUB_TOKEN": "${FLUENT_GITHUB_TOKEN:-}"
+        "SNOWCAT_QUEUE_DB": "${SNOWCAT_QUEUE_DB:-/var/lib/snowcat/queue.db}",
+        "SNOWCAT_CONTROL_DB": "${SNOWCAT_CONTROL_DB:-/var/lib/snowcat/control-plane.db}",
+        "SNOWCAT_GITHUB_TOKEN": "${SNOWCAT_GITHUB_TOKEN:-}"
       }
     }
   }

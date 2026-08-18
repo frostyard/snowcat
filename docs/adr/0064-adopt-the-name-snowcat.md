@@ -73,7 +73,7 @@ link-only maintenance later.
 
 ## References
 
-- Shapes: [how Fluent works](../design/how-fluent-works.md),
+- Shapes: [how Snowcat works](../design/how-snowcat-works.md),
   [queue operations runbook](../design/queue-operations.md),
   [ubiquitous language](../domain/ubiquitous-language.md),
   [work queue](../specs/work-queue.md)

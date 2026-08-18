@@ -23,7 +23,7 @@ and [local repository holds](../specs/repository-local-holds.md), and
 ## Overview
 
 The control-plane kernel is the separately identified SQLite store that will
-hold Fluent's typed authoritative records, operational history, and rebuildable
+hold Snowcat's typed authoritative records, operational history, and rebuildable
 read models. The implemented slices initialize the kernel and one stable
 implicit local-operator principal, execute one system integrity command, and
 publish subject-lookup and event-cursor projection generations. The current
@@ -67,8 +67,8 @@ queue is the claim-eligibility hook.
 ### Database boundary
 
 [`ControlPlaneStore`](../../src/control/store.ts) owns the target database.
-`FLUENT_CONTROL_DB` selects its path and defaults to
-`./data/control-plane.db`; `FLUENT_QUEUE_DB` selects the queue. The path
+`SNOWCAT_CONTROL_DB` selects its path and defaults to
+`./data/control-plane.db`; `SNOWCAT_QUEUE_DB` selects the queue. The path
 helper rejects equal resolved paths, while store startup also recognizes the
 queue tables and refuses to initialize over them.
 
@@ -89,13 +89,13 @@ repository-hold, and initial GitHub-observation identity contracts:
 
 | Registry | Initial member | Meaning |
 | --- | --- | --- |
-| Subject kind | `control-plane-database` | One Fluent-native database lineage with UUIDv7 identity |
+| Subject kind | `control-plane-database` | One Snowcat-native database lineage with UUIDv7 identity |
 | Subject kind | `operator-principal` | The stable human-authority identity implicitly bound by local stdio |
-| Subject kind | `core-snapshot` | One Fluent-native retained catalog identity with UUIDv7 identity |
+| Subject kind | `core-snapshot` | One Snowcat-native retained catalog identity with UUIDv7 identity |
 | Subject kind | `github-repository` | One immutable source-native GitHub repository identity |
 | Subject kinds | `github-app-hook`, `github-pull-request`, `github-check-run`, `github-commit-status` | Exact source-native GitHub observation identities qualified by App or immutable repository identity |
 | Revision kind | `sha256`, `transaction-sequence`, `core-catalog-sha256`, `git-commit-sha1` | Exact payload, database-state, catalog, or source-commit identity |
-| Source kind | `fluent-system` / `kernel` or `github-observer` | The deterministic kernel bootstrap or GitHub reconciliation source; neither impersonates GitHub acquisition |
+| Source kind | `snowcat-system` / `kernel` or `github-observer` | The deterministic kernel bootstrap or GitHub reconciliation source; neither impersonates GitHub acquisition |
 | Source kind | `github-repository` | Immutable GitHub repository ID plus typed Git commit revision |
 | Source kind | `operator-principal` | Stored UUIDv7 human authority with no caller-selected revision |
 | Source kind | `github-api` | Bounded selected metadata from `api.github.com` |
@@ -331,7 +331,7 @@ events, receipts, or transaction order.
 ### Backup and restore staging
 
 Online backup reads the live file through a dedicated read-only SQLite
-connection and writes only to a new path. Fluent never uses filesystem copy on
+connection and writes only to a new path. Snowcat never uses filesystem copy on
 an open WAL database and never overwrites an existing backup. It then opens the
 artifact through the same target validator, runs SQLite quick-check, and
 requires usable projection heads.
@@ -362,7 +362,7 @@ diagnostics, integrity execution, projection rebuild/repair, and backup
 verification through `npm run --silent control`. It emits JSON for scripting but is a
 host-local operator surface, not a worker protocol or authenticated remote API.
 Backup verification and restore staging dispatch without opening the configured
-live database, preventing an absent `FLUENT_CONTROL_DB` from being initialized
+live database, preventing an absent `SNOWCAT_CONTROL_DB` from being initialized
 as an inspection side effect.
 
 Normal store construction validates the complete projection catalog. The
@@ -397,7 +397,7 @@ work lineage are later slices in the
 
 ## Operational notes
 
-- Do not point `FLUENT_CONTROL_DB` at `FLUENT_QUEUE_DB`. The queue database is
+- Do not point `SNOWCAT_CONTROL_DB` at `SNOWCAT_QUEUE_DB`. The queue database is
   the work engine's own store, never a control-plane initialization input.
 - The target file, WAL, and backups must be handled as `restricted` assets even
   though the three initialization occurrences are `organization` class.

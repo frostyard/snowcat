@@ -1,13 +1,13 @@
 # Plan: Product foundation roadmap
 
-This plan moves Fluent from the completed queue spike and Discovery PRD to an
+This plan moves Snowcat from the completed queue spike and Discovery PRD to an
 implementation-ready, dogfoodable v1. It orders decisions and vertical outcomes
 rather than treating all 389 requirements as one build. Before an implementation
 phase begins, that phase must author and link its current design and implementing
 spec; this roadmap does not describe unimplemented architecture as current
 reality.
 
-Fluent's canonical source is `frostyard/fluent` under
+Snowcat's canonical source is `frostyard/snowcat` under
 [ADR-0045](../adr/0045-host-fluent-under-frostyard.md). Organization ownership
 does not itself enroll the repository in the fleet.
 
@@ -40,10 +40,10 @@ annotated, not rewritten.
 ## Phase 0 — Canonical language and documentation integrity (completed)
 
 - Establish the canonical
-  [Fluent ubiquitous language](../domain/ubiquitous-language.md) under
+  [Snowcat ubiquitous language](../domain/ubiquitous-language.md) under
   [ADR-0036](../adr/0036-maintain-a-canonical-domain-language.md).
 - Add the portable
-  [`model-fluent-domain`](../../.agents/skills/model-fluent-domain/SKILL.md)
+  [`model-snowcat-domain`](../../.agents/skills/model-snowcat-domain/SKILL.md)
   procedure and root compatibility symlink.
 - Enforce links, indexing, ADR and PRD numbering, domain-entry shape, Accepted
   term sources, and the canonical symlink through `npm run check:docs` and the
@@ -82,7 +82,7 @@ annotated, not rewritten.
   late-data queries, and idempotency receipts.
 - Preserve the canonical distinction between policy decision and effective
   authority in the
-  [Fluent ubiquitous language](../domain/ubiquitous-language.md), and apply
+  [Snowcat ubiquitous language](../domain/ubiquitous-language.md), and apply
   [ADR-0038](../adr/0038-separate-lifecycle-pause-from-runtime-interventions.md)
   when specifying lifecycle and runtime intervention records.
 - Refine exact subject kinds, record envelopes, command and event schemas,
@@ -99,16 +99,16 @@ annotated, not rewritten.
 ## Phase 2 — Publish the core authoring contract (large)
 
 - Merged core PR #80 now supplies the strict repository declaration,
-  repository-surface, and agent-governance foundation. Fluent verifies that
+  repository-surface, and agent-governance foundation. Snowcat verifies that
   exact current slice through the
   [core snapshot ingestion design](../design/core-snapshot-ingestion.md),
   [verification contract](../specs/core-snapshot-verification.md), and
   [activation contract](../specs/core-snapshot-activation.md), and
-  [ingestion plan](core-snapshot-ingestion.md). Fluent can now retain and
+  [ingestion plan](core-snapshot-ingestion.md). Snowcat can now retain and
   activate the disabled fixture declaration without treating it as enrollment.
   The remaining record kinds below keep this phase open.
 - Core PR #81 proposes the versioned verification-profile producer contract.
-  Fluent's backward-compatible consumer support is implemented first through
+  Snowcat's backward-compatible consumer support is implemented first through
   the [success-measure verification design](../design/success-measure-verification.md)
   and [profile-ingestion contract](../specs/verification-profile-ingestion.md):
   legacy snapshots remain valid, while the extension is pinned, retained, and
@@ -175,7 +175,7 @@ annotated, not rewritten.
   repository-installation acquisition now classifies exact read-only access,
   suspension, absence, mismatch, and unavailability without changing
   enrollment, and its typed command durably distinguishes source-backed access
-  outcomes from Fluent-observed unavailability. Automatic gap creation,
+  outcomes from Snowcat-observed unavailability. Automatic gap creation,
   per-repository application, and production credentials remain. The App-wide
   delivery audit now has one durable completion-relative schedule, fixed
   ten-minute recoverable lease, bounded 1/5/15-minute incomplete retry, and
@@ -212,7 +212,7 @@ annotated, not rewritten.
   gaps, repair, retention protection, outage behavior, and observation cursors
   before relying on GitHub state as a gate. Fork handling remains post-v1 for
   the required-check adapter.
-- **Done when:** Fluent independently distinguishes a valid worker PR, a wrong-
+- **Done when:** Snowcat independently distinguishes a valid worker PR, a wrong-
   repository artifact, a stale-attempt artifact, a GitHub outage, formal
   maintainer changes requested, and the exact reviewed merge on a real enrolled
   test repository.

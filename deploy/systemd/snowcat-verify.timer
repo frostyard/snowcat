@@ -1,0 +1,11 @@
+# Artifact verification every 15 minutes. Enable with
+# `systemctl enable --now snowcat-verify.timer`.
+[Unit]
+Description=Snowcat: refresh artifact verification every 15 minutes
+
+[Timer]
+OnCalendar=*:0/15
+Unit=snowcat-verify.service
+
+[Install]
+WantedBy=timers.target

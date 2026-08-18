@@ -29,7 +29,7 @@ test("Core poll policy validates configuration and applies bounded source backof
 });
 
 test("Core poll leases exclude overlap, recover after expiry, and persist completion-relative schedules", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-core-poll-state-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-core-poll-state-test-"));
   const path = join(directory, "control-plane.db");
   let now = new Date("2026-08-16T10:00:00.000Z");
   const first = new ControlPlaneStore(path, () => now);
@@ -132,7 +132,7 @@ test("Core poll leases exclude overlap, recover after expiry, and persist comple
     execFileSync(process.execPath, ["--import", "tsx", "src/core/cli.ts", "poll-state"], {
       cwd: process.cwd(),
       encoding: "utf8",
-      env: { ...process.env, FLUENT_CONTROL_DB: path },
+      env: { ...process.env, SNOWCAT_CONTROL_DB: path },
     }),
   ) as Record<string, unknown>;
   assert.equal(cliState.completedRunCount, 3);
@@ -141,14 +141,14 @@ test("Core poll leases exclude overlap, recover after expiry, and persist comple
   const invalidInterval = spawnSync(process.execPath, ["--import", "tsx", "src/core/cli.ts", "poll-once"], {
     cwd: process.cwd(),
     encoding: "utf8",
-    env: { ...process.env, FLUENT_CONTROL_DB: path, FLUENT_CORE_POLL_INTERVAL_SECONDS: "0" },
+    env: { ...process.env, SNOWCAT_CONTROL_DB: path, SNOWCAT_CORE_POLL_INTERVAL_SECONDS: "0" },
   });
   assert.notEqual(invalidInterval.status, 0);
   assert.match(invalidInterval.stderr, /canonical positive integer/);
 });
 
 test("poll-once completes expected source failures and reserves controller errors for infrastructure failure", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-core-poll-once-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-core-poll-once-test-"));
   let now = new Date("2026-08-16T12:00:00.000Z");
   const store = new ControlPlaneStore(join(directory, "control-plane.db"), () => now);
   const expectedFailure: CoreSourceSynchronizer = async () => ({
@@ -255,7 +255,7 @@ test("only consecutive equivalent invalid or continuity outcomes suppress detail
 });
 
 test("startup fails closed on malformed Core poll operational state", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "fluent-core-poll-tamper-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-core-poll-tamper-test-"));
   const path = join(directory, "control-plane.db");
   const store = new ControlPlaneStore(path, () => new Date("2026-08-16T15:00:00.000Z"));
   store.close();

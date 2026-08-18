@@ -40,7 +40,7 @@ const EXPECTED_SCHEMA_DIGESTS = {
   settings: "sha256:a0008dbdd77d11e604ddee20a12218d1c692748fe80d037d589d2acd051871e1",
 } as const;
 /**
- * Earlier revisions of a v1 schema that Fluent reviewed and bundled before a
+ * Earlier revisions of a v1 schema that Snowcat reviewed and bundled before a
  * compatible widening (core ADR-0039). A candidate or retained snapshot whose
  * schema bytes match one of these is validated with exactly that revision, so
  * snapshots accepted under the old bytes stay valid, rollback to them works,
@@ -591,7 +591,7 @@ function loadBundledSchemas(entries: Map<string, CoreTreeEntry>): {
       const superseded = (SUPERSEDED_SCHEMA_REVISIONS[kind] ?? []).find((revision) => revision.digest === fetchedDigest);
       if (!superseded) {
         throw new CoreValidationError(
-          `${fetched.path}: schema bytes do not match Fluent's bundled v1 contract`,
+          `${fetched.path}: schema bytes do not match Snowcat's bundled v1 contract`,
           [`expected ${expectedDigest}`, `received ${fetchedDigest}`],
         );
       }

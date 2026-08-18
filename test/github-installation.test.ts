@@ -16,7 +16,7 @@ test("repository installation inspection binds the configured App without retain
     appId: "4567",
     repositoryId: "github.com:9001",
     owner: "frostyard",
-    name: "fluent",
+    name: "snowcat",
     getAppJwt: () => jwt,
     now,
     fetcher: async (input, init) => {
@@ -26,7 +26,7 @@ test("repository installation inspection binds the configured App without retain
     },
   });
   assert.deepEqual(requests, [{
-    url: "https://api.github.com/repos/frostyard/fluent/installation",
+    url: "https://api.github.com/repos/frostyard/snowcat/installation",
     authorization: `Bearer ${jwt}`,
   }]);
   assert.equal(result.kind, "observed");
@@ -46,7 +46,7 @@ test("installation inspection distinguishes absence, suspension, and permission 
     appId: "4567",
     repositoryId: "github.com:9001",
     owner: "frostyard",
-    name: "fluent",
+    name: "snowcat",
     getAppJwt: () => jwt,
     now,
   };
@@ -94,7 +94,7 @@ test("installation inspection bounds redirects, bodies, and JWT refresh", async 
     if (requestCount === 1) {
       return new Response(null, {
         status: 301,
-        headers: { location: "/repos/frostyard/fluent-renamed/installation" },
+        headers: { location: "/repos/frostyard/snowcat-renamed/installation" },
       });
     }
     return Response.json(installation());
@@ -103,7 +103,7 @@ test("installation inspection bounds redirects, bodies, and JWT refresh", async 
     appId: "4567",
     repositoryId: "github.com:9001",
     owner: "frostyard",
-    name: "fluent",
+    name: "snowcat",
     getAppJwt: () => {
       jwtCount += 1;
       return jwt;
@@ -119,11 +119,11 @@ test("installation inspection bounds redirects, bodies, and JWT refresh", async 
     appId: "4567",
     repositoryId: "github.com:9001",
     owner: "frostyard",
-    name: "fluent",
+    name: "snowcat",
     getAppJwt: () => jwt,
     fetcher: async () => new Response(null, {
       status: 301,
-      headers: { location: "https://attacker.example/repos/frostyard/fluent/installation" },
+      headers: { location: "https://attacker.example/repos/frostyard/snowcat/installation" },
     }),
     now,
   });
@@ -133,7 +133,7 @@ test("installation inspection bounds redirects, bodies, and JWT refresh", async 
     appId: "4567",
     repositoryId: "github.com:9001",
     owner: "frostyard",
-    name: "fluent",
+    name: "snowcat",
     getAppJwt: () => jwt,
     fetcher: async () => new Response("{}", { headers: { "content-length": "1048577" } }),
     now,

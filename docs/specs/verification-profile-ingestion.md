@@ -1,6 +1,6 @@
 # Spec: Verification-profile ingestion
 
-This contract governs Fluent's independent validation and retention of the
+This contract governs Snowcat's independent validation and retention of the
 versioned verification-profile definitions published in a Core authority
 snapshot. It covers import compatibility and profile immutability, not goal
 activation or execution of verification mechanisms.
@@ -11,7 +11,7 @@ The optional profile-capable authority extension consists of:
 
 | Path | Cardinality | Constraint |
 | --- | --- | --- |
-| `organization/schemas/v1/verification-profile.schema.json` | zero or one | when present, exact bytes and canonical JSON MUST match Fluent's bundled schema |
+| `organization/schemas/v1/verification-profile.schema.json` | zero or one | when present, exact bytes and canonical JSON MUST match Snowcat's bundled schema |
 | `organization/contracts/verification-profiles/<id>/v<version>.json` | zero or more | forbidden unless the profile schema is present |
 | `organization/fixtures/v1/valid/verification-profile*.json` | one or more when schema present | every fixture MUST pass the live validation path |
 | `organization/fixtures/v1/invalid/verification-profile*.json` | one or more when schema present | every fixture MUST fail the live validation path |
@@ -65,7 +65,7 @@ payloads without that field and with the original three schema digests.
 11. An attributed operator rollback MAY activate a retained older snapshot
     without the extension. Reapplying a later descendant still requires normal
     validation and continuity.
-12. Profile validation MUST NOT execute a mechanism, claim that Fluent supports
+12. Profile validation MUST NOT execute a mechanism, claim that Snowcat supports
     a binding, collect evidence, establish a result, activate a goal, admit
     work, or change enrollment.
 
