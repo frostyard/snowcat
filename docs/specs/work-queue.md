@@ -76,6 +76,7 @@ npm run queue -- requeue <work-item-id> <reason>
 npm run queue -- cancel <work-item-id> <reason>
 npm run queue -- prioritize <work-item-id> <priority> <reason>
 npm run queue -- note <work-item-id> <text>
+npm run queue -- attach-artifact <work-item-id> <url> [--kind pull-request|issue] [--description <text>]
 npm run queue -- list [proposed|queued|claimed|completed|blocked|cancelled]
 npm run queue -- show <work-item-id>
 npm run queue -- events [--since <sequence>] [--repository <owner/repo>] [--limit <1-500>]
@@ -136,6 +137,14 @@ on earlier ones ("PR #5 already exists — re-report it, no code change needed")
 when no state change is due. Notes are advice, not definition: they override
 nothing in the objective, instructions, acceptance criteria, or actions. The
 command is not exposed through MCP.
+
+`attach-artifact` records one pull request or issue the worker did not report
+against a `completed` item — typically a follow-up that stayed on a local
+branch whose pull request the operator opened by hand — so `delivery` and
+later `verify-artifacts` passes see it. The URL is checked against GitHub
+first, exactly as `complete_work` checks a worker's report; the kind defaults
+from the URL path. It is an operator command only and is not exposed through
+MCP (rule 41).
 
 ## Rules
 
@@ -395,9 +404,10 @@ command is not exposed through MCP.
     change is required.
 40. The operator surface's mutations MUST be exactly the CLI's operator
     commands — `approve`, `reject`, `defer`, `requeue`, `cancel`,
-    `prioritize`, `note`, and `verify-artifacts` — invoked through the same
-    `QueueStore` methods and `refreshArtifactVerifications`, attributed to
-    the actor `operator:web`, and MUST NOT introduce a state transition,
+    `prioritize`, `note`, `attach-artifact`, and `verify-artifacts` —
+    invoked through the same `QueueStore` methods,
+    `attachVerifiedArtifact`, and `refreshArtifactVerifications`, attributed
+    to the actor `operator:web`, and MUST NOT introduce a state transition,
     batch action, or worker-facing endpoint. Every surface mutation MUST be
     a same-origin `POST` behind the session cookie, MUST carry the item's
     rendered `status` and `updatedAt` as the rule 39 precondition, and on a
@@ -405,6 +415,30 @@ command is not exposed through MCP.
     message that it changed since it was read. Its events MUST be
     indistinguishable in shape from the CLI's, differing only in actor, so
     `show`, `events`, and `watch` report browser and CLI decisions alike.
+41. `attach-artifact <id> <url> [--kind pull-request|issue] [--description
+    <text>]` MUST append one `issue` or `pull-request` artifact to a
+    `completed` item's `result.artifacts` and MUST refuse every other status,
+    leaving the item unchanged with no event. Only an actor in the
+    `operator:` or `policy:` namespace MAY attach; a worker identity MUST be
+    rejected and no MCP tool MAY attach. Before the write, the caller MUST
+    check the URL against GitHub exactly as rule 33 checks a worker's report,
+    using the item's own repository: a rejected answer (another repository,
+    wrong number or kind, absent) MUST refuse the attach with the reason and
+    write nothing; an unavailable answer MUST attach the artifact with
+    `verification.status = "unverified"` and the reason; a confirmed answer
+    MUST attach it `verified` with the observed state. The stored
+    `verification` MUST be GitHub's answer — `QueueStore.attachArtifact`
+    MUST refuse an artifact without one and MUST NOT invent one — and the
+    same URL MUST be attached at most once per item (`artifact already
+    reported: <url>`). Attaching MUST NOT require the item's `allowedActions`
+    to include `open-pr` or `open-issue` (the operator, not the worker,
+    produced the artifact), MUST NOT change the result's summary or evidence,
+    and MUST record one `artifact.attached` event naming `url`, `kind`,
+    `status`, and `state`; from then on the artifact is subject to rules
+    34–35 like any reported one. The command MUST honor the rule 39
+    precondition (`--if-updated-at`, status derived from the item's current
+    status) and MUST print the item without a lease token. It requires no
+    schema change: `result_json` already holds artifacts.
 
 ## Derived artifacts
 
@@ -413,7 +447,7 @@ command is not exposed through MCP.
 | SQLite schema | Created and upgraded by `QueueStore`'s migration ladder from this work-item model; admission triggers and `user_version` per rules 20–21 |
 | Backup manifest | Derived by `backup` and re-derived by `verify-backup` per rules 28–29 |
 | Issue import | `import-issues` maps labeled open GitHub issues to proposed `issue-resolution` roots per rules 30–31 |
-| Artifact verification | Completion-time and `verify-artifacts` observations per rules 33–35; `delivery` derived per rule 35 |
+| Artifact verification | Completion-time, `attach-artifact`, and `verify-artifacts` observations per rules 33–35 and 41; `delivery` derived per rule 35 |
 | MCP worker behavior | Portable `work-fluent-queue` skill constrained by this contract |
 | Testing-gap seed | Deterministic CLI instance of this contract |
 

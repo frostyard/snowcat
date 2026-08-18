@@ -171,7 +171,11 @@ removed. -->
   [`src/queue/programs.ts`](src/queue/programs.ts); a new program is one
   entry there plus its Core enum value). `complete_work` verifies issue and pull-request artifacts against
   GitHub (refuse on mismatch, `unverified` on outage); run `queue --
-  verify-artifacts` to refresh and to derive `delivery`. When
+  verify-artifacts` to refresh and to derive `delivery`, and `queue --
+  attach-artifact <id> <url>` (operator only, never an MCP tool) to record a
+  pull request or issue the operator carried the last mile against a
+  completed item — it verifies against GitHub first and never fabricates a
+  `verification`. When
   `FLUENT_CONTROL_DB` is set, `claim_work` also requires the repository to be
   `enrolled` in the control-plane store
   ([`src/queue/eligibility.ts`](src/queue/eligibility.ts)); the hook is the

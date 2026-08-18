@@ -10,7 +10,9 @@ import { itemPage } from "./pages-item.ts";
 import { boardPage, repositoriesPage } from "./pages-repositories.ts";
 import { itemPath, repositoryPath } from "./pages.ts";
 import {
+  ATTACH_ARTIFACT_ACTION,
   MutationInputError,
+  applyAttachArtifact,
   applyItemMutation,
   applyVerifyArtifacts,
   isPreconditionMismatch,
@@ -249,16 +251,21 @@ export function createSurfaceApp(options: SurfaceOptions): Hono {
 
   // Mutations: exactly the CLI's operator commands, attributed operator:web,
   // guarded by the precondition every form carries from render.
+  // `attach-artifact` is the one that also asks GitHub before the write.
   app.post("/items/:id/:mutation", requireConfigured, requireSession, requireSameOrigin, (context) =>
     page(async (stores, enrollments, chrome) => {
       const id = context.req.param("id");
       const mutation = context.req.param("mutation");
-      if (!(itemMutations as readonly string[]).includes(mutation)) {
+      if (!(itemMutations as readonly string[]).includes(mutation) && mutation !== ATTACH_ARTIFACT_ACTION) {
         return new Response(notFoundPage(chrome, `No such action: ${mutation}.`), htmlHeaders(404));
       }
       const body = await formBody(context);
       const back = returnPath(body, itemPath(id));
       try {
+        if (mutation === ATTACH_ARTIFACT_ACTION) {
+          const outcome = await applyAttachArtifact(stores.queue, id, body, stores.verifier ?? {});
+          return redirectWithBanner(back, outcome.eventType, `${outcome.url} ${outcome.state ?? outcome.status}`);
+        }
         const outcome = applyItemMutation(stores.queue, mutation as ItemMutation, id, body);
         return redirectWithBanner(back, outcome.eventType);
       } catch (error) {
@@ -272,7 +279,7 @@ export function createSurfaceApp(options: SurfaceOptions): Hono {
           return new Response(itemPage({ ...chrome, banner }, item), htmlHeaders(409));
         }
         const status = error instanceof MutationInputError ? 400 : 409;
-        const banner = { tone: "error" as const, text: `${capitalize(mutation)} was not applied: ${message(error)}` };
+        const banner = { tone: "error" as const, text: `${capitalize(mutation.replace("-", " "))} was not applied: ${message(error)}` };
         return new Response(itemPage({ ...chrome, banner }, item), htmlHeaders(status));
       }
     })(context),

@@ -873,6 +873,70 @@ export class QueueStore {
     });
   }
 
+  /**
+   * Appends one issue or pull-request artifact to a completed item's result
+   * and records `artifact.attached`. This is the operator's way to record a
+   * GitHub artifact the worker did not report — typically a local-only
+   * follow-up whose pull request the operator opened by hand — so `delivery`
+   * and later `verify-artifacts` passes see it. The caller MUST have checked
+   * the URL against GitHub first and supplies that observation as
+   * `verification` (`verified`, or `unverified` with the reason); the store
+   * never invents one and never accepts an artifact without one. Only an
+   * operator or policy actor may attach; the URL must be a GitHub issue or
+   * pull-request URL in the item's own repository; the same URL is attached
+   * at most once. Unlike a worker's completion report, attaching does not
+   * require the item's `allowedActions` to include `open-pr` or
+   * `open-issue`: the operator, not the worker, produced the artifact.
+   * Honors the rule 39 precondition like `note`.
+   */
+  attachArtifact(
+    id: string,
+    actor: string,
+    artifact: { kind: "issue" | "pull-request"; url: string; description?: string; verification: ArtifactVerification },
+    precondition?: MutationPrecondition,
+  ): WorkItem {
+    validateOperatorActor(actor, "attach-artifact");
+    if (artifact.kind !== "issue" && artifact.kind !== "pull-request") {
+      throw new Error(`artifact kind must be issue or pull-request: ${String(artifact.kind)}`);
+    }
+    if (artifact.verification === undefined) throw new Error("attached artifact requires a verification");
+    validateVerification(artifact.verification);
+    if (artifact.description !== undefined) {
+      if (!artifact.description.trim()) throw new Error("artifact description must not be empty");
+      if (artifact.description.length > MAX_OPERATOR_NOTE_LENGTH) {
+        throw new Error(`artifact description exceeds ${MAX_OPERATOR_NOTE_LENGTH} characters`);
+      }
+    }
+    return this.transaction(() => {
+      const item = this.getRequired(id);
+      this.assertPrecondition(item, precondition);
+      if (item.status !== "completed" || !item.result) throw new Error(`work item is not completed: ${id}`);
+      const attached: WorkArtifact = {
+        kind: artifact.kind,
+        url: artifact.url,
+        ...(artifact.description !== undefined ? { description: artifact.description } : {}),
+        verification: artifact.verification,
+      };
+      validateArtifact(attached);
+      assertGitHubArtifactScope(item.repository, attached);
+      if (item.result.artifacts.some((existing) => existing.url === attached.url)) {
+        throw new Error(`artifact already reported: ${attached.url}`);
+      }
+      const artifacts = [...item.result.artifacts, attached];
+      const now = this.now();
+      this.db
+        .prepare("UPDATE work_items SET result_json = ?, updated_at = ? WHERE id = ?")
+        .run(JSON.stringify({ ...item.result, artifacts }), now, id);
+      this.addEvent(id, "artifact.attached", actor, {
+        url: attached.url,
+        kind: attached.kind,
+        status: artifact.verification.status,
+        state: artifact.verification.status === "verified" ? artifact.verification.state : undefined,
+      });
+      return this.getRequired(id);
+    });
+  }
+
   events(id: string): WorkEvent[] {
     return (this.db.prepare("SELECT * FROM work_events WHERE work_item_id = ? ORDER BY sequence").all(id) as Row[]).map(
       decodeWorkEvent,
@@ -1204,22 +1268,24 @@ function validateWorkDefinition(input: {
 function validateResult(result: WorkResult): void {
   if (!result.summary.trim()) throw new Error("result summary is required");
   if (result.evidence.some((evidence) => !evidence.trim())) throw new Error("evidence entries must not be empty");
-  for (const artifact of result.artifacts) {
-    if (artifact.verification !== undefined) {
-      if (artifact.kind !== "issue" && artifact.kind !== "pull-request") {
-        throw new Error(`artifact ${artifact.kind} cannot carry verification`);
-      }
-      validateVerification(artifact.verification);
+  for (const artifact of result.artifacts) validateArtifact(artifact);
+}
+
+function validateArtifact(artifact: WorkArtifact): void {
+  if (artifact.verification !== undefined) {
+    if (artifact.kind !== "issue" && artifact.kind !== "pull-request") {
+      throw new Error(`artifact ${artifact.kind} cannot carry verification`);
     }
-    let url: URL;
-    try {
-      url = new URL(artifact.url);
-    } catch {
-      throw new Error("artifact URLs must be valid HTTPS URLs");
-    }
-    if (url.protocol !== "https:") throw new Error("artifact URLs must use HTTPS");
-    if (url.username || url.password) throw new Error("artifact URLs must not contain credentials");
+    validateVerification(artifact.verification);
   }
+  let url: URL;
+  try {
+    url = new URL(artifact.url);
+  } catch {
+    throw new Error("artifact URLs must be valid HTTPS URLs");
+  }
+  if (url.protocol !== "https:") throw new Error("artifact URLs must use HTTPS");
+  if (url.username || url.password) throw new Error("artifact URLs must not contain credentials");
 }
 
 function assertGitHubArtifactScope(repository: string, artifact: WorkArtifact): void {

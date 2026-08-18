@@ -3,7 +3,7 @@ import { html, type SafeHtml } from "./html.ts";
 import type { ItemData } from "./item.ts";
 import { artifactLabel, clock, document, itemPath, payloadGist, repositoryPath, shell, type PageContext } from "./pages.ts";
 import { enrollmentBadge } from "./pages-repositories.ts";
-import { admissionForm, deferForm, exitForm, noteForm, prioritizeForm, verifyForm } from "./forms.ts";
+import { admissionForm, attachArtifactForm, deferForm, exitForm, noteForm, prioritizeForm, verifyForm } from "./forms.ts";
 
 export function itemPage(context: PageContext, data: ItemData): string {
   const item = data.item;
@@ -49,6 +49,7 @@ function actionsCard(item: ObservableWorkItem): SafeHtml {
   if (item.status === "completed" && (item.result?.artifacts ?? []).some((artifact) => artifact.kind === "issue" || artifact.kind === "pull-request")) {
     forms.push(html`<div class="fl-decide"><div class="fl-actions">${verifyForm(item.repository, here, { label: "Re-verify repository artifacts" })}</div><small class="fl-sub">Re-checks every pending issue and pull-request artifact in ${item.repository} against GitHub.</small></div>`);
   }
+  if (item.status === "completed") forms.push(attachArtifactForm(item, here));
   forms.push(noteForm(item, here));
   return html`<section class="fl-group" id="actions"><div class="fl-group-head"><h2>Decide</h2><span>as operator:web · ${item.status}</span></div><div class="fl-def fl-stack-sm">${forms}</div></section>`;
 }

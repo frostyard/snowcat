@@ -1,5 +1,5 @@
 import { githubApiJson, type GitHubFetch } from "../repository/github-api.ts";
-import type { QueueStore } from "./store.ts";
+import type { MutationPrecondition, QueueStore } from "./store.ts";
 import type { ArtifactVerification, WorkArtifact, WorkItem } from "./types.ts";
 
 const GITHUB_TIMEOUT_MS = 30_000;
@@ -196,6 +196,67 @@ export async function refreshArtifactVerifications(
     }
   }
   return result;
+}
+
+export type AttachableArtifactKind = "issue" | "pull-request";
+
+export interface AttachArtifactInput {
+  url: string;
+  /** Defaults from the URL path: `/pull/<n>` → `pull-request`, `/issues/<n>` → `issue`. */
+  kind?: AttachableArtifactKind;
+  description?: string;
+}
+
+/**
+ * The artifact kind a GitHub URL's path names, or `undefined` when the path
+ * is neither `/pull/<n>` nor `/issues/<n>`. Used to default `--kind`; the
+ * repository check happens in verification and in the store.
+ */
+export function artifactKindFromUrl(url: string): AttachableArtifactKind | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  const segments = parsed.pathname.split("/");
+  if (segments.length !== 5 || !/^[1-9][0-9]*$/.test(segments[4] ?? "")) return undefined;
+  if (segments[3] === "pull") return "pull-request";
+  if (segments[3] === "issues") return "issue";
+  return undefined;
+}
+
+/**
+ * Operator attach: checks one issue or pull-request URL against GitHub
+ * exactly as `complete_work` does, then records it on the completed item
+ * through `QueueStore.attachArtifact`. A rejected answer (not in the item's
+ * repository, wrong number, absent) throws `artifact rejected: <reason>` and
+ * writes nothing; an unavailable answer attaches the artifact `unverified`
+ * with the reason so a later `verify-artifacts` pass refreshes it. The
+ * verification stored is always GitHub's answer, never one supplied by the
+ * caller. Used by `queue -- attach-artifact` and the surface's form only.
+ */
+export async function attachVerifiedArtifact(
+  queue: QueueStore,
+  id: string,
+  actor: string,
+  input: AttachArtifactInput,
+  options: ArtifactVerifierOptions & { precondition?: MutationPrecondition } = {},
+): Promise<{ item: WorkItem; check: Exclude<ArtifactCheck, { kind: "rejected" }> }> {
+  const item = queue.get(id);
+  if (!item) throw new Error(`work item not found: ${id}`);
+  const kind = input.kind ?? artifactKindFromUrl(input.url);
+  if (!kind) throw new Error(`artifact URL must be a GitHub pull-request or issue URL (…/pull/<n> or …/issues/<n>): ${input.url}`);
+  const artifact: WorkArtifact = { kind, url: input.url, ...(input.description !== undefined ? { description: input.description } : {}) };
+  const check = await verifyGitHubArtifact(item.repository, artifact, options);
+  if (check.kind === "rejected") throw new Error(`artifact rejected: ${check.reason}`);
+  const attached = queue.attachArtifact(
+    id,
+    actor,
+    { kind, url: input.url, ...(input.description !== undefined ? { description: input.description } : {}), verification: check.verification },
+    options.precondition,
+  );
+  return { item: attached, check };
 }
 
 function pendingArtifacts(item: WorkItem): WorkArtifact[] {

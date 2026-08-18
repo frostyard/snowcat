@@ -169,7 +169,14 @@ Phase 10 and later.
   and no mutation; success redirects back with a `?done=<event type>`
   banner. Inline on the inbox: approve/reject, requeue-with-note/cancel,
   re-verify; the item page's *Decide* card offers every action its state
-  allows. The board's repository actions shipped with
+  allows. `POST /items/:id/attach-artifact` joined them with
+  [#35](https://github.com/frostyard/fluent/issues/35): the completed item
+  page's *Attach artifact* form calls `attachVerifiedArtifact` — GitHub is
+  asked first, a rejected URL re-renders with the banner and writes nothing,
+  an outage attaches `unverified` — then `QueueStore.attachArtifact` under
+  the same precondition ([spec rule 41](../specs/work-queue.md)); the
+  `artifact.attached` event refreshes live pages like `artifact.verified`.
+  The board's repository actions shipped with
   [#24](https://github.com/frostyard/fluent/issues/24): `POST
   /repositories/:owner/:name/{import-issues,seed-dogfood,hold,clear-hold}`
   beside `verify-artifacts` — `importLabeledIssues` (label default `fluent`,

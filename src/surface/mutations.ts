@@ -1,4 +1,9 @@
-import { refreshArtifactVerifications, type ArtifactVerifierOptions } from "../queue/artifact-verification.ts";
+import {
+  artifactKindFromUrl,
+  attachVerifiedArtifact,
+  refreshArtifactVerifications,
+  type ArtifactVerifierOptions,
+} from "../queue/artifact-verification.ts";
 import { PreconditionMismatchError, type MutationPrecondition, type QueueStore } from "../queue/store.ts";
 import { workStatuses, type WorkStatus } from "../queue/types.ts";
 
@@ -8,6 +13,9 @@ export const WEB_ACTOR = "operator:web";
 /** The item mutations the surface offers: exactly the CLI's operator commands. */
 export const itemMutations = ["approve", "reject", "defer", "requeue", "cancel", "prioritize", "note"] as const;
 export type ItemMutation = (typeof itemMutations)[number];
+
+/** The one item action that also asks GitHub before writing: `queue -- attach-artifact`. */
+export const ATTACH_ARTIFACT_ACTION = "attach-artifact";
 
 /** A form field was missing or malformed; rendered as 400 with the message. */
 export class MutationInputError extends Error {
@@ -102,6 +110,37 @@ export async function applyVerifyArtifacts(
     updated: result.updated.length,
     unavailable: result.unavailable.length,
     rejected: result.rejected.length,
+  };
+}
+
+/**
+ * Attaches one issue or pull-request URL to a completed item, attributed
+ * `operator:web`, through the same verify-then-write path as
+ * `queue -- attach-artifact`: GitHub is asked first, a rejected answer
+ * throws and writes nothing, an unavailable answer attaches `unverified`.
+ * The kind is derived from the URL path unless the form names one; the
+ * rule 39 precondition is checked inside the store transaction.
+ */
+export async function applyAttachArtifact(
+  queue: QueueStore,
+  id: string,
+  body: Record<string, unknown>,
+  verifier: ArtifactVerifierOptions,
+): Promise<MutationOutcome & { url: string; status: string; state?: string }> {
+  const precondition = parsePrecondition(body);
+  const url = field(body, "url").trim();
+  if (!url) throw new MutationInputError("Enter the pull request or issue URL.");
+  const rawKind = typeof body.kind === "string" && body.kind.length > 0 ? body.kind : undefined;
+  if (rawKind !== undefined && rawKind !== "pull-request" && rawKind !== "issue") throw new MutationInputError("kind must be pull-request or issue");
+  const kind = rawKind ?? artifactKindFromUrl(url);
+  if (!kind) throw new MutationInputError("Enter a GitHub pull request (…/pull/<n>) or issue (…/issues/<n>) URL in the item's repository.");
+  const description = typeof body.description === "string" && body.description.trim().length > 0 ? body.description.trim() : undefined;
+  const { check } = await attachVerifiedArtifact(queue, id, WEB_ACTOR, { url, kind, description }, { ...verifier, precondition });
+  return {
+    eventType: "artifact.attached",
+    url,
+    status: check.verification.status,
+    ...(check.verification.status === "verified" ? { state: check.verification.state } : {}),
   };
 }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { refreshArtifactVerifications } from "./artifact-verification.ts";
+import { attachVerifiedArtifact, refreshArtifactVerifications, type AttachableArtifactKind } from "./artifact-verification.ts";
 import { queueStoreOptionsFromEnvironment } from "./eligibility.ts";
 import { importLabeledIssues, importLabeledIssuesForEnrolled } from "./github-issues.ts";
 import { QueueStore, queueDatabasePath, type MutationPrecondition } from "./store.ts";
@@ -106,6 +106,20 @@ try {
     const id = required(rest[0], "work item id");
     const text = required(rest.slice(1).join(" "), "note text");
     print(withoutLeaseToken(queue.note(id, "operator:cli", text, currentStatusPrecondition(id, ifUpdatedAt))));
+  } else if (command === "attach-artifact") {
+    const { rest, ifUpdatedAt } = extractIfUpdatedAt(args);
+    const id = required(rest[0], "work item id");
+    const url = required(rest[1], "artifact url");
+    const flags = parseFlags(rest.slice(2), ["kind", "description"]);
+    const kind = parseAttachableKind(flags.kind);
+    const { item, check } = await attachVerifiedArtifact(
+      queue,
+      id,
+      "operator:cli",
+      { url, kind, description: flags.description },
+      { precondition: currentStatusPrecondition(id, ifUpdatedAt) },
+    );
+    print({ item: withoutLeaseToken(item), verification: check.verification });
   } else if (command === "list") {
     const status = args[0] !== undefined && !args[0].startsWith("--") ? args[0] : undefined;
     const flags = parseFlags(status === undefined ? args : args.slice(1), ["repository", "kind", "limit"]);
@@ -161,6 +175,7 @@ try {
     console.error("       npm run queue -- cancel <work-item-id> <reason> [--if-updated-at <iso>]");
     console.error("       npm run queue -- prioritize <work-item-id> <priority> <reason> [--if-updated-at <iso>]");
     console.error("       npm run queue -- note <work-item-id> <text> [--if-updated-at <iso>]");
+    console.error("       npm run queue -- attach-artifact <work-item-id> <url> [--kind pull-request|issue] [--description <text>] [--if-updated-at <iso>]");
     console.error("       npm run queue -- list [proposed|queued|claimed|completed|blocked|cancelled] [--repository <owner/repo>] [--kind <kind>] [--limit <1-100>]");
     console.error("       npm run queue -- show <work-item-id>");
     console.error("       npm run queue -- events [--since <sequence>] [--repository <owner/repo>] [--limit <1-500>]");
@@ -263,6 +278,12 @@ function currentStatusPrecondition(id: string, ifUpdatedAt: string | undefined):
   const item = queue.get(id);
   if (!item) throw new Error(`work item not found: ${id}`);
   return { status: item.status, updatedAt: ifUpdatedAt };
+}
+
+function parseAttachableKind(value: string | undefined): AttachableArtifactKind | undefined {
+  if (value === undefined) return undefined;
+  if (value === "pull-request" || value === "issue") return value;
+  throw new Error(`--kind must be pull-request or issue: ${value}`);
 }
 
 function parseStatus(value: string | undefined): WorkStatus | undefined {
