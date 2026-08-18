@@ -204,6 +204,13 @@ you say otherwise. `prioritize` is how you say otherwise: it works on
 note for the next worker. Approve then prioritize, or prioritize while still
 proposed — either order works.
 
+Every command above (and `requeue`/`cancel` below) accepts
+`--if-updated-at <iso>`, the item's `updatedAt` as you last saw it in `list`
+or `show`; if a worker or another shell moved the item since, the command
+exits non-zero with `item changed since it was read: <id> is now <status>
+(updated <when>)` and changes nothing, so a decision formed on a stale
+listing is never applied ([spec rule 39](../specs/work-queue.md)).
+
 Worker follow-ups land as `proposed` children with `parentId`; approve them the
 same way. Their permissions can never exceed the parent's `delegableActions`.
 

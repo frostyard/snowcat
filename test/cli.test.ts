@@ -216,6 +216,75 @@ test("operator CLI can defer admitted work and approve it later", async () => {
   assert.match(usage.stderr, /defer <work-item-id> <reason>/);
 });
 
+test("operator CLI --if-updated-at refuses a stale approve, prioritize, and note, and applies a fresh one", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-cli-precondition-test-"));
+  const path = join(directory, "queue.db");
+  let now = new Date("2026-08-18T00:00:00.000Z");
+  const queue = new QueueStore(path, () => now);
+  queue.setRepositoryEnabled("frostyard/updex", true);
+  const seed = queue.enqueueSeed({
+    repository: "frostyard/updex",
+    kind: "quality-gap-discovery",
+    objective: "Inspect one gap.",
+    instructions: "Read only.",
+    acceptanceCriteria: ["One gap."],
+    allowedActions: ["read"],
+    delegableActions: [],
+    createdBy: "operator:test",
+  });
+  now = new Date(now.getTime() + 1000);
+  const proposed = queue.defer(seed.id, "operator:test", "Hold.");
+  assert.equal(proposed.status, "proposed");
+  assert.notEqual(proposed.updatedAt, seed.updatedAt);
+  queue.close();
+
+  const env = stringEnvironment({ ...process.env, FLUENT_QUEUE_DB: path });
+  const run = (...args: string[]) =>
+    spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env,
+    });
+  const show = () => JSON.parse(run("show", seed.id).stdout) as { item: Record<string, unknown>; events: unknown[] };
+
+  // Stale render (the pre-defer updatedAt): refused, item stays proposed, no event.
+  const before = show();
+  const stale = run("approve", seed.id, "--if-updated-at", seed.updatedAt);
+  assert.notEqual(stale.status, 0);
+  assert.equal(stale.stdout, "");
+  assert.match(stale.stderr, new RegExp(`item changed since it was read: ${seed.id} is now proposed \\(updated ${proposed.updatedAt}\\)`));
+  assert.deepEqual(show(), before);
+  assert.equal(before.item.status, "proposed");
+
+  // Flag validation happens before any store call.
+  const missing = run("approve", seed.id, "--if-updated-at");
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /--if-updated-at requires a value/);
+  const garbage = run("approve", seed.id, "--if-updated-at", "yesterday");
+  assert.notEqual(garbage.status, 0);
+  assert.match(garbage.stderr, /--if-updated-at must be an ISO 8601 timestamp/);
+  assert.deepEqual(show(), before);
+
+  // Fresh render: applied. The flag may sit anywhere among the reason words.
+  const approved = run("approve", seed.id, "--if-updated-at", proposed.updatedAt);
+  assert.equal(approved.status, 0, approved.stderr);
+  const approvedItem = JSON.parse(approved.stdout) as { status: string; updatedAt: string };
+  assert.equal(approvedItem.status, "queued");
+  const staleNote = run("note", seed.id, "still", "--if-updated-at", proposed.updatedAt, "waiting");
+  assert.notEqual(staleNote.status, 0);
+  assert.match(staleNote.stderr, /item changed since it was read/);
+  const prioritized = run("prioritize", seed.id, "3", "--if-updated-at", approvedItem.updatedAt, "front", "of", "line");
+  assert.equal(prioritized.status, 0, prioritized.stderr);
+  const prioritizedItem = JSON.parse(prioritized.stdout) as { priority: number; updatedAt: string; operatorNotes: Array<{ reason: string }> };
+  assert.equal(prioritizedItem.priority, 3);
+  assert.equal(prioritizedItem.operatorNotes.at(-1)?.reason, "front of line");
+  const noted = run("note", seed.id, "still", "--if-updated-at", prioritizedItem.updatedAt, "waiting");
+  assert.equal(noted.status, 0, noted.stderr);
+  assert.equal((JSON.parse(noted.stdout) as { operatorNotes: Array<{ reason: string }> }).operatorNotes.at(-1)?.reason, "still waiting");
+  const usage = run("help");
+  assert.match(usage.stderr, /approve <work-item-id> \[--if-updated-at <iso>\]/);
+});
+
 function stringEnvironment(source: NodeJS.ProcessEnv): Record<string, string> {
   return Object.fromEntries(
     Object.entries(source).filter((entry): entry is [string, string] => entry[1] !== undefined),

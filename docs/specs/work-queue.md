@@ -362,6 +362,26 @@ command is not exposed through MCP.
     admission, lease, or result, MUST NOT be exposed through MCP, and MUST
     NOT alter rule 22: children inherit at creation and workers never supply
     a priority.
+39. `approve`, `reject`, `defer`, `requeue`, `cancel`, `prioritize`, and
+    `note` MUST accept an optional precondition `{ status, updatedAt }`
+    naming the item as the operator observed it. Inside the mutation's
+    transaction, before any write, `QueueStore` MUST compare the item's
+    logical `status` (rule 25's `proposed` view included) and `updatedAt`
+    with the precondition and, on any mismatch, MUST throw
+    `PreconditionMismatchError` (message
+    `item changed since it was read: <id> is now <status> (updated <updatedAt>)`,
+    carrying the current `id`, `status`, and `updatedAt`) and change
+    nothing: no row write and no event. The check MUST run before the
+    mutation's own state check (rules 24, 25, 37, 38) so a stale operator
+    learns that the item moved rather than which rule it now breaks. Without
+    a precondition every mutation MUST behave exactly as before. The CLI
+    MUST accept `--if-updated-at <iso>` on those seven commands, off by
+    default, deriving `status` from the command's required state (`approve`,
+    `reject`: `proposed`; `defer`: `queued`; `requeue`, `cancel`: `blocked`)
+    and, for `prioritize` and `note`, from the item's current status so
+    `updatedAt` alone carries the check; a mismatch MUST exit non-zero with
+    the store's message. No MCP tool MAY carry a precondition and no schema
+    change is required.
 
 ## Derived artifacts
 

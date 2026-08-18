@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { Worker } from "node:worker_threads";
 
-import { QueueStore, SCHEMA_VERSION } from "../src/queue/store.ts";
+import { PreconditionMismatchError, QueueStore, SCHEMA_VERSION } from "../src/queue/store.ts";
 import type { FollowUpInput } from "../src/queue/types.ts";
 
 test("seed work requires an opted-in repository and preserves child lineage", async () => {
@@ -1183,6 +1183,133 @@ test("worker identities cannot use reserved principal namespaces", async () => {
     ],
   );
   assert.equal(seed.createdBy, "operator:test");
+});
+
+test("operator mutations honor a status/updatedAt precondition and refuse stale intent without changing anything", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fluent-precondition-test-"));
+  let now = new Date("2026-08-18T00:00:00.000Z");
+  const tick = () => {
+    now = new Date(now.getTime() + 1000);
+  };
+  const queue = new QueueStore(join(directory, "queue.db"), () => now);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/core", true);
+  const actor = "operator:test";
+
+  // Fresh, admitted seed → make it proposed for approve/reject.
+  const seedA = seedTestingGap(queue, "frostyard/core");
+  tick();
+  queue.defer(seedA.id, actor, "Hold for review.");
+  const proposedA = queue.get(seedA.id)!;
+  assert.equal(proposedA.status, "proposed");
+  const stale = { status: proposedA.status, updatedAt: seedA.updatedAt }; // the pre-defer render
+  assert.notEqual(stale.updatedAt, proposedA.updatedAt);
+
+  const eventCount = (id: string) => queue.events(id).length;
+
+  /** A mismatch throws the typed error, leaves the row byte-identical, and appends no event. */
+  const assertRefused = (id: string, mutate: () => unknown, expectedStatus: string) => {
+    const before = queue.get(id)!;
+    const events = eventCount(id);
+    assert.throws(mutate, (error: unknown) => {
+      assert.ok(error instanceof PreconditionMismatchError);
+      assert.equal(error.name, "PreconditionMismatchError");
+      assert.equal(error.id, id);
+      assert.equal(error.status, expectedStatus);
+      assert.equal(error.updatedAt, before.updatedAt);
+      assert.equal(
+        error.message,
+        `item changed since it was read: ${id} is now ${expectedStatus} (updated ${before.updatedAt})`,
+      );
+      return true;
+    });
+    assert.deepEqual(queue.get(id), before);
+    assert.equal(eventCount(id), events);
+  };
+
+  // approve: stale updatedAt, wrong status, then a matching precondition succeeds.
+  assertRefused(seedA.id, () => queue.approve(seedA.id, actor, stale), "proposed");
+  assertRefused(seedA.id, () => queue.approve(seedA.id, actor, { status: "queued", updatedAt: proposedA.updatedAt }), "proposed");
+  tick();
+  const approved = queue.approve(seedA.id, actor, { status: "proposed", updatedAt: proposedA.updatedAt });
+  assert.equal(approved.status, "queued");
+  assert.equal(queue.events(seedA.id).at(-1)?.type, "work.approved");
+
+  // defer: the item is queued now; the approve-time render is stale.
+  assertRefused(seedA.id, () => queue.defer(seedA.id, actor, "again", { status: "queued", updatedAt: proposedA.updatedAt }), "queued");
+  assertRefused(seedA.id, () => queue.defer(seedA.id, actor, "again", { status: "proposed", updatedAt: approved.updatedAt }), "queued");
+  tick();
+  const deferred = queue.defer(seedA.id, actor, "again", { status: "queued", updatedAt: approved.updatedAt });
+  assert.equal(deferred.status, "proposed");
+
+  // reject: proposed again.
+  assertRefused(seedA.id, () => queue.reject(seedA.id, actor, "no", { status: "proposed", updatedAt: approved.updatedAt }), "proposed");
+  assertRefused(seedA.id, () => queue.reject(seedA.id, actor, "no", { status: "queued", updatedAt: deferred.updatedAt }), "proposed");
+  tick();
+  const rejected = queue.reject(seedA.id, actor, "no", { status: "proposed", updatedAt: deferred.updatedAt });
+  assert.equal(rejected.status, "cancelled");
+
+  // prioritize + note on a second admitted seed.
+  const seedB = seedTestingGap(queue, "frostyard/core");
+  tick();
+  queue.note(seedB.id, actor, "first note");
+  const notedB = queue.get(seedB.id)!;
+  assertRefused(seedB.id, () => queue.prioritize(seedB.id, actor, 5, "bump", { status: "queued", updatedAt: seedB.updatedAt }), "queued");
+  assertRefused(seedB.id, () => queue.prioritize(seedB.id, actor, 5, "bump", { status: "proposed", updatedAt: notedB.updatedAt }), "queued");
+  tick();
+  const prioritized = queue.prioritize(seedB.id, actor, 5, "bump", { status: "queued", updatedAt: notedB.updatedAt });
+  assert.equal(prioritized.priority, 5);
+  assertRefused(seedB.id, () => queue.note(seedB.id, actor, "second", { status: "queued", updatedAt: notedB.updatedAt }), "queued");
+  assertRefused(seedB.id, () => queue.note(seedB.id, actor, "second", { status: "blocked", updatedAt: prioritized.updatedAt }), "queued");
+  tick();
+  const noted = queue.note(seedB.id, actor, "second", { status: "queued", updatedAt: prioritized.updatedAt });
+  assert.equal(noted.operatorNotes.at(-1)?.reason, "second");
+
+  // requeue + cancel on blocked work: block a third seed, then a fourth.
+  const block = (id: string) => {
+    tick();
+    const lease = queue.claim({ worker: "claude:core:pre", repository: "frostyard/core" })!;
+    assert.equal(lease.id, id);
+    tick();
+    return queue.block(id, lease.leaseToken!, "claude:core:pre", "Need input.");
+  };
+  const blockedB = block(seedB.id);
+  assert.equal(blockedB.status, "blocked");
+  assertRefused(seedB.id, () => queue.requeue(seedB.id, actor, "go", { status: "blocked", updatedAt: noted.updatedAt }), "blocked");
+  assertRefused(seedB.id, () => queue.requeue(seedB.id, actor, "go", { status: "queued", updatedAt: blockedB.updatedAt }), "blocked");
+  tick();
+  const requeued = queue.requeue(seedB.id, actor, "go", { status: "blocked", updatedAt: blockedB.updatedAt });
+  assert.equal(requeued.status, "queued");
+
+  const blockedAgain = block(seedB.id);
+  assertRefused(seedB.id, () => queue.cancel(seedB.id, actor, "stop", { status: "blocked", updatedAt: requeued.updatedAt }), "blocked");
+  assertRefused(seedB.id, () => queue.cancel(seedB.id, actor, "stop", { status: "queued", updatedAt: blockedAgain.updatedAt }), "blocked");
+  tick();
+  const cancelled = queue.cancel(seedB.id, actor, "stop", { status: "blocked", updatedAt: blockedAgain.updatedAt });
+  assert.equal(cancelled.status, "cancelled");
+
+  // Omitted precondition: unchanged behavior on every mutation.
+  const seedC = seedTestingGap(queue, "frostyard/core");
+  tick();
+  assert.equal(queue.note(seedC.id, actor, "plain").operatorNotes.length, 1);
+  tick();
+  assert.equal(queue.prioritize(seedC.id, actor, 2, "plain").priority, 2);
+  tick();
+  assert.equal(queue.defer(seedC.id, actor, "plain").status, "proposed");
+  tick();
+  assert.equal(queue.approve(seedC.id, actor).status, "queued");
+  const blockedC = block(seedC.id);
+  tick();
+  assert.equal(queue.requeue(seedC.id, actor, "plain").status, "queued");
+  block(seedC.id);
+  tick();
+  assert.equal(queue.cancel(seedC.id, actor, "plain").status, "cancelled");
+  const seedD = seedTestingGap(queue, "frostyard/core");
+  tick();
+  queue.defer(seedD.id, actor, "plain");
+  tick();
+  assert.equal(queue.reject(seedD.id, actor, "plain").status, "cancelled");
+  assert.equal(blockedC.status, "blocked");
 });
 
 type Row = Record<string, unknown>;

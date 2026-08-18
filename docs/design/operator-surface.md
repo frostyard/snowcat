@@ -68,11 +68,14 @@ and inline on the inbox, all attributed `operator:web`:
 | Re-verify | `refreshArtifactVerifications({repository})` | completed with unverified or open artifacts |
 
 Every mutation form carries the item's `status` and `updatedAt` as rendered;
-the store methods gain an optional `precondition: { status, updatedAt }` and
-throw `item changed since it was read` when it no longer matches, so a stale
-tab cannot approve something a worker or another shell already moved. The
-CLI may pass the same precondition; without it, behavior is unchanged. There
-is no batch action and no worker-facing endpoint.
+the store methods take an optional `precondition: { status, updatedAt }`
+([spec rule 39](../specs/work-queue.md)) and throw `PreconditionMismatchError`
+(`item changed since it was read: <id> is now <status> (updated <when>)`)
+when it no longer matches, so a stale tab cannot approve something a worker
+or another shell already moved; the error carries the current state for the
+surface to render. The CLI passes the same precondition through
+`--if-updated-at`; without it, behavior is unchanged. There is no batch
+action and no worker-facing endpoint.
 
 ### Session and binding
 

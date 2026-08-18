@@ -107,6 +107,33 @@ export function validateWorkerIdentity(worker: string): string {
 }
 
 /**
+ * The item state an operator observed before deciding. An operator mutation
+ * that carries one is refused when the item's logical `status` or `updatedAt`
+ * no longer matches, so intent formed against a stale render is never applied
+ * to an item a worker or another shell has since moved (ADR-0035, ADR-0060).
+ */
+export interface MutationPrecondition {
+  status: WorkStatus;
+  updatedAt: string;
+}
+
+/**
+ * Thrown by an operator mutation whose precondition no longer holds. Callers
+ * can render the item's current `status` and `updatedAt` instead of a generic
+ * failure. Nothing has been changed and no event has been recorded.
+ */
+export class PreconditionMismatchError extends Error {
+  constructor(
+    readonly id: string,
+    readonly status: WorkStatus,
+    readonly updatedAt: string,
+  ) {
+    super(`item changed since it was read: ${id} is now ${status} (updated ${updatedAt})`);
+    this.name = "PreconditionMismatchError";
+  }
+}
+
+/**
  * Decides whether a repository's admitted work may be claimed right now, on
  * top of the queue's own opt-in. The control-plane store supplies one that
  * requires `enrolled` (which already excludes operator holds); without a
@@ -646,10 +673,11 @@ export class QueueStore {
     });
   }
 
-  approve(id: string, actor: string): WorkItem {
+  approve(id: string, actor: string, precondition?: MutationPrecondition): WorkItem {
     if (!actor.trim()) throw new Error("approval actor is required");
     return this.transaction(() => {
       const item = this.getRequired(id);
+      this.assertPrecondition(item, precondition);
       if (item.status !== "proposed") throw new Error(`work item is not proposed: ${id}`);
       const now = this.now();
       this.db.prepare("UPDATE work_items SET admitted = 1, updated_at = ? WHERE id = ?").run(now, id);
@@ -658,11 +686,12 @@ export class QueueStore {
     });
   }
 
-  defer(id: string, actor: string, reason: string): WorkItem {
+  defer(id: string, actor: string, reason: string, precondition?: MutationPrecondition): WorkItem {
     validateOperatorActor(actor, "deferral");
     validateOperatorNoteReason(reason, "deferral reason");
     return this.transaction(() => {
       const item = this.getRequired(id);
+      this.assertPrecondition(item, precondition);
       if (item.status !== "queued") throw new Error(`work item is not queued and admitted: ${id}`);
       const now = this.now();
       this.db
@@ -679,11 +708,12 @@ export class QueueStore {
    * carried to the next lease through `operatorNotes`; it is advice about
    * earlier leases, never a change to the definition.
    */
-  note(id: string, actor: string, reason: string): WorkItem {
+  note(id: string, actor: string, reason: string, precondition?: MutationPrecondition): WorkItem {
     validateOperatorActor(actor, "note");
     validateOperatorNoteReason(reason, "note text");
     return this.transaction(() => {
       const item = this.getRequired(id);
+      this.assertPrecondition(item, precondition);
       const now = this.now();
       this.db
         .prepare("UPDATE work_items SET operator_notes_json = ?, updated_at = ? WHERE id = ?")
@@ -700,12 +730,13 @@ export class QueueStore {
    * their parent's value at creation, and the change is recorded both as
    * `work.prioritized` and as a `prioritize` note carried to the next lease.
    */
-  prioritize(id: string, actor: string, priority: number, reason: string): WorkItem {
+  prioritize(id: string, actor: string, priority: number, reason: string, precondition?: MutationPrecondition): WorkItem {
     validateOperatorActor(actor, "prioritize");
     if (!Number.isSafeInteger(priority)) throw new Error("priority must be a safe integer");
     validateOperatorNoteReason(reason, "prioritize reason");
     return this.transaction(() => {
       const item = this.getRequired(id);
+      this.assertPrecondition(item, precondition);
       if (item.status !== "proposed" && item.status !== "queued" && item.status !== "blocked") {
         throw new Error(`work item is not proposed, queued, or blocked: ${id}`);
       }
@@ -718,11 +749,12 @@ export class QueueStore {
     });
   }
 
-  reject(id: string, actor: string, reason: string): WorkItem {
+  reject(id: string, actor: string, reason: string, precondition?: MutationPrecondition): WorkItem {
     if (!actor.trim()) throw new Error("rejection actor is required");
     if (!reason.trim()) throw new Error("rejection reason is required");
     return this.transaction(() => {
       const item = this.getRequired(id);
+      this.assertPrecondition(item, precondition);
       if (item.status !== "proposed") throw new Error(`work item is not proposed: ${id}`);
       const now = this.now();
       this.db
@@ -739,11 +771,12 @@ export class QueueStore {
    * appended to `operatorNotes`, so the next lease can read both what stopped
    * the earlier one and what the operator said about it.
    */
-  requeue(id: string, actor: string, reason: string): WorkItem {
+  requeue(id: string, actor: string, reason: string, precondition?: MutationPrecondition): WorkItem {
     validateOperatorActor(actor, "requeue");
     validateOperatorNoteReason(reason, "requeue reason");
     return this.transaction(() => {
       const item = this.getRequired(id);
+      this.assertPrecondition(item, precondition);
       if (item.status !== "blocked") throw new Error(`work item is not blocked: ${id}`);
       const now = this.now();
       const previousResults = item.result ? [...item.previousResults, item.result] : item.previousResults;
@@ -765,11 +798,12 @@ export class QueueStore {
     });
   }
 
-  cancel(id: string, actor: string, reason: string): WorkItem {
+  cancel(id: string, actor: string, reason: string, precondition?: MutationPrecondition): WorkItem {
     if (!actor.trim()) throw new Error("cancellation actor is required");
     if (!reason.trim()) throw new Error("cancellation reason is required");
     return this.transaction(() => {
       const item = this.getRequired(id);
+      this.assertPrecondition(item, precondition);
       if (item.status !== "blocked") throw new Error(`work item is not blocked: ${id}`);
       const now = this.now();
       this.db
@@ -975,6 +1009,18 @@ export class QueueStore {
         throw new Error(`artifact ${artifact.kind} requires allowed action ${action}`);
       }
       if (action) assertGitHubArtifactScope(item.repository, artifact);
+    }
+  }
+
+  /**
+   * Refuses an operator mutation whose observed `status`/`updatedAt` no longer
+   * match the item (rule 39). Runs inside the caller's transaction before any
+   * write, so a mismatch leaves the row and the event ledger untouched.
+   */
+  private assertPrecondition(item: WorkItem, precondition: MutationPrecondition | undefined): void {
+    if (!precondition) return;
+    if (item.status !== precondition.status || item.updatedAt !== precondition.updatedAt) {
+      throw new PreconditionMismatchError(item.id, item.status, item.updatedAt);
     }
   }
 
