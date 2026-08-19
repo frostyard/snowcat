@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # `npm run check:deploy`: lint the host deployment files under deploy/.
 #
-# 1. `bash -n` and `shellcheck` on every script in deploy/bin/ and deploy/*.sh.
+# 1. `bash -n` and `shellcheck` on every script in deploy/bin/, deploy/*.sh, and deploy/incus/*.sh.
 # 2. `systemd-analyze verify` on every unit in deploy/systemd/, run against a
 #    throwaway --root that holds a stub /etc/snowcat/env, stub `npm` and
 #    `/bin/bash` executables, and stub default-dependency targets, so the
@@ -28,7 +28,7 @@ for tool in shellcheck systemd-analyze; do
 done
 
 shopt -s nullglob
-scripts=(deploy/bin/* deploy/*.sh)
+scripts=(deploy/bin/* deploy/*.sh deploy/incus/*.sh)
 units=(deploy/systemd/*.service deploy/systemd/*.timer)
 shopt -u nullglob
 if [[ ${#scripts[@]} -eq 0 || ${#units[@]} -eq 0 ]]; then
