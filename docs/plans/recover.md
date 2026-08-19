@@ -251,8 +251,23 @@ hands on the host. Status as of 2026-08-19:
 
 ## Later / ideas
 
-- Grants, capability profiles, and WIP limits from ADR-0032/0034 as
-  additional claim filters once one repository shows contention.
+- Grants and capability profiles from ADR-0032/0034 as additional claim
+  filters once one repository shows contention.
+- **Per-repository WIP limit (ADR-0034)** — filed 2026-08-19 after the
+  first Copilot fleet run: four supervisors drained 23 discovery roots in
+  ~20 minutes, the operator admitted 18 proposals in bulk, and 19 draft
+  pull requests reached the review gate within 40 minutes; every one
+  passed the gate and was merged by hand the same afternoon (~45 minutes
+  of operator time for 20+ pull requests across four repositories — judged
+  fine today). The gate filters quality; it does not pace volume, and the
+  pace is set by admission. When it stops being fine: a per-repository cap
+  on pull requests that are ready-for-review-but-unmerged (or on admitted
+  change-shaped items), enforced as a claim filter like enrollment
+  (rule 36's hook shape) so a worker leases nothing in a repository whose
+  inventory is full, with the board showing the cap and the count; admission
+  stays the operator's, the cap only stops workers from running ahead of
+  merges. Not before the numbers say so (`queue -- metrics`: time-to-merge
+  rising, accepted-per-attempt flat).
 - Unpark GitHub observation only if on-demand verification demonstrably
   misses state that a maintainer relied on.
 - Remote workers: accepted and built 2026-08-18 as
