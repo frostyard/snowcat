@@ -236,8 +236,10 @@ removed. -->
 - Keep the operator surface in [`src/surface/`](src/surface/) a view over
   the same `QueueStore` and `ControlPlaneStore` methods the CLI uses: no new
   state transitions, no worker-facing route, no lease token in a template
-  (use `withoutLeaseToken`), and every route behind the `SNOWCAT_APP_TOKEN`
-  cookie session. `npm run serve` binds `127.0.0.1` unless `HOST` says
+  (use `withoutLeaseToken`), and every route behind the session — the
+  Cloudflare Access assertion in Access mode, the `SNOWCAT_APP_TOKEN` cookie
+  session otherwise (ADR-0063; no fallback between them). `npm run serve`
+  binds `127.0.0.1` unless `HOST` says
   otherwise; exposure is a deployment decision. Pages inline their
   stylesheet from [`src/surface/styles.ts`](src/surface/styles.ts) (copied
   from the `frostyard-design` skill) and load nothing from another host.

@@ -47,7 +47,7 @@ as well as on the item page.
 
 | View | Route | Reads | Purpose |
 | --- | --- | --- | --- |
-| Inbox | `/` | `list({status:"proposed"})`, `list({status:"blocked"})`, completed items with any `unverified` artifact | Everything waiting on the operator, grouped: proposals to admit (children under their parent's finding), blocked items to requeue or cancel, unverified artifacts to re-check |
+| Inbox | `/` | `list({status:"proposed"})`, `list({status:"blocked"})`, `completedItemsWithPendingArtifacts({ unverifiedOnly: true })` — completed items with an `unverified` issue or pull-request artifact, newest first, selected in the store rather than filtered out of the first 100 completions | Everything waiting on the operator, grouped: proposals to admit (children under their parent's finding), blocked items to requeue or cancel, unverified artifacts to re-check |
 | Repository board | `/repositories/:owner/:name` | `counts(repository)`, `list({repository, status})` for `queued`/`claimed`/`completed`, `list({repository, kind:"pr-cure", status})` per status, `events(id)` for the completing worker; `ControlPlaneStore.repositoryStatuses()` and `activeCoreSnapshot()` for the enrollment badge (effective state, Core source commit, surface commit, repository id, hold) | Three columns: queued in claim order (priority tag, `note` tag when `operatorNotes` is non-empty), leased (worker identity, lease-time bar from `updatedAt` → `leaseExpiresAt`), completed newest first with the `delivery` tag; four stat tiles (queued, leased, completed today, merged / attempts); under them the [pull requests](#pull-requests) section; the header's Verify artifacts / Import issues / Seed dogfood / Hold (or Clear hold) actions, each one same-origin `POST` (see [Mutations](#mutations) and the operational notes below; [spec rule 40](../specs/work-queue.md)) |
 | Item | `/items/:id` | `get(id)`, `events(id)`, `get(parentId)`, `get(rootId)`, `children(id)` | Exactly what `queue -- show` prints, rendered: header with status and delivery tags; Definition (objective, repository + enrollment, kind, lineage links to parent/root/children, priority, allowed/delegable tags, created/updated, instructions, acceptance criteria); Result (summary, evidence, artifacts table with verification tag, head SHA, merged/verified time and the re-verifying actor from `artifact.verified`); Operator notes; Previous results; the full event timeline |
 
@@ -175,9 +175,14 @@ Phase 10 and later.
 ## Operational notes
 
 - The surface runs in the same process as the Flue app, reading
-  `SNOWCAT_QUEUE_DB`, `SNOWCAT_CONTROL_DB`, `SNOWCAT_APP_TOKEN`, `HOST`, and
-  `PORT`. Missing `SNOWCAT_APP_TOKEN` fails closed (503) for every surface
-  route, login included, as it does for `/agents/*` today.
+  `SNOWCAT_QUEUE_DB`, `SNOWCAT_CONTROL_DB`, `SNOWCAT_ACCESS_TEAM_DOMAIN` +
+  `SNOWCAT_ACCESS_AUD` (Access mode) or `SNOWCAT_APP_TOKEN` (token mode),
+  `HOST`, and `PORT`. The surface fails closed (503) for every route, login
+  included, only when neither Access nor the token is configured:
+  `Neither Cloudflare Access (SNOWCAT_ACCESS_TEAM_DOMAIN + SNOWCAT_ACCESS_AUD)
+  nor SNOWCAT_APP_TOKEN is configured on this host`. In Access mode a request
+  without a valid `Cf-Access-Jwt-Assertion` gets 401 and `SNOWCAT_APP_TOKEN`
+  is ignored (see [`deploy/env.example`](../../deploy/env.example)).
 - Run it locally with
   `SNOWCAT_APP_TOKEN=… SNOWCAT_QUEUE_DB=/var/lib/snowcat/queue.db npm run build && npm run serve`
   and open `http://127.0.0.1:3000/`. `npm run serve`

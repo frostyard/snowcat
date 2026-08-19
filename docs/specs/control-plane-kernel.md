@@ -14,7 +14,7 @@ no generic record-writing, fact-writing, administrative, or worker interface.
 | Environment variable | `SNOWCAT_CONTROL_DB` | Optional; target database path |
 | Default path | `./data/control-plane.db` | Distinct from the queue-spike default |
 | SQLite application ID | `1179405908` | Decimal encoding of `FLNT` |
-| Schema version | `7` | Stored in both `PRAGMA user_version` and metadata |
+| Schema version | `8` | Stored in both `PRAGMA user_version` and metadata |
 | Registry version | `18` | Stored in metadata and both initialization payloads |
 | Node runtime | `>=24.0.0` | Required for the stable `node:sqlite` surface and online backup API |
 | Database lineage ID | UUIDv7 | Generated once by the server; never reused or inferred from path |
@@ -627,7 +627,7 @@ kind `transaction-sequence` and the pre-command sequence as the revision value.
    initialization transaction.
 5. Older, newer, incomplete, unexpected, or differently identified schemas
    MUST fail closed. Unregistered indexes, triggers, and views are unexpected.
-   Schema version 7 and registry version 18 define no upgrade path from earlier
+   Schema version 8 and registry version 18 define no upgrade path from earlier
    pre-production target stores.
 6. Subject, record, event, command, source, revision, record-class, and
    information-class names MUST come from the code-owned versioned registries.

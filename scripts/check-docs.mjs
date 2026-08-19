@@ -192,6 +192,20 @@ for (const file of domainFiles) {
   }
 }
 
+// A `rename-repository <old> <new>` example whose two slugs are the same
+// (case-insensitively) is a no-op the CLI refuses — the ADR-0064 slug sweep
+// collapsed one such example. Fenced code included: examples are what
+// operators paste.
+for (const file of checkedDocs) {
+  const lines = bodies.get(file).split("\n");
+  for (const [index, line] of lines.entries()) {
+    const match = /rename-repository\s+(\S+)\s+(\S+)/.exec(line);
+    if (match && match[1].toLowerCase() === match[2].toLowerCase()) {
+      fail(`${relative(file)}:${index + 1}: rename-repository example names the same slug twice (${match[1]})`);
+    }
+  }
+}
+
 const contextPath = path.join(root, "CONTEXT.md");
 const expectedContextTarget = "docs/domain/ubiquitous-language.md";
 if (!fs.existsSync(contextPath) || !fs.lstatSync(contextPath).isSymbolicLink()) {
