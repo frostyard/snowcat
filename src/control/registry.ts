@@ -143,7 +143,10 @@ export const revisionKindRegistry = {
 } as const;
 
 export const sourceKindRegistry = {
-  "snowcat-system": {
+  // Persisted source kind: recorded in every control-plane database since v1 and
+  // deliberately NOT renamed with the product (Snowcat ADR-0064) — a stored
+  // vocabulary value is a contract, not a label.
+  "fluent-system": {
     validateId: (value: string) => value === "kernel" || value === "github-observer",
     revisionKinds: [] as const,
   },

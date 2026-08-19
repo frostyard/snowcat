@@ -172,7 +172,7 @@ App is trusted.
 Direct deliveries use source `github-app-webhook` and an exact body revision;
 API acquisitions use `github-api` and the applicable canonical response
 revision. Checkpoints and gaps use deterministic source
-`snowcat-system/github-observer` with no caller-selected source revision: their
+`fluent-system/github-observer` with no caller-selected source revision: their
 own checkpoint or gap digest binds the repository subject, but is not
 misrepresented as a revision issued by GitHub.
 

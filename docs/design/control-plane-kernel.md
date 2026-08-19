@@ -95,7 +95,7 @@ repository-hold, and initial GitHub-observation identity contracts:
 | Subject kind | `github-repository` | One immutable source-native GitHub repository identity |
 | Subject kinds | `github-app-hook`, `github-pull-request`, `github-check-run`, `github-commit-status` | Exact source-native GitHub observation identities qualified by App or immutable repository identity |
 | Revision kind | `sha256`, `transaction-sequence`, `core-catalog-sha256`, `git-commit-sha1` | Exact payload, database-state, catalog, or source-commit identity |
-| Source kind | `snowcat-system` / `kernel` or `github-observer` | The deterministic kernel bootstrap or GitHub reconciliation source; neither impersonates GitHub acquisition |
+| Source kind | `fluent-system` / `kernel` or `github-observer` | The deterministic kernel bootstrap or GitHub reconciliation source; neither impersonates GitHub acquisition |
 | Source kind | `github-repository` | Immutable GitHub repository ID plus typed Git commit revision |
 | Source kind | `operator-principal` | Stored UUIDv7 human authority with no caller-selected revision |
 | Source kind | `github-api` | Bounded selected metadata from `api.github.com` |

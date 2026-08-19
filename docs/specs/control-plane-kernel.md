@@ -49,7 +49,7 @@ sequence and position. Neither method mutates the database or returns a secret.
 | Revisions | `github-rules-sha256`, `github-pull-request-sha256`, `github-branch-transition-sha256`, `github-check-run-sha256`, `github-commit-status-sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact canonical allowlisted source representation for the named GitHub subject or repository transition |
 | Revisions | `github-source-checkpoint-sha256`, `github-source-gap-sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact canonical checkpoint or gap observation contract input |
 | Revisions | `github-installation-response-sha256`, `github-installation-reconciliation-sha256` | `sha256:` plus 64 lowercase hexadecimal characters | Exact bounded GitHub response or canonical installation reconciliation input; unavailable acquisition has no source revision |
-| Source | `snowcat-system` | Source ID `kernel` or `github-observer` | Internal deterministic bootstrap or GitHub reconciliation source; accepts no caller-selected source revision |
+| Source | `fluent-system` | Source ID `kernel` or `github-observer` | Internal deterministic bootstrap or GitHub reconciliation source; accepts no caller-selected source revision |
 | Source | `github-repository` | `github.com:` plus immutable positive numeric repository ID | Source revision must be `git-commit-sha1` |
 | Source | `operator-principal` | UUIDv7 matching a stored operator subject | Human authority source; accepts no source revision |
 | Source | `github-api` | Only source ID `api.github.com` | Bounded selected GitHub API acquisition; accepts only registered API-obtainable metadata, delivery-audit, installation-response, rules, pull-request, transition, check-run, and commit-status revisions—not controller checkpoint, gap, or unavailable-result digests |
@@ -376,7 +376,7 @@ for an already enrolled immutable repository and exact optimistic sequence. It
 atomically appends observation, reconciliation fact, and event at positions
 `[0,1,2]`, causally rooted in the latest enrollment. Source-backed observed and
 `not-installed` outcomes retain source `github-api` and the exact response
-revision; `unavailable` uses `snowcat-system/github-observer` with no invented
+revision; `unavailable` uses `fluent-system/github-observer` with no invented
 GitHub revision. Replay is bound to the complete inspection for 30 days.
 Startup re-derives command and inspection digests and verifies enrollment,
 source distinction, output order, causation, result, and retention. No outcome
@@ -423,7 +423,7 @@ not call GitHub or independently prove caller-supplied pagination digests.
 Every command requires a currently enrolled immutable repository, exact
 optimistic pre-command sequence, UUIDv7 run ID, configured App and installation
 IDs, organization information class, deployment scope, and the
-`snowcat-system/github-observer` source with no source revision.
+`fluent-system/github-observer` source with no source revision.
 
 `recordGitHubSourceCheckpoint(input)` accepts canonical UTC `coveredFrom` and
 `coveredThrough`, 1–100 completed pages, 0–10,000 selected deliveries, and
@@ -561,7 +561,7 @@ Every successful command prints exactly one JSON value to stdout. Usage and
 failure messages go to stderr with a nonzero exit status. The CLI is local
 operator tooling, not an authenticated remote API or worker surface. Projection
 rebuild/repair and backup staging remain non-authoritative operations; invoking
-the integrity check does not change its registered `snowcat-system/kernel`
+the integrity check does not change its registered `fluent-system/kernel`
 source identity.
 
 ### Tables
@@ -594,7 +594,7 @@ registry are accepted by current kernel code.
 
 The first accepted transaction has sequence `1`, command
 `control-plane.initialize` schema `1`, principal/source
-`snowcat-system` / `kernel`, no session or idempotency key, and one captured UTC
+`fluent-system` / `kernel`, no session or idempotency key, and one captured UTC
 evaluation/recorded time. Its outputs are:
 
 | Position | Subtype | Kind | Class | Information |
