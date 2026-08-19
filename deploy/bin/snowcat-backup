@@ -54,8 +54,23 @@ back_up() {
   fi
 }
 
-back_up queue "$backup_dir/queue-$stamp.db"
-back_up control "$backup_dir/control-plane-$stamp.db"
+# Each database is attempted independently: a queue backup that fails must not
+# cost the control-plane its daily copy, so `set -e` is held off with `if !`
+# rather than letting the first failure end the run.
+failures=()
+if ! back_up queue "$backup_dir/queue-$stamp.db"; then
+  failures+=(queue)
+fi
+if ! back_up control "$backup_dir/control-plane-$stamp.db"; then
+  failures+=(control)
+fi
+
+# A run that could not write today's copy must never delete older ones, so the
+# prune is skipped entirely unless both backups succeeded.
+if ((${#failures[@]} > 0)); then
+  echo "snowcat-backup: failed backups: ${failures[*]}; skipping prune so existing backups are kept" >&2
+  exit 1
+fi
 
 # Prune: only files this script names, only in the backup directory, only
 # older than the retention window, and never a live database.
