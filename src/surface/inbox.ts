@@ -67,7 +67,11 @@ export function readInbox(queue: QueueStore, enrollments: Map<string, Repository
   if (proposed.length === LIST_LIMIT) truncated.push("proposals");
   const blockedItems = queue.list({ status: "blocked", limit: LIST_LIMIT });
   if (blockedItems.length === LIST_LIMIT) truncated.push("blocked");
-  const completed = queue.list({ status: "completed", limit: LIST_LIMIT });
+  // Completed items that still carry an unverified issue or pull-request
+  // artifact, newest first — selected in the store rather than filtered out
+  // of list()'s first 100 completions, which starved the group once a queue
+  // held more than 100 completed items.
+  const completed = queue.completedItemsWithPendingArtifacts({ limit: LIST_LIMIT, unverifiedOnly: true });
   if (completed.length === LIST_LIMIT) truncated.push("unverified artifacts");
   const claimed = queue.list({ status: "claimed", limit: LIST_LIMIT });
 
