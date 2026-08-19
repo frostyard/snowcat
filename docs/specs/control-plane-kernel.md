@@ -401,6 +401,9 @@ source acquisition outcome. `completed` requires exactly one outcome:
 `complete`, `source-unavailable`, `pagination-incomplete`,
 `request-budget-exhausted`, `unsupported-relevant-delivery`, or
 `normalization-failed`. `controller-error` carries no invented source outcome.
+The transient claimed-run result includes a control-character-normalized,
+secret-redacted controller diagnostic bounded to 512 UTF-8 bytes; the durable
+singleton stores only `controller-error`, never that diagnostic text.
 Only `complete` advances the retained App acquisition boundary. Any other
 completion retries after 1, then 5, then 15 minutes; a later exact GitHub
 `Retry-After` or rate-limit reset wins. A complete result resets the streak and
