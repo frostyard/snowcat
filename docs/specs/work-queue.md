@@ -406,16 +406,38 @@ MCP (rule 41).
     the store's message. No MCP tool MAY carry a precondition and no schema
     change is required.
 40. The operator surface's mutations MUST be exactly the CLI's operator
-    commands — `approve`, `reject`, `defer`, `requeue`, `cancel`,
-    `prioritize`, `note`, `attach-artifact`, and `verify-artifacts` —
-    invoked through the same `QueueStore` methods,
-    `attachVerifiedArtifact`, and `refreshArtifactVerifications`, attributed
-    to the actor `operator:web`, and MUST NOT introduce a state transition,
-    batch action, or worker-facing endpoint. Every surface mutation MUST be
-    a same-origin `POST` behind the session cookie, MUST carry the item's
-    rendered `status` and `updatedAt` as the rule 39 precondition, and on a
+    commands, invoked through the same functions and attributed to the
+    session's actor (`operator:web`, or `member:<email>` per rule 51). The
+    item-scoped mutations MUST be exactly `approve`, `reject`, `defer`,
+    `requeue`, `cancel`, `prioritize`, `note`, and `attach-artifact` (`POST
+    /items/:id/:mutation`; the `QueueStore` methods and
+    `attachVerifiedArtifact`), and MUST NOT introduce a state transition or
+    a batch action — a decision applied to more than one existing item in
+    one request. The repository-scoped mutations MUST be exactly
+    `verify-artifacts` (`refreshArtifactVerifications` then
+    `curePullRequests`, as the CLI's `verify-artifacts` runs them),
+    `import-issues` (`importLabeledIssues`), `seed-dogfood`
+    (`enqueueDogfoodBatch`), `hold`
+    (`ControlPlaneStore.imposeRepositoryOperatorHold`), and `clear-hold`
+    (`ControlPlaneStore.clearRepositoryOperatorHold`) (`POST
+    /repositories/:owner/:name/<action>`); `hold` and `clear-hold` MUST
+    render only when `SNOWCAT_CONTROL_DB` is set and the repository is
+    declared. A repository-scoped action is one operator decision that MAY
+    create many roots in one `POST` — `seed-dogfood` at most one per catalog
+    program, `import-issues` one per labeled open issue — and that is not a
+    batch action. The surface MUST NOT expose a worker-facing endpoint.
+    Every mutation, item- or repository-scoped, MUST be a same-origin `POST`
+    behind the session cookie. An item-scoped mutation MUST carry the item's
+    rendered `status` and `updatedAt` as the rule 39 precondition and on a
     mismatch MUST change nothing and show the item's current state with the
-    message that it changed since it was read. Its events MUST be
+    message that it changed since it was read; `hold` and `clear-hold` are
+    guarded instead by the control plane's `lastTransactionSequence` read in
+    the same handler, and on a concurrent write MUST change nothing and
+    re-render the board with a `409` banner saying the control plane changed;
+    `verify-artifacts`, `import-issues`, and `seed-dogfood` are idempotent
+    over their inputs and carry no precondition. The token routes `POST
+    /tokens/mint` and `POST /tokens/:id/revoke` are the surface-identity
+    mutations of rule 51, not operator commands. Its events MUST be
     indistinguishable in shape from the CLI's, differing only in actor, so
     `show`, `events`, and `watch` report browser and CLI decisions alike.
 41. `attach-artifact <id> <url> [--kind pull-request|issue] [--description
