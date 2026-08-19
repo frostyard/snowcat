@@ -25,6 +25,8 @@ export type ArtifactVerification =
       headSha?: string;
       mergedAt?: string;
       closedAt?: string;
+      /** A pull request GitHub reports as a draft (ADR-0065); omitted when not a draft, so older records read as not-draft. */
+      draft?: boolean;
     }
   | { status: "unverified"; attemptedAt: string; reason: string };
 
@@ -45,7 +47,16 @@ export interface WorkResult {
   summary: string;
   evidence: string[];
   artifacts: WorkArtifact[];
+  /**
+   * The model the worker says it ran (for example `claude-opus-5`): descriptive
+   * provenance under rule 13 — retained, never verified, grants nothing — so
+   * a later review round can prefer a different model (ADR-0029, ADR-0065).
+   */
+  model?: string;
 }
+
+/** Shape of a worker-asserted model name: a short provider/model identifier, no whitespace. */
+export const MODEL_NAME_PATTERN = /^[a-z0-9][a-z0-9._:/@-]{1,120}$/i;
 
 export const operatorNoteActions = ["requeue", "defer", "prioritize", "note"] as const;
 export type OperatorNoteAction = (typeof operatorNoteActions)[number];
@@ -94,6 +105,72 @@ export interface PullRequestCure {
 export const pullRequestDecays = ["behind", "dirty", "failing-checks", "changes-requested", "unresolved-threads"] as const;
 export type PullRequestDecay = (typeof pullRequestDecays)[number];
 
+/** The decision of one bounded pull-request review round (ADR-0029, ADR-0065). */
+export const reviewDecisions = ["pass", "block", "unable-to-review"] as const;
+export type ReviewDecision = (typeof reviewDecisions)[number];
+
+/** At most this many blockers per review, per ADR-0029. */
+export const MAX_REVIEW_BLOCKERS = 5;
+/** At most this many advisories per review, per ADR-0029. */
+export const MAX_REVIEW_ADVISORIES = 3;
+/** Completed review rounds per pull request before human adjudication, per ADR-0029. */
+export const MAX_REVIEW_ROUNDS = 3;
+
+/** One material defect a reviewer found; the fingerprint is stable across rounds so a re-review can tell old from new. */
+export interface ReviewBlocker {
+  fingerprint: string;
+  location: string;
+  contract: string;
+  impact: string;
+  resolution: string;
+  verification: string;
+}
+
+/** A non-blocking observation; never creates work and never prevents a pass. */
+export interface ReviewAdvisory {
+  fingerprint: string;
+  text: string;
+}
+
+/** The structured verdict a `pr-review` worker supplies to `complete_work`. */
+export interface ReviewResult {
+  decision: ReviewDecision;
+  blockers: ReviewBlocker[];
+  advisories: ReviewAdvisory[];
+}
+
+/**
+ * The review record a `pr-review` or `pr-review-fix` root is bound to
+ * (ADR-0065). The sweep writes the binding fields at creation; a `pr-review`
+ * completion merges its verdict in.
+ */
+export interface PullRequestReview {
+  /** The pull request under review; the item's `sourceRef` is `pr-review:<url>@<headSha>` or `pr-review-fix:<url>@<headSha>`. */
+  pullRequestUrl: string;
+  /** Head commit the round is bound to; a push makes a new head and a new round. */
+  headSha: string;
+  /** Patch identity at creation, when computable; informational. */
+  patchDigest?: string;
+  /** 1-based review round for this pull request (rounds are counted per URL, not per head). */
+  round: number;
+  /** The completed item that reported the pull request, when known. */
+  originItemId?: string;
+  /** The model the origin item's worker reported, so the reviewer can prefer a different one. */
+  authorModel?: string;
+  /** The model the previous round's reviewer reported. */
+  priorReviewerModel?: string;
+  /** Blockers from the previous completed round on this pull request, carried verbatim. */
+  priorBlockers: ReviewBlocker[];
+  /** `pr-review-fix` only: the completed `pr-review` whose blockers it addresses, and that reviewer's model. */
+  reviewItemId?: string;
+  reviewerModel?: string;
+  /** Merged in when a `pr-review` completes. */
+  decision?: ReviewDecision;
+  blockers?: ReviewBlocker[];
+  advisories?: ReviewAdvisory[];
+  reviewedAt?: string;
+}
+
 export interface WorkItem {
   id: string;
   rootId: string;
@@ -112,6 +189,8 @@ export interface WorkItem {
   sourceRef?: string;
   /** Present on `pr-cure` roots: the head and patch identity the cure is bound to. */
   cure?: PullRequestCure;
+  /** Present on `pr-review` and `pr-review-fix` roots: the pull-request head and round the item is bound to (ADR-0065). */
+  review?: PullRequestReview;
   createdAt: string;
   updatedAt: string;
   leaseOwner?: string;
@@ -171,6 +250,12 @@ export interface CureRootInput extends Omit<SeedWorkInput, "repository"> {
   cure: PullRequestCure;
 }
 
+/** An admitted `pr-review` or `pr-review-fix` root: one per pull-request head and kind, keyed by `sourceRef` (ADR-0065). */
+export interface ReviewRootInput extends Omit<SeedWorkInput, "repository"> {
+  sourceRef: string;
+  review: PullRequestReview;
+}
+
 export interface ClaimInput {
   worker: string;
   repository?: string;
@@ -186,6 +271,8 @@ export interface CompletionInput {
   worker: string;
   result: WorkResult;
   followUps: FollowUpInput[];
+  /** Required on a `pr-review` item, refused on every other kind (ADR-0065). */
+  review?: ReviewResult;
 }
 
 export interface WorkEvent {

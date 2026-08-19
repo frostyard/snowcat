@@ -1149,6 +1149,45 @@ dispositioned. A preference, advisory, or repeated rewording is not a blocker.
 **Avoid:** blocked work; nit; every review comment.
 ([ADR-0029](../adr/0029-bound-adversarial-review.md))
 
+#### Review gate
+
+A per-repository setting under which worker pull requests stay drafts until
+one bounded review round passes. While it is on, a completion that reports an
+open, non-draft pull request is refused, the verification pass creates review
+rounds for draft heads, and Snowcat — not a model — acts on each verdict: a
+pass marks the pull request ready for a human, a block within budget creates
+one bounded fix, and anything else waits for a person.
+
+**Avoid:** required approval; merge gate; branch protection; Copilot review.
+([ADR-0065](../adr/0065-gate-worker-pull-requests-behind-bounded-review.md),
+[ADR-0029](../adr/0029-bound-adversarial-review.md))
+
+#### Review round
+
+One read-only `pr-review` work item bound to one pull request head, counted
+per pull request (not per head) toward a budget of three completed rounds
+before human adjudication. A round's verdict — pass, block, or
+unable-to-review, with at most five fingerprinted blockers — binds to that
+head alone: a new head invalidates it, and only its blockers are carried into
+the next round, as prior blockers the re-review must examine.
+
+**Avoid:** review comment; re-review of a fresh audit; attempt; lease.
+([ADR-0065](../adr/0065-gate-worker-pull-requests-behind-bounded-review.md),
+[ADR-0029](../adr/0029-bound-adversarial-review.md))
+
+#### Pull-request cure
+
+One admitted `pr-cure` work item bound to one decayed, non-draft pull request
+head, whose success is an unchanged patch on a healthier pull request:
+mechanical changes only, enforced by recomputing the patch identity on
+completion; a needed substantive change becomes a `pr-cure-change` proposal.
+Cure acts only after a pull request is ready for review; the review gate acts
+only while it is a draft.
+
+**Avoid:** fix; rebase bot; review; merge.
+([ADR-0061](../adr/0061-cure-pull-requests-as-bounded-per-head-work.md),
+[ADR-0065](../adr/0065-gate-worker-pull-requests-behind-bounded-review.md))
+
 #### Initiative
 
 A core-authorized coordinated product outcome linking one canonical PRD to an

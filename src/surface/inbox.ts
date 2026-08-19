@@ -1,6 +1,6 @@
 import type { QueueStore } from "../queue/store.ts";
 import { withoutLeaseToken, type ObservableWorkItem, type ObservedWorkEvent, type WorkArtifact } from "../queue/types.ts";
-import type { RepositoryEnrollment } from "./repositories.ts";
+import { readPullRequests, type PullRequestRow, type RepositoryEnrollment } from "./repositories.ts";
 
 /** How many ledger events the inbox rail shows, newest first. */
 export const EVENTS_RAIL_SIZE = 30;
@@ -36,17 +36,25 @@ export interface UnverifiedRow {
   completedBy?: string;
 }
 
+/** A draft pull request the review gate (ADR-0065) cannot advance by itself, or that passed and waits to be marked ready. */
+export interface AdjudicationRow {
+  repository: string;
+  pullRequest: PullRequestRow;
+}
+
 export interface InboxData {
   stats: {
     proposals: number;
     blocked: number;
     unverified: number;
+    adjudication: number;
     leased: number;
     leasedCaption: string;
   };
   proposals: ProposalRow[];
   blocked: BlockedRow[];
   unverified: UnverifiedRow[];
+  adjudication: AdjudicationRow[];
   events: ObservedWorkEvent[];
   eventsSince: number;
   /** Groups whose read hit the 100-row list cap, so the operator knows the page is not exhaustive. */
@@ -129,6 +137,19 @@ export function readInbox(queue: QueueStore, enrollments: Map<string, Repository
     }
   }
 
+  // Review-gated repositories only (ADR-0065): pull requests whose gate
+  // needs a human — third-round block, unable-to-review, a fix that went
+  // nowhere — or that passed and wait to be marked ready.
+  const adjudication: AdjudicationRow[] = [];
+  for (const setting of queue.repositoryReviewGateSettings()) {
+    if (!setting.reviewGate) continue;
+    const pulls = readPullRequests(queue, setting.repository);
+    if (pulls.truncated) truncated.push(`pull requests (${setting.repository})`);
+    for (const pullRequest of pulls.open) {
+      if (pullRequest.review?.needsHuman || pullRequest.review?.readyToMark) adjudication.push({ repository: setting.repository, pullRequest });
+    }
+  }
+
   const eventsSince = Math.max(0, metadata.lastEventSequence - EVENTS_RAIL_SIZE);
   const events = queue.eventsSince(eventsSince, { limit: EVENTS_RAIL_SIZE }).reverse();
 
@@ -144,12 +165,14 @@ export function readInbox(queue: QueueStore, enrollments: Map<string, Repository
       proposals: counts.proposed,
       blocked: counts.blocked,
       unverified: unverified.length,
+      adjudication: adjudication.length,
       leased: counts.claimed,
       leasedCaption,
     },
     proposals,
     blocked,
     unverified,
+    adjudication,
     events,
     eventsSince,
     truncated,

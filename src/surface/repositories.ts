@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import type { RepositoryMaintenanceProgram } from "../control/registry.ts";
 import { ControlPlaneStore, type RepositoryStatus } from "../control/store.ts";
 import { CURE_KIND } from "../queue/pull-request-cure.ts";
+import { REVIEW_FIX_KIND, REVIEW_KIND } from "../queue/pull-request-review.ts";
 import type { QueueStore } from "../queue/store.ts";
 import {
   withoutLeaseToken,
@@ -14,6 +15,7 @@ import {
   type WorkStatus,
 } from "../queue/types.ts";
 import type { SidebarRepository } from "./inbox.ts";
+import { deriveReviewState, type PullRequestReviewRow } from "./review-state.ts";
 
 /** `list()` caps at 100 rows per status; columns read that many and say so if they hit the cap. */
 const LIST_LIMIT = 100;
@@ -257,10 +259,14 @@ export interface PullRequestRow {
   headSha?: string;
   verifiedAt?: string;
   mergedAt?: string;
-  /** Completed items that reported this pull request, most recently updated first. */
+  /** GitHub reported the pull request as a draft at the latest verification (ADR-0065). */
+  draft?: boolean;
+  /** Completed items that reported this pull request, most recently updated first (review and fix items excluded). */
   reportedBy: ObservableWorkItem[];
   /** The `pr-cure` root for this head, when one exists. */
   cure?: PullRequestCureRow;
+  /** What the review gate says about this pull request, when review or fix items exist (ADR-0065). */
+  review?: PullRequestReviewRow;
 }
 
 /** Per-repository pull-request counts for the repositories index. */
@@ -268,6 +274,8 @@ export interface PullRequestSummary {
   open: number;
   /** Open pull requests whose current head has an unfinished `pr-cure` root. */
   decayed: number;
+  /** Open pull requests the review gate cannot advance by itself, or that passed and wait to be marked ready. */
+  awaitingHuman: number;
   mergedToday: number;
 }
 
@@ -299,6 +307,9 @@ export function readPullRequests(queue: QueueStore, repository: string, now: Dat
   if (completed.length === LIST_LIMIT) truncated = true;
   for (const raw of completed) {
     const item = withoutLeaseToken(raw);
+    // Review and fix items report the pull request they act on; they are not
+    // its reporters and must not retitle it.
+    if (item.kind === REVIEW_KIND || item.kind === REVIEW_FIX_KIND) continue;
     for (const artifact of item.result?.artifacts ?? []) {
       if (artifact.kind !== "pull-request") continue;
       absorbArtifact(rows, item, artifact);
@@ -338,6 +349,15 @@ export function readPullRequests(queue: QueueStore, repository: string, now: Dat
 
   for (const [key, row] of rows) row.cure = pickCure(cures.get(key) ?? [], row.headSha);
 
+  // Review-gate items (ADR-0065): the same uncapped per-pull-request read the
+  // sweep uses (`pullRequestReviewItems`, oldest first), so a repository with
+  // more than 100 completed rounds never hides the latest verdict.
+  for (const row of rows.values()) {
+    const items = queue.pullRequestReviewItems(repository, row.url).map(withoutLeaseToken);
+    if (items.length === 0) continue;
+    row.review = deriveReviewState(items, row.headSha, row.draft === true);
+  }
+
   const startOfToday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
   const mergedSince = new Date(now.getTime() - MERGED_WINDOW_DAYS * 24 * 3600 * 1000).toISOString();
   const all = [...rows.values()];
@@ -355,6 +375,7 @@ export function readPullRequests(queue: QueueStore, repository: string, now: Dat
     summary: {
       open: open.length,
       decayed: open.filter((row) => row.cure?.active === true).length,
+      awaitingHuman: open.filter((row) => row.review?.needsHuman === true || row.review?.readyToMark === true).length,
       mergedToday: merged.filter((row) => (row.mergedAt ?? "") >= startOfToday).length,
     },
     truncated,
@@ -373,8 +394,9 @@ function absorbArtifact(rows: Map<string, PullRequestRow>, item: ObservableWorkI
           headSha: verification.headSha,
           verifiedAt: verification.verifiedAt,
           mergedAt: verification.mergedAt,
+          draft: verification.draft === true,
         }
-      : { state: "unverified" as const, verifiedAt: verification?.attemptedAt };
+      : { state: "unverified" as const, verifiedAt: verification?.attemptedAt, draft: undefined };
   const existing = rows.get(key);
   if (!existing) {
     rows.set(key, {
@@ -385,6 +407,7 @@ function absorbArtifact(rows: Map<string, PullRequestRow>, item: ObservableWorkI
       headSha: observed.headSha,
       verifiedAt: observed.verifiedAt,
       mergedAt: observed.mergedAt,
+      ...(observed.draft === undefined ? {} : { draft: observed.draft }),
       reportedBy: [item],
     });
     return;
@@ -397,6 +420,7 @@ function absorbArtifact(rows: Map<string, PullRequestRow>, item: ObservableWorkI
     existing.headSha = observed.headSha ?? existing.headSha;
     existing.verifiedAt = observed.verifiedAt;
     existing.mergedAt = observed.mergedAt;
+    if (observed.draft !== undefined) existing.draft = observed.draft;
   }
   existing.title = existing.reportedBy[0]?.objective ?? existing.title;
 }

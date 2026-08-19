@@ -186,7 +186,18 @@ removed. -->
   only, and `complete_work` refuses a `pr-cure` whose patch identity changed;
   substantive fixes are `pr-cure-change` proposals. Pull requests no item
   reported are cured only for a repository with `queue -- cure-foreign
-  <owner/repo> on` (schema rung 6, off by default). When
+  <owner/repo> on` (schema rung 6, off by default). The same pass runs the
+  review gate ([`src/queue/pull-request-review.ts`](src/queue/pull-request-review.ts),
+  ADR-0065) for repositories with `queue -- review-gate <owner/repo> on`
+  (schema rung 8, off by default): workers there open drafts (`complete_work`
+  refuses an open non-draft pull request), one admitted read-only `pr-review`
+  root per draft head with at most three rounds per pull request, a
+  structured `review` verdict on `complete_work`, and deterministic
+  consequences — `pass` marks ready only with `SNOWCAT_REVIEW_GATE_WRITES=1`
+  (Snowcat's only GitHub write), `block` admits one bounded `pr-review-fix`,
+  round three waits for a human. `result.model` is worker-asserted
+  provenance the gate uses to ask for a different reviewer model; never treat
+  it as verified. When
   `SNOWCAT_CONTROL_DB` is set, `claim_work` also requires the repository to be
   `enrolled` in the control-plane store
   ([`src/queue/eligibility.ts`](src/queue/eligibility.ts)); the hook is the

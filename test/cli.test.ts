@@ -432,6 +432,7 @@ test("operator CLI verify-artifacts validates its flags and reports an empty pas
     unavailable: [],
     rejected: [],
     cure: { inspected: 0, foreign: { listed: 0, inspected: 0 }, enqueued: [], healthy: [], skipped: [], unavailable: [], notes: [] },
+    review: { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: [], unavailable: [] },
   });
 });
 
@@ -473,6 +474,61 @@ test("operator CLI cure-foreign is a repository-level setting: on|off for an opt
 
   const usage = run("nonsense");
   assert.match(usage.stderr, /cure-foreign <owner\/repo> on\|off/);
+});
+
+test("operator CLI review-gate is a repository-level setting: on|off for an opted-in repository only, and verify-artifacts can skip the review step", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cli-review-gate-test-"));
+  const path = join(directory, "queue.db");
+  const seeded = new QueueStore(path);
+  seeded.setRepositoryEnabled("frostyard/updex", true);
+  seeded.close();
+  const env = childEnvironment({ SNOWCAT_QUEUE_DB: path });
+  const run = (...args: string[]) =>
+    spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env,
+    });
+
+  const on = run("review-gate", "frostyard/updex", "on");
+  assert.equal(on.status, 0, on.stderr);
+  assert.deepEqual(JSON.parse(on.stdout), { repository: "frostyard/updex", reviewGate: true });
+
+  const notOptedIn = run("review-gate", "frostyard/lodge", "on");
+  assert.notEqual(notOptedIn.status, 0);
+  assert.match(notOptedIn.stderr, /not opted in/);
+
+  const badValue = run("review-gate", "frostyard/updex", "yes");
+  assert.notEqual(badValue.status, 0);
+  assert.match(badValue.stderr, /on or off/);
+  const missing = run("review-gate", "frostyard/updex");
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /on\|off is required/);
+
+  // With the gate on and no draft pull request reported, the review step reads nothing and reports an empty sweep.
+  const swept = run("verify-artifacts", "--no-cure");
+  assert.equal(swept.status, 0, swept.stderr);
+  assert.deepEqual(JSON.parse(swept.stdout), {
+    checked: 0,
+    updated: [],
+    unavailable: [],
+    rejected: [],
+    review: { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: [], unavailable: [] },
+  });
+  const noReview = run("verify-artifacts", "--no-cure", "--no-review");
+  assert.equal(noReview.status, 0, noReview.stderr);
+  assert.deepEqual(JSON.parse(noReview.stdout), { checked: 0, updated: [], unavailable: [], rejected: [] });
+
+  const off = run("review-gate", "frostyard/updex", "off");
+  assert.equal(off.status, 0, off.stderr);
+  assert.deepEqual(JSON.parse(off.stdout), { repository: "frostyard/updex", reviewGate: false });
+  const inspect = new QueueStore(path);
+  assert.deepEqual(inspect.repositoryReviewGateSettings(), [{ repository: "frostyard/updex", reviewGate: false }]);
+  inspect.close();
+
+  const usage = run("nonsense");
+  assert.match(usage.stderr, /review-gate <owner\/repo> on\|off/);
+  assert.match(usage.stderr, /verify-artifacts \[--repository <owner\/repo>\] \[--limit <1-100>\] \[--no-cure\] \[--no-review\]/);
 });
 
 test("operator CLI attach-artifact verifies against GitHub first: refuses another repository and a 404, attaches unverified on 5xx, and verify-artifacts later promotes it", async () => {

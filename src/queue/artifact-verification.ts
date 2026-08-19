@@ -97,6 +97,9 @@ export async function verifyGitHubArtifact(
         ...(typeof headSha === "string" && /^[0-9a-f]{7,64}$/i.test(headSha) ? { headSha } : {}),
         ...(typeof record.merged_at === "string" ? { mergedAt: record.merged_at } : {}),
         ...(typeof record.closed_at === "string" ? { closedAt: record.closed_at } : {}),
+        // Recorded only while true (ADR-0065): older records, and ready pull
+        // requests, carry no `draft` key at all.
+        ...(record.draft === true && !merged && state === "open" ? { draft: true } : {}),
       },
     };
   }
@@ -193,7 +196,8 @@ export async function refreshArtifactVerifications(
       const unchanged =
         previous?.status === "verified" &&
         previous.state === check.verification.state &&
-        previous.headSha === check.verification.headSha;
+        previous.headSha === check.verification.headSha &&
+        previous.draft === check.verification.draft;
       if (unchanged) continue;
       queue.recordArtifactVerification(item.id, artifact.url, check.verification, actor);
       result.updated.push({ id: item.id, url: artifact.url, status: "verified", state: check.verification.state });

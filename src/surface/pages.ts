@@ -1,6 +1,6 @@
 import type { ObservableWorkItem, ObservedWorkEvent } from "../queue/types.ts";
 import { html, raw, type SafeHtml } from "./html.ts";
-import type { BlockedRow, InboxData, ProposalRow, SidebarRepository, UnverifiedRow } from "./inbox.ts";
+import type { AdjudicationRow, BlockedRow, InboxData, ProposalRow, SidebarRepository, UnverifiedRow } from "./inbox.ts";
 import { admissionForm, exitForm, verifyForm } from "./forms.ts";
 import { surfaceStylesheet } from "./styles.ts";
 
@@ -209,7 +209,7 @@ export function unavailablePage(message: string): string {
 }
 
 /** The inbox fragments the live script refetches; each renders one element with that id. */
-export const inboxPartials = ["stats", "proposals", "blocked", "unverified"] as const;
+export const inboxPartials = ["stats", "proposals", "blocked", "unverified", "adjudication"] as const;
 export type InboxPartial = (typeof inboxPartials)[number];
 
 export function inboxPartial(data: InboxData, partial: InboxPartial): string {
@@ -222,6 +222,8 @@ export function inboxPartial(data: InboxData, partial: InboxPartial): string {
       return blockedGroup(data.blocked).value;
     case "unverified":
       return unverifiedGroup(data.unverified).value;
+    case "adjudication":
+      return adjudicationGroup(data.adjudication).value;
   }
 }
 
@@ -237,6 +239,7 @@ export function inboxPage(context: PageContext, data: InboxData): string {
         ${proposalsGroup(data.proposals)}
         ${blockedGroup(data.blocked)}
         ${unverifiedGroup(data.unverified)}
+        ${adjudicationGroup(data.adjudication)}
       </div>${eventsRail(data.events, data.eventsSince)}</div>`,
     ),
     { refresh: true, live: { page: "/", partials: inboxPartials } },
@@ -316,6 +319,7 @@ function statRow(data: InboxData): SafeHtml {
     ${tile("Proposals", data.stats.proposals, "awaiting admission")}
     ${tile("Blocked", data.stats.blocked, "needs an operator exit")}
     ${tile("Unverified artifacts", data.stats.unverified, "GitHub could not be asked")}
+    ${tile("Review adjudication", data.stats.adjudication, "draft PRs the gate cannot advance")}
     ${tile("Leased now", data.stats.leased, data.stats.leasedCaption)}
   </div>`;
 }
@@ -379,6 +383,28 @@ function unverifiedGroup(rows: UnverifiedRow[]): SafeHtml {
     )}</tbody></table>`,
     "Every issue and pull-request artifact has been verified against GitHub.",
     "unverified",
+  );
+}
+
+function adjudicationGroup(rows: AdjudicationRow[]): SafeHtml {
+  return group(
+    "Review adjudication — draft pull requests waiting for you",
+    rows.length,
+    html`<table class="fl-table"><thead><tr><th>Pull request</th><th>Repository</th><th>Review gate</th><th class="right"></th></tr></thead><tbody>${rows.map((row) => {
+      const review = row.pullRequest.review!;
+      return html`<tr>
+        <td><div class="fl-name"><strong><a href="${row.pullRequest.url}" rel="noreferrer noopener">${row.pullRequest.number === undefined ? "pull request" : `#${row.pullRequest.number}`}</a> <span>${row.pullRequest.title}</span></strong><small>head ${row.pullRequest.headSha ? row.pullRequest.headSha.slice(0, 7) : "?"}${row.pullRequest.draft ? " · draft" : ""}</small></div></td>
+        <td><a href="${repositoryPath(row.repository)}">${row.repository}</a></td>
+        <td class="fl-reason">${
+          review.readyToMark
+            ? html`<span class="ph-badge ok">passed</span> round ${review.round} · mark it ready: <code>gh pr ready ${row.pullRequest.number ?? ""}</code>`
+            : html`<span class="ph-badge danger">needs human</span> round ${review.round}${review.decision ? ` · ${review.decision}` : ""}${review.reason ? ` · ${review.reason}` : ""}`
+        }</td>
+        <td class="right"><a class="ph-button secondary" href="${itemPath(review.itemId)}">Open ${review.kind}</a></td>
+      </tr>`;
+    })}</tbody></table>`,
+    "No review-gated pull request is waiting for you.",
+    "adjudication",
   );
 }
 

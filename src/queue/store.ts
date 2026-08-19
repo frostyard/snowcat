@@ -6,7 +6,11 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import {
   allowedActions,
   deriveDelivery,
+  MAX_REVIEW_ADVISORIES,
+  MAX_REVIEW_BLOCKERS,
+  MODEL_NAME_PATTERN,
   pullRequestDecays,
+  reviewDecisions,
   workStatuses,
   type AllowedAction,
   type ArtifactVerification,
@@ -18,6 +22,11 @@ import {
   type CureRootInput,
   type ProposedRootInput,
   type PullRequestCure,
+  type PullRequestReview,
+  type ReviewAdvisory,
+  type ReviewBlocker,
+  type ReviewResult,
+  type ReviewRootInput,
   type SeedWorkInput,
   type WorkArtifact,
   type WorkEvent,
@@ -45,7 +54,7 @@ const MAX_OPERATOR_NOTE_LENGTH = 4000;
  * that newer code has already migrated; newer code upgrades an older database
  * in place, forward only, inside one write transaction.
  */
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 /**
  * Backup manifest emitted by `QueueStore.backup` and re-derived by
@@ -379,13 +388,13 @@ export class QueueStore {
     validateOperatorActor(actor, "repository rename");
     if (from.toLowerCase() === to.toLowerCase()) throw new Error("repository rename needs a different slug");
     return this.transaction(() => {
-      const row = this.db.prepare("SELECT slug, enabled, cure_foreign, created_at FROM repositories WHERE slug = ?").get(from) as Row | undefined;
+      const row = this.db.prepare("SELECT slug, enabled, cure_foreign, review_gate, created_at FROM repositories WHERE slug = ?").get(from) as Row | undefined;
       if (!row) throw new Error(`repository is not known to the queue: ${from}`);
       if (this.db.prepare("SELECT 1 AS present FROM repositories WHERE slug = ?").get(to)) throw new Error(`repository already exists: ${to}`);
       const now = this.now();
       this.db
-        .prepare("INSERT INTO repositories (slug, enabled, cure_foreign, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
-        .run(to, Number(row.enabled), Number(row.cure_foreign), String(row.created_at), now);
+        .prepare("INSERT INTO repositories (slug, enabled, cure_foreign, review_gate, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
+        .run(to, Number(row.enabled), Number(row.cure_foreign), Number(row.review_gate), String(row.created_at), now);
       const updated = this.db.prepare("UPDATE work_items SET repository = ? WHERE repository = ?").run(to, from);
       this.db.prepare("DELETE FROM repositories WHERE slug = ?").run(from);
       return { from, to, items: Number(updated.changes) };
@@ -477,6 +486,33 @@ export class QueueStore {
       this.assertRepositoryEnabled(repository);
       this.db
         .prepare("UPDATE repositories SET cure_foreign = ?, updated_at = ? WHERE slug = ?")
+        .run(enabled ? 1 : 0, this.now(), repository);
+    });
+  }
+
+  /**
+   * The review-gate setting of every opted-in repository, in slug order
+   * (ADR-0065): with `reviewGate` on, workers open pull requests as drafts
+   * and the verification pass creates bounded `pr-review` rounds for them.
+   */
+  repositoryReviewGateSettings(): Array<{ repository: string; reviewGate: boolean }> {
+    const rows = this.db.prepare("SELECT slug, review_gate FROM repositories WHERE enabled = 1 ORDER BY slug").all() as Row[];
+    return rows.map((row) => ({ repository: String(row.slug), reviewGate: Number(row.review_gate) === 1 }));
+  }
+
+  /** Whether the review gate is on for an opted-in repository; off for unknown or disabled ones. */
+  reviewGateEnabled(repository: string): boolean {
+    validateRepository(repository);
+    const row = this.db.prepare("SELECT review_gate FROM repositories WHERE slug = ? AND enabled = 1").get(repository) as Row | undefined;
+    return row !== undefined && Number(row.review_gate) === 1;
+  }
+
+  /** Turns the review gate on or off for one opted-in repository. */
+  setRepositoryReviewGate(repository: string, enabled: boolean): void {
+    this.transaction(() => {
+      this.assertRepositoryEnabled(repository);
+      this.db
+        .prepare("UPDATE repositories SET review_gate = ?, updated_at = ? WHERE slug = ?")
         .run(enabled ? 1 : 0, this.now(), repository);
     });
   }
@@ -584,6 +620,114 @@ export class QueueStore {
         root: true,
         cure: { pullRequestUrl: input.cure.pullRequestUrl, headSha: input.cure.headSha, decay: input.cure.decay },
       });
+      return this.getRequired(id);
+    });
+  }
+
+  /**
+   * Creates one admitted `pr-review` or `pr-review-fix` root (ADR-0065),
+   * keyed by `sourceRef` (`pr-review:<url>@<headSha>` or
+   * `pr-review-fix:<url>@<headSha>`); the same head and kind are never
+   * enqueued twice, whatever the earlier item's status became, so this returns
+   * `undefined` when the head is already known. A `pr-review` is read-only
+   * (at most `read` and `run-tests`, nothing delegable); a `pr-review-fix`
+   * carries exactly `read, write, run-tests, open-pr` and nothing delegable.
+   * Both are created by the review sweep under a `policy:` actor, never by a
+   * worker.
+   */
+  enqueueReviewRoot(repository: string, input: ReviewRootInput): WorkItem | undefined {
+    validateRepository(repository);
+    validateSourceRef(input.sourceRef);
+    validateReview(input.review);
+    if (input.kind !== "pr-review" && input.kind !== "pr-review-fix") {
+      throw new Error("a review root must have kind pr-review or pr-review-fix");
+    }
+    if (input.delegableActions.length > 0) throw new Error(`a ${input.kind} root delegates nothing`);
+    if (input.kind === "pr-review") {
+      assertSubset(input.allowedActions, ["read", "run-tests"], "pr-review allowedActions");
+    } else {
+      const expected = ["read", "write", "run-tests", "open-pr"];
+      const actual = [...input.allowedActions].sort();
+      if (actual.length !== expected.length || actual.some((action, index) => action !== [...expected].sort()[index])) {
+        throw new Error("a pr-review-fix root must carry exactly read, write, run-tests, open-pr");
+      }
+      if (!input.review.reviewItemId) throw new Error("a pr-review-fix root must name the review item it addresses");
+    }
+    const definition: SeedWorkInput = { ...input, repository };
+    validateWorkDefinition(definition);
+    return this.transaction(() => {
+      this.assertRepositoryEnabled(repository);
+      if (this.sourceRefExists(repository, input.sourceRef)) return undefined;
+      const id = randomUUID();
+      const now = this.now();
+      this.insertWork({
+        ...definition,
+        id,
+        rootId: id,
+        priority: definition.priority ?? 0,
+        admitted: true,
+        createdAt: now,
+        sourceRef: input.sourceRef,
+        review: input.review,
+      });
+      this.addEvent(id, "work.queued", input.createdBy, {
+        root: true,
+        review: {
+          kind: input.kind,
+          pullRequestUrl: input.review.pullRequestUrl,
+          headSha: input.review.headSha,
+          round: input.review.round,
+          ...(input.review.reviewItemId ? { reviewItemId: input.review.reviewItemId } : {}),
+          ...(input.kind === "pr-review-fix" ? { fingerprints: (input.review.blockers ?? []).map((blocker) => blocker.fingerprint) } : {}),
+        },
+      });
+      return this.getRequired(id);
+    });
+  }
+
+  /**
+   * Every `pr-review` and `pr-review-fix` item bound to one pull request in a
+   * repository, oldest first and uncapped: the review sweep derives the round
+   * count, what is in flight, and the latest verdict from this one read.
+   */
+  pullRequestReviewItems(repository: string, pullRequestUrl: string): WorkItem[] {
+    validateRepository(repository);
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM work_items
+         WHERE repository = ? AND kind IN ('pr-review', 'pr-review-fix')
+           AND lower(json_extract(review_json, '$.pullRequestUrl')) = lower(?)
+         ORDER BY created_at ASC, rowid ASC`,
+      )
+      .all(repository, pullRequestUrl) as Row[];
+    return rows.map((row) => withDelivery(decodeWorkItem(row)));
+  }
+
+  /**
+   * Records that Snowcat marked a reviewed draft pull request ready for
+   * review (ADR-0065): rewrites the origin item's verification of that
+   * artifact without `draft` and records `artifact.ready` naming the head and
+   * the review that passed. Policy or operator actors only.
+   */
+  recordPullRequestReady(id: string, url: string, actor: string, payload: { headSha: string; reviewItemId: string }): WorkItem {
+    validateOperatorActor(actor, "ready-for-review");
+    return this.transaction(() => {
+      const item = this.getRequired(id);
+      if (item.status !== "completed" || !item.result) throw new Error(`work item is not completed: ${id}`);
+      const index = item.result.artifacts.findIndex((artifact) => artifact.url.toLowerCase() === url.toLowerCase());
+      if (index === -1) throw new Error(`work item ${id} has no artifact ${url}`);
+      const artifact = item.result.artifacts[index]!;
+      if (artifact.kind !== "pull-request") throw new Error(`artifact is not a pull request: ${url}`);
+      const artifacts = item.result.artifacts.slice();
+      if (artifact.verification?.status === "verified") {
+        const { draft: _draft, ...verification } = artifact.verification;
+        artifacts[index] = { ...artifact, verification };
+      }
+      const now = this.now();
+      this.db
+        .prepare("UPDATE work_items SET result_json = ?, updated_at = ? WHERE id = ?")
+        .run(JSON.stringify({ ...item.result, artifacts }), now, id);
+      this.addEvent(id, "artifact.ready", actor, { url, headSha: payload.headSha, reviewItemId: payload.reviewItemId });
       return this.getRequired(id);
     });
   }
@@ -884,6 +1028,17 @@ export class QueueStore {
         throw new Error(`work lineage may be at most ${MAX_LINEAGE_DEPTH} edges deep`);
       }
       this.assertArtifactsAllowed(parent, input.result.artifacts);
+      // A pr-review completes with a structured verdict and nothing else does
+      // (ADR-0065); the verdict is merged into the item's review record.
+      let reviewJson: string | undefined;
+      if (parent.kind === "pr-review") {
+        if (!input.review) throw new Error("pr-review completion requires a review result (decision, blockers, advisories)");
+        if (!parent.review) throw new Error("pr-review item has no review record");
+        validateReviewResult(input.review);
+        reviewJson = JSON.stringify({ ...parent.review, ...input.review, reviewedAt: this.now() });
+      } else if (input.review !== undefined) {
+        throw new Error("review results are accepted only on pr-review items");
+      }
 
       const now = this.now();
       const children: WorkItem[] = [];
@@ -916,15 +1071,25 @@ export class QueueStore {
       this.db
         .prepare(
           `UPDATE work_items
-           SET status = 'completed', result_json = ?, lease_owner = NULL, lease_token = NULL,
+           SET status = 'completed', result_json = ?, review_json = COALESCE(?, review_json), lease_owner = NULL, lease_token = NULL,
                lease_expires_at = NULL, updated_at = ?
            WHERE id = ?`,
         )
-        .run(JSON.stringify(input.result), now, input.id);
+        .run(JSON.stringify(input.result), reviewJson ?? null, now, input.id);
       this.addEvent(input.id, "work.completed", input.worker, {
         followUpIds: children.map((child) => child.id),
         artifactCount: input.result.artifacts.length,
+        ...(input.result.model ? { model: input.result.model } : {}),
       });
+      if (input.review && parent.review) {
+        this.addEvent(input.id, "work.reviewed", input.worker, {
+          decision: input.review.decision,
+          round: parent.review.round,
+          headSha: parent.review.headSha,
+          pullRequestUrl: parent.review.pullRequestUrl,
+          fingerprints: input.review.blockers.map((blocker) => blocker.fingerprint),
+        });
+      }
       return { completed: this.getRequired(input.id), followUps: children };
     });
   }
@@ -1312,14 +1477,15 @@ export class QueueStore {
     createdAt: string;
     sourceRef?: string;
     cure?: PullRequestCure;
+    review?: PullRequestReview;
   }): void {
     this.db
       .prepare(
         `INSERT INTO work_items (
           id, root_id, parent_id, repository, kind, objective, instructions,
           acceptance_criteria_json, allowed_actions_json, delegable_actions_json,
-          priority, status, admitted, created_by, created_at, updated_at, source_ref, cure_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
+          priority, status, admitted, created_by, created_at, updated_at, source_ref, cure_json, review_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.id,
@@ -1339,6 +1505,7 @@ export class QueueStore {
         input.createdAt,
         input.sourceRef ?? null,
         input.cure ? JSON.stringify(input.cure) : null,
+        input.review ? JSON.stringify(input.review) : null,
       );
   }
 
@@ -1456,6 +1623,7 @@ function decodeWorkItem(row: Row): WorkItem {
     createdBy: String(row.created_by),
     sourceRef: row.source_ref == null ? undefined : String(row.source_ref),
     ...(row.cure_json == null ? {} : { cure: parseJson<PullRequestCure | undefined>(row.cure_json, undefined) }),
+    ...(row.review_json == null ? {} : { review: parseJson<PullRequestReview | undefined>(row.review_json, undefined) }),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     leaseOwner: row.lease_owner == null ? undefined : String(row.lease_owner),
@@ -1505,6 +1673,57 @@ function validateCure(cure: PullRequestCure): void {
     throw new Error("cure decay must name at least one distinct known reason");
   }
   if (cure.originItemId !== undefined && typeof cure.originItemId !== "string") throw new Error("cure originItemId must be a string");
+}
+
+function validateReviewBlockers(blockers: ReviewBlocker[], name: string): void {
+  if (!Array.isArray(blockers)) throw new Error(`${name} must be a list`);
+  if (blockers.length > MAX_REVIEW_BLOCKERS) throw new Error(`${name} may name at most ${MAX_REVIEW_BLOCKERS} blockers`);
+  const fingerprints = new Set<string>();
+  for (const blocker of blockers) {
+    for (const field of ["fingerprint", "location", "contract", "impact", "resolution", "verification"] as const) {
+      if (typeof blocker[field] !== "string" || !blocker[field].trim()) throw new Error(`${name} blocker ${field} is required`);
+    }
+    if (fingerprints.has(blocker.fingerprint)) throw new Error(`${name} blocker fingerprints must be distinct: ${blocker.fingerprint}`);
+    fingerprints.add(blocker.fingerprint);
+  }
+}
+
+function validateReviewAdvisories(advisories: ReviewAdvisory[], name: string): void {
+  if (!Array.isArray(advisories)) throw new Error(`${name} must be a list`);
+  if (advisories.length > MAX_REVIEW_ADVISORIES) throw new Error(`${name} may name at most ${MAX_REVIEW_ADVISORIES} advisories`);
+  for (const advisory of advisories) {
+    if (typeof advisory.fingerprint !== "string" || !advisory.fingerprint.trim()) throw new Error(`${name} advisory fingerprint is required`);
+    if (typeof advisory.text !== "string" || !advisory.text.trim()) throw new Error(`${name} advisory text is required`);
+  }
+}
+
+/** The verdict a `pr-review` worker supplies: decision, bounded blockers, bounded advisories, consistent with each other. */
+function validateReviewResult(review: ReviewResult): void {
+  if (!(reviewDecisions as readonly string[]).includes(review.decision)) throw new Error("review decision is invalid");
+  validateReviewBlockers(review.blockers, "review");
+  validateReviewAdvisories(review.advisories, "review");
+  if (review.decision === "block" && review.blockers.length === 0) throw new Error("review decision block requires at least one blocker");
+  if (review.decision === "pass" && review.blockers.length > 0) throw new Error("review decision pass must carry no blockers");
+}
+
+function validateReview(review: PullRequestReview): void {
+  if (!/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/[1-9][0-9]*$/.test(review.pullRequestUrl)) {
+    throw new Error("review pullRequestUrl must be a GitHub pull-request URL");
+  }
+  if (!/^[0-9a-f]{40}$/.test(review.headSha)) throw new Error("review headSha must be a 40-hex commit SHA");
+  if (review.patchDigest !== undefined && !/^sha256:[0-9a-f]{64}$/.test(review.patchDigest)) {
+    throw new Error("review patchDigest must be a sha256: digest");
+  }
+  if (!Number.isInteger(review.round) || review.round < 1) throw new Error("review round must be a positive integer");
+  for (const field of ["originItemId", "authorModel", "priorReviewerModel", "reviewItemId", "reviewerModel"] as const) {
+    if (review[field] !== undefined && typeof review[field] !== "string") throw new Error(`review ${field} must be a string`);
+  }
+  validateReviewBlockers(review.priorBlockers, "review priorBlockers");
+  if (review.blockers !== undefined) validateReviewBlockers(review.blockers, "review");
+  if (review.advisories !== undefined) validateReviewAdvisories(review.advisories, "review");
+  if (review.decision !== undefined && !(reviewDecisions as readonly string[]).includes(review.decision)) {
+    throw new Error("review decision is invalid");
+  }
 }
 
 function validateSourceRef(sourceRef: string): void {
@@ -1561,6 +1780,9 @@ function validateWorkDefinition(input: {
 function validateResult(result: WorkResult): void {
   if (!result.summary.trim()) throw new Error("result summary is required");
   if (result.evidence.some((evidence) => !evidence.trim())) throw new Error("evidence entries must not be empty");
+  if (result.model !== undefined && (typeof result.model !== "string" || !MODEL_NAME_PATTERN.test(result.model))) {
+    throw new Error("result model must be a short model identifier (letters, digits, . _ : / @ -)");
+  }
   for (const artifact of result.artifacts) validateArtifact(artifact);
 }
 
@@ -1785,6 +2007,23 @@ const MIGRATIONS: readonly Migration[] = [
       );
       CREATE INDEX IF NOT EXISTS mcp_tokens_owner ON mcp_tokens(owner, created_at);
     `);
+  },
+  // Rung 8: the review gate (ADR-0065): the review record a `pr-review` or
+  // `pr-review-fix` root is bound to, typed in one nullable column, and the
+  // per-repository opt-in. Off for every existing row.
+  (db) => {
+    const items = new Set(
+      (db.prepare("PRAGMA table_info(work_items)").all() as Row[]).map((column) => String(column.name)),
+    );
+    if (!items.has("review_json")) {
+      db.exec("ALTER TABLE work_items ADD COLUMN review_json TEXT");
+    }
+    const repositories = new Set(
+      (db.prepare("PRAGMA table_info(repositories)").all() as Row[]).map((column) => String(column.name)),
+    );
+    if (!repositories.has("review_gate")) {
+      db.exec("ALTER TABLE repositories ADD COLUMN review_gate INTEGER NOT NULL DEFAULT 0 CHECK (review_gate IN (0, 1))");
+    }
   },
 ];
 

@@ -3,8 +3,17 @@ import * as z from "zod/v4";
 
 import { verifyCompletionArtifacts, type ArtifactVerifierOptions } from "../queue/artifact-verification.ts";
 import { assertCureCompletion } from "../queue/pull-request-cure.ts";
+import { assertReviewCompletion, assertReviewGate } from "../queue/pull-request-review.ts";
 import { QueueStore, queueDatabasePath, validateWorkerIdentity, type QueueStoreOptions } from "../queue/store.ts";
-import { allowedActions, withoutLeaseToken, workStatuses } from "../queue/types.ts";
+import {
+  allowedActions,
+  MAX_REVIEW_ADVISORIES,
+  MAX_REVIEW_BLOCKERS,
+  MODEL_NAME_PATTERN,
+  reviewDecisions,
+  withoutLeaseToken,
+  workStatuses,
+} from "../queue/types.ts";
 
 const actionSchema = z.enum(allowedActions);
 // Worker identities may not borrow Snowcat's reserved principal namespaces
@@ -26,6 +35,21 @@ const artifactSchema = z.strictObject({
   kind: z.enum(["issue", "pull-request", "commit", "report", "other"]),
   url: z.url().startsWith("https://"),
   description: z.string().min(1).optional(),
+});
+// A pr-review verdict (ADR-0029, ADR-0065): bounded, fingerprinted, strict.
+const fingerprintSchema = z.string().regex(/^[a-z0-9][a-z0-9._:/-]{3,120}$/i);
+const reviewBlockerSchema = z.strictObject({
+  fingerprint: fingerprintSchema,
+  location: z.string().min(1),
+  contract: z.string().min(1),
+  impact: z.string().min(1),
+  resolution: z.string().min(1),
+  verification: z.string().min(1),
+});
+const reviewSchema = z.strictObject({
+  decision: z.enum(reviewDecisions),
+  blockers: z.array(reviewBlockerSchema).max(MAX_REVIEW_BLOCKERS),
+  advisories: z.array(z.strictObject({ fingerprint: fingerprintSchema, text: z.string().min(1) })).max(MAX_REVIEW_ADVISORIES),
 });
 // Strict: unknown fields such as `priority` are rejected rather than stripped,
 // because scheduling priority is operator-owned and children inherit it.
@@ -66,7 +90,8 @@ export function buildQueueMcpServer(
         "Perform only the allowedActions listed on the claimed item.",
         "Before changing anything, check whether the work already exists: read operatorNotes when present and look for pull requests that reference the item's sourceRef issue; re-report or block rather than opening a duplicate.",
         "Never broaden child permissions beyond delegableActions.",
-        "Complete work with concrete evidence and bounded follow-up items.",
+        "Complete work with concrete evidence and bounded follow-up items, and report the model you ran as result.model.",
+        "In a review-gated repository open pull requests as drafts; a pr-review item completes with a structured review verdict and touches nothing on GitHub.",
       ].join(" "),
     },
   );
@@ -131,7 +156,7 @@ export function buildQueueMcpServer(
     "complete_work",
     {
       description:
-        "Complete leased work with evidence and zero or more bounded child items. Child permissions cannot exceed the parent's delegation ceiling.",
+        "Complete leased work with evidence and zero or more bounded child items. Child permissions cannot exceed the parent's delegation ceiling. result.model is the model you ran (provenance). A pr-review item must supply `review` (decision, blockers, advisories); no other kind may.",
       inputSchema: z.object({
         id: z.string().uuid(),
         leaseToken: z.string().uuid(),
@@ -140,8 +165,10 @@ export function buildQueueMcpServer(
           summary: z.string().min(1),
           evidence: z.array(z.string().min(1)),
           artifacts: z.array(artifactSchema),
+          model: z.string().regex(MODEL_NAME_PATTERN).optional(),
         }),
         followUps: z.array(followUpSchema).max(10),
+        review: reviewSchema.optional(),
       }),
     },
     async (input) => {
@@ -153,9 +180,16 @@ export function buildQueueMcpServer(
       const artifacts = item
         ? await verifyCompletionArtifacts(item.repository, input.result.artifacts, verifier)
         : input.result.artifacts;
-      // A pr-cure completion is refused when the pull request's patch identity
-      // changed (ADR-0061): mechanical is a fact Snowcat computes, not a claim.
-      if (item) await assertCureCompletion(item, artifacts, verifier);
+      // In a review-gated repository an open pull request must be a draft
+      // (ADR-0065); a pr-cure completion is refused when the pull request's
+      // patch identity changed (ADR-0061): mechanical is a fact Snowcat
+      // computes, not a claim; a pr-review verdict must bind to the head the
+      // round named.
+      if (item) {
+        assertReviewGate(queue, item, artifacts);
+        await assertCureCompletion(item, artifacts, verifier);
+        await assertReviewCompletion(item, artifacts, input.review, verifier);
+      }
       return toolResult(queue.complete({ ...input, worker: actor(input.worker), result: { ...input.result, artifacts } }));
     },
   );
