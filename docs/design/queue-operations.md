@@ -785,7 +785,7 @@ What the instance is (all of it in
 in it): Debian 13 cloud image, `limits.cpu=2`, `limits.memory=4GiB`,
 `boot.autostart`, daily snapshots kept 14 days, and cloud-init user-data that
 creates the `snowcat` user (passwordless `sudo`, locked password), installs
-`git jq sqlite3 curl gnupg unattended-upgrades`, adds the NodeSource
+`git jq sqlite3 shellcheck curl gnupg unattended-upgrades` (`shellcheck` because `deploy/upgrade.sh` runs `npm run check`), adds the NodeSource
 (`node_24.x`), Tailscale, and Cloudflare apt repositories with their signing
 keys fetched in `bootcmd` (so cloud-init's own `package_update` already
 trusts them), installs `nodejs`, `tailscale`, and `cloudflared` (neither of

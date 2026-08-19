@@ -8,7 +8,8 @@
 #
 # cloud-init prepares the OS only — a `snowcat` user, Node 24 (NodeSource),
 # tailscale and cloudflared (both installed, neither configured: pick the
-# private mesh or the Access edge in the runbook), git/jq/sqlite3 — and leaves
+# private mesh or the Access edge in the runbook), git/jq/sqlite3/shellcheck
+# (deploy/upgrade.sh runs `npm run check`, whose check:deploy needs it) — and leaves
 # the checkout, databases, secrets, and mesh/tunnel login to
 # deploy/incus/bootstrap.sh and the operator, so nothing secret ever sits in
 # a profile.
@@ -34,6 +35,7 @@ config:
       - git
       - gnupg
       - jq
+      - shellcheck
       - sqlite3
       - sudo
       - unattended-upgrades
