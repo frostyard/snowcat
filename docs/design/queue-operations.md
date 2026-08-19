@@ -585,7 +585,7 @@ and the worker is told to fix it. To refresh state after review and merges:
 npm run --silent queue -- verify-artifacts --repository frostyard/updex
 ```
 
-`snowcat-verify.timer` runs this every 10 minutes with the default limit. The
+`snowcat-verify.timer` runs this every 2 minutes with the default limit (10 until 2026-08-19; shortened so a ready pull request that falls `behind` during a merge run is cured before the operator reaches it). The
 limit bounds completed items that still have a non-terminal artifact (missing,
 `unverified`, or `open`), newest first, so a repository with hundreds of
 already-merged completions never pushes a fresh one out of the pass. It
@@ -685,7 +685,16 @@ gated — and, per draft head:
   (beside the `readyToMark` ones). You decide: push a fix, `gh pr ready`,
   `note` or `requeue` the item, or close the pull request.
 
-The sweep never merges, approves, or dismisses. Because
+The sweep never merges, approves, or dismisses.
+
+**Merging a batch.** Every enrolled repository's ruleset requires strict
+up-to-date checks (core ADR-0040), so merging N ready pull requests in a row
+means each one after the first must be updated against `main` and re-checked.
+The 2-minute verify cadence means the cure sweep does the update for you
+(`behind` → mechanical update, patch identity unchanged): merge one, and the
+others are updated and re-checked by the time you reach them — click merge as
+they go green. Until core ADR-0042 (merge queue, proposed 2026-08-19) lands,
+that is the shape; a merge queue removes the wait entirely. Because
 drafts are never cured, Copilot's automatic review skips drafts unless a
 ruleset opts in, and the fleet's review-apply workflows run only on
 non-drafts, review/fix and cure never act on one pull request at the same
@@ -772,7 +781,7 @@ Snowcat v1 runs on **one operator host** and stays there deliberately:
   | `snowcat-import-issues.timer` | every 15 minutes (`OnCalendar=*:0/15`, `RandomizedDelaySec=60`) | `queue -- import-issues --enrolled --label snowcat` |
   | `snowcat-sweep-dependencies.timer` | daily, 00:45 UTC (`OnCalendar=*-*-* 00:45:00`, `RandomizedDelaySec=300`, `Persistent=true`) | `queue -- sweep-dependencies --enrolled` |
   | `snowcat-sweep-settings.timer` | weekly, Mondays 01:15 UTC (`OnCalendar=Mon *-*-* 01:15:00`, `RandomizedDelaySec=300`, `Persistent=true`) | `queue -- sweep-repository-settings --enrolled` |
-  | `snowcat-verify.timer` | every 10 minutes (`OnCalendar=*:0/10`) | `queue -- verify-artifacts` (default limit; includes the pull-request cure sweep) |
+  | `snowcat-verify.timer` | every 2 minutes (`OnCalendar=*:0/2`) | `queue -- verify-artifacts` (default limit; includes the pull-request cure sweep and the review gate) |
   | `snowcat-backup.timer` | daily (`OnCalendar=daily`, `Persistent=true`) | [`deploy/bin/snowcat-backup`](../../deploy/bin/snowcat-backup) |
 
   The four feeders are independent: one failing no longer skips the others
@@ -1235,7 +1244,7 @@ tokens and wall time per accepted outcome (from the client you ran).
   MCP server opens its own connection; SQLite WAL and a busy timeout serialize
   writes.
 - Feeder, `verify-artifacts`, and `backup` are idempotent and cheap; the
-  six timers in `deploy/systemd/` (daily, every 15 minutes, daily, weekly, every 10 minutes, daily) are the
+  six timers in `deploy/systemd/` (daily, every 15 minutes, daily, weekly, every 2 minutes, daily) are the
   intended cadence, and running any of them by hand in between is harmless.
 - `SNOWCAT_CONTROL_DB` is the only coupling between the queue and the control
   plane. Leave it unset until `repository -- status` shows the repositories you
