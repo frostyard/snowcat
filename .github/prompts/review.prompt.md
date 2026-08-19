@@ -8,10 +8,11 @@ review-required; core ADR-0019).
 1. Read [AGENTS.md](../../AGENTS.md) — the working conventions, the
    documentation rules, and the repository boundary the diff must satisfy.
    Read the item's ADRs, design docs, and specs it names.
-2. Run the gate exactly as CI does — `npm run check` (`check:docs`,
-   `check:deploy`, typecheck, tests, build with `check-dist` and
-   `check-boot`) — and read its output; a local pass is a CI pass, so a
-   local failure is a blocking finding.
+2. Run the gate exactly as CI does — `npm run check` (`check:audit`,
+   `check:docs`, `check:deploy`, typecheck, tests with the line, branch, and
+   function coverage floors from `package.json`, build with `check-dist` and
+   `check-boot`) — and read its output; a local pass is a CI pass, so a local
+   failure is a blocking finding.
 3. Documentation rules (AGENTS.md "Documentation rules"): a new doc starts
    from its category's `TEMPLATE.md` and is indexed in
    [docs/README.md](../../docs/README.md); a significant decision has a new
