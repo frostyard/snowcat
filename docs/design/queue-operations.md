@@ -1076,13 +1076,42 @@ keeps its own lineage identity that the verify commands check.
 ## What to record for the PRD
 
 The [agent fleet PRD](../prd/agent-fleet.md) needs numbers before it can be
-Approved. During the dogfood week keep, per repository:
+Approved. `metrics` computes the queue's share of them for one window, so a
+day of the dogfood week is one command instead of an evening with `list` and
+`events`:
 
-- items admitted, claimed, completed, blocked, cancelled (`list` counts);
-- completed items by `delivery` — merged pull requests over attempts is the
-  headline;
-- reviewer changes requested and rejected pull requests (from GitHub);
-- tokens and wall time per accepted outcome (from the client you ran).
+```bash
+npm run --silent queue -- metrics                                    # the last 24 hours, every repository and the total
+npm run --silent queue -- metrics --repository frostyard/updex       # one repository
+npm run --silent queue -- metrics --since 2026-08-19T00:00:00Z --until 2026-08-20T00:00:00Z
+```
+
+The window is half-open — `--since` inclusive, `--until` exclusive, both ISO
+timestamps — and defaults to the last 24 hours ending now, so consecutive days
+neither overlap nor gap. The reading prints one JSON object with `all` and one
+entry per repository, each carrying, for that window:
+
+- `created` — items *created* in the window, counted by the logical status
+  they hold *now* (`proposed`, `queued`, `claimed`, `completed`, `blocked`,
+  `cancelled`);
+- `attempts` — `work.claimed` events, and `completed` — `work.completed`
+  events, with `completedByDelivery` splitting those completions by their
+  item's current `delivery`;
+- `accepted` — completions whose `delivery` is `merged` — and
+  `acceptedPerAttempt`, the headline number (`null` when nothing was claimed);
+- `blocked` and `cancelled` — `work.blocked` and `work.cancelled` events;
+- `timeToMergeHours` — `{ count, median, p90 }` hours from a completion to its
+  pull request's merge.
+
+Run `verify-artifacts` (or let its timer run) before reading a day: delivery
+and merge times come from the recorded verifications, so an unverified pull
+request counts as `unverified`, not as accepted. The command is read-only and
+is not an MCP tool.
+
+Record daily, per repository, `acceptedPerAttempt`, `blocked`, and
+`timeToMergeHours` from the reading, plus the two numbers the queue cannot
+see: reviewer changes requested and rejected pull requests (from GitHub), and
+tokens and wall time per accepted outcome (from the client you ran).
 
 ## Troubleshooting
 

@@ -85,6 +85,7 @@ npm run queue -- list [proposed|queued|claimed|completed|blocked|cancelled]
 npm run queue -- show <work-item-id>
 npm run queue -- events [--since <sequence>] [--repository <owner/repo>] [--limit <1-500>]
 npm run queue -- watch [--repository <owner/repo>] [--interval <seconds>]
+npm run queue -- metrics [--repository <owner/repo>] [--since <iso>] [--until <iso>]
 ```
 
 `seed-testing-gap` creates exactly one read-only discovery item that may create
@@ -118,6 +119,12 @@ first, each joined with its item's repository, kind, source reference, and
 current status; `watch` polls the same read from the current last sequence and
 prints one JSON line per new event until interrupted. Neither mutates the queue
 and neither is exposed through MCP.
+
+`metrics` is the PRD baseline reading over one window (rule 56): how much work
+the window created and where it stands now, how often workers attempted it,
+what they completed and how much of that GitHub merged, and how long the merges
+took. It aggregates the ledger and the current items, mutates nothing, and is
+not exposed through MCP.
 
 `requeue` and `cancel` are operator-only exits for `blocked` work. Requeue
 moves the block result to the end of `previousResults`, appends a `requeue`
@@ -732,6 +739,32 @@ MCP (rule 41).
     its only writes are the ready-for-review mark and its compensating
     conversion back to draft, and with the variable unset it MUST perform no
     GitHub write at all.
+56. **Baseline metrics.** `metrics [--repository <owner/repo>] [--since
+    <iso>] [--until <iso>]` MUST print exactly one JSON object for the
+    half-open window `[since, until)` — `since` inclusive, `until` exclusive,
+    both ISO-8601 timestamps normalized to UTC, defaulting to the last 24
+    hours ending now (either bound given alone fixes its end and the other
+    follows 24 hours from it) — carrying the window, one entry per repository
+    that appears in it, and an `all` entry totalling the same scope, each
+    entry with exactly: `created`, the items *created* in the window counted
+    by the logical status they hold *now* (`proposed`, `queued`, `claimed`,
+    `completed`, `blocked`, `cancelled`); `attempts`, the `work.claimed`
+    events in the window; `completed`, the `work.completed` events in it, and
+    `completedByDelivery`, those completions by their item's current
+    `delivery` (`none`, `unverified`, `open`, `closed`, `merged`);
+    `accepted`, the completions whose item's `delivery` is `merged`;
+    `acceptedPerAttempt`, `accepted / attempts` rounded to three decimals and
+    `null` when `attempts` is 0; `blocked` and `cancelled`, the
+    `work.blocked` and `work.cancelled` events in the window; and
+    `timeToMergeHours` as `{ count, median, p90 }` over the merged
+    pull-request artifacts of those completions — hours from the item's
+    `work.completed` event to the artifact's `verification.mergedAt`, each
+    rounded to three decimals, `p90` by nearest rank, with `median` and `p90`
+    `null` exactly when `count` is 0. An unparseable bound and a window whose
+    `since` is not before its `until` MUST be refused naming the bound. The
+    command MUST be read-only — no write, no schema rung, no GitHub call —
+    MUST refuse a window carrying more than 100,000 events instead of
+    aggregating it, and MUST NOT be exposed as an MCP tool.
 
 ## Derived artifacts
 
@@ -746,6 +779,7 @@ MCP (rule 41).
 | Internal dependency chain | `sweep-dependencies` maps tags, branch comparison, and `go.mod` to `release-needed` and `dependency-bump` proposals per rule 45 |
 | Repository settings drift | `sweep-repository-settings` diffs live GitHub settings against core's contract into `settings-drift` proposals per rule 46 |
 | MCP tokens | `token mint | list | revoke` over the `mcp_tokens` table per rule 49; identities per rule 48 |
+| PRD baseline metrics | `metrics` aggregates items created in a window with its `work.claimed`, `work.completed`, `work.blocked`, and `work.cancelled` events and the completed items' current `delivery` per rule 56 |
 | MCP worker behavior | Portable `work-snowcat-queue` skill constrained by this contract |
 | Testing-gap seed | Deterministic CLI instance of this contract |
 

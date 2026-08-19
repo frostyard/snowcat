@@ -46,6 +46,10 @@ const MAX_SOURCE_REF_LENGTH = 512;
 const DEFAULT_EVENTS_SINCE_LIMIT = 100;
 const MAX_EVENTS_SINCE_LIMIT = 500;
 const MAX_OPERATOR_NOTE_LENGTH = 4000;
+/** Ledger events the metrics window reads; no other event bears on the reported numbers. */
+const METRICS_EVENT_TYPES = ["work.claimed", "work.completed", "work.blocked", "work.cancelled"] as const;
+/** Events one metrics window may carry before it is refused instead of aggregated. */
+export const MAX_METRICS_WINDOW_EVENTS = 100_000;
 
 /**
  * Schema version recorded in SQLite `PRAGMA user_version`. It equals the length
@@ -218,6 +222,42 @@ export type ClaimEligibility = (repository: string) => boolean;
 
 export interface QueueStoreOptions {
   claimEligibility?: ClaimEligibility;
+}
+
+/**
+ * One group of items created inside a metrics window: how many items the
+ * window created in `repository` that hold `status` now. The status is the
+ * item's logical status as of the read, not its status at creation.
+ */
+export interface QueueMetricsCreatedRow {
+  repository: string;
+  status: WorkStatus;
+  count: number;
+}
+
+/**
+ * One lifecycle event inside a metrics window, joined with its item's
+ * repository and — for a completion — the item's current result, so delivery
+ * and merge times are read from what the item says now.
+ */
+export interface QueueMetricsEventRow {
+  type: string;
+  repository: string;
+  workItemId: string;
+  occurredAt: string;
+  result?: WorkResult;
+}
+
+/**
+ * The bounded read `QueueStore.metricsWindow` returns. It carries rows, not
+ * metrics: the field definitions live in `src/queue/metrics.ts`.
+ */
+export interface QueueMetricsWindow {
+  since: string;
+  until: string;
+  repository?: string;
+  created: QueueMetricsCreatedRow[];
+  events: QueueMetricsEventRow[];
 }
 
 export function queueDatabasePath(): string {
@@ -924,6 +964,74 @@ export class QueueStore {
       .all(...(repository === undefined ? [] : [repository])) as Row[];
     for (const row of rows) result[String(row.logical_status) as WorkStatus] = Number(row.count);
     return result;
+  }
+
+  /**
+   * The bounded read behind `queue -- metrics`: items created in the
+   * half-open window `[since, until)` grouped by repository and current
+   * logical status, plus every `work.claimed`, `work.completed`,
+   * `work.blocked`, and `work.cancelled` event that occurred in it, each
+   * joined with its item's repository and — for a completion — the item's
+   * current result. It writes nothing and is not exposed through MCP;
+   * `src/queue/metrics.ts` turns these rows into the reported numbers. A
+   * window carrying more than `MAX_METRICS_WINDOW_EVENTS` events is refused
+   * rather than aggregated, so one call can never sweep the whole ledger by
+   * accident.
+   */
+  metricsWindow(options: { since: string; until: string; repository?: string }): QueueMetricsWindow {
+    const since = normalizeTimestamp(options.since, "since");
+    const until = normalizeTimestamp(options.until, "until");
+    if (since >= until) throw new Error(`since must be before until (got ${since} and ${until})`);
+    if (options.repository !== undefined) validateRepository(options.repository);
+    const repositoryParams: SQLInputValue[] = options.repository === undefined ? [] : [options.repository];
+    const createdRows = this.db
+      .prepare(
+        `SELECT repository,
+                CASE WHEN status = 'queued' AND admitted = 0 THEN 'proposed' ELSE status END AS logical_status,
+                COUNT(*) AS count
+         FROM work_items
+         WHERE created_at >= ? AND created_at < ? ${options.repository === undefined ? "" : "AND repository = ?"}
+         GROUP BY repository, logical_status
+         ORDER BY repository, logical_status`,
+      )
+      .all(since, until, ...repositoryParams) as Row[];
+    const eventRows = this.db
+      .prepare(
+        `SELECT e.event_type, e.occurred_at, e.work_item_id, w.repository, w.result_json
+         FROM work_events e
+         JOIN work_items w ON w.id = e.work_item_id
+         WHERE e.event_type IN (${METRICS_EVENT_TYPES.map(() => "?").join(", ")})
+           AND e.occurred_at >= ? AND e.occurred_at < ?
+           ${options.repository === undefined ? "" : "AND w.repository = ?"}
+         ORDER BY e.sequence
+         LIMIT ?`,
+      )
+      .all(...METRICS_EVENT_TYPES, since, until, ...repositoryParams, MAX_METRICS_WINDOW_EVENTS + 1) as Row[];
+    if (eventRows.length > MAX_METRICS_WINDOW_EVENTS) {
+      throw new Error(
+        `the metrics window carries more than ${MAX_METRICS_WINDOW_EVENTS} events; narrow it with --since and --until`,
+      );
+    }
+    return {
+      since,
+      until,
+      ...(options.repository === undefined ? {} : { repository: options.repository }),
+      created: createdRows.map((row) => ({
+        repository: String(row.repository),
+        status: String(row.logical_status) as WorkStatus,
+        count: Number(row.count),
+      })),
+      events: eventRows.map((row) => {
+        const result = row.result_json == null ? undefined : (JSON.parse(String(row.result_json)) as WorkResult);
+        return {
+          type: String(row.event_type),
+          repository: String(row.repository),
+          workItemId: String(row.work_item_id),
+          occurredAt: String(row.occurred_at),
+          ...(result === undefined ? {} : { result }),
+        };
+      }),
+    };
   }
 
   claim(input: ClaimInput): WorkItem | undefined {
@@ -1745,6 +1853,18 @@ function validateVerification(verification: ArtifactVerification): void {
     return;
   }
   throw new Error("verification status is invalid");
+}
+
+/**
+ * Normalizes an operator-supplied timestamp to the ISO-8601 UTC form the
+ * ledger stores, so a string comparison in SQL is a time comparison.
+ */
+function normalizeTimestamp(value: string, name: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`${name} must be an ISO timestamp (for example 2026-08-19T00:00:00Z), got ${value}`);
+  }
+  return parsed.toISOString();
 }
 
 function validateRepository(repository: string): void {
