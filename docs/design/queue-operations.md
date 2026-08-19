@@ -607,17 +607,17 @@ Snowcat v1 runs on **one operator host** and stays there deliberately:
   client live on the same machine. MCP is stdio only; a worker started in an
   Incus or other container *on that host* still works because the client
   and `npm run mcp` share the machine.
-- The only credentials in the system are the operator's: the shell that
-  starts a client, `SNOWCAT_GITHUB_TOKEN`, and `SNOWCAT_APP_TOKEN` for the
-  operator surface. Snowcat issues no worker credentials and trusts the
-  self-declared worker identity only as provenance, never as authorization
+- Credentials, local mode: the shell that starts a client,
+  `SNOWCAT_GITHUB_TOKEN`, and `SNOWCAT_APP_TOKEN` for the operator surface;
+  worker identity is self-declared and trusted only as provenance
   ([queue execution boundary](queue-execution-boundary.md)).
-- Anything with a listener — the operator surface, the Flue app — binds to
-  loopback and is reached over SSH or a private mesh (Tailscale or
-  equivalent), never exposed directly. (Proposed change:
-  [ADR-0063](../adr/0063-authenticate-people-through-cloudflare-access-and-mint-mcp-tokens.md)
-  publishes both through a Cloudflare Tunnel behind Access, with a
-  Streamable HTTP MCP endpoint and Snowcat-minted worker tokens.)
+- Anything with a listener — the operator surface, the Flue app, `/mcp` —
+  binds to loopback. It is reached either over SSH / a private mesh (local
+  mode) or, per
+  [ADR-0063](../adr/0063-authenticate-people-through-cloudflare-access-and-mint-mcp-tokens.md),
+  through a **Cloudflare Tunnel behind Cloudflare Access** — see
+  [People and workers from anywhere](#people-and-workers-from-anywhere-adr-0063)
+  below.
 - Feeder, `verify-artifacts`, and `backup` run from three systemd timers on
   the host, shipped in [`deploy/systemd/`](../../deploy/systemd/) and linted
   by `npm run check:deploy`:
@@ -643,6 +643,56 @@ Snowcat v1 runs on **one operator host** and stays there deliberately:
   environment from the shell that launches it (`.mcp.json` `env` or the
   operator's login shell), never from `/etc/snowcat/env`, because systemd's
   `EnvironmentFile=` applies only to the units it starts.
+
+### People and workers from anywhere (ADR-0063)
+
+Snowcat writes no login page and holds no OAuth client. People authenticate
+at the edge; workers hold Snowcat-minted tokens; every event says who.
+
+**Two modes, chosen by the environment.**
+
+| | Local mode (default) | Access mode |
+| --- | --- | --- |
+| Turned on by | `SNOWCAT_APP_TOKEN` | `SNOWCAT_ACCESS_TEAM_DOMAIN` + `SNOWCAT_ACCESS_AUD` (both; `SNOWCAT_APP_TOKEN` is ignored) |
+| Surface session | token login → cookie | a verified `Cf-Access-Jwt-Assertion` (or `CF_Authorization` cookie); no login page, `/logout` sends you to Access's logout |
+| Actor on every decision | `operator:web` | `member:<email>` (the email in the assertion) |
+| Unauthenticated request | redirect to `/login` | `401` with a note that the surface is reachable only through the Access hostname |
+| MCP | stdio (`npm run mcp`), self-declared worker identity | `/mcp` over Streamable HTTP with a minted bearer token; the worker acts as `member:<owner>/<client>` and the payload's `worker` is only a label. Stdio still works locally. |
+
+**Minted MCP tokens.** Sign in, open *MCP tokens* (sidebar), mint one per
+client (name it: "codex on the laptop"); the plaintext appears once — put it in
+the client's configuration as `Authorization: Bearer snowcat_…` against
+`https://<host>/mcp`. Revoke from the same page (a member their own; the CLI
+any: `queue -- token list | revoke <id>`; `token mint member:<email> "<client>"`
+mints from the CLI in local mode). Snowcat stores only the token's hash; the
+page shows when each was last used.
+
+**Setting up the edge (once, operator).**
+
+1. Cloudflare Zero Trust → Access → *Applications* → add a self-hosted
+   application for the surface hostname (say `snowcat.frostyard.org`).
+   Identity provider: GitHub. Policy: *Allow* — GitHub organization
+   `frostyard`. Copy the application's **Audience (AUD) tag**.
+2. Add a second self-hosted application for `snowcat.frostyard.org/mcp*` with a
+   *Bypass* policy for everyone: `/mcp` authenticates with the minted token,
+   not with Access, so MCP clients need only the bearer header.
+3. Create a Tunnel (`cloudflared tunnel create snowcat`), route the hostname
+   to `http://127.0.0.1:3100`, and run `cloudflared` as a service on the host
+   (its credential is a secret like any other; rotate it if it leaks).
+4. In `/etc/snowcat/env` add
+   `SNOWCAT_ACCESS_TEAM_DOMAIN=https://<team>.cloudflareaccess.com` and
+   `SNOWCAT_ACCESS_AUD=<the tag>`; restart the surface (`npm run serve` with
+   that environment). From then on `SNOWCAT_APP_TOKEN` is unused.
+5. Verify: an incognito visit to the hostname is challenged by Access and,
+   after GitHub sign-in, lands on the inbox with `member:<your email>` in the
+   sidebar; `curl -i https://<host>/` from outside answers 401 from Snowcat
+   only if Access is misconfigured (it should be Access's own 302).
+
+Access verification is `RS256` against the team's published keys
+(`/cdn-cgi/access/certs`, cached ten minutes, refreshed once on an unknown
+key), issuer = the team domain, audience = the tag, expiry honored. Nothing
+that fails to verify falls back to the token session: the two modes never
+mix on one host.
 
 **Upgrade.** In the operator checkout, as the operator user:
 

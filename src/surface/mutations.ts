@@ -64,32 +64,32 @@ export function returnPath(body: Record<string, unknown>, fallback: string): str
  * `PreconditionMismatchError` untouched so the caller can render the item's
  * current state; other store errors surface as their message.
  */
-export function applyItemMutation(queue: QueueStore, mutation: ItemMutation, id: string, body: Record<string, unknown>): MutationOutcome {
+export function applyItemMutation(queue: QueueStore, mutation: ItemMutation, id: string, body: Record<string, unknown>, actor: string = WEB_ACTOR): MutationOutcome {
   const precondition = parsePrecondition(body);
   switch (mutation) {
     case "approve":
-      queue.approve(id, WEB_ACTOR, precondition);
+      queue.approve(id, actor, precondition);
       return { eventType: "work.approved" };
     case "reject":
-      queue.reject(id, WEB_ACTOR, reason(body, "a rejection reason"), precondition);
+      queue.reject(id, actor, reason(body, "a rejection reason"), precondition);
       return { eventType: "work.rejected" };
     case "defer":
-      queue.defer(id, WEB_ACTOR, reason(body, "a deferral reason"), precondition);
+      queue.defer(id, actor, reason(body, "a deferral reason"), precondition);
       return { eventType: "work.deferred" };
     case "requeue":
-      queue.requeue(id, WEB_ACTOR, reason(body, "a note for the next lease"), precondition);
+      queue.requeue(id, actor, reason(body, "a note for the next lease"), precondition);
       return { eventType: "work.requeued" };
     case "cancel":
-      queue.cancel(id, WEB_ACTOR, reason(body, "a cancellation reason"), precondition);
+      queue.cancel(id, actor, reason(body, "a cancellation reason"), precondition);
       return { eventType: "work.cancelled" };
     case "prioritize": {
       const raw = field(body, "priority");
       if (!/^-?\d+$/.test(raw) || !Number.isSafeInteger(Number(raw))) throw new MutationInputError("priority must be an integer");
-      queue.prioritize(id, WEB_ACTOR, Number(raw), reason(body, "a prioritize reason"), precondition);
+      queue.prioritize(id, actor, Number(raw), reason(body, "a prioritize reason"), precondition);
       return { eventType: "work.prioritized" };
     }
     case "note":
-      queue.note(id, WEB_ACTOR, reason(body, "note text"), precondition);
+      queue.note(id, actor, reason(body, "note text"), precondition);
       return { eventType: "work.noted" };
   }
 }
@@ -103,10 +103,11 @@ export async function applyVerifyArtifacts(
   queue: QueueStore,
   repository: string,
   verifier: ArtifactVerifierOptions,
+  actor: string = WEB_ACTOR,
 ): Promise<MutationOutcome & { checked: number; updated: number; unavailable: number; rejected: number; cured: number }> {
-  const result = await refreshArtifactVerifications(queue, { ...verifier, repository, actor: WEB_ACTOR });
+  const result = await refreshArtifactVerifications(queue, { ...verifier, repository, actor });
   // Same pass as the CLI: decayed pull-request heads become pr-cure roots (ADR-0061).
-  const cure = await curePullRequests(queue, { ...verifier, repository, actor: WEB_ACTOR });
+  const cure = await curePullRequests(queue, { ...verifier, repository, actor });
   return {
     eventType: cure.enqueued.length > 0 ? "work.queued" : result.updated.length + result.rejected.length > 0 ? "artifact.verified" : "artifact.unchanged",
     checked: result.checked,
@@ -130,6 +131,7 @@ export async function applyAttachArtifact(
   id: string,
   body: Record<string, unknown>,
   verifier: ArtifactVerifierOptions,
+  actor: string = WEB_ACTOR,
 ): Promise<MutationOutcome & { url: string; status: string; state?: string }> {
   const precondition = parsePrecondition(body);
   const url = field(body, "url").trim();
@@ -139,7 +141,7 @@ export async function applyAttachArtifact(
   const kind = rawKind ?? artifactKindFromUrl(url);
   if (!kind) throw new MutationInputError("Enter a GitHub pull request (…/pull/<n>) or issue (…/issues/<n>) URL in the item's repository.");
   const description = typeof body.description === "string" && body.description.trim().length > 0 ? body.description.trim() : undefined;
-  const { check } = await attachVerifiedArtifact(queue, id, WEB_ACTOR, { url, kind, description }, { ...verifier, precondition });
+  const { check } = await attachVerifiedArtifact(queue, id, actor, { url, kind, description }, { ...verifier, precondition });
   return {
     eventType: "artifact.attached",
     url,
