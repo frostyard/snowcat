@@ -195,13 +195,14 @@ test("the operator surface requires a session, sets the cookie on the right toke
   // Events rail: newest first, with the "since <sequence>" caption.
   const events = section(body, "events");
   const metadata = seeded.queue.metadata();
-  assert.match(events, new RegExp(`<h2>Events</h2><span>since ${Math.max(0, metadata.lastEventSequence - 30)} · all repositories</span>`));
+  assert.match(events, new RegExp(`<h2><a href="/events">Events</a></h2><span>since ${Math.max(0, metadata.lastEventSequence - 30)} · all repositories</span>`));
   const newest = seeded.queue.eventsSince(metadata.lastEventSequence - 1)[0]!;
   assert.equal(newest.type, "work.claimed");
   const firstEvent = /<div class="fl-event">.*?<\/div><\/div><\/div>/s.exec(events)![0];
   assert.match(firstEvent, /<b>work\.claimed<\/b><a href="\/items\/[0-9a-f-]+" title="[^"]+">security-implementation<\/a>/);
 
   // Sidebar without a control plane lists opted-in repositories; footer prints paths.
+  assert.match(body, /<a class="ph-nav-link" href="\/events"><span class="ph-nav-num">03<\/span>Events<\/a>/);
   assert.match(body, /<div class="ph-nav-group">Opted in<\/div>/);
   assert.match(body, /frostyard\/example/);
   assert.match(body, /frostyard\/updex/);
@@ -1312,4 +1313,156 @@ test("hold from the board needs a control plane, and an unknown repository or ac
   const crossSite = await app.request("/repositories/frostyard/example/seed-dogfood", { method: "POST", body: new URLSearchParams({}), headers: { Cookie: cookie, "Sec-Fetch-Site": "cross-site" } });
   assert.equal(crossSite.status, 403);
   assert.equal(seeded.queue.list({ repository: "frostyard/example", kind: "ci-gap-discovery" }).length, 0);
+});
+
+test("the events page filters by repository and by operator decision, 404s an unknown repository, and never renders a lease token", async () => {
+  const seeded = await seededQueue();
+  test.after(() => seeded.queue.close());
+  // One operator decision in the ledger: the proposed follow-up, approved.
+  const proposal = seeded.queue.list({ status: "proposed" })[0]!;
+  assert.equal(proposal.repository, "frostyard/updex");
+  seeded.queue.approve(proposal.id, "operator:test");
+  const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue: seeded.queue }) });
+  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const read = async (path: string) => {
+    const response = await app.request(path, { headers: { Cookie: cookie } });
+    return { status: response.status, body: await response.text() };
+  };
+
+  // Gated like every other route.
+  const anonymous = await app.request("/events");
+  assert.equal(anonymous.status, 303);
+  assert.equal(anonymous.headers.get("Location"), "/login");
+
+  // Every repository, newest first, with the sidebar entry now active.
+  const all = await read("/events");
+  assert.equal(all.status, 200);
+  assert.match(all.body, /<a class="ph-nav-link active" href="\/events"><span class="ph-nav-num">03<\/span>Events<\/a>/);
+  assert.match(all.body, /<h1>Events<\/h1>/);
+  const ledger = section(all.body, "events");
+  const metadata = seeded.queue.metadata();
+  assert.match(ledger, new RegExp(`<h2>Ledger</h2><span>\\d+ events? · since ${Math.max(0, metadata.lastEventSequence - 100)} · all repositories</span>`));
+  const newest = seeded.queue.eventsSince(metadata.lastEventSequence - 1)[0]!;
+  assert.equal(newest.type, "work.approved");
+  const sequences = [...ledger.matchAll(/<td class="right">(\d+)<\/td>/g)].map((match) => Number(match[1]));
+  assert.equal(sequences[0], newest.sequence, "newest first");
+  assert.deepEqual(sequences, [...sequences].sort((left, right) => right - left));
+  assert.ok(ledger.includes("frostyard/example") && ledger.includes("frostyard/updex"), "all repositories");
+  assert.match(ledger, /<b>work\.claimed<\/b>/);
+
+  // One repository: only its events, and the header names it.
+  const example = await read("/events?repository=frostyard/example");
+  assert.equal(example.status, 200);
+  const exampleLedger = section(example.body, "events");
+  assert.match(exampleLedger, /<h2>Ledger<\/h2><span>\d+ events? · since \d+ · frostyard\/example<\/span>/);
+  assert.ok(exampleLedger.includes("frostyard/example"));
+  assert.equal(exampleLedger.includes("frostyard/updex"), false, "the other repository's events are filtered out");
+  assert.match(example.body, /<option value="frostyard\/example" selected>frostyard\/example<\/option>/);
+
+  // Decisions only: work.approved stays, work.claimed goes.
+  const decisions = await read("/events?decisions=1");
+  assert.equal(decisions.status, 200);
+  const decisionLedger = section(decisions.body, "events");
+  assert.match(decisionLedger, /<h2>Operator decisions<\/h2><span>\d+ events? · since \d+ · all repositories · decisions only<\/span>/);
+  assert.match(decisionLedger, /<b>work\.approved<\/b>/);
+  assert.equal(/<b>work\.claimed<\/b>/.test(decisionLedger), false);
+  assert.equal(/<b>work\.completed<\/b>/.test(decisionLedger), false);
+  assert.match(decisions.body, /<input type="checkbox" name="decisions" value="1" checked>/);
+
+  // Both filters at once, and the combination the board header links to.
+  const combined = await read("/events?repository=frostyard/updex&decisions=1");
+  assert.equal(combined.status, 200);
+  assert.match(section(combined.body, "events"), /<b>work\.approved<\/b>/);
+  const board = await read("/repositories/frostyard/updex");
+  assert.match(board.body, /<a class="ph-button secondary" href="\/events\?repository=frostyard%2Fupdex">Events<\/a>/);
+
+  // An unknown or malformed repository is the 404-in-shell page, not a 500.
+  for (const path of ["/events?repository=frostyard/nope", "/events?repository=not-a-slug", "/events?repository=a%2Fb%2Fc"]) {
+    const missing = await read(path);
+    assert.equal(missing.status, 404, path);
+    assert.match(missing.body, /<aside class="ph-sidebar">/, path);
+    assert.match(missing.body, /<h1>Not found<\/h1>/, path);
+  }
+
+  // `since` narrows the window; a junk value falls back to the default.
+  const narrowed = await read(`/events?since=${metadata.lastEventSequence - 2}`);
+  assert.equal(narrowed.status, 200);
+  assert.equal([...section(narrowed.body, "events").matchAll(/<td class="right">(\d+)<\/td>/g)].length, 2);
+  const junk = await read("/events?since=banana");
+  assert.equal(junk.status, 200);
+  assert.match(section(junk.body, "events"), new RegExp(`since ${Math.max(0, metadata.lastEventSequence - 100)} ·`));
+
+  // Read-only: no POST form, no lease token, nothing loaded from elsewhere.
+  for (const body of [all.body, example.body, decisions.body, combined.body]) {
+    assert.equal(/method="post"/.test(body.replace(/<form class="fl-logout" method="post"/g, "")), false);
+    assert.equal(body.includes(seeded.leaseToken), false);
+    assert.equal(body.includes("leaseToken"), false);
+    assert.equal(/<script[^>]*src=/.test(body), false);
+  }
+});
+
+test("the events page names the highest sequence a capped read reached, calls the hidden events newer, and drops the notice when the window is read whole", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-surface-cap-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/example", true);
+  // A ledger well past the 500-event cap: one `work.queued` event per seed.
+  let newest: { id: string } | undefined;
+  for (let index = 0; index < 700; index += 1) {
+    newest = queue.enqueueSeed({
+      repository: "frostyard/example",
+      kind: "issue-resolution",
+      objective: `Resolve frostyard/example#${index + 1}: seeded for the cap test.`,
+      instructions: "Read only.",
+      acceptanceCriteria: ["Done."],
+      allowedActions: ["read"],
+      delegableActions: [],
+      createdBy: "operator:test",
+    });
+  }
+  // One operator decision inside the newest 500 sequences, so the decisions view has a row.
+  queue.note(newest!.id, "operator:test", "Seen by the operator.");
+  const metadata = queue.metadata();
+  assert.equal(metadata.lastEventSequence, 701);
+
+  const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue }) });
+  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const read = async (path: string) => {
+    const response = await app.request(path, { headers: { Cookie: cookie } });
+    return { status: response.status, body: await response.text() };
+  };
+
+  // `?since=0` fills the cap 201 events short of the cursor: the read is
+  // ascending, so what is hidden is the NEWER end of the window. The notice
+  // names the highest sequence actually read and links onward from it.
+  const widened = await read("/events?since=0");
+  assert.equal(widened.status, 200);
+  const sequences = [...section(widened.body, "events").matchAll(/<td class="right">(\d+)<\/td>/g)].map((match) => Number(match[1]));
+  assert.equal(sequences.length, 500);
+  assert.equal(sequences[0], 500, "newest first within the read");
+  assert.equal(sequences.at(-1), 1);
+  assert.match(
+    widened.body,
+    /This read filled the 500-event cap at sequence 500, so events <b>newer<\/b> than sequence 500 — up to the cursor at 701 — are not shown\./,
+  );
+  assert.match(widened.body, /<a href="\/events\?since=500">Continue from sequence 500<\/a>/);
+  assert.equal(/older than sequence/.test(widened.body), false, "the hidden events are newer, not older");
+
+  // Following that link reaches the events the first read hid.
+  const continued = await read("/events?since=500");
+  assert.equal(continued.status, 200);
+  const continuedSequences = [...section(continued.body, "events").matchAll(/<td class="right">(\d+)<\/td>/g)].map((match) => Number(match[1]));
+  assert.equal(continuedSequences[0], 701);
+  assert.equal(continuedSequences.at(-1), 501);
+  assert.equal(continued.body.includes("-event cap"), false, "the rest of the ledger fits under the cap");
+
+  // The decisions default window is the last 500 events: the read fills the cap
+  // exactly at the cursor, so nothing of the window is hidden and there is no
+  // cap notice at all.
+  const decisionsOnly = await read("/events?decisions=1");
+  assert.equal(decisionsOnly.status, 200);
+  const decisionLedger = section(decisionsOnly.body, "events");
+  assert.match(decisionLedger, new RegExp(`since ${metadata.lastEventSequence - 500} ·`));
+  assert.match(decisionLedger, /<b>work\.noted<\/b>/);
+  assert.equal(decisionsOnly.body.includes("-event cap"), false, "the whole window was read, so it is not capped");
 });
