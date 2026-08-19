@@ -18,7 +18,7 @@ import { QueueStore } from "../src/queue/store.ts";
 import { enrollExampleRepository } from "./helpers/core-fixtures.ts";
 
 const clock = () => new Date("2026-08-18T20:00:00.000Z");
-process.env.SNOWCAT_GITHUB_TOKEN ??= "test-token";
+process.env.SNOWCAT_GITHUB_TOKEN = "test-token";
 const HEAD = "1".repeat(40);
 const TAG_SHA = "2".repeat(40);
 

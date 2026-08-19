@@ -672,6 +672,43 @@ export class QueueStore {
   }
 
   /**
+   * Completed items with at least one issue or pull-request artifact that is
+   * not yet terminal — no verification, `verification.status` `unverified`,
+   * or `verification.state` `open` (the predicate the artifact sweeps apply
+   * per artifact) — newest first by `updated_at`, so `verify-artifacts` and
+   * the cure sweep never starve a recent completion behind older, already
+   * terminal ones. Unlike list(), the limit bounds items that need checking
+   * and is not clamped to 100; the callers own their ceilings.
+   */
+  completedItemsWithPendingArtifacts(options: { repository?: string; limit?: number } = {}): WorkItem[] {
+    const params: SQLInputValue[] = [];
+    let repositoryClause = "";
+    if (options.repository) {
+      validateRepository(options.repository);
+      repositoryClause = "AND repository = ?";
+      params.push(options.repository);
+    }
+    const limit = Math.max(1, Math.floor(options.limit ?? 100));
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM work_items item
+         WHERE status = 'completed' AND result_json IS NOT NULL ${repositoryClause}
+           AND EXISTS (
+             SELECT 1 FROM json_each(item.result_json, '$.artifacts') artifact
+             WHERE json_extract(artifact.value, '$.kind') IN ('issue', 'pull-request')
+               AND (
+                 json_type(artifact.value, '$.verification') IS NULL
+                 OR json_extract(artifact.value, '$.verification.status') = 'unverified'
+                 OR json_extract(artifact.value, '$.verification.state') = 'open'
+               )
+           )
+         ORDER BY updated_at DESC, created_at DESC LIMIT ?`,
+      )
+      .all(...params, limit) as Row[];
+    return rows.map((row) => withDelivery(decodeWorkItem(row)));
+  }
+
+  /**
    * Kinds of every root in `repository` whose lineage still has non-terminal
    * work (proposed, queued, claimed, or blocked). Unlike list(), this is not
    * capped, so feeders can detect active lineages regardless of queue size.

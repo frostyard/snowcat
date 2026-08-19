@@ -11,7 +11,7 @@ import { QueueStore } from "../src/queue/store.ts";
 import { enabledDeclaration, validCoreEntries } from "./helpers/core-fixtures.ts";
 
 const clock = () => new Date("2026-08-18T22:00:00.000Z");
-process.env.SNOWCAT_GITHUB_TOKEN ??= "test-token";
+process.env.SNOWCAT_GITHUB_TOKEN = "test-token";
 const REPO = "frostyard/updex";
 
 const CONTRACT: RepositorySettingsContract = {

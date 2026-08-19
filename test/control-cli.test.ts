@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { childEnvironment } from "./helpers/child-environment.ts";
 
 test("the local control CLI exposes kernel diagnostics and typed integrity execution", async () => {
   const directory = await mkdtemp(join(tmpdir(), "snowcat-control-cli-test-"));
@@ -122,7 +123,7 @@ test("the local control CLI repairs only disposable projection rows", async () =
 });
 
 function controlRunner(path: string) {
-  const env = stringEnvironment({ ...process.env, SNOWCAT_CONTROL_DB: path });
+  const env = childEnvironment({ SNOWCAT_CONTROL_DB: path });
   return (...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/control/cli.ts", ...args], {
       cwd: process.cwd(),
@@ -131,8 +132,3 @@ function controlRunner(path: string) {
     });
 }
 
-function stringEnvironment(source: NodeJS.ProcessEnv): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(source).filter((entry): entry is [string, string] => entry[1] !== undefined),
-  );
-}

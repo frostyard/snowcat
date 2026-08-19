@@ -27,6 +27,7 @@ import {
 import { synchronizeCoreSource } from "../src/core/synchronize.ts";
 import { ControlPlaneStore, CoreSnapshotPersistenceError } from "../src/control/store.ts";
 import { uuidV7 } from "../src/control/encoding.ts";
+import { childEnvironment } from "./helpers/child-environment.ts";
 
 test("the bundled validator accepts the current core repository-authority shape without enrolling it", async () => {
   const entries = await validCoreEntries();
@@ -384,7 +385,7 @@ test("a Core candidate rejection is bounded, idempotent, queryable, and non-auth
   const output = execFileSync(
     process.execPath,
     ["--import", "tsx", "src/core/cli.ts", "rejections", "1"],
-    { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, SNOWCAT_CONTROL_DB: path } },
+    { cwd: process.cwd(), encoding: "utf8", env: childEnvironment({ SNOWCAT_CONTROL_DB: path }) },
   );
   const cliRows = JSON.parse(output) as Array<Record<string, unknown>>;
   assert.equal(cliRows.length, 1);
@@ -745,7 +746,7 @@ test("Core check-detail pruning enforces 30 days while preserving readiness and 
   const cliOutput = execFileSync(
     process.execPath,
     ["--import", "tsx", "src/core/cli.ts", "prune-check-history", String(empty.transactionSequence)],
-    { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, SNOWCAT_CONTROL_DB: path } },
+    { cwd: process.cwd(), encoding: "utf8", env: childEnvironment({ SNOWCAT_CONTROL_DB: path }) },
   );
   const cliPrune = JSON.parse(cliOutput) as Record<string, unknown>;
   assert.equal(cliPrune.deletedTransactionCount, 0);
@@ -762,11 +763,10 @@ test("activate records a bounded source rejection while verify remains outside t
   const controlPath = join(directory, "control-plane.db");
   const invalidMirror = join(directory, "not-a-bare-repository");
   await writeFile(invalidMirror, "not git", "utf8");
-  const environment = {
-    ...process.env,
+  const environment = childEnvironment({
     SNOWCAT_CONTROL_DB: controlPath,
     SNOWCAT_CORE_MIRROR: invalidMirror,
-  };
+  });
 
   const verify = spawnSync(process.execPath, ["--import", "tsx", "src/core/cli.ts", "verify"], {
     cwd: process.cwd(),
@@ -1076,7 +1076,7 @@ test("an attributed operator rollback creates a new snapshot and preserves later
       first.commitId,
       "Restore the retained reviewed authority through the operator CLI",
     ],
-    { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, SNOWCAT_CONTROL_DB: path } },
+    { cwd: process.cwd(), encoding: "utf8", env: childEnvironment({ SNOWCAT_CONTROL_DB: path }) },
   );
   const cliRollback = JSON.parse(cliOutput) as Record<string, unknown>;
   assert.equal(cliRollback.sourceCommitId, first.commitId);
