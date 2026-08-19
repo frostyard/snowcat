@@ -406,11 +406,45 @@ Three more views sit behind the same session:
 
 ## Run workers
 
-Configure an MCP server named `snowcat` in the client you start and let it
-inherit the host configuration from the shell that launched it — `set -a; .
-/etc/snowcat/env; set +a` first, then start the client. Claude Code
-(`.mcp.json`; the committed one in this repository has the same shape) expands
-`${VAR}` and `${VAR:-default}`:
+Configure an MCP server named `snowcat` in the client you start. Two shapes,
+both expanding `${VAR}` / `${VAR:-default}` from the shell that launched
+the client (Claude Code reads `.mcp.json`; other clients have the same
+fields under other names):
+
+**Remote — the committed `.mcp.json` in this repository.** The host runs
+elsewhere (the Incus instance) and the client talks Streamable HTTP to its
+`/mcp` with a minted token — over the tailnet of
+[A private mesh instead of Access](#a-private-mesh-instead-of-access-tailscale)
+or the Access edge; the URL is the only difference. Mint the token once on
+the host (`queue -- token mint member:<your email> "<client name>"`; the
+browser can do it in Access mode), keep the plaintext in a private file
+your login shell exports — for example
+`~/.config/snowcat/mcp-token.env` holding
+`export SNOWCAT_MCP_TOKEN=snowcat_…`, mode 0600 — and never in the
+repository:
+
+```json
+{
+  "mcpServers": {
+    "snowcat": {
+      "type": "http",
+      "url": "${SNOWCAT_MCP_URL:-https://snowcat.goat-snake.ts.net/mcp}",
+      "headers": {
+        "Authorization": "Bearer ${SNOWCAT_MCP_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+The worker then acts as `member:<owner>/<client>` on every event; no
+database path, no GitHub token, and no host environment reach the client,
+because artifact verification runs on the host.
+
+**Local — stdio on the host itself.** For a worker on the machine that owns
+the databases (a laptop still hosting, or a shell inside the instance), let
+the server inherit the host configuration: `set -a; . /etc/snowcat/env;
+set +a` first, then start the client with
 
 ```json
 {
@@ -645,10 +679,11 @@ Snowcat v1 runs on **one operator host** and stays there deliberately:
   `ReadWritePaths=` for the real `SNOWCAT_HOME`) — see
   [Install the host](#install-the-host). Until it has run, run the three
   commands by hand as above.
-- The timers do not reach worker clients: an MCP client still gets its
+- The timers do not reach worker clients: a stdio MCP client still gets its
   environment from the shell that launches it (`.mcp.json` `env` or the
   operator's login shell), never from `/etc/snowcat/env`, because systemd's
-  `EnvironmentFile=` applies only to the units it starts.
+  `EnvironmentFile=` applies only to the units it starts — one of which is
+  `snowcat-surface.service`, so `/mcp` *does* run with the host environment.
 
 ### People and workers from anywhere (ADR-0063)
 
@@ -962,11 +997,12 @@ Approved. During the dogfood week keep, per repository:
   worker; it should fix the report and complete again.
 - **A completion on a private repository comes back `unverified` with
   "without SNOWCAT_GITHUB_TOKEN"** — the MCP server was started without the
-  token, so GitHub answered 404 for a repository it could not see. Export
-  `SNOWCAT_GITHUB_TOKEN` in the shell that starts the client (the committed
-  `.mcp.json` passes it through as `${SNOWCAT_GITHUB_TOKEN:-}`; never write
-  the token into that file), restart the client, and run `verify-artifacts`
-  to record the real state.
+  token, so GitHub answered 404 for a repository it could not see. Over
+  `/mcp` that is the host's `/etc/snowcat/env`; for a stdio server it is the
+  shell that started the client (the stdio shape passes it through as
+  `${SNOWCAT_GITHUB_TOKEN:-}`; never write a token into an MCP file).
+  Fix the environment, restart, and run `verify-artifacts` to record the
+  real state.
 - **`claim_work` returns `null` but `list queued` shows items** — with
   `SNOWCAT_CONTROL_DB` set, the repository is not `enrolled`; check
   `repository -- status`. Or the items are `proposed` (not admitted), or the
