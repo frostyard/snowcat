@@ -427,20 +427,29 @@ export function reviewFixRootDefinition(
   };
 }
 
+/** Kinds that act on pull requests after the gate released them (ADR-0061): never subject to the draft rule. */
+const CURE_KINDS = new Set(["pr-cure", "pr-cure-change"]);
+
 /**
  * The draft rule (ADR-0065): in a review-gated repository, a completion that
  * reports an open, non-draft pull request is refused so the item stays
  * claimed and the worker converts the pull request back (`gh pr ready --undo`).
- * `pr-cure` items are exempt (cure acts only on ready pull requests) and so
- * is anything unverified (GitHub could not answer; the refusal would be a
- * guess). Merged and closed pull requests are accepted.
+ * Exempt: `pr-cure` and `pr-cure-change` items (cure acts only on ready pull
+ * requests), a pull request the gate itself released — one with a completed
+ * `pr-review` round that passed — and anything unverified (GitHub could not
+ * answer; the refusal would be a guess). Merged and closed pull requests are
+ * accepted.
  */
 export function assertReviewGate(queue: QueueStore, item: WorkItem, artifacts: WorkArtifact[]): void {
-  if (item.kind === "pr-cure") return;
+  if (CURE_KINDS.has(item.kind)) return;
   if (!queue.reviewGateEnabled(item.repository)) return;
   for (const artifact of artifacts) {
     if (artifact.kind !== "pull-request" || artifact.verification?.status !== "verified") continue;
     if (artifact.verification.state !== "open" || artifact.verification.draft === true) continue;
+    const released = queue
+      .pullRequestReviewItems(item.repository, artifact.url)
+      .some((round) => round.kind === REVIEW_KIND && round.status === "completed" && round.review?.decision === "pass");
+    if (released) continue;
     throw new Error(
       `review gate: pull request ${artifact.url} is open and not a draft in ${item.repository}; convert it with \`gh pr ready --undo ${artifact.verification.number}\` and complete again, or block`,
     );
