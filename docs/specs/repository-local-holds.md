@@ -61,7 +61,7 @@ derives `operator-held` only after current Core authority is materialized.
    exact-declaration-bound, and verified on startup. No worker surface may
    impose or clear them.
 9. Registry version `18` has no in-place migration from the pre-production
-   target; initialize a fresh database. Physical schema remains version `7`.
+   target; initialize a fresh database. Physical schema remains version `8`.
 
 ## Derived artifacts
 
