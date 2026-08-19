@@ -7,7 +7,7 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "build": "vite build && node scripts/check-dist.mjs",
+    "build": "vite build && node scripts/check-dist.mjs && node scripts/check-boot.mjs",
     "check": "npm run check:docs && npm run check:deploy && npm run typecheck && npm test && npm run build",
     "check:deploy": "bash scripts/check-deploy.sh",
     "check:docs": "node scripts/check-docs.mjs",
