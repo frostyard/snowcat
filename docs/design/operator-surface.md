@@ -222,11 +222,12 @@ Phase 10 and later.
   opt-ins.
 - Session: `GET /login` renders the token form; `POST /login` compares the
   submitted token to `SNOWCAT_APP_TOKEN` in constant time and sets
-  `fluent_session`, an `HttpOnly; SameSite=Strict` cookie holding an
+  `snowcat_session`, an `HttpOnly; SameSite=Strict` cookie holding an
   HMAC-SHA256 of the token (never the token; `Secure` is added when the
   request itself arrived over HTTPS). Every other surface route redirects to
   `/login` without it; `POST /logout` clears it. Rotating the token
-  invalidates every session.
+  invalidates every session. The pre-Snowcat `fluent_session` cookie is not
+  read; existing local browser sessions must log in once after upgrading.
 - Slice status: the shell, login, and the read-only inbox (`/`) shipped with
   [frostyard/snowcat#17](https://github.com/frostyard/snowcat/issues/17):
   stat tiles, the three decision groups, and the events rail (last 30 from
