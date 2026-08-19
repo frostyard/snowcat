@@ -175,9 +175,14 @@ Phase 10 and later.
 ## Operational notes
 
 - The surface runs in the same process as the Flue app, reading
-  `SNOWCAT_QUEUE_DB`, `SNOWCAT_CONTROL_DB`, `SNOWCAT_APP_TOKEN`, `HOST`, and
-  `PORT`. Missing `SNOWCAT_APP_TOKEN` fails closed (503) for every surface
-  route, login included, as it does for `/agents/*` today.
+  `SNOWCAT_QUEUE_DB`, `SNOWCAT_CONTROL_DB`, `SNOWCAT_ACCESS_TEAM_DOMAIN` +
+  `SNOWCAT_ACCESS_AUD` (Access mode) or `SNOWCAT_APP_TOKEN` (token mode),
+  `HOST`, and `PORT`. The surface fails closed (503) for every route, login
+  included, only when neither Access nor the token is configured:
+  `Neither Cloudflare Access (SNOWCAT_ACCESS_TEAM_DOMAIN + SNOWCAT_ACCESS_AUD)
+  nor SNOWCAT_APP_TOKEN is configured on this host`. In Access mode a request
+  without a valid `Cf-Access-Jwt-Assertion` gets 401 and `SNOWCAT_APP_TOKEN`
+  is ignored (see [`deploy/env.example`](../../deploy/env.example)).
 - Run it locally with
   `SNOWCAT_APP_TOKEN=… SNOWCAT_QUEUE_DB=/var/lib/snowcat/queue.db npm run build && npm run serve`
   and open `http://127.0.0.1:3000/`. `npm run serve`
