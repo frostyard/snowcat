@@ -215,6 +215,14 @@ removed. -->
   `install.sh` dry run, so a broken unit or a non-idempotent installer fails
   the PR; the operator runbook is
   [docs/design/queue-operations.md](docs/design/queue-operations.md).
+  `deploy/systemd/snowcat-surface.service` runs the built surface and `/mcp`
+  on loopback (enabled, not started, by `install.sh`; `upgrade.sh` restarts
+  it where enabled). The recommended host is the Incus instance described by
+  [`deploy/incus/snowcat.profile.yaml`](deploy/incus/snowcat.profile.yaml)
+  (cloud-init only, no secrets) and prepared by
+  [`deploy/incus/bootstrap.sh`](deploy/incus/bootstrap.sh), which calls the
+  same `install.sh`; the runbook's "The host as an Incus instance" and
+  "Moving the host to a new machine" sections are the procedure.
 - Install and upgrade the single operator host only through
   [`deploy/install.sh`](deploy/install.sh) (idempotent: directories,
   `/etc/snowcat/env` from `deploy/env.example` only if absent, units plus a

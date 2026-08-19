@@ -1,0 +1,69 @@
+# Incus profile for a dedicated Snowcat host (ADR-0059 single host, ADR-0063
+# people-and-workers-from-anywhere). Apply beside `default` (which supplies the
+# NIC and root disk):
+#
+#   incus profile create <remote>:snowcat
+#   incus profile edit   <remote>:snowcat < deploy/incus/snowcat.profile.yaml
+#   incus launch images:debian/13/cloud <remote>:snowcat --profile default --profile snowcat
+#
+# cloud-init prepares the OS only — a `snowcat` user, Node 24 (NodeSource),
+# cloudflared (installed, not configured), git/jq/sqlite3 — and leaves the
+# checkout, databases, secrets, and tunnel to deploy/incus/bootstrap.sh run by
+# the operator, so nothing secret ever sits in a profile.
+name: snowcat
+description: Snowcat operator host — queue, control plane, timers, surface, /mcp
+config:
+  limits.cpu: "2"
+  limits.memory: 4GiB
+  # Daily instance snapshots on top of the in-app backups; two weeks kept.
+  snapshots.schedule: "@daily"
+  snapshots.expiry: 14d
+  snapshots.pattern: "auto-{{ creation_date|date:'2006-01-02' }}"
+  boot.autostart: "true"
+  cloud-init.user-data: |
+    #cloud-config
+    hostname: snowcat
+    timezone: UTC
+    package_update: true
+    package_upgrade: true
+    packages:
+      - ca-certificates
+      - curl
+      - git
+      - gnupg
+      - jq
+      - sqlite3
+      - sudo
+      - unattended-upgrades
+    users:
+      - name: snowcat
+        gecos: Snowcat operator
+        shell: /bin/bash
+        sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+        lock_passwd: true
+    write_files:
+      - path: /etc/apt/sources.list.d/nodesource.sources
+        content: |
+          Types: deb
+          URIs: https://deb.nodesource.com/node_24.x
+          Suites: nodistro
+          Components: main
+          Signed-By: /etc/apt/keyrings/nodesource.asc
+      - path: /etc/apt/sources.list.d/cloudflared.sources
+        content: |
+          Types: deb
+          URIs: https://pkg.cloudflare.com/cloudflared
+          Suites: any
+          Components: main
+          Signed-By: /etc/apt/keyrings/cloudflare-main.gpg
+    # The signing keys must exist before cloud-init's own package_update runs,
+    # so they are fetched in bootcmd (guarded: a no-op on every later boot).
+    bootcmd:
+      - mkdir -p /etc/apt/keyrings
+      - '[ -s /etc/apt/keyrings/nodesource.asc ] || curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /etc/apt/keyrings/nodesource.asc'
+      - '[ -s /etc/apt/keyrings/cloudflare-main.gpg ] || curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /etc/apt/keyrings/cloudflare-main.gpg'
+    runcmd:
+      - apt-get install -y nodejs cloudflared
+      - install -d -o snowcat -g snowcat -m 0755 /opt/snowcat
+      - node --version > /var/lib/cloud/instance/snowcat-node-version
+devices: {}

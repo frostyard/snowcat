@@ -54,6 +54,13 @@ timers=(snowcat-feed.timer snowcat-verify.timer snowcat-backup.timer)
 "${systemctl[@]}" daemon-reload
 "${systemctl[@]}" restart "${timers[@]}"
 echo "upgrade: restarted ${timers[*]}"
+# The surface serves the built bundle (npm run check already built it); restart
+# it only where it is installed and enabled — a laptop running `npm run serve`
+# by hand is left alone.
+if "${systemctl[@]}" is-enabled --quiet snowcat-surface.service 2>/dev/null; then
+  "${systemctl[@]}" restart snowcat-surface.service
+  echo "upgrade: restarted snowcat-surface.service"
+fi
 
 if [[ $before != "$after" ]] && [[ -n "$(git diff --name-only "$before" "$after" -- deploy/systemd deploy/env.example deploy/install.sh)" ]]; then
   echo "upgrade: deploy/ changed in this upgrade — run 'sudo $snowcat_home/deploy/install.sh' to refresh the installed units and drop-ins."

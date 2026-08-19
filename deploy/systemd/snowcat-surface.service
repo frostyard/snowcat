@@ -1,0 +1,30 @@
+# Snowcat operator surface and /mcp: the built app (`npm run build` →
+# dist/app.mjs) served by scripts/serve.mjs on 127.0.0.1:${PORT:-3100}. On a
+# dedicated host a Cloudflare Tunnel in front of it provides the only ingress
+# (ADR-0063); the process itself never binds beyond loopback unless HOST says
+# so. Reads /etc/snowcat/env for the databases, the GitHub token, and either
+# SNOWCAT_APP_TOKEN (local mode) or SNOWCAT_ACCESS_TEAM_DOMAIN +
+# SNOWCAT_ACCESS_AUD (Access mode). Configure `User=` and, when SNOWCAT_HOME
+# is not /opt/snowcat, `ReadWritePaths=` in a drop-in; deploy/install.sh
+# writes both. Rebuild (`npm run build`) and restart after every upgrade.
+[Unit]
+Description=Snowcat: operator surface and MCP endpoint
+Documentation=https://github.com/frostyard/snowcat/blob/main/docs/design/queue-operations.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/snowcat/env
+Environment=PORT=3100
+Environment=HOST=127.0.0.1
+ExecStart=npm --prefix ${SNOWCAT_HOME} run --silent serve
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/snowcat -/opt/snowcat/data
+
+[Install]
+WantedBy=multi-user.target

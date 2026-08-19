@@ -255,6 +255,9 @@ write_dropin snowcat-feed.service \
 write_dropin snowcat-verify.service \
   "$state_dir -$snowcat_home/data" \
   "$npm_path --prefix $snowcat_home run --silent queue -- verify-artifacts"
+write_dropin snowcat-surface.service \
+  "$state_dir -$snowcat_home/data" \
+  "$npm_path --prefix $snowcat_home run --silent serve"
 write_dropin snowcat-backup.service \
   "$state_dir $backup_dir -$snowcat_home/data" \
   "/bin/bash $snowcat_home/deploy/bin/snowcat-backup"
@@ -280,14 +283,18 @@ if [[ ${#legacy_units[@]} -gt 0 ]]; then
   legacy_migrated=1
 fi
 
-# 4. Reload and enable the timers.
+# 4. Reload, enable the timers, and enable (not start) the surface: it needs a
+# built bundle (`npm run build`) and either SNOWCAT_APP_TOKEN or the Access
+# variables in /etc/snowcat/env first; `systemctl start snowcat-surface` when
+# both are in place, and again after every upgrade + build.
 timers=(snowcat-feed.timer snowcat-verify.timer snowcat-backup.timer)
 if [[ ${#systemctl[@]} -eq 0 ]]; then
   report "skipped systemctl (SNOWCAT_INSTALL_ROOT is set and SNOWCAT_SYSTEMCTL is not)"
 else
   "${systemctl[@]}" daemon-reload
   "${systemctl[@]}" enable --now "${timers[@]}"
-  report "enabled and started ${timers[*]}"
+  "${systemctl[@]}" enable snowcat-surface.service
+  report "enabled and started ${timers[*]}; enabled snowcat-surface.service (start it after npm run build and the env is complete)"
 fi
 if [[ $legacy_migrated -eq 1 ]]; then
   report "Fluent -> Snowcat migration done: restart any MCP client and the operator surface; export SNOWCAT_* in your shell (FLUENT_* is read for one more release)"

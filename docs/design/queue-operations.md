@@ -78,7 +78,10 @@ writes `/etc/snowcat/env` (0600, same owner) from
 the checkout and the database paths under `/var/lib/snowcat` — **only if the
 file is absent**, so your token and edits survive re-runs; installs the six
 units from [`deploy/systemd/`](../../deploy/systemd/) into
-`/etc/systemd/system/` with one drop-in per service (`10-install.conf`:
+`/etc/systemd/system/` — three timer/service pairs plus
+`snowcat-surface.service`, which is enabled but not started (start it after
+`npm run build`, and it stays optional on a laptop that runs `npm run serve`
+by hand) — with one drop-in per service (`10-install.conf`:
 `User=`, an absolute `ExecStart=` for the `npm` the operator user's login
 shell resolves — a plain login shell first, then an interactive one (Homebrew's
 `brew shellenv` usually sits in `~/.bashrc` behind an "if not interactive,
@@ -603,10 +606,11 @@ back.
 
 Snowcat v1 runs on **one operator host** and stays there deliberately:
 
-- The checkout, `/var/lib/snowcat/{queue,control-plane}.db`, and every worker
-  client live on the same machine. MCP is stdio only; a worker started in an
-  Incus or other container *on that host* still works because the client
-  and `npm run mcp` share the machine.
+- The checkout and `/var/lib/snowcat/{queue,control-plane}.db` live on one
+  machine — preferably a dedicated one, see
+  [The host as an Incus instance](#the-host-as-an-incus-instance) — and every
+  worker client either shares that machine (stdio MCP) or reaches its `/mcp`
+  through the edge of ADR-0063 with a minted token.
 - Credentials, local mode: the shell that starts a client,
   `SNOWCAT_GITHUB_TOKEN`, and `SNOWCAT_APP_TOKEN` for the operator surface;
   worker identity is self-declared and trusted only as provenance
@@ -722,6 +726,126 @@ building it is the first worker that must run on another machine; when that
 happens it gets its own ADR and slice, and the operator surface's shared
 token becomes per-operator auth at the same time. Until then, do not expose
 `npm run mcp` or the surface off-host.
+
+### The host as an Incus instance
+
+The recommended v1 host is a small, dedicated Incus **container** — not the
+operator's daily driver — so a laptop reboot never stalls the feeder, the
+tunnel has a stable place to live, and the whole thing can be snapshotted,
+moved, or rebuilt from three files in [`deploy/incus/`](../../deploy/incus/).
+Anything else with systemd, Node 24, and `cloudflared` works the same way;
+the instance is only the reproducible shape.
+
+What the instance is (all of it in
+[`snowcat.profile.yaml`](../../deploy/incus/snowcat.profile.yaml), no secret
+in it): Debian 13 cloud image, `limits.cpu=2`, `limits.memory=4GiB`,
+`boot.autostart`, daily snapshots kept 14 days, and cloud-init user-data that
+creates the `snowcat` user (passwordless `sudo`, locked password), installs
+`git jq sqlite3 curl gnupg unattended-upgrades`, adds the NodeSource
+(`node_24.x`) and Cloudflare apt repositories with their signing keys fetched
+in `bootcmd` (so cloud-init's own `package_update` already trusts them),
+installs `nodejs` and `cloudflared`, and creates `/opt/snowcat` owned by
+`snowcat`. Snowcat itself is not in the image: the checkout, `/etc/snowcat/env`,
+and the databases arrive in the next steps.
+
+Once, from any machine with the `incus` client (an operator laptop), against
+the Incus server that will host it (`<remote>` below; add it with
+`incus remote add <remote> https://<server>:8443` and the trust token the
+server admin issues with `incus config trust add`):
+
+```bash
+git clone https://github.com/frostyard/snowcat.git && cd snowcat
+incus profile create <remote>:snowcat
+incus profile edit   <remote>:snowcat < deploy/incus/snowcat.profile.yaml
+incus launch images:debian/13/cloud <remote>:snowcat --profile default --profile snowcat
+incus exec <remote>:snowcat -- cloud-init status --wait --long   # errors: [] / recoverable_errors: {}
+incus exec <remote>:snowcat -- bash -s < deploy/incus/bootstrap.sh          # add: -- --ref <branch> to pin a ref
+```
+
+The image renders its cloud-init seed at **create** time: edit the profile
+before `incus launch`, and if you change it later, re-create the instance
+(`incus delete --force`, `incus launch`) rather than restarting it — a
+restarted instance keeps the seed it was born with. `cloud-init status` must
+end with no errors before bootstrap; `bootstrap` refuses to run until `node`
+exists.
+
+[`bootstrap.sh`](../../deploy/incus/bootstrap.sh) runs as root inside the
+instance and is idempotent: clone (or fast-forward) `/opt/snowcat` as
+`snowcat` (`SNOWCAT_GIT_URL` overrides the URL; `SNOWCAT_GIT_TOKEN` is used
+once for a private clone and never stored — pass it with
+`incus exec … --env SNOWCAT_GIT_TOKEN=…`), `npm ci`, `deploy/install.sh
+--user snowcat` (the same installer as any host: directories,
+`/etc/snowcat/env` from the example if absent, units, drop-ins, timers), and
+`npm run build`. When `/var/lib/snowcat` holds no queue database yet it stops
+the three timers again — still enabled — so a fresh host never feeds an
+empty queue while the real databases are on their way. It ends by printing
+what remains the operator's: the GitHub token, the databases, starting the
+surface and (at cutover) the timers, then the tunnel and Access.
+
+Day two: `incus exec <remote>:snowcat -- sudo -u snowcat -i bash -lc 'cd
+/opt/snowcat && deploy/upgrade.sh'` upgrades exactly like any host;
+`incus snapshot create <remote>:snowcat pre-upgrade` before it costs nothing
+and `incus snapshot restore` undoes everything including the databases;
+`incus exec <remote>:snowcat -- journalctl -u snowcat-feed -u
+snowcat-surface --since -1h` reads the logs; `incus file pull
+<remote>:snowcat/var/backups/snowcat/queue-<stamp>.db .` fetches a backup
+off the machine. The instance binds nothing but loopback; its only ingress
+is the tunnel of [People and workers from anywhere](#people-and-workers-from-anywhere-adr-0063),
+and the only way in for the operator is `incus exec` (or the server's SSH).
+
+### Moving the host to a new machine
+
+Moving is a backup, a copy, and a cutover; nothing else changes because the
+databases carry all state and `/etc/snowcat/env` all configuration. The
+new machine is prepared exactly as above (or with `deploy/install.sh` on any
+host) up to and including `bootstrap`, with its timers stopped. Then, in
+this order — the order matters because two feeders against two copies of
+one queue would each admit their own work:
+
+1. **Freeze the old host.** Disable its timers, stop its surface, and make
+   sure no worker holds a lease (`queue -- list`, or the *Watch the work*
+   view): `sudo systemctl disable --now snowcat-feed.timer
+   snowcat-verify.timer snowcat-backup.timer` and stop `npm run serve` /
+   `snowcat-surface.service`. From here on the old copy is history.
+2. **Back up both databases** on the old host into a scratch directory
+   (never over an existing file; both commands verify the copy before they
+   print its manifest): `queue -- backup <dir>/queue.db >
+   <dir>/queue.manifest.json` and `control -- backup <dir>/control-plane.db >
+   <dir>/control-plane.manifest.json`. Note `workItems`,
+   `lastEventSequence`, and the control manifest's `databaseLineageId` and
+   `lastTransactionSequence` — they are the check on the other side.
+3. **Copy them into place** on the new host as the `snowcat` user, mode 0600,
+   at the paths its `/etc/snowcat/env` names (for an instance:
+   `incus file push <dir>/queue.db <dir>/control-plane.db
+   <remote>:snowcat/var/lib/snowcat/ --uid 1000 --gid 1000 --mode 0600`),
+   and **verify there**: `queue -- verify-backup /var/lib/snowcat/queue.db`
+   must report the same `workItems`, `lastEventSequence`, and
+   `schemaVersion`; `control -- verify-backup <manifest.json> <lineage-id>
+   <last-sequence>` (push the manifest too, with `backupPath` rewritten to
+   the new location) must accept the lineage; `repository -- status` must
+   list the same enrolled repositories. Push nothing else — no `-wal`/`-shm`
+   files, no manifests into the database directory except for that check.
+4. **Complete `/etc/snowcat/env`** on the new host: `SNOWCAT_GITHUB_TOKEN`
+   (a token for this host; the old one may be reused, but a dedicated
+   fine-grained token is what makes revoking one host possible later),
+   `SNOWCAT_APP_TOKEN` for local mode or the two Access variables, and
+   anything else the old file had beyond the example. The file stays 0600.
+5. **Start the surface** — `systemctl start snowcat-surface.service` — and
+   read the inbox through `incus exec` + `curl -s http://127.0.0.1:3100/`
+   or the tunnel; the sidebar's repository list is the last proof the copy
+   is the one you meant.
+6. **Cut over:** `systemctl start snowcat-feed.timer snowcat-verify.timer
+   snowcat-backup.timer` on the new host. Exactly one host now feeds. Point
+   the tunnel (or move it) at the new host and restart every MCP client
+   with the new endpoint or, for stdio clients, on the new host.
+7. **Retire the old copy** once the first feed tick and the first
+   `verify-artifacts` run land cleanly on the new host: leave the old
+   database files as a dated backup or delete them — never start the old
+   timers again by habit; `install.sh` on the old machine would re-enable
+   them.
+
+Rolling back before step 6 is nothing: start the old timers again. After
+it, move back the same way, with the new host as the old one.
 
 ## Keep the database safe
 
