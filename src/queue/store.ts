@@ -679,8 +679,13 @@ export class QueueStore {
    * the cure sweep never starve a recent completion behind older, already
    * terminal ones. Unlike list(), the limit bounds items that need checking
    * and is not clamped to 100; the callers own their ceilings.
+   *
+   * `unverifiedOnly` narrows the predicate to artifacts whose
+   * `verification.status` is `unverified` (the operator inbox's "unverified
+   * artifacts" group): a verified-but-open pull request is not waiting on
+   * the operator, it is waiting on GitHub.
    */
-  completedItemsWithPendingArtifacts(options: { repository?: string; limit?: number } = {}): WorkItem[] {
+  completedItemsWithPendingArtifacts(options: { repository?: string; limit?: number; unverifiedOnly?: boolean } = {}): WorkItem[] {
     const params: SQLInputValue[] = [];
     let repositoryClause = "";
     if (options.repository) {
@@ -689,6 +694,11 @@ export class QueueStore {
       params.push(options.repository);
     }
     const limit = Math.max(1, Math.floor(options.limit ?? 100));
+    const pending = options.unverifiedOnly
+      ? `json_extract(artifact.value, '$.verification.status') = 'unverified'`
+      : `json_type(artifact.value, '$.verification') IS NULL
+                 OR json_extract(artifact.value, '$.verification.status') = 'unverified'
+                 OR json_extract(artifact.value, '$.verification.state') = 'open'`;
     const rows = this.db
       .prepare(
         `SELECT * FROM work_items item
@@ -697,9 +707,7 @@ export class QueueStore {
              SELECT 1 FROM json_each(item.result_json, '$.artifacts') artifact
              WHERE json_extract(artifact.value, '$.kind') IN ('issue', 'pull-request')
                AND (
-                 json_type(artifact.value, '$.verification') IS NULL
-                 OR json_extract(artifact.value, '$.verification.status') = 'unverified'
-                 OR json_extract(artifact.value, '$.verification.state') = 'open'
+                 ${pending}
                )
            )
          ORDER BY updated_at DESC, created_at DESC LIMIT ?`,
