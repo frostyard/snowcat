@@ -84,6 +84,10 @@ Docs are split by the question they answer:
 
 - [Org-wide decisions (frostyard/core ADRs)](org-adrs.md) — the core ADRs that bind this repository and what each binds here
 
+### Governance
+
+- [Change risk tiers](risk-tiers.md) — the three-tier scale every pull request declares (core ADR-0019), in terms of this repository's protected boundaries
+
 ### Domain language
 
 - [Snowcat ubiquitous language](domain/ubiquitous-language.md)
