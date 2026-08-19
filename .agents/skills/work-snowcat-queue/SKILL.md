@@ -94,7 +94,12 @@ new pull request but an unchanged patch on a healthier one.
   acceptance criteria. Follow-ups become non-claimable proposals for operator
   or approved-policy review; never treat proposing work as approving it.
 - Keep every child action inside the parent's `delegableActions`. A follow-up is
-  not permission to escalate autonomy.
+  not permission to escalate autonomy — but do not under-authorize either: a
+  follow-up whose objective is a change (a fix, a bump, a doc edit) needs
+  `open-pr` in its `allowedActions` whenever the parent's ceiling includes it,
+  because `complete_work` refuses a `pull-request` artifact on an item without
+  it and nothing widens an admitted item afterwards; a change nobody can
+  deliver is not a proposal. Discovery-only follow-ups stay `read`.
 - Report created issues, pull requests, commits, and reports as artifacts.
   Snowcat checks each reported issue and pull request against GitHub when you
   call `complete_work`: report the exact URL in the item's repository. A
