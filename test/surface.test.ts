@@ -140,13 +140,13 @@ test("the operator surface requires a session, sets the cookie on the right toke
   assert.equal(right.status, 303);
   assert.equal(right.headers.get("Location"), "/");
   const setCookie = right.headers.get("Set-Cookie")!;
-  assert.match(setCookie, /^fluent_session=[0-9a-f]{64}; Path=\/; HttpOnly; SameSite=Strict$/);
+  assert.match(setCookie, /^snowcat_session=[0-9a-f]{64}; Path=\/; HttpOnly; SameSite=Strict$/);
   assert.equal(setCookie.includes(TOKEN), false);
   const cookie = setCookie.split(";")[0]!;
-  assert.equal(cookie, `fluent_session=${sessionDigest(TOKEN)}`);
+  assert.equal(cookie, `snowcat_session=${sessionDigest(TOKEN)}`);
 
   // A forged cookie is refused.
-  const forged = await app.request("/", { headers: { Cookie: `fluent_session=${"0".repeat(64)}` } });
+  const forged = await app.request("/", { headers: { Cookie: `snowcat_session=${"0".repeat(64)}` } });
   assert.equal(forged.status, 303);
 
   const inbox = await app.request("/", { headers: { Cookie: cookie } });
@@ -218,7 +218,7 @@ test("the operator surface requires a session, sets the cookie on the right toke
   // Logout clears the cookie and the inbox is gated again.
   const logout = await app.request("/logout", { method: "POST", headers: { Cookie: cookie } });
   assert.equal(logout.status, 303);
-  assert.match(logout.headers.get("Set-Cookie") ?? "", /^fluent_session=; .*Max-Age=0$/);
+  assert.match(logout.headers.get("Set-Cookie") ?? "", /^snowcat_session=; .*Max-Age=0$/);
   const authenticatedLogin = await app.request("/login", { headers: { Cookie: cookie } });
   assert.equal(authenticatedLogin.status, 303);
   assert.equal(authenticatedLogin.headers.get("Location"), "/");
@@ -239,7 +239,7 @@ test("the sidebar lists control-plane repositories with their effective states w
   control.close();
 
   const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue: seeded.queue, controlPlanePath }) });
-  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const cookie = `snowcat_session=${sessionDigest(TOKEN)}`;
   const inbox = await app.request("/", { headers: { Cookie: cookie } });
   assert.equal(inbox.status, 200);
   const body = await inbox.text();
@@ -279,7 +279,7 @@ test("a store that cannot be opened renders 503 after authentication, not a stac
       throw new Error("SQLITE_CANTOPEN: unable to open database file");
     },
   });
-  const inbox = await app.request("/", { headers: { Cookie: `fluent_session=${sessionDigest(TOKEN)}` } });
+  const inbox = await app.request("/", { headers: { Cookie: `snowcat_session=${sessionDigest(TOKEN)}` } });
   assert.equal(inbox.status, 503);
   const body = await inbox.text();
   assert.match(body, /The queue database could not be opened: SQLITE_CANTOPEN/);
@@ -348,7 +348,7 @@ test("the repository board shows queued, leased, and completed columns with the 
   control.close();
 
   const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue, controlPlanePath }) });
-  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const cookie = `snowcat_session=${sessionDigest(TOKEN)}`;
 
   const board = await app.request("/repositories/frostyard/example", { headers: { Cookie: cookie } });
   assert.equal(board.status, 200);
@@ -476,7 +476,7 @@ test("the board's pull-request section shows open heads with their cure decay an
 
   // No fetcher is configured anywhere: rendering must not reach GitHub.
   const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue }) });
-  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const cookie = `snowcat_session=${sessionDigest(TOKEN)}`;
 
   const board = await app.request("/repositories/frostyard/example", { headers: { Cookie: cookie } });
   assert.equal(board.status, 200);
@@ -569,7 +569,7 @@ test("the board and inbox show the review gate: draft badge, review round, passe
 
   // No fetcher is configured anywhere: rendering must not reach GitHub.
   const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue }) });
-  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const cookie = `snowcat_session=${sessionDigest(TOKEN)}`;
 
   const board = await app.request("/repositories/frostyard/example", { headers: { Cookie: cookie } });
   assert.equal(board.status, 200);
@@ -663,7 +663,7 @@ test("the item page renders the definition, artifacts with verification, operato
   );
 
   const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue }) });
-  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const cookie = `snowcat_session=${sessionDigest(TOKEN)}`;
   const page = await app.request(`/items/${child.id}`, { headers: { Cookie: cookie } });
   assert.equal(page.status, 200);
   const body = await page.text();
@@ -736,7 +736,7 @@ test("browser mutations are the CLI's operator commands as operator:web, refuse 
   const proposed = queue.list({ status: "proposed" })[0]!;
   const blocked = queue.list({ status: "blocked" })[0]!;
   const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue }) });
-  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const cookie = `snowcat_session=${sessionDigest(TOKEN)}`;
   const post = (path: string, fields: Record<string, string>, headers: Record<string, string> = { Cookie: cookie }) =>
     app.request(path, { method: "POST", body: new URLSearchParams(fields), headers });
   const stale = { status: proposed.status, updatedAt: proposed.updatedAt, return: "/" };
@@ -852,7 +852,7 @@ test("re-verify from the browser refreshes a repository's pending artifacts as o
     return new Response("{}", { status: 404 });
   }) as typeof fetch;
   const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue, verifier: { fetcher, clock: () => new Date("2026-08-18T02:00:00.000Z") } }) });
-  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const cookie = `snowcat_session=${sessionDigest(TOKEN)}`;
 
   const anonymous = await app.request("/repositories/frostyard/example/verify-artifacts", { method: "POST", body: new URLSearchParams({ return: "/" }) });
   assert.equal(anonymous.status, 303);
@@ -900,7 +900,7 @@ test("attach artifact from the item page verifies against GitHub and attaches as
     );
   answers.set("/repos/frostyard/updex/pulls/326", merged);
   const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue, verifier: { fetcher, clock: () => new Date("2026-08-18T14:00:00.000Z") } }) });
-  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const cookie = `snowcat_session=${sessionDigest(TOKEN)}`;
   const post = (fields: Record<string, string>, headers: Record<string, string> = { Cookie: cookie }) =>
     app.request(`/items/${completed.id}/attach-artifact`, { method: "POST", body: new URLSearchParams(fields), headers });
   const fresh = () => ({ status: "completed", updatedAt: queue.get(completed.id)!.updatedAt, return: `/items/${completed.id}` });
@@ -988,7 +988,7 @@ test("the event stream is session-guarded, starts with the cursor, and delivers 
   test.after(() => seeded.queue.close());
   const queue = seeded.queue;
   const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue }), surfaceStream: { pollMs: 20, heartbeatMs: 60 } });
-  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const cookie = `snowcat_session=${sessionDigest(TOKEN)}`;
 
   const anonymous = await app.request("/events/stream");
   assert.equal(anonymous.status, 303);
@@ -1096,7 +1096,7 @@ test("?partial= returns one inbox group or one board column as a fragment, and r
   const seeded = await seededQueue();
   test.after(() => seeded.queue.close());
   const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue: seeded.queue }) });
-  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const cookie = `snowcat_session=${sessionDigest(TOKEN)}`;
 
   const proposals = await app.request("/?partial=proposals", { headers: { Cookie: cookie } });
   assert.equal(proposals.status, 200);
@@ -1159,7 +1159,7 @@ test("board actions import labeled issues, seed dogfood, verify artifacts, and i
     return new Response(JSON.stringify(body ?? {}), { status: body ? 200 : 404, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue, controlPlanePath, verifier: { fetcher, clock: () => new Date("2026-08-18T02:00:00.000Z") } }) });
-  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const cookie = `snowcat_session=${sessionDigest(TOKEN)}`;
   const post = (action: string, fields: Record<string, string> = {}, headers: Record<string, string> = { Cookie: cookie }) =>
     app.request(`/repositories/frostyard/example/${action}`, { method: "POST", body: new URLSearchParams(fields), headers });
 
@@ -1300,7 +1300,7 @@ test("hold from the board needs a control plane, and an unknown repository or ac
   const seeded = await seededQueue();
   test.after(() => seeded.queue.close());
   const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue: seeded.queue }) });
-  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const cookie = `snowcat_session=${sessionDigest(TOKEN)}`;
   const withoutControlPlane = await app.request("/repositories/frostyard/example/hold", { method: "POST", body: new URLSearchParams({ reason: "x" }), headers: { Cookie: cookie } });
   assert.equal(withoutControlPlane.status, 503);
   assert.match(await withoutControlPlane.text(), /Hold is unavailable: SNOWCAT_CONTROL_DB is not configured/);
@@ -1361,7 +1361,7 @@ test("the board's attempts denominator counts only completed items that could ha
   seedAndComplete("docs-drift-fix", "Fix the drifted doc.", ["read", "write", "open-pr"], []);
 
   const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue }) });
-  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const cookie = `snowcat_session=${sessionDigest(TOKEN)}`;
   const board = await app.request("/repositories/frostyard/example", { headers: { Cookie: cookie } });
   assert.equal(board.status, 200);
   const body = await board.text();
@@ -1384,7 +1384,7 @@ test("the events page filters by repository and by operator decision, 404s an un
   assert.equal(proposal.repository, "frostyard/updex");
   seeded.queue.approve(proposal.id, "operator:test");
   const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue: seeded.queue }) });
-  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const cookie = `snowcat_session=${sessionDigest(TOKEN)}`;
   const read = async (path: string) => {
     const response = await app.request(path, { headers: { Cookie: cookie } });
     return { status: response.status, body: await response.text() };
@@ -1487,7 +1487,7 @@ test("the events page names the highest sequence a capped read reached, calls th
   assert.equal(metadata.lastEventSequence, 701);
 
   const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue }) });
-  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const cookie = `snowcat_session=${sessionDigest(TOKEN)}`;
   const read = async (path: string) => {
     const response = await app.request(path, { headers: { Cookie: cookie } });
     return { status: response.status, body: await response.text() };
