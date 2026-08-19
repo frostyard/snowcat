@@ -4,7 +4,7 @@ import { attachVerifiedArtifact, refreshArtifactVerifications, type AttachableAr
 import { queueStoreOptionsFromEnvironment } from "./eligibility.ts";
 import { curePullRequests } from "./pull-request-cure.ts";
 import { importLabeledIssues, importLabeledIssuesForEnrolled } from "./github-issues.ts";
-import { sweepInternalDependencies } from "./internal-dependencies.ts";
+import { sweepFailureMessage, sweepInternalDependencies } from "./internal-dependencies.ts";
 import { sweepRepositorySettings } from "./repository-settings.ts";
 import { QueueStore, queueDatabasePath, type MutationPrecondition } from "./store.ts";
 import {
@@ -196,7 +196,17 @@ try {
     if (enrolled && (!controlPlanePath || controlPlanePath === ":memory:")) {
       throw new Error("sweep-dependencies --enrolled requires SNOWCAT_CONTROL_DB to name the control-plane database");
     }
-    print(await sweepInternalDependencies(queue, controlPlanePath, repository ? { repository } : {}));
+    const result = await sweepInternalDependencies(queue, controlPlanePath, repository ? { repository } : {});
+    print(result);
+    // Partial failure is reported, not fatal, exactly as for import-issues
+    // --enrolled: only a total failure of the enrolled sweep exits non-zero.
+    if (enrolled) {
+      const failure = sweepFailureMessage(result);
+      if (failure !== undefined) {
+        console.error(failure);
+        process.exitCode = 1;
+      }
+    }
   } else if (command === "sweep-repository-settings") {
     // Repository settings conformance (core ADR-0040): read-only diff of each
     // enrolled repository's live GitHub settings against the contract in the
