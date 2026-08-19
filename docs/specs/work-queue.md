@@ -365,6 +365,23 @@ MCP (rule 41).
     the items that need checking rather than arbitrary completions and a
     repository with more than 100 terminal completions cannot starve a newer
     one; the pull-request cure sweep (rules 42–43) MUST use the same selection.
+    An artifact URL whose `owner/repository` slug is not the item's — an
+    artifact recorded under the repository's **former name**, before
+    `rename-repository` (rule 47) carried the item to the new slug without
+    rewriting history — MUST NOT be rejected before GitHub is asked: the
+    check MUST query GitHub with the URL's own slug (the API follows renames)
+    and MUST record `verified` only when GitHub's own answer names the item's
+    repository case-insensitively (`base.repo.full_name` for a pull request,
+    `repository_url` for an issue) at the same number and kind, so that only
+    GitHub attests the rename. Every other slug mismatch — another
+    repository, another number, another kind, an absent artifact — MUST stay
+    rejected exactly as before, and 404-without-credential and unavailable
+    handling (rule 33) are unchanged. Only this refresh path MUST learn
+    renames: every other caller of the same check — `complete_work` (rule 33)
+    and `attach-artifact` (rule 41) — MUST keep rejecting a slug that is not
+    the item's before GitHub is asked anything, and artifact scope validation
+    (rule 15) still refuses such a URL at the store, so a newly reported
+    artifact MUST use the item's current slug.
 35. `delivery` MUST be derived on read from a completed item's pull-request
     artifacts, never stored separately: `merged` if any is merged, otherwise
     `unverified` if any lacks a verified state, otherwise `open` if any is
@@ -595,7 +612,11 @@ MCP (rule 41).
     slug; and it MUST NOT rewrite history — `sourceRef`s, results, and events
     keep the strings they were recorded with. Used after a GitHub repository
     rename (ADR-0064), whose immutable repository ID keeps enrollment
-    continuous once the Core declaration is renamed.
+    continuous once the Core declaration is renamed. Because history is kept
+    verbatim, an artifact reported before the rename keeps the former name's
+    URL; `verify-artifacts` (rule 34) still re-checks such a URL and verifies
+    it when GitHub's own answer names the current repository at the same
+    number, while `complete_work` (rule 15) still requires the current slug.
 
 48. **Principals (ADR-0063).** `member:<email-or-login>` is the identity of
     a verified person, set only by a transport — an Access session or a
