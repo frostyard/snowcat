@@ -174,6 +174,6 @@ Snowcat — an already-open process refuses its next write once the schema moves
 Backups contain lease tokens and are created `0600`; restore is a file copy to
 a new path after `verify-backup`, never an overwrite of the live file.
 
-The optional local clerk defaults to `http://10.0.1.200:13305/v1` and
+The optional local clerk defaults to `http://localhost:13305/v1` and
 `Qwen3.8-27B-GGUF-UD-Q4_K_XL`. Snowcat remains useful when that endpoint is
 absent, and subscription credentials never enter Snowcat.

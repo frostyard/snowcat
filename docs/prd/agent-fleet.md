@@ -157,7 +157,7 @@ above.
     broaden permissions, create policy-level durable work, or promote a worker
     claim to verified fact.
 18. The optional Lemonade integration MUST support the OpenAI-compatible endpoint
-    `http://10.0.1.200:13305/v1` and exact model
+    `http://localhost:13305/v1` and exact model
     `Qwen3.8-27B-GGUF-UD-Q4_K_XL`.
 19. Local-agent context and output budgets MUST be set for a named bounded task
     and observed behavior, not raised merely because the model advertises
