@@ -36,8 +36,9 @@ the [operations runbook](docs/design/queue-operations.md) for how to run it.
   ledger, on loopback behind `SNOWCAT_APP_TOKEN`
   ([ADR-0060](docs/adr/0060-bring-the-operator-surface-forward-as-a-read-first-inbox.md)).
 - **Deployment:** one operator host — `deploy/install.sh`, `deploy/upgrade.sh`,
-  `/etc/snowcat/env`, systemd timers for feeder, verification, and backup;
-  remote workers deliberately deferred.
+  `/etc/snowcat/env`, systemd timers for feeder, verification, and backup.
+  [Remote workers](docs/design/queue-operations.md#run-workers) connect to its
+  `/mcp` endpoint over Streamable HTTP with Snowcat-minted bearer tokens.
 - **Dogfood so far:** `frostyard/updex` and Snowcat itself are enrolled; 27
   items completed by four different client kinds, 22 pull requests merged
   and verified, including every Snowcat feature above being built through

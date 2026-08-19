@@ -149,25 +149,45 @@ test("delivery-audit controller runs acquisition outside SQLite and retains boun
   assert.equal(limited.state.lastCompleteBoundaryAt, "2026-08-17T12:00:00.000Z");
 
   now = new Date("2026-08-17T12:15:00.000Z");
+  const unsafeControllerDiagnostic = [
+    "delivery fetch failed",
+    "token=top-secret-token",
+    "authorization=unsafe-authorization",
+    "x".repeat(600),
+  ].join("\n");
   const failed = await runGitHubDeliveryAuditOnce(
     store,
     { appId: "4567", getAppJwt: () => jwt, now: () => now },
     300,
     async () => {
-      throw new Error("must not escape into durable state");
+      throw new Error(unsafeControllerDiagnostic);
     },
   );
   assert.equal(failed.status, "claimed");
   if (failed.status !== "claimed") return;
   assert.equal(failed.runStatus, "controller-error");
-  assert.equal(failed.diagnostic, "controller-error");
+  assert.equal(failed.outcome, null);
+  assert.equal(failed.diagnostic, null);
+  assert.match(failed.controllerError ?? "", /^delivery fetch failed token=\[redacted\] authorization=\[redacted\]/);
+  assert.ok(!failed.controllerError?.includes("top-secret-token"));
+  assert.ok(!failed.controllerError?.includes("unsafe-authorization"));
+  assert.ok(Buffer.byteLength(failed.controllerError ?? "", "utf8") <= 512);
+  assert.equal(failed.retryAt, null);
+  assert.equal(failed.sourceBoundaryAt, null);
   assert.equal(failed.state.incompleteStreak, 2);
   assert.equal(failed.state.nextAuditAt, "2026-08-17T12:20:00.000Z");
+  assert.equal(failed.state.lastRunStatus, "controller-error");
+  assert.equal(failed.state.lastOutcome, null);
+  assert.equal(failed.state.lastRetryAt, null);
   store.close();
   concurrent.close();
 
   const reopened = new ControlPlaneStore(path, () => now);
-  assert.equal(reopened.githubDeliveryAuditState().completedRunCount, 3);
+  const reopenedState = reopened.githubDeliveryAuditState();
+  assert.equal(reopenedState.completedRunCount, 3);
+  assert.equal(reopenedState.lastRunStatus, "controller-error");
+  assert.equal(reopenedState.lastOutcome, null);
+  assert.equal(reopenedState.lastRetryAt, null);
   reopened.close();
 
   const raw = new DatabaseSync(path);

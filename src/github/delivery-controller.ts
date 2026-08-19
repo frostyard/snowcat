@@ -9,6 +9,7 @@ import {
   type GitHubDeliveryAuditInput,
   type GitHubDeliveryAuditResult,
 } from "./delivery-api.ts";
+import { sanitizeDiagnostic } from "../diagnostic.ts";
 
 export type GitHubDeliveryAuditor = typeof auditGitHubAppDeliveries;
 
@@ -19,7 +20,8 @@ export type GitHubDeliveryAuditOnceResult =
       runId: string;
       runStatus: "completed" | "controller-error";
       outcome: GitHubDeliveryAuditOperationalOutcome | null;
-      diagnostic: Extract<GitHubDeliveryAuditResult, { kind: "incomplete" }>["diagnostic"] | "controller-error" | null;
+      diagnostic: Extract<GitHubDeliveryAuditResult, { kind: "incomplete" }>["diagnostic"] | null;
+      controllerError: string | null;
       pageCount: number;
       deliveryCount: number;
       sourceBoundaryAt: string | null;
@@ -37,20 +39,22 @@ export async function runGitHubDeliveryAuditOnce(
   if (claim.status !== "claimed") return claim;
 
   let result: GitHubDeliveryAuditResult | null = null;
-  let controllerError = false;
+  let controllerError: Error | null = null;
   try {
     result = await audit(config);
     if (result.appId !== config.appId) {
+      controllerError = new Error(
+        `GitHub delivery auditor returned App ${result.appId} for configured App ${config.appId}`,
+      );
       result = null;
-      controllerError = true;
     }
-  } catch {
-    controllerError = true;
+  } catch (error) {
+    controllerError = error instanceof Error ? error : new Error(String(error));
   }
 
   const state = store.completeGitHubDeliveryAudit({
     runId: claim.runId,
-    runStatus: controllerError ? "controller-error" : "completed",
+    runStatus: controllerError === null ? "completed" : "controller-error",
     outcome: result === null ? null : result.kind === "complete" ? "complete" : result.cause,
     sourceBoundaryAt: result?.kind === "complete" ? result.coveredThrough : null,
     retryAt: result?.kind === "incomplete" ? result.retryAt : null,
@@ -58,13 +62,12 @@ export async function runGitHubDeliveryAuditOnce(
   return {
     status: "claimed",
     runId: claim.runId,
-    runStatus: controllerError ? "controller-error" : "completed",
+    runStatus: controllerError === null ? "completed" : "controller-error",
     outcome: result === null ? null : result.kind === "complete" ? "complete" : result.cause,
-    diagnostic: controllerError
-      ? "controller-error"
-      : result?.kind === "incomplete"
-        ? result.diagnostic
-        : null,
+    diagnostic: result?.kind === "incomplete" ? result.diagnostic : null,
+    controllerError: controllerError
+      ? sanitizeDiagnostic(controllerError.message, "Unspecified GitHub delivery-audit controller error")
+      : null,
     pageCount: result?.pageCount ?? 0,
     deliveryCount: result?.deliveryCount ?? 0,
     sourceBoundaryAt: result?.kind === "complete" ? result.coveredThrough : null,
