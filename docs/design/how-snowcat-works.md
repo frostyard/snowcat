@@ -133,6 +133,18 @@ runs code.
    refuses if it changed. A cure that needs a code change becomes a proposal
    again. Cure never merges, approves, or dismisses.
 
+6b. **A review gate, where a repository turns it on.** In a review-gated
+   repository ([ADR-0065](../adr/0065-gate-worker-pull-requests-behind-bounded-review.md))
+   a worker opens its pull request as a draft, and the same pass creates one
+   read-only `pr-review` item per draft head — bounded to the head, to the
+   origin item's acceptance criteria, and to three rounds per pull request.
+   The reviewer's verdict is structured (pass, block with up to five
+   fingerprinted blockers, or unable); Snowcat acts on it: a pass marks the
+   pull request ready for a human (or tells the operator to), a block
+   schedules one bounded `pr-review-fix`, and a third-round block waits for a
+   person. Drafts are never cured and Copilot skips them, so review and cure
+   never touch one pull request at the same time.
+
 7. **Merge stays human.** No path in Snowcat merges a pull request, cuts a tag,
    or publishes a release. The operator merges; `make bump` tags; the
    repository's own release workflow publishes.
@@ -200,6 +212,8 @@ verification in between that neither decision has to be re-litigated.
   (operator surface),
   [ADR-0061](../adr/0061-cure-pull-requests-as-bounded-per-head-work.md)
   (pull-request cure),
+  [ADR-0065](../adr/0065-gate-worker-pull-requests-behind-bounded-review.md)
+  (review gate),
   [ADR-0062](../adr/0062-retire-hive-fluent-owns-conformance.md)
   (Snowcat owns conformance and triage); core's
   [ADR-0035](https://github.com/frostyard/core/blob/main/docs/adr/0035-author-organization-authority-as-strict-json.md)

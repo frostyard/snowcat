@@ -56,6 +56,11 @@ its sandbox; Snowcat only owns queue authorization and bookkeeping.
   item's own instructions and `allowedActions`, and block rather than guess
   when the issue is unclear or already resolved.
 - Never merge, release, deploy, or widen repository scope in v1.
+- In a **review-gated** repository (ADR-0065) open every pull request as a
+  **draft** (`gh pr create --draft`) and leave it a draft: Snowcat refuses a
+  completion that reports an open, non-draft pull request there and tells you
+  to `gh pr ready --undo <n>` and complete again. A bounded independent review
+  (`pr-review`, below) marks it ready once it passes; you never do.
 
 ## Cure a pull request (`pr-cure`)
 
@@ -85,10 +90,64 @@ new pull request but an unchanged patch on a healthier one.
   evidence: the checks on the new head, the mergeable state, and what you
   changed (metadata only).
 
+## Review a pull request (`pr-review`)
+
+A `pr-review` item binds one draft pull request at one head to one review
+round (`sourceRef` is `pr-review:<url>@<head SHA>`; the item's `review` record
+carries the head, the round — at most three per pull request — the origin
+item, the previous round's blockers, and the models the author and previous
+reviewer reported). It is ADR-0029's pull-request profile: adversarial means
+trying to falsify the pull request's claims, not maximizing comments.
+
+- Read the origin item with `get_work(review.originItemId)`: its objective,
+  acceptance criteria, instructions, and `sourceRef` issue are the contract
+  the pull request claims to satisfy. Read the pull request and its diff at
+  exactly `review.headSha`; check it out and run the repository's own checks
+  locally when you can (`run-tests` is allowed; nothing on GitHub is).
+- If you completed the origin item yourself in this session, `release_work`
+  so another worker reviews it. Prefer a different model or provider from
+  `review.authorModel` when your client can choose.
+- A **blocker** is only a concrete correctness or security defect, an unmet
+  acceptance criterion of the origin item, unauthorized or out-of-scope
+  behaviour, false or materially insufficient evidence, missing required
+  validation, or a compatibility or contract break. Style, alternative valid
+  designs, speculative concerns, and "while you are here" work are advisories
+  at most. On round 2 or 3, examine `review.priorBlockers` and the diff since
+  the previous head — reuse a fingerprint for a blocker still open, and name a
+  new one only when the diff introduced it or made it newly assessable.
+- You are **read-only on GitHub**: no comment, review, approval, push, edit,
+  or ready-for-review change, and no follow-ups. Snowcat acts on your verdict.
+- Complete with `review` on `complete_work`: `decision` `pass` | `block` |
+  `unable-to-review`; at most five `blockers`, each `{ fingerprint
+  (stable, e.g. defect:<path>:<slug>), location, contract, impact, resolution,
+  verification }`; at most three `advisories` `{ fingerprint, text }`. A block
+  needs at least one blocker; a pass carries none. Do not report the pull
+  request as an artifact — it is not yours. Put the head SHA and the checks
+  you ran in the evidence, and the model you ran in `result.model`. If the
+  head moved since the item was created, `block_work` with that reason;
+  Snowcat refuses a verdict for a moved head.
+
+## Fix review blockers (`pr-review-fix`)
+
+A `pr-review-fix` item names one blocked draft head and exactly the
+fingerprinted blockers of its review round (`review.blockers`,
+`review.reviewItemId`). Address exactly those on the pull request's branch,
+push, keep the pull request a **draft**, do not widen scope or mark it ready,
+and never merge, approve, or dismiss. If a blocker is wrong, say so in the
+evidence with the reason rather than silently skipping it, and still complete
+— the next round judges. Run the repository's checks locally on the new head.
+Complete reporting the pull request as a `pull-request` artifact, with
+evidence naming each fingerprint as addressed or disputed, and the model you
+ran as `result.model`. Your push is a new head and Snowcat's next round (at
+most three per pull request; a third-round block goes to a human).
+
 ## Finish
 
 - Call `complete_work` only when every acceptance criterion is satisfied or the
   result clearly explains why a criterion is inapplicable.
+- Report the model you ran as `result.model` (for example `claude-opus-5`).
+  It is provenance, never verified; it lets the review gate ask a different
+  model to review your pull request.
 - Create follow-up items only for distinct durable work justified by the
   evidence. Give each one a bounded objective and mechanically verifiable
   acceptance criteria. Follow-ups become non-claimable proposals for operator

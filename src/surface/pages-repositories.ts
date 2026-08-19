@@ -190,7 +190,7 @@ function completedRow(row: CompletedRow): SafeHtml {
 
 /** `open 3 · decayed 1 · merged today 2`, the same phrase on the board head and the index. */
 export function pullRequestSummaryLabel(summary: PullRequestSummary): string {
-  return `open ${summary.open} · decayed ${summary.decayed} · merged today ${summary.mergedToday}`;
+  return `open ${summary.open} · decayed ${summary.decayed}${summary.awaitingHuman > 0 ? ` · awaiting you ${summary.awaitingHuman}` : ""} · merged today ${summary.mergedToday}`;
 }
 
 /**
@@ -215,11 +215,26 @@ function pullRequestRow(row: PullRequestRow): SafeHtml {
     row.mergedAt ? `merged ${clock(row.mergedAt)}` : row.verifiedAt ? `verified ${clock(row.verifiedAt)}` : "never verified",
   ].filter((fact): fact is string => fact !== undefined);
   const reporter = row.reportedBy[0];
+  const review = row.review;
+  const reviewBadge = !review
+    ? ""
+    : review.needsHuman
+      ? html`<span class="ph-badge danger">needs human</span>`
+      : review.readyToMark
+        ? html`<span class="ph-badge ok">passed review</span>`
+        : review.active
+          ? html`<span class="ph-badge">${review.kind === "pr-review" ? "in review" : "fixing"}</span>`
+          : "";
+  const reviewFacts = !review
+    ? ""
+    : html` · <a href="${itemPath(review.itemId)}">${review.kind} r${review.round} ${review.status}${review.decision ? ` · ${review.decision}` : ""}</a>${
+        review.readyToMark ? html` · mark ready: <code>gh pr ready ${row.number ?? ""}</code>` : review.reason ? ` · ${review.reason}` : ""
+      }`;
   return html`<div class="fl-row"><div class="fl-row-head"><strong><a href="${row.url}" rel="noreferrer">${row.number === undefined ? "pull request" : `#${row.number}`}</a> <span>${row.title}</span></strong><span class="fl-tags"><span class="ph-badge ${tone}">${row.state}</span>${
-    row.cure?.active ? html`<span class="ph-badge warn">decayed</span>` : ""
-  }</span></div><small>${facts.join(" · ")}${reporter ? html` · <a href="${itemPath(reporter.id)}">reported by ${reporter.kind}</a>` : " · no reporting item"}${
+    row.draft ? html`<span class="ph-badge">draft</span>` : ""
+  }${row.cure?.active ? html`<span class="ph-badge warn">decayed</span>` : ""}${reviewBadge}</span></div><small>${facts.join(" · ")}${reporter ? html` · <a href="${itemPath(reporter.id)}">reported by ${reporter.kind}</a>` : " · no reporting item"}${
     row.cure ? html` · <a href="${itemPath(row.cure.itemId)}">cure ${row.cure.status}: ${row.cure.decay.join(", ")}</a>` : ""
-  }</small></div>`;
+  }${reviewFacts}</small></div>`;
 }
 
 export function enrollmentBadge(enrollment: RepositoryEnrollment | undefined, controlPlaneConfigured: boolean): SafeHtml {

@@ -5,6 +5,7 @@ import {
   type ArtifactVerifierOptions,
 } from "../queue/artifact-verification.ts";
 import { curePullRequests } from "../queue/pull-request-cure.ts";
+import { reviewGateWritesFromEnvironment, reviewPullRequests } from "../queue/pull-request-review.ts";
 import { PreconditionMismatchError, type MutationPrecondition, type QueueStore } from "../queue/store.ts";
 import { workStatuses, type WorkStatus } from "../queue/types.ts";
 
@@ -104,17 +105,21 @@ export async function applyVerifyArtifacts(
   repository: string,
   verifier: ArtifactVerifierOptions,
   actor: string = WEB_ACTOR,
-): Promise<MutationOutcome & { checked: number; updated: number; unavailable: number; rejected: number; cured: number }> {
+): Promise<MutationOutcome & { checked: number; updated: number; unavailable: number; rejected: number; cured: number; reviewed: number }> {
   const result = await refreshArtifactVerifications(queue, { ...verifier, repository, actor });
-  // Same pass as the CLI: decayed pull-request heads become pr-cure roots (ADR-0061).
+  // Same pass as the CLI: decayed pull-request heads become pr-cure roots
+  // (ADR-0061) and draft heads in a review-gated repository advance through
+  // the review gate (ADR-0065; the sweep's own policy actor, not the web one).
   const cure = await curePullRequests(queue, { ...verifier, repository, actor });
+  const review = await reviewPullRequests(queue, { ...verifier, repository, writes: reviewGateWritesFromEnvironment() });
   return {
-    eventType: cure.enqueued.length > 0 ? "work.queued" : result.updated.length + result.rejected.length > 0 ? "artifact.verified" : "artifact.unchanged",
+    eventType: cure.enqueued.length + review.enqueued.length > 0 ? "work.queued" : result.updated.length + result.rejected.length > 0 ? "artifact.verified" : "artifact.unchanged",
     checked: result.checked,
     updated: result.updated.length,
     unavailable: result.unavailable.length,
     rejected: result.rejected.length,
     cured: cure.enqueued.length,
+    reviewed: review.enqueued.length,
   };
 }
 

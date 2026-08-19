@@ -39,7 +39,11 @@ therefore cannot be granted.
 An artifact has a `kind` (`issue`, `pull-request`, `commit`, `report`, or
 `other`), an HTTPS `url`, and an optional description. GitHub issue, pull
 request, and commit artifacts MUST name the work item's repository and use the
-path shape for their kind. This validates the claim's scope, not the artifact's
+path shape for their kind. A completion result MAY carry `model`, the model
+the worker says it ran (a short identifier such as `claude-opus-5`): it is
+descriptive provenance under rule 13 — retained, never verified, granting
+nothing — that the review gate (rules 52–55) copies into later rounds so a
+reviewer can prefer a different model. This validates the claim's scope, not the artifact's
 existence. Issue and pull-request artifacts additionally carry a
 `verification`, Snowcat's own observation of the artifact through the GitHub
 API: `{ status: "verified", verifiedAt, number, state: open | closed | merged,
@@ -215,7 +219,9 @@ MCP (rule 41).
     `queue_metadata` carrying an immutable per-database `database_id` and
     `created_at`; rung 3 adds `source_ref`; rung 4 adds `operator_notes_json`
     and `previous_results_json` (rule 37); rung 5 adds `cure_json` (rule 44);
-    rung 6 adds `repositories.cure_foreign` (rule 42). Processes running code from before
+    rung 6 adds `repositories.cure_foreign` (rule 42); rung 7 adds
+    `mcp_tokens` (rule 49); rung 8 adds `review_json` and
+    `repositories.review_gate` (rules 52–53). Processes running code from before
     the version guard existed are stopped by rule 20's database constraint,
     not by this check.
 22. Scheduling priority is operator-owned. Only operator-authored or
@@ -571,7 +577,7 @@ MCP (rule 41).
 
 47. `rename-repository <old owner/repo> <new owner/repo>` MUST, in one
     transaction attributed to an `operator:` or `policy:` actor, carry the
-    opt-in row (enabled and cure-foreign flags, creation time) and every work
+    opt-in row (enabled, cure-foreign, and review-gate flags, creation time) and every work
     item from the old slug to the new one and remove the old row; it MUST
     refuse an unknown old slug, an existing new slug, and a rename to the same
     slug; and it MUST NOT rewrite history — `sourceRef`s, results, and events
@@ -625,6 +631,101 @@ MCP (rule 41).
     and revoke only their own; the local `operator:web` mode lists and
     revokes all and mints none.
 
+52. **Review gate (ADR-0065).** `review-gate <owner/repo> on|off` MUST set a
+    per-repository flag (schema rung 8, off by default, a repository-level
+    command like `opt-in`, not an item mutation under rule 40) for an
+    opted-in repository only. While it is on, `complete_work` on any item
+    other than `pr-cure` MUST, after rule 33, refuse a completion — leaving
+    the item claimed — that reports a `pull-request` artifact verified `open`
+    and not a draft, with the message `review gate: pull request <url> is
+    open and not a draft in <owner/repo>; convert it with \`gh pr ready --undo
+    <n>\` and complete again, or block`; merged and closed pull requests MUST
+    be accepted and an `unverified` answer MUST be accepted, never refused on
+    a guess. `verifyGitHubArtifact` MUST record `draft: true` on a verified
+    open pull request GitHub reports as a draft and MUST omit the key
+    otherwise, so older records read as not-draft; `verify-artifacts` MUST
+    treat a draft change as a new observation (rule 34). Snowcat MUST NOT
+    itself convert a pull request to a draft.
+53. **Review rounds (ADR-0029, ADR-0065).** `verify-artifacts` MUST, after
+    rules 34 and 42 and unless `--no-review` is given, read nothing when no
+    repository has the gate on, and otherwise, for every pull request that a
+    completed item other than a `pr-review` or `pr-review-fix` reported in a
+    gated repository and whose latest verification is `open` and draft, read
+    the pull request's head (one `GET /pulls/N`) and: skip it when it is not
+    open, not a draft, or when a `pr-review` or `pr-review-fix` for its URL is
+    `queued` or `claimed`; otherwise, when no completed `pr-review` round has
+    judged that head, compute `round` = one more than the completed
+    `pr-review` rounds for that URL (a `blocked` or `cancelled` review does
+    not count), and when `round` exceeds three report the pull request as
+    `needsHuman` (`review budget exhausted`) and create nothing, else create
+    exactly one admitted root of kind `pr-review` with `sourceRef =
+    pr-review:<pull-request URL>@<head SHA>`, priority inherited from the
+    highest-priority reporting item, `allowedActions` at most `read,
+    run-tests`, `delegableActions` empty, `createdBy policy:review-gate`, and
+    a `review` record (`pullRequestUrl`, `headSha`, `patchDigest` when
+    computable per rule 43, `round`, `originItemId`, `authorModel` from the
+    origin's `result.model`, `priorReviewerModel` from the previous round's
+    `result.model`, `priorBlockers` = the previous round's blockers
+    verbatim), recording `work.queued` whose payload names kind, URL, head,
+    and round. The same `sourceRef` MUST never be enqueued twice, whatever the
+    earlier item's status; a pushed head is a new `sourceRef`; rounds are
+    counted per pull request URL and a new head never resets them. The
+    `sourceRef` prefixes `pr-review:` and `pr-review-fix:` keep these roots
+    distinct from rule 42's `<url>@<sha>` under the per-repository uniqueness
+    of rule 30. `QueueStore.pullRequestReviewItems(repository, url)` MUST
+    return every `pr-review` and `pr-review-fix` item bound to the URL,
+    oldest first, case-insensitively, uncapped. A completed `pr-review` or
+    `pr-review-fix` is never a candidate origin and the surface MUST NOT
+    count it among a pull request's reporters.
+54. **Verdict (ADR-0029, ADR-0065).** `complete_work` MUST accept an
+    optional strict `review: { decision: pass | block | unable-to-review,
+    blockers: [{ fingerprint, location, contract, impact, resolution,
+    verification }], advisories: [{ fingerprint, text }] }` with at most five
+    blockers with distinct fingerprints and at most three advisories,
+    required on a `pr-review` item (`pr-review completion requires a review
+    result (decision, blockers, advisories)`) and refused on every other kind
+    (`review results are accepted only on pr-review items`), at the MCP
+    schema and in `QueueStore` alike. A `block` MUST carry at least one
+    blocker and a `pass` none. Before the completion transaction the server
+    MUST read the pull request's head and refuse the completion — leaving the
+    item claimed — when GitHub is unavailable (`pr-review completion cannot
+    be verified: <reason>`), when the pull request is rejected (`pr-review
+    completion refused: <reason>`), or when it is open and its head is not
+    the round's (`pr-review completion refused: the pull request's head moved
+    (reviewed <7>, now <7>); block this item instead`); a merged or closed
+    pull request is accepted on the verdict alone. A `pr-review` MUST NOT be
+    required to report the pull request as an artifact (it has no `open-pr`;
+    the subject is its `review.pullRequestUrl`). On acceptance the store MUST
+    merge the verdict and `reviewedAt` into the item's `review` record and
+    record `work.reviewed` naming decision, round, head, URL, and blocker
+    fingerprints. A `pr-review-fix` completion MUST report its pull request
+    as a `pull-request` artifact and is subject to rule 52's draft refusal.
+55. **Consequences (ADR-0065).** On a later pass, for a draft head whose
+    latest completed `pr-review` round names that head: a `pass` MUST, when
+    `SNOWCAT_REVIEW_GATE_WRITES=1`, mark the pull request ready for review
+    through GraphQL `markPullRequestReadyForReview` as `policy:review-gate`
+    and then record `artifact.ready` on the origin item (URL, head, review
+    item), rewriting its verification without `draft`; a refused or
+    unavailable mutation MUST be reported as `unavailable` and record
+    nothing; without the variable the pass MUST be reported as `readyToMark`
+    and the surface MUST show it with the `gh pr ready <n>` command. A
+    `block` at a round below three MUST create exactly one admitted root of
+    kind `pr-review-fix` with `sourceRef = pr-review-fix:<url>@<head SHA>`,
+    exactly `read, write, run-tests, open-pr`, nothing delegable, the
+    origin's priority, and a `review` record carrying the round, the
+    blockers, `reviewItemId`, `reviewerModel`, `originItemId`, and
+    `authorModel`, instructed to address exactly those blockers on the same
+    branch, keep the pull request a draft, and report it; this is the only
+    admitted root with write authority and no digest guard, bounded instead
+    by rule 52, the fingerprinted scope, the empty ceiling, and the round
+    budget. A `block` at round three, an `unable-to-review`, and a
+    `pr-review-fix` that completed without a new head MUST create nothing and
+    be reported as `needsHuman` with the reason; the operator inbox MUST
+    list those pull requests and the `readyToMark` ones in one "Review
+    adjudication" group. The sweep MUST never merge, approve, dismiss, or
+    convert to draft, and with the variable unset MUST perform no GitHub
+    write at all.
+
 ## Derived artifacts
 
 | Artifact | Derivation |
@@ -634,6 +735,7 @@ MCP (rule 41).
 | Issue import | `import-issues` maps labeled open GitHub issues to proposed `issue-resolution` roots per rules 30–31 |
 | Artifact verification | Completion-time, `attach-artifact`, and `verify-artifacts` observations per rules 33–35 and 41; `delivery` derived per rule 35 |
 | Pull-request cure | `verify-artifacts` enqueues `pr-cure` roots per decayed head per rules 42–43; `complete_work` enforces patch identity per rule 44 |
+| Review gate | `review-gate` flag and draft refusal per rule 52; `verify-artifacts` enqueues `pr-review` rounds and `pr-review-fix` roots and marks passed drafts ready per rules 53 and 55; `complete_work` accepts the bound verdict per rule 54 |
 | Internal dependency chain | `sweep-dependencies` maps tags, branch comparison, and `go.mod` to `release-needed` and `dependency-bump` proposals per rule 45 |
 | Repository settings drift | `sweep-repository-settings` diffs live GitHub settings against core's contract into `settings-drift` proposals per rule 46 |
 | MCP tokens | `token mint | list | revoke` over the `mcp_tokens` table per rule 49; identities per rule 48 |
@@ -654,6 +756,8 @@ MCP (rule 41).
   the [operations runbook](../design/queue-operations.md), and the planned
   [operator surface](../design/operator-surface.md)
 - Delivery: [queue vertical spike](../plans/queue-vertical-spike.md)
+- Review gate: [ADR-0065](../adr/0065-gate-worker-pull-requests-behind-bounded-review.md)
+  implementing [ADR-0029](../adr/0029-bound-adversarial-review.md)
 - Promotion decision and plan:
   [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md) and
   [recovery plan](../plans/recover.md), superseding

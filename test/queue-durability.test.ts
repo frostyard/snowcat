@@ -92,7 +92,7 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
   const directory = await mkdtemp(join(tmpdir(), "snowcat-ladder-test-"));
   const path = join(directory, "queue.db");
   const { itemId } = createVersionOneDatabase(path);
-  assert.equal(SCHEMA_VERSION, 7, "this test pins the ladder at rung 7; extend it when a rung is added");
+  assert.equal(SCHEMA_VERSION, 8, "this test pins the ladder at rung 8; extend it when a rung is added");
 
   const queue = new QueueStore(path);
   test.after(() => queue.close());
@@ -129,6 +129,21 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
     cure: { pullRequestUrl: "https://github.com/frostyard/updex/pull/9", headSha: "c".repeat(40), patchDigest: `sha256:${"1".repeat(64)}`, decay: ["behind"] },
   });
   assert.deepEqual(queue.get(cured!.id)?.cure?.decay, ["behind"]);
+
+  // Rung 8 arrived too: a pr-review root carries its typed review record and the repository has a review-gate setting.
+  const reviewed = queue.enqueueReviewRoot("frostyard/updex", {
+    sourceRef: "pr-review:https://github.com/frostyard/updex/pull/9@" + "c".repeat(40),
+    kind: "pr-review",
+    objective: "Review #9",
+    instructions: "Read-only.",
+    acceptanceCriteria: ["Verdict supplied."],
+    allowedActions: ["read", "run-tests"],
+    delegableActions: [],
+    createdBy: "policy:review-gate",
+    review: { pullRequestUrl: "https://github.com/frostyard/updex/pull/9", headSha: "c".repeat(40), round: 1, priorBlockers: [] },
+  });
+  assert.equal(queue.get(reviewed!.id)?.review?.round, 1);
+  assert.deepEqual(queue.repositoryReviewGateSettings(), [{ repository: "frostyard/updex", reviewGate: false }]);
 
   // Rung 3 arrived too: imported roots can be recorded and deduplicated on the upgraded database.
   const imported = queue.enqueueProposedRoots("frostyard/updex", [
@@ -249,6 +264,56 @@ test("a version-5 database gains rung 6's cure_foreign column, off for every exi
   assert.throws(() => queue.setRepositoryCureForeign("frostyard/lodge", true), /not opted in/);
   queue.setRepositoryEnabled("frostyard/updex", false);
   assert.deepEqual(queue.repositoryCureSettings(), [], "only opted-in repositories carry a cure setting");
+});
+
+test("a version-7 database gains rung 8's review_json column and review_gate setting, off for every existing repository", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-ladder-v7-test-"));
+  const path = join(directory, "queue.db");
+  createVersionOneDatabase(path);
+  // Bring the hand-built database to exactly version 7 with rungs 2–7's objects.
+  const raw = new DatabaseSync(path);
+  raw.exec(`
+    CREATE TABLE queue_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    INSERT INTO queue_metadata (key, value) VALUES ('database_id', '77777777-7777-4777-8777-777777777777');
+    INSERT INTO queue_metadata (key, value) VALUES ('created_at', '2026-08-15T00:00:00.000Z');
+    ALTER TABLE work_items ADD COLUMN source_ref TEXT;
+    CREATE UNIQUE INDEX work_items_source_ref ON work_items(repository, source_ref) WHERE source_ref IS NOT NULL;
+    ALTER TABLE work_items ADD COLUMN operator_notes_json TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE work_items ADD COLUMN previous_results_json TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE work_items ADD COLUMN cure_json TEXT;
+    ALTER TABLE repositories ADD COLUMN cure_foreign INTEGER NOT NULL DEFAULT 0 CHECK (cure_foreign IN (0, 1));
+    CREATE TABLE mcp_tokens (id TEXT PRIMARY KEY, owner TEXT NOT NULL, client TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT, revoked_by TEXT);
+    CREATE INDEX mcp_tokens_owner ON mcp_tokens(owner, created_at);
+    PRAGMA user_version = 7;
+  `);
+  const before = new Set((raw.prepare("PRAGMA table_info(repositories)").all() as Row[]).map((column) => String(column.name)));
+  assert.ok(!before.has("review_gate"));
+  raw.close();
+
+  const queue = new QueueStore(path);
+  test.after(() => queue.close());
+  assert.equal(queue.schemaVersion(), SCHEMA_VERSION);
+  assert.equal(queue.metadata().databaseId, "77777777-7777-4777-8777-777777777777");
+  const inspect = new DatabaseSync(path, { readOnly: true });
+  const gate = (inspect.prepare("PRAGMA table_info(repositories)").all() as Row[]).find((entry) => String(entry.name) === "review_gate");
+  const review = (inspect.prepare("PRAGMA table_info(work_items)").all() as Row[]).find((entry) => String(entry.name) === "review_json");
+  const stored = inspect.prepare("SELECT review_gate FROM repositories WHERE slug = 'frostyard/updex'").get() as Row;
+  inspect.close();
+  assert.ok(gate, "rung 8 adds repositories.review_gate");
+  assert.ok(review, "rung 8 adds work_items.review_json");
+  assert.equal(Number(gate!.notnull), 1);
+  assert.equal(String(gate!.dflt_value), "0");
+  assert.equal(Number(stored.review_gate), 0, "existing rows default to off");
+  assert.equal(queue.reviewGateEnabled("frostyard/updex"), false);
+  assert.deepEqual(queue.repositoryReviewGateSettings(), [{ repository: "frostyard/updex", reviewGate: false }]);
+  assert.deepEqual(queue.repositoryCureSettings(), [{ repository: "frostyard/updex", cureForeign: false }], "rung 6's setting is untouched");
+
+  queue.setRepositoryReviewGate("frostyard/updex", true);
+  assert.equal(queue.reviewGateEnabled("frostyard/updex"), true);
+  assert.throws(() => queue.setRepositoryReviewGate("frostyard/lodge", true), /not opted in/);
+  queue.setRepositoryEnabled("frostyard/updex", false);
+  assert.deepEqual(queue.repositoryReviewGateSettings(), [], "only opted-in repositories carry a review-gate setting");
+  assert.equal(queue.reviewGateEnabled("frostyard/updex"), false, "a disabled repository is not gated");
 });
 
 test("re-running the ladder from an unversioned database converges without changing the identity", async () => {

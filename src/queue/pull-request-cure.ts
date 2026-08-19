@@ -210,7 +210,7 @@ async function readUnresolvedThreads(
  * identified by their blob SHA. Too many files, or a text file whose patch
  * GitHub truncated, leave the identity uncomputable — reported, not guessed.
  */
-async function readPatchDigest(
+export async function readPatchDigest(
   base: string,
   number: number,
   fetcher: GitHubFetch,
@@ -498,11 +498,11 @@ export async function assertCureCompletion(item: WorkItem, artifacts: WorkArtifa
   }
 }
 
-function asObject(value: unknown): Record<string, unknown> | undefined {
+export function asObject(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
-function parsePullRequestUrl(repository: string, url: string): { owner: string; name: string; number: number } | undefined {
+export function parsePullRequestUrl(repository: string, url: string): { owner: string; name: string; number: number } | undefined {
   let parsed: URL;
   try {
     parsed = new URL(url);

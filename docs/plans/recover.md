@@ -213,7 +213,15 @@ hands on the host. Status as of 2026-08-19:
    that refused to forge patches and filed `pr-cure-change` instead. Still
    to do: record accepted-per-attempt, blocked, and time-to-merge daily into
    the PRD baseline. (The Hive/Snowcat boundary was decided 2026-08-18:
-   Hive retired, ADR-0062.)
+   Hive retired, ADR-0062.) The first two days also showed worker pull
+   requests reaching the human with defects nothing caught, and Copilot's
+   *Lite* auto-review plus the fleet's review-apply workflows looping on
+   them; 2026-08-19's answer is the per-repository review gate under
+   [ADR-0065](../adr/0065-gate-worker-pull-requests-behind-bounded-review.md)
+   (drafts, bounded `pr-review` rounds, `pr-review-fix`, `result.model`
+   provenance; off by default — `queue -- review-gate <owner/repo> on`,
+   snowcat first), with the Copilot effort level and workflow retirement
+   handled outside this repository.
 3. **Second repository** — done 2026-08-18: `frostyard/clix` and
    `frostyard/std` enrolled after ACMM conformance, governance files, and
    GoReleaser Pro landed there; four repositories run at once.
