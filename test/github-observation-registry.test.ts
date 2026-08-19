@@ -64,7 +64,7 @@ test("webhook and GitHub API sources cannot exchange acquisition revisions", () 
   );
   assert.doesNotThrow(() => assertSourceRevision("github-webhook-body-sha256", digest));
   assert.doesNotThrow(() => assertSourceRevision("github-delivery-audit-sha256", digest));
-  assert.doesNotThrow(() => assertSource("snowcat-system", "github-observer"));
+  assert.doesNotThrow(() => assertSource("fluent-system", "github-observer"));
 
   assert.throws(() =>
     assertSource("github-app-webhook", "github.com:app:12345:hook", "github-delivery-audit-sha256"),
@@ -79,6 +79,6 @@ test("webhook and GitHub API sources cannot exchange acquisition revisions", () 
     assertSource("github-api", "api.github.com", "github-source-gap-sha256"),
   );
   assert.throws(() =>
-    assertSource("snowcat-system", "github-observer", "github-source-gap-sha256"),
+    assertSource("fluent-system", "github-observer", "github-source-gap-sha256"),
   );
 });

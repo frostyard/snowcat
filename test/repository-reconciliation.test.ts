@@ -492,7 +492,7 @@ test("GitHub observer installation reconciliation is enrollment-bound, replayabl
     },
   });
   assert.equal(unavailable.access, "unavailable");
-  assert.equal(store.occurrences().at(-3)?.sourceKind, "snowcat-system");
+  assert.equal(store.occurrences().at(-3)?.sourceKind, "fluent-system");
   assert.equal(
     store.githubInstallationReconciliation("github.com:9001", "4567")?.access,
     "unavailable",

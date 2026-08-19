@@ -1,12 +1,12 @@
 /**
- * Snowcat ADR-0064 compatibility window: the product was named Snowcat, so
- * every environment variable was `SNOWCAT_*`. `SNOWCAT_*` is now the name; for
- * one release a process still adopts any `SNOWCAT_*` variable whose `SNOWCAT_*`
+ * Snowcat ADR-0064 compatibility window: the product was named Fluent, so
+ * every environment variable was `FLUENT_*`. `SNOWCAT_*` is now the name; for
+ * one release a process still adopts any `FLUENT_*` variable whose `SNOWCAT_*`
  * twin is unset, and says so once on stderr, so a host or client that has not
  * been migrated keeps working. Every entry point calls this before reading
  * its configuration; library code reads only `SNOWCAT_*`.
  */
-const LEGACY_PREFIX = "SNOWCAT_";
+const LEGACY_PREFIX = "FLUENT_";
 const PREFIX = "SNOWCAT_";
 
 export function adoptLegacyEnvironment(env: NodeJS.ProcessEnv = process.env, warn: (line: string) => void = (line) => console.error(line)): string[] {
@@ -20,7 +20,7 @@ export function adoptLegacyEnvironment(env: NodeJS.ProcessEnv = process.env, war
     }
   }
   if (adopted.length > 0) {
-    warn(`snowcat: adopted legacy ${adopted.sort().join(", ")}; rename to ${PREFIX}* (SNOWCAT_* is read for one release only)`);
+    warn(`snowcat: adopted legacy ${adopted.sort().join(", ")}; rename to ${PREFIX}* (FLUENT_* is read for one release only)`);
   }
   return adopted;
 }
