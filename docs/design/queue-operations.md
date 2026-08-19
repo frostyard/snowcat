@@ -510,6 +510,12 @@ Other clients have equivalents; the rule is the same — the three variables
 come from the launching shell, so a token never has to live in a client
 config file.
 
+A claim leases the item for 15 minutes: a client that runs several workers at
+once must call `heartbeat_work` before and through any long step (tests,
+builds) and complete, block, or release what it holds, or a sibling re-claims
+the item and the first worker's pull request becomes an
+[orphan](#review-gate).
+
 `npm --prefix` lets the client run from any directory — typically a checkout
 of the target repository — while the server code comes from the Snowcat
 checkout. Start the client with whatever credentials and sandbox you want it
@@ -684,6 +690,31 @@ gated — and, per draft head:
   reason and the inbox's **Review adjudication** group lists the pull request
   (beside the `readyToMark` ones). You decide: push a fix, `gh pr ready`,
   `note` or `requeue` the item, or close the pull request.
+
+**Orphan pull requests.** The gate only ever sees a pull request an item
+reported, so one can escape it: a worker opens its draft, then its lease
+expires (or the process dies) before it completes, and the sibling that
+re-claims the item reports something else — or nothing. The draft stays open
+with no item behind it: never reviewed, never marked ready, invisible to the
+board. That is an **unreported** pull request, and after the round pass the
+sweep lists each gated repository's open pull requests once and reports every
+one the queue cannot account for — no completed item's artifact, no
+`pr-review`, `pr-review-fix`, or `pr-cure` binding — as `unreported` in the
+`verify-artifacts` output. It creates nothing for them: an orphan is yours to
+decide. The finding is stored per repository (overwritten each pass, the empty
+list included), so the board's pull-request section shows an **Unreported**
+sub-list and the inbox's *Review adjudication* group lists each one with the
+time it was observed, both without calling GitHub. Two remedies:
+
+- the pull request is a duplicate or unwanted → close it on GitHub; the next
+  pass drops it from the list;
+- the work is real → `attach-artifact` it to the item that should have
+  reported it (below). It then becomes an ordinary candidate and the next pass
+  opens a review round for it.
+
+Prevention is the lease: the default is 15 minutes and a worker must
+`heartbeat_work` through anything longer, or a sibling re-claims the item
+under it. A fleet client that does not heartbeat will produce orphans.
 
 The sweep never merges, approves, or dismisses.
 

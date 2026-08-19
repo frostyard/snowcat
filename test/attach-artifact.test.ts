@@ -45,7 +45,7 @@ test("attachArtifact appends a verified pull request to a completed item so deli
   const queue = new QueueStore(join(directory, "queue.db"), () => now);
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/updex", true);
-  assert.equal(SCHEMA_VERSION, 9, "attaching needs no schema rung of its own: result_json already holds artifacts (rung 5 is the pull-request cure column, rung 6 the repository cure_foreign setting, rung 7 the mcp_tokens table, rung 8 the review gate, rung 9 the token claim restriction)");
+  assert.equal(SCHEMA_VERSION, 10, "attaching needs no schema rung of its own: result_json already holds artifacts (rung 5 is the pull-request cure column, rung 6 the repository cure_foreign setting, rung 7 the mcp_tokens table, rung 8 the review gate, rung 9 the token claim restriction, rung 10 the unreported pull-request observation)");
 
   const completed = completedLocalOnly(queue);
   assert.equal(completed.delivery, "none");

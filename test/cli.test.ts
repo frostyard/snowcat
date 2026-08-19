@@ -432,7 +432,7 @@ test("operator CLI verify-artifacts validates its flags and reports an empty pas
     unavailable: [],
     rejected: [],
     cure: { inspected: 0, foreign: { listed: 0, inspected: 0 }, enqueued: [], healthy: [], skipped: [], unavailable: [], notes: [] },
-    review: { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: [], unavailable: [] },
+    review: { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: [], unavailable: [], unreported: [] },
   });
 });
 
@@ -505,16 +505,32 @@ test("operator CLI review-gate is a repository-level setting: on|off for an opte
   assert.notEqual(missing.status, 0);
   assert.match(missing.stderr, /on\|off is required/);
 
-  // With the gate on and no draft pull request reported, the review step reads nothing and reports an empty sweep.
+  // With the gate on and no draft pull request reported, the review step
+  // inspects nothing and creates nothing. Its unreported pass (ADR-0065) is
+  // the one step that reads GitHub without a candidate — one bounded open
+  // pull-request listing for the gated repository — so `unreported` and the
+  // sweep's `unavailable` depend on what GitHub answers here and are not
+  // pinned; nothing is created either way.
   const swept = run("verify-artifacts", "--no-cure");
   assert.equal(swept.status, 0, swept.stderr);
-  assert.deepEqual(JSON.parse(swept.stdout), {
-    checked: 0,
-    updated: [],
-    unavailable: [],
-    rejected: [],
-    review: { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: [], unavailable: [] },
-  });
+  const sweptOutput = JSON.parse(swept.stdout) as {
+    checked: number;
+    updated: unknown[];
+    unavailable: unknown[];
+    rejected: unknown[];
+    review: { inspected: number; enqueued: unknown[]; markedReady: unknown[]; readyToMark: unknown[]; needsHuman: unknown[]; unreported: unknown[] };
+  };
+  assert.deepEqual(
+    { ...sweptOutput, review: { ...sweptOutput.review, skipped: undefined, unavailable: undefined, unreported: undefined } },
+    {
+      checked: 0,
+      updated: [],
+      unavailable: [],
+      rejected: [],
+      review: { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: undefined, unavailable: undefined, unreported: undefined },
+    },
+  );
+  assert.ok(Array.isArray(sweptOutput.review.unreported), "the review sweep always reports its unreported list");
   const noReview = run("verify-artifacts", "--no-cure", "--no-review");
   assert.equal(noReview.status, 0, noReview.stderr);
   assert.deepEqual(JSON.parse(noReview.stdout), { checked: 0, updated: [], unavailable: [], rejected: [] });

@@ -63,13 +63,23 @@ const FILE_V1 = {
 };
 
 const MARK_READY_ROUTE = "graphql:SnowcatMarkReady";
+/** `GET /pulls?state=open` — the listing the unreported pass shares with foreign cure; keyed by pathname alone, like every REST route here. */
+const LISTING_PATH = "/repos/frostyard/updex/pulls";
 
-function routesFor(options: { head?: string; draft?: boolean; state?: string; merged?: boolean; markReady?: unknown } = {}): Record<string, unknown> {
+/** One entry of the open pull-request listing, as GitHub serves it. */
+function listed(number: number, draft: boolean, createdAt?: string): Record<string, unknown> {
+  return { number, draft, ...(createdAt ? { created_at: createdAt } : {}) };
+}
+
+function routesFor(options: { head?: string; draft?: boolean; state?: string; merged?: boolean; markReady?: unknown; listing?: unknown[] } = {}): Record<string, unknown> {
   const head = options.head ?? HEAD_A;
   return {
     [PR_PATH]: pullRequest({ head: { sha: head }, draft: options.draft ?? true, state: options.state ?? "open", merged: options.merged ?? false }),
     [`${PR_PATH}/files`]: [FILE_V1],
     [MARK_READY_ROUTE]: options.markReady ?? { data: { markPullRequestReadyForReview: { pullRequest: { isDraft: false } } } },
+    // The pull request every fixture reports; the unreported pass must never
+    // report it, so the default listing carries it and nothing else.
+    [LISTING_PATH]: options.listing ?? [listed(12, true, "2026-08-18T00:00:00.000Z")],
   };
 }
 
@@ -364,7 +374,7 @@ test("the sweep reads nothing without a gated repository and creates one admitte
   // Gate off: no GitHub read, nothing created.
   const quiet = apiFetcher(routesFor({}));
   const untouched = await reviewPullRequests(queue, { fetcher: quiet.fetcher, clock });
-  assert.deepEqual(untouched, { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: [], unavailable: [] });
+  assert.deepEqual(untouched, { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: [], unavailable: [], unreported: [] });
   assert.deepEqual(quiet.requests, []);
 
   queue.setRepositoryReviewGate(REPOSITORY, true);
@@ -402,7 +412,11 @@ test("the sweep reads nothing without a gated repository and creates one admitte
   const claimed = queue.claim({ worker: "claude:reviewer", kinds: [REVIEW_KIND] })!;
   queue.release(claimed.id, claimed.leaseToken!, "claude:reviewer", "wrong client");
   const down = await reviewPullRequests(queue, { fetcher: apiFetcher({}, { status: 500 }).fetcher, clock });
-  assert.deepEqual(down.unavailable, [{ url: PR_URL, reason: "GitHub API returned HTTP 500" }]);
+  assert.deepEqual(down.unavailable, [
+    { url: PR_URL, reason: "GitHub API returned HTTP 500" },
+    { url: `https://github.com/${REPOSITORY}/pulls`, reason: `GitHub open pull-request listing unavailable for ${REPOSITORY}` },
+  ]);
+  assert.deepEqual(down.unreported, [], "a listing GitHub could not serve leaves the previous observation standing");
 });
 
 test("a pr-review completion needs a consistent verdict bound to the same head; the store merges it and records work.reviewed", async () => {
@@ -533,7 +547,7 @@ test("pass → ready to mark (writes off) or marked ready through GraphQL with a
   assert.deepEqual(ready.payload, { url: PR_URL, headSha: HEAD_A, reviewItemId: passed.id });
   // Nothing left to do: the pull request is no longer a draft candidate.
   const done = await reviewPullRequests(queue, { fetcher: apiFetcher(routesFor({ draft: false })).fetcher, clock, writes: true });
-  assert.deepEqual(done, { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: [], unavailable: [] });
+  assert.deepEqual(done, { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: [], unavailable: [], unreported: [] });
   // A refused mutation is reported, not hidden, and the origin is untouched.
   const queue2 = await newQueue("review-pass-refused");
   const origin2 = completedWithDraftPr(queue2);
@@ -621,7 +635,7 @@ test("enqueueReviewRoot validates kind, action ceilings, and the review record; 
   const created = make({});
   assert.ok(created);
   assert.equal(make({}), undefined, "the same sourceRef is never enqueued twice");
-  assert.equal(queue.metadata().schemaVersion, 9);
+  assert.equal(queue.metadata().schemaVersion, 10);
   assert.throws(() => queue.enqueueReviewRoot("frostyard/lodge", { ...definition, allowedActions: [...definition.allowedActions], delegableActions: [], sourceRef: "pr-review:x@y", review }), /not opted in/);
 
   const originId = completedWithDraftPr(queue);
@@ -661,4 +675,80 @@ test("deriveReviewState mirrors the sweep for the board and inbox", () => {
   assert.equal(unable?.needsHuman, true);
   const movedBlocked = deriveReviewState([item({ id: "r1", status: "blocked", review: record(HEAD_A, 1) })], HEAD_B, true);
   assert.equal(movedBlocked?.needsHuman, true);
+});
+
+test("the sweep reports, persists, and clears open pull requests no item reported in a gated repository (ADR-0065)", async () => {
+  const queue = await newQueue("review-unreported");
+  completedWithDraftPr(queue); // reports PR #12
+  queue.setRepositoryReviewGate(REPOSITORY, true);
+  queue.setRepositoryEnabled("frostyard/other", true); // opted in, gate off
+
+  // #88 is bound to a pr-review round and to nothing else: the gate already
+  // sees it, so it is not unreported either.
+  const boundUrl = "https://github.com/frostyard/updex/pull/88";
+  const bound = queue.enqueueReviewRoot(REPOSITORY, {
+    kind: REVIEW_KIND,
+    objective: "Review frostyard/updex#88 (head bbbbbbb, round 1 of 3)",
+    instructions: "Read-only.",
+    acceptanceCriteria: ["Verdict supplied."],
+    allowedActions: [...REVIEW_ACTIONS],
+    delegableActions: [],
+    createdBy: "policy:review-gate",
+    sourceRef: `${REVIEW_KIND}:${boundUrl}@${HEAD_B}`,
+    review: { pullRequestUrl: boundUrl, headSha: HEAD_B, round: 1, priorBlockers: [] },
+  });
+  assert.ok(bound);
+
+  const listing = [listed(12, true, "2026-08-18T00:00:00.000Z"), listed(88, false), listed(77, true, "2026-08-19T09:00:00.000Z")];
+  const api = apiFetcher(routesFor({ listing }));
+  const swept = await reviewPullRequests(queue, { fetcher: api.fetcher, clock });
+
+  const orphan = "https://github.com/frostyard/updex/pull/77";
+  assert.deepEqual(swept.unreported, [{ url: orphan, number: 77, draft: true, createdAt: "2026-08-19T09:00:00.000Z" }]);
+  assert.ok(api.requests.includes(LISTING_PATH), "the gated repository's open pull requests are listed");
+  assert.equal(
+    api.requests.some((path) => path.startsWith("/repos/frostyard/other")),
+    false,
+    "a repository without the gate is never listed",
+  );
+
+  // Nothing was created for it: no item anywhere is bound to the orphan.
+  assert.deepEqual(
+    swept.enqueued.filter((entry) => entry.url === orphan),
+    [],
+  );
+  assert.deepEqual(queue.pullRequestReviewItems(REPOSITORY, orphan), []);
+  assert.deepEqual(queue.knownPullRequestUrls(REPOSITORY).includes(orphan.toLowerCase()), false);
+
+  // It is persisted, so the surface can show it without calling GitHub.
+  assert.deepEqual(queue.repositoryUnreportedPullRequests(REPOSITORY), {
+    observedAt: clock().toISOString(),
+    pullRequests: [{ url: orphan, number: 77, draft: true, createdAt: "2026-08-19T09:00:00.000Z" }],
+  });
+  assert.equal(queue.repositoryUnreportedPullRequests("frostyard/other"), undefined, "a repository the sweep never observed has no observation");
+
+  // The orphan is closed (or attached): the next pass overwrites the finding with an empty list.
+  const cleared = await reviewPullRequests(queue, { fetcher: apiFetcher(routesFor({ listing: [listed(12, true), listed(88, false)] })).fetcher, clock });
+  assert.deepEqual(cleared.unreported, []);
+  assert.deepEqual(queue.repositoryUnreportedPullRequests(REPOSITORY), { observedAt: clock().toISOString(), pullRequests: [] });
+
+  assert.throws(
+    () => queue.recordUnreportedPullRequests(REPOSITORY, { observedAt: clock().toISOString(), pullRequests: [] }, "claude:worker"),
+    /principal namespace/,
+    "only policy and operator actors record the observation",
+  );
+});
+
+test("the unreported listing is bounded: more than three pages is reported truncated, and duplicates collapse", async () => {
+  const queue = await newQueue("review-unreported-truncated");
+  completedWithDraftPr(queue);
+  queue.setRepositoryReviewGate(REPOSITORY, true);
+  // Every page is full, so the listing is truncated after MAX_LISTING_PAGES ×
+  // 100; the same page answers each request, so the same URLs repeat.
+  const page = Array.from({ length: 100 }, (_, index) => listed(1000 + index, index % 2 === 0));
+  const swept = await reviewPullRequests(queue, { fetcher: apiFetcher(routesFor({ listing: page })).fetcher, clock });
+  assert.deepEqual(swept.skipped, [{ url: `https://github.com/${REPOSITORY}/pulls`, reason: "more than 300 open pull requests; the rest were not listed" }]);
+  assert.equal(swept.unreported.length, 100, "300 listed entries, 100 distinct pull requests");
+  assert.equal(new Set(swept.unreported.map((pull) => pull.url)).size, 100);
+  assert.equal(queue.repositoryUnreportedPullRequests(REPOSITORY)?.pullRequests.length, 100);
 });
