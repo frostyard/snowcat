@@ -160,6 +160,71 @@ test("one same-origin redirect refreshes App authorization without widening the 
   assert.equal(authorizationCount, 2);
 });
 
+test("delivery list and detail abort pending JWT acquisition without issuing requests", { timeout: 1_000 }, async () => {
+  let fetchCount = 0;
+  const fetcher: GitHubDeliveryFetch = async () => {
+    fetchCount += 1;
+    return Response.json([]);
+  };
+
+  const auditController = new AbortController();
+  let rejectAuditJwt!: (error: Error) => void;
+  const auditPromise = auditGitHubAppDeliveries({
+    appId: "4567",
+    getAppJwt: () =>
+      new Promise<string>((_resolve, reject) => {
+        rejectAuditJwt = reject;
+      }),
+    fetcher,
+    signal: auditController.signal,
+    now,
+  });
+  auditController.abort();
+  const audit = await auditPromise;
+  assert.equal(audit.kind, "incomplete");
+  if (audit.kind === "incomplete") {
+    assert.equal(audit.cause, "source-unavailable");
+    assert.equal(audit.diagnostic, "authorization-unavailable");
+  }
+
+  const detailController = new AbortController();
+  let rejectDetailJwt!: (error: Error) => void;
+  const detailPromise = fetchGitHubPullRequestDeliveryDetail({
+    appId: "4567",
+    delivery: {
+      deliveryId: "301",
+      deliveryGuid: "00000000-0000-4000-8000-000000000301",
+      deliveredAt: "2026-08-17T15:55:00.000Z",
+      redelivery: false,
+      statusCode: 200,
+      event: "pull_request",
+      action: "synchronize",
+      actionSupported: true,
+      installationId: "github.com:installation:7654",
+      repositoryId: "github.com:9001",
+    },
+    getAppJwt: () =>
+      new Promise<string>((_resolve, reject) => {
+        rejectDetailJwt = reject;
+      }),
+    fetcher,
+    signal: detailController.signal,
+    now,
+  });
+  detailController.abort();
+  const detail = await detailPromise;
+  assert.equal(detail.kind, "incomplete");
+  if (detail.kind === "incomplete") {
+    assert.equal(detail.cause, "source-unavailable");
+    assert.equal(detail.diagnostic, "authorization-unavailable");
+  }
+  assert.equal(fetchCount, 0);
+
+  rejectAuditJwt(new Error("late audit JWT failure"));
+  rejectDetailJwt(new Error("late detail JWT failure"));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+});
+
 test("delivery detail produces an API repair input without retaining free-form response content", async () => {
   const summary = {
     deliveryId: "301",
