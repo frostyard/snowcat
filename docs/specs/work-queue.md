@@ -230,7 +230,10 @@ MCP (rule 41).
     `mcp_tokens` (rule 49); rung 8 adds `review_json` and
     `repositories.review_gate` (rules 52–53); rung 9 adds
     `mcp_tokens.kinds_json`, the claim restriction of rule 49, `NULL` for
-    every token that existed before it. Processes running code from before
+    every token that existed before it; rung 10 adds
+    `repositories.unreported_pull_requests_json`, the unreported
+    pull-request observation of rule 53, `NULL` for every repository that
+    existed before it. Processes running code from before
     the version guard existed are stopped by rule 20's database constraint,
     not by this check.
 22. Scheduling priority is operator-owned. Only operator-authored or
@@ -712,6 +715,34 @@ MCP (rule 41).
     oldest first, case-insensitively, uncapped. A completed `pr-review` or
     `pr-review-fix` is never a candidate origin and the surface MUST NOT
     count it among a pull request's reporters.
+
+    After that pass, and only for the same gated repositories, the sweep MUST
+    list each one's open pull requests once (`GET /pulls?state=open`, at most
+    three pages of 100, the same bounded listing rule 42 uses; a full last
+    page MUST be reported as truncated and MUST NOT shrink what is reported),
+    MUST drop every URL `QueueStore.knownPullRequestUrls(repository)` returns
+    — one a completed item reported as a `pull-request` artifact, whatever its
+    kind and whatever its verification state, and one a `pr-review`,
+    `pr-review-fix`, or `pr-cure` item is bound to, whatever its status — and
+    MUST report each remaining pull request once, in listing order, as
+    `unreported: [{ url, number, draft, createdAt? }]` in the sweep result and
+    so in `verify-artifacts` output. Such a pull request is **unreported**:
+    the gate never saw it, so it was never reviewed and never marked ready.
+    The sweep MUST NOT create any work item, event, or artifact for one — an
+    unreported pull request is a human decision (close it, or
+    `attach-artifact` it to the item that should have reported it, after which
+    the next pass reviews it as an ordinary candidate). It MUST persist the
+    whole finding for the repository through
+    `QueueStore.recordUnreportedPullRequests(repository, { observedAt,
+    pullRequests }, actor)` — an opted-in repository, a `policy:`,
+    `operator:`, or `member:` actor, no event — overwriting the previous
+    observation, the empty list included, so a closed or attached orphan
+    disappears on the next pass; a listing GitHub could not serve MUST be
+    reported in `unavailable` and MUST leave the previous observation
+    standing. `QueueStore.repositoryUnreportedPullRequests(repository)` MUST
+    return the last observation, or `undefined` for a repository no sweep has
+    observed (schema rung 10's column is nullable). The surface MUST read that
+    stored observation and MUST NOT call GitHub to render it.
 54. **Verdict (ADR-0029, ADR-0065).** `complete_work` MUST accept an
     optional strict `review: { decision: pass | block | unable-to-review,
     blockers: [{ fingerprint, location, contract, impact, resolution,

@@ -191,7 +191,9 @@ function completedRow(row: CompletedRow): SafeHtml {
 
 /** `open 3 · decayed 1 · merged today 2`, the same phrase on the board head and the index. */
 export function pullRequestSummaryLabel(summary: PullRequestSummary): string {
-  return `open ${summary.open} · decayed ${summary.decayed}${summary.awaitingHuman > 0 ? ` · awaiting you ${summary.awaitingHuman}` : ""} · merged today ${summary.mergedToday}`;
+  return `open ${summary.open} · decayed ${summary.decayed}${summary.awaitingHuman > 0 ? ` · awaiting you ${summary.awaitingHuman}` : ""}${
+    summary.unreported > 0 ? ` · unreported ${summary.unreported}` : ""
+  } · merged today ${summary.mergedToday}`;
 }
 
 /**
@@ -203,10 +205,33 @@ export function pullRequestSummaryLabel(summary: PullRequestSummary): string {
 function pullRequestsSection(data: PullRequestsData): SafeHtml {
   return html`<section class="fl-group" id="pull-requests"><div class="fl-group-head"><h2>Pull requests</h2><span>${pullRequestSummaryLabel(data.summary)}</span></div>
     <div class="fl-rows">${data.open.length === 0 ? html`<p class="fl-empty">No open pull request reported.</p>` : data.open.map(pullRequestRow)}</div>
+    ${unreportedSubList(data)}
     <div class="fl-group-head"><h2>Merged · last 7 days</h2><span>${data.merged.length}</span></div>
     <div class="fl-rows">${data.merged.length === 0 ? html`<p class="fl-empty">Nothing merged in the last 7 days.</p>` : data.merged.map(pullRequestRow)}</div>${
       data.truncated ? html`<p class="fl-empty">Some source rows hit the 100-row cap; use the CLI for the full list.</p>` : ""
     }</section>`;
+}
+
+/**
+ * Open pull requests GitHub lists in this repository that no item reported
+ * (ADR-0065), as the last review sweep observed them. They are outside the
+ * gate — never reviewed, never marked ready — so each one is a decision for
+ * you: close it, or attach it to the item that should have reported it. The
+ * sub-list appears only once a sweep has observed the repository, and stays
+ * (empty) afterwards so its absence is never mistaken for "none".
+ */
+function unreportedSubList(data: PullRequestsData): SafeHtml {
+  if (data.unreportedObservedAt === undefined) return html``;
+  return html`<div class="fl-group-head"><h2>Unreported</h2><span>${data.unreported.length} · observed ${clock(data.unreportedObservedAt)}</span></div>
+    <div class="fl-rows">${
+      data.unreported.length === 0
+        ? html`<p class="fl-empty">Every open pull request is reported by an item.</p>`
+        : data.unreported.map(
+            (pull) => html`<div class="fl-row"><div class="fl-row-head"><strong><a href="${pull.url}" rel="noreferrer noopener">#${pull.number}</a> <span>no item reported this pull request — close it or attach it to its item</span></strong><span class="fl-tags"><span class="ph-badge warn">unreported</span>${
+              pull.draft ? html`<span class="ph-badge">draft</span>` : ""
+            }</span></div><small>${pull.createdAt ? `opened ${clock(pull.createdAt)} · ` : ""}<code>npm run queue -- attach-artifact &lt;id&gt; ${pull.url}</code></small></div>`,
+          )
+    }</div>`;
 }
 
 function pullRequestRow(row: PullRequestRow): SafeHtml {

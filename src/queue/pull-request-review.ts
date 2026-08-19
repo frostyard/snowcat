@@ -1,5 +1,5 @@
 import { githubApiJson, githubGraphql, type GitHubFetch } from "../repository/github-api.ts";
-import { asObject, parsePullRequestUrl, readPatchDigest } from "./pull-request-cure.ts";
+import { asObject, listOpenPullRequests, MAX_LISTING_PAGES, parsePullRequestUrl, readPatchDigest } from "./pull-request-cure.ts";
 import type { QueueStore } from "./store.ts";
 import {
   MAX_REVIEW_ADVISORIES,
@@ -10,6 +10,7 @@ import {
   type ReviewBlocker,
   type ReviewResult,
   type SeedWorkInput,
+  type UnreportedPullRequest,
   type WorkArtifact,
   type WorkItem,
 } from "./types.ts";
@@ -162,29 +163,37 @@ export interface ReviewSweepResult {
   needsHuman: Array<{ url: string; headSha: string; round: number; reason: string }>;
   skipped: Array<{ url: string; reason: string }>;
   unavailable: Array<{ url: string; reason: string }>;
+  /**
+   * Open pull requests GitHub lists in a gated repository that no completed
+   * item reported and no `pr-review`, `pr-review-fix`, or `pr-cure` item is
+   * bound to: outside the gate until a human closes one or attaches it to the
+   * item that should have reported it. The sweep creates no work for them.
+   */
+  unreported: UnreportedPullRequest[];
 }
 
 /**
  * The review sweep: for every open draft pull request that a completed item
  * reported in a review-gated repository, read its head and either create the
  * next bounded review round, act on the latest verdict for that head, or
- * report that a human is needed. Runs after `refreshArtifactVerifications`
- * and `curePullRequests` on the same timer; reads nothing when no repository
- * has the gate on.
+ * report that a human is needed. Then, per gated repository, list the open
+ * pull requests GitHub knows and report the ones the queue cannot account for
+ * at all (`unreported`) — no work, a persisted finding for the operator.
+ * Runs after `refreshArtifactVerifications` and `curePullRequests` on the
+ * same timer; reads nothing when no repository has the gate on.
  */
 export async function reviewPullRequests(
   queue: QueueStore,
   options: ReviewOptions & { repository?: string; limit?: number; actor?: string; writes?: boolean } = {},
 ): Promise<ReviewSweepResult> {
   const actor = options.actor ?? REVIEW_ACTOR;
-  const result: ReviewSweepResult = { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: [], unavailable: [] };
-  const gated = new Set(
-    queue
-      .repositoryReviewGateSettings()
-      .filter((setting) => setting.reviewGate)
-      .filter((setting) => options.repository === undefined || setting.repository.toLowerCase() === options.repository.toLowerCase())
-      .map((setting) => setting.repository.toLowerCase()),
-  );
+  const result: ReviewSweepResult = { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: [], unavailable: [], unreported: [] };
+  const gatedRepositories = queue
+    .repositoryReviewGateSettings()
+    .filter((setting) => setting.reviewGate)
+    .filter((setting) => options.repository === undefined || setting.repository.toLowerCase() === options.repository.toLowerCase())
+    .map((setting) => setting.repository);
+  const gated = new Set(gatedRepositories.map((repository) => repository.toLowerCase()));
   if (gated.size === 0) return result;
 
   const items = queue.completedItemsWithPendingArtifacts({ repository: options.repository, limit: options.limit ?? 100 });
@@ -339,7 +348,50 @@ export async function reviewPullRequests(
     }
     result.enqueued.push({ id: created.id, kind: REVIEW_KIND, url, headSha: head.headSha, round });
   }
+
+  await observeUnreportedPullRequests(queue, result, gatedRepositories, actor, options);
   return result;
+}
+
+/**
+ * The unreported pass: one bounded open pull-request listing per gated
+ * repository (the same one foreign cure uses), minus every URL the queue can
+ * already account for — a completed item's artifact, a `pr-review` or
+ * `pr-review-fix` binding, a `pr-cure` binding. What remains is a pull request
+ * the gate cannot see: it was never reviewed, never marked ready, and no item
+ * carries it. Nothing is enqueued for one — an orphan is a human decision
+ * (close it, or `queue -- attach-artifact <id> <url>` to bring it under the
+ * gate, after which the next pass reviews it) — but the finding is persisted
+ * per repository so the surface can show it without calling GitHub. A listing
+ * GitHub could not serve leaves the previous observation standing.
+ */
+async function observeUnreportedPullRequests(
+  queue: QueueStore,
+  result: ReviewSweepResult,
+  repositories: string[],
+  actor: string,
+  options: ReviewOptions,
+): Promise<void> {
+  const observedAt = (options.clock?.() ?? new Date()).toISOString();
+  for (const repository of repositories) {
+    const listing = await listOpenPullRequests(repository, options.fetcher ?? fetch);
+    if (listing.kind === "unavailable") {
+      result.unavailable.push({ url: `https://github.com/${repository}/pulls`, reason: listing.reason });
+      continue;
+    }
+    if (listing.truncated) {
+      result.skipped.push({ url: `https://github.com/${repository}/pulls`, reason: `more than ${MAX_LISTING_PAGES * 100} open pull requests; the rest were not listed` });
+    }
+    const seen = new Set(queue.knownPullRequestUrls(repository));
+    const unreported: UnreportedPullRequest[] = [];
+    for (const pull of listing.pulls) {
+      if (seen.has(pull.url.toLowerCase())) continue;
+      seen.add(pull.url.toLowerCase());
+      unreported.push({ url: pull.url, number: pull.number, draft: pull.draft, ...(pull.createdAt ? { createdAt: pull.createdAt } : {}) });
+    }
+    queue.recordUnreportedPullRequests(repository, { observedAt, pullRequests: unreported }, actor);
+    result.unreported.push(...unreported);
+  }
 }
 
 function describeBlockers(blockers: ReviewBlocker[]): string {

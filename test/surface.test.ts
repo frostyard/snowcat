@@ -567,6 +567,15 @@ test("the board and inbox show the review gate: draft badge, review round, passe
     review: { decision: "pass", blockers: [], advisories: [{ fingerprint: "adv:naming", text: "consider renaming gate()" }] },
   });
 
+  // The last review sweep also found an open pull request no item reported
+  // (ADR-0065): it is outside the gate until a human closes it or attaches it.
+  const orphan = "https://github.com/frostyard/example/pull/70";
+  queue.recordUnreportedPullRequests(
+    "frostyard/example",
+    { observedAt: "2026-08-19T18:00:00.000Z", pullRequests: [{ url: orphan, number: 70, draft: true, createdAt: "2026-08-19T09:00:00.000Z" }] },
+    "policy:review-gate",
+  );
+
   // No fetcher is configured anywhere: rendering must not reach GitHub.
   const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue }) });
   const cookie = `snowcat_session=${sessionDigest(TOKEN)}`;
@@ -574,7 +583,12 @@ test("the board and inbox show the review gate: draft badge, review round, passe
   const board = await app.request("/repositories/frostyard/example", { headers: { Cookie: cookie } });
   assert.equal(board.status, 200);
   const pulls = section(await board.text(), "pull-requests");
-  assert.match(pulls, /<h2>Pull requests<\/h2><span>open 1 · decayed 0 · awaiting you 1 · merged today 0<\/span>/);
+  assert.match(pulls, /<h2>Pull requests<\/h2><span>open 1 · decayed 0 · awaiting you 1 · unreported 1 · merged today 0<\/span>/);
+  // The Unreported sub-list: the pull request, the draft badge, why it is here, and the way in.
+  assert.match(pulls, /<h2>Unreported<\/h2><span>1 · observed /);
+  assert.match(pulls, /no item reported this pull request — close it or attach it to its item/);
+  assert.match(pulls, /<span class="ph-badge warn">unreported<\/span><span class="ph-badge">draft<\/span>/);
+  assert.match(pulls, /<code>npm run queue -- attach-artifact &lt;id&gt; https:\/\/github.com\/frostyard\/example\/pull\/70<\/code>/);
   assert.match(pulls, /<span class="ph-badge ">open<\/span><span class="ph-badge">draft<\/span><span class="ph-badge ok">passed review<\/span>/);
   assert.match(pulls, new RegExp(`<a href="/items/${seed.id}">reported by issue-resolution</a> · <a href="/items/${review.id}">pr-review r1 completed · pass</a> · mark ready: <code>gh pr ready 52</code>`));
   assert.equal(pulls.includes("reported by pr-review"), false, "a review item never becomes the pull request's reporter");
@@ -582,11 +596,20 @@ test("the board and inbox show the review gate: draft badge, review round, passe
   const inbox = await app.request("/", { headers: { Cookie: cookie } });
   assert.equal(inbox.status, 200);
   const inboxBody = await inbox.text();
-  assert.match(inboxBody, /<span>Review adjudication<\/span><strong>1<\/strong>/);
+  assert.match(inboxBody, /<span>Review adjudication<\/span><strong>2<\/strong>/, "the passed draft and the unreported pull request are both yours to decide");
   const adjudication = section(inboxBody, "adjudication");
   assert.match(adjudication, /Review adjudication — draft pull requests waiting for you/);
   assert.match(adjudication, /<span class="ph-badge ok">passed<\/span> round 1 · mark it ready: <code>gh pr ready 52<\/code>/);
   assert.match(adjudication, new RegExp(`href="/items/${review.id}">Open pr-review</a>`));
+  // The unreported one, with the time it was observed and the attach hint.
+  assert.match(adjudication, /<span class="ph-badge warn">unreported<\/span> outside the gate — close it, or bring it under the gate: <code>npm run queue -- attach-artifact &lt;id&gt; https:\/\/github.com\/frostyard\/example\/pull\/70<\/code>/);
+  assert.match(adjudication, /no item reported this pull request<\/span><\/strong><small>draft · opened /);
+  assert.match(adjudication, /observed /);
+
+  // The repositories index carries the same count in its summary phrase.
+  const repositories = await app.request("/repositories", { headers: { Cookie: cookie } });
+  assert.equal(repositories.status, 200);
+  assert.match(await repositories.text(), /awaiting you 1 · unreported 1 · merged today 0<\/a>/);
   const partial = await app.request("/?partial=adjudication", { headers: { Cookie: cookie } });
   assert.equal(partial.status, 200);
   assert.match(await partial.text(), /^<section class="fl-group" id="adjudication">/);

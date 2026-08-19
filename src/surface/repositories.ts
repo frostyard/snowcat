@@ -11,6 +11,7 @@ import {
   workStatuses,
   type ObservableWorkItem,
   type PullRequestDecay,
+  type UnreportedPullRequest,
   type WorkArtifact,
   type WorkStatus,
 } from "../queue/types.ts";
@@ -291,6 +292,8 @@ export interface PullRequestSummary {
   decayed: number;
   /** Open pull requests the review gate cannot advance by itself, or that passed and wait to be marked ready. */
   awaitingHuman: number;
+  /** Open pull requests no item reported, from the review sweep's last observation (ADR-0065). */
+  unreported: number;
   mergedToday: number;
 }
 
@@ -300,6 +303,14 @@ export interface PullRequestsData {
   open: PullRequestRow[];
   /** Merged within the last 7 days, newest merge first. */
   merged: PullRequestRow[];
+  /**
+   * Open pull requests no item reported, as the last review sweep observed
+   * them (ADR-0065): stored by the sweep, read here, never fetched at render.
+   * Empty for a repository the gate is off for, or that no sweep has observed.
+   */
+  unreported: UnreportedPullRequest[];
+  /** When the sweep last observed `unreported`; absent when it never has. */
+  unreportedObservedAt?: string;
   summary: PullRequestSummary;
   /** True when a source list hit the 100-row cap, so the projection may be partial. */
   truncated: boolean;
@@ -312,7 +323,9 @@ export interface PullRequestsData {
  * and its latest verification (`state`, `headSha`, `verifiedAt`, `mergedAt`);
  * `pr-cure` roots supply the decay of the current head and can contribute a
  * pull request no item reported (foreign cure). Closed pull requests, and
- * merges older than seven days, are left out.
+ * merges older than seven days, are left out. The review sweep's last
+ * unreported-pull-request observation (ADR-0065) is read from the repository
+ * row as stored; rendering never calls GitHub.
  */
 export function readPullRequests(queue: QueueStore, repository: string, now: Date = new Date()): PullRequestsData {
   const rows = new Map<string, PullRequestRow>();
@@ -383,14 +396,24 @@ export function readPullRequests(queue: QueueStore, repository: string, now: Dat
     .filter((row) => row.state === "merged" && (row.mergedAt ?? row.verifiedAt ?? "") >= mergedSince)
     .sort((left, right) => (right.mergedAt ?? "").localeCompare(left.mergedAt ?? ""));
 
+  // The review sweep's last unreported observation (ADR-0065), read from the
+  // repository row it wrote — no GitHub call, and nothing to reconcile: a
+  // pull request the queue accounts for was already excluded when it was
+  // observed, and the next pass overwrites the whole list.
+  const observation = queue.repositoryUnreportedPullRequests(repository);
+  const unreported = observation?.pullRequests ?? [];
+
   return {
     repository,
     open,
     merged,
+    unreported,
+    ...(observation ? { unreportedObservedAt: observation.observedAt } : {}),
     summary: {
       open: open.length,
       decayed: open.filter((row) => row.cure?.active === true).length,
       awaitingHuman: open.filter((row) => row.review?.needsHuman === true || row.review?.readyToMark === true).length,
+      unreported: unreported.length,
       mergedToday: merged.filter((row) => (row.mergedAt ?? "") >= startOfToday).length,
     },
     truncated,

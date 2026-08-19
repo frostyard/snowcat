@@ -18,8 +18,8 @@ import type { AllowedAction, PullRequestCure, PullRequestDecay, SeedWorkInput, W
 const GITHUB_TIMEOUT_MS = 30_000;
 /** `/pulls/N/files` pages read before the patch identity is called unavailable (100 files each). */
 const MAX_FILE_PAGES = 3;
-/** `/pulls?state=open` pages read per foreign-cure repository before the listing is reported truncated (100 pull requests each). */
-const MAX_LISTING_PAGES = 3;
+/** `/pulls?state=open` pages read per listing repository before it is reported truncated (100 pull requests each): foreign cure and the review gate's unreported pass alike. */
+export const MAX_LISTING_PAGES = 3;
 const FAILING_CONCLUSIONS = new Set(["failure", "timed_out", "startup_failure", "action_required"]);
 /** Review threads read per pull request; the REST reviews list carries the `CHANGES_REQUESTED` signal, this carries the unanswered inline comments. */
 const MAX_REVIEW_THREADS = 100;
@@ -392,18 +392,29 @@ async function inspectCandidate(
   result.enqueued.push({ id: created.id, url, headSha: health.headSha, decay: health.decay });
 }
 
+/** One entry of the open pull-request listing: what GitHub's list endpoint carries without a second read. */
+export interface ListedPullRequest {
+  url: string;
+  number: number;
+  draft: boolean;
+  /** GitHub's `created_at`, when the entry carried one. */
+  createdAt?: string;
+}
+
 /**
  * Lists a repository's open pull requests (`GET /repos/{owner}/{name}/pulls?state=open`),
  * up to `MAX_LISTING_PAGES` pages of 100; a full last page marks the listing
- * truncated. Each entry is its canonical URL and draft flag.
+ * truncated. Each entry is its canonical URL, number, draft flag, and creation
+ * time. Shared by the foreign-cure pass (ADR-0061) and the review gate's
+ * unreported pass (ADR-0065), which is why it is exported.
  */
-async function listOpenPullRequests(
+export async function listOpenPullRequests(
   repository: string,
   fetcher: GitHubFetch,
-): Promise<{ kind: "listed"; pulls: Array<{ url: string; draft: boolean }>; truncated: boolean } | { kind: "unavailable"; reason: string }> {
+): Promise<{ kind: "listed"; pulls: ListedPullRequest[]; truncated: boolean } | { kind: "unavailable"; reason: string }> {
   const [owner, name] = repository.split("/") as [string, string];
   const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`;
-  const pulls: Array<{ url: string; draft: boolean }> = [];
+  const pulls: ListedPullRequest[] = [];
   for (let page = 1; page <= MAX_LISTING_PAGES; page += 1) {
     const response = await githubApiJson(`${base}/pulls?state=open&per_page=100&page=${page}`, AbortSignal.timeout(GITHUB_TIMEOUT_MS), fetcher);
     if (response.kind === "unavailable" || response.status !== 200) return { kind: "unavailable", reason: `GitHub open pull-request listing unavailable for ${repository}` };
@@ -412,7 +423,12 @@ async function listOpenPullRequests(
       const entry = asObject(raw);
       const number = Number(entry?.number);
       if (!entry || !Number.isInteger(number) || number < 1) return { kind: "unavailable", reason: `GitHub open pull-request listing entry for ${repository} was malformed` };
-      pulls.push({ url: `https://github.com/${owner}/${name}/pull/${number}`, draft: entry.draft === true });
+      pulls.push({
+        url: `https://github.com/${owner}/${name}/pull/${number}`,
+        number,
+        draft: entry.draft === true,
+        ...(typeof entry.created_at === "string" ? { createdAt: entry.created_at } : {}),
+      });
     }
     if (response.value.length < 100) return { kind: "listed", pulls, truncated: false };
   }

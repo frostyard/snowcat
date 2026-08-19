@@ -321,7 +321,7 @@ function statRow(data: InboxData): SafeHtml {
     ${tile("Proposals", data.stats.proposals, "awaiting admission")}
     ${tile("Blocked", data.stats.blocked, "needs an operator exit")}
     ${tile("Unverified artifacts", data.stats.unverified, "GitHub could not be asked")}
-    ${tile("Review adjudication", data.stats.adjudication, "draft PRs the gate cannot advance")}
+    ${tile("Review adjudication", data.stats.adjudication, "PRs the gate cannot advance or never saw")}
     ${tile("Leased now", data.stats.leased, data.stats.leasedCaption)}
   </div>`;
 }
@@ -388,11 +388,27 @@ function unverifiedGroup(rows: UnverifiedRow[]): SafeHtml {
   );
 }
 
+/**
+ * Pull requests in review-gated repositories that only you can move on
+ * (ADR-0065): the gate's own dead ends and passed-but-still-draft heads, and
+ * the ones the last sweep found that no item reported — outside the gate
+ * until you close them or attach them to their item.
+ */
 function adjudicationGroup(rows: AdjudicationRow[]): SafeHtml {
   return group(
     "Review adjudication — draft pull requests waiting for you",
     rows.length,
     html`<table class="fl-table"><thead><tr><th>Pull request</th><th>Repository</th><th>Review gate</th><th class="right"></th></tr></thead><tbody>${rows.map((row) => {
+      if (row.kind === "unreported") {
+        return html`<tr>
+        <td><div class="fl-name"><strong><a href="${row.pullRequest.url}" rel="noreferrer noopener">#${row.pullRequest.number}</a> <span>no item reported this pull request</span></strong><small>${
+          row.pullRequest.draft ? "draft · " : ""
+        }${row.pullRequest.createdAt ? `opened ${clock(row.pullRequest.createdAt)} · ` : ""}observed ${clock(row.observedAt, true)}</small></div></td>
+        <td><a href="${repositoryPath(row.repository)}">${row.repository}</a></td>
+        <td class="fl-reason"><span class="ph-badge warn">unreported</span> outside the gate — close it, or bring it under the gate: <code>npm run queue -- attach-artifact &lt;id&gt; ${row.pullRequest.url}</code></td>
+        <td class="right"><a class="ph-button secondary" href="${row.pullRequest.url}" rel="noreferrer noopener">Open on GitHub</a></td>
+      </tr>`;
+      }
       const review = row.pullRequest.review!;
       return html`<tr>
         <td><div class="fl-name"><strong><a href="${row.pullRequest.url}" rel="noreferrer noopener">${row.pullRequest.number === undefined ? "pull request" : `#${row.pullRequest.number}`}</a> <span>${row.pullRequest.title}</span></strong><small>head ${row.pullRequest.headSha ? row.pullRequest.headSha.slice(0, 7) : "?"}${row.pullRequest.draft ? " · draft" : ""}</small></div></td>

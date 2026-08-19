@@ -92,7 +92,7 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
   const directory = await mkdtemp(join(tmpdir(), "snowcat-ladder-test-"));
   const path = join(directory, "queue.db");
   const { itemId } = createVersionOneDatabase(path);
-  assert.equal(SCHEMA_VERSION, 9, "this test pins the ladder at rung 9; extend it when a rung is added");
+  assert.equal(SCHEMA_VERSION, 10, "this test pins the ladder at rung 10; extend it when a rung is added");
 
   const queue = new QueueStore(path);
   test.after(() => queue.close());
@@ -370,6 +370,67 @@ test("a version-8 database gains rung 9's mcp_tokens.kinds_json column, NULL for
   assert.deepEqual(queue.verifyMcpToken(restricted.token)?.kinds, ["issue-resolution", "pr-review"]);
   assert.throws(() => queue.mintMcpToken({ owner: "member:reviewer@frostyard.org", client: "bad", kinds: ["Bad Kind"] }), /invalid work kind: Bad Kind/);
   assert.throws(() => queue.mintMcpToken({ owner: "member:reviewer@frostyard.org", client: "empty", kinds: [] }), /at least one work kind/);
+});
+
+test("a version-9 database gains rung 10's repositories.unreported_pull_requests_json column, NULL for every existing repository", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-ladder-v9-test-"));
+  const path = join(directory, "queue.db");
+  createVersionOneDatabase(path);
+  // Bring the hand-built database to exactly version 9 with rungs 2–9's objects.
+  const raw = new DatabaseSync(path);
+  raw.exec(`
+    CREATE TABLE queue_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    INSERT INTO queue_metadata (key, value) VALUES ('database_id', '99999999-9999-4999-8999-999999999999');
+    INSERT INTO queue_metadata (key, value) VALUES ('created_at', '2026-08-15T00:00:00.000Z');
+    ALTER TABLE work_items ADD COLUMN source_ref TEXT;
+    CREATE UNIQUE INDEX work_items_source_ref ON work_items(repository, source_ref) WHERE source_ref IS NOT NULL;
+    ALTER TABLE work_items ADD COLUMN operator_notes_json TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE work_items ADD COLUMN previous_results_json TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE work_items ADD COLUMN cure_json TEXT;
+    ALTER TABLE repositories ADD COLUMN cure_foreign INTEGER NOT NULL DEFAULT 0 CHECK (cure_foreign IN (0, 1));
+    CREATE TABLE mcp_tokens (id TEXT PRIMARY KEY, owner TEXT NOT NULL, client TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT, revoked_by TEXT);
+    CREATE INDEX mcp_tokens_owner ON mcp_tokens(owner, created_at);
+    ALTER TABLE work_items ADD COLUMN review_json TEXT;
+    ALTER TABLE repositories ADD COLUMN review_gate INTEGER NOT NULL DEFAULT 0 CHECK (review_gate IN (0, 1));
+    ALTER TABLE mcp_tokens ADD COLUMN kinds_json TEXT;
+    PRAGMA user_version = 9;
+  `);
+  const before = new Set((raw.prepare("PRAGMA table_info(repositories)").all() as Row[]).map((column) => String(column.name)));
+  assert.ok(!before.has("unreported_pull_requests_json"));
+  raw.close();
+
+  const queue = new QueueStore(path);
+  test.after(() => queue.close());
+  assert.equal(queue.schemaVersion(), SCHEMA_VERSION);
+  assert.equal(queue.metadata().databaseId, "99999999-9999-4999-8999-999999999999");
+  const inspect = new DatabaseSync(path, { readOnly: true });
+  const column = (inspect.prepare("PRAGMA table_info(repositories)").all() as Row[]).find((entry) => String(entry.name) === "unreported_pull_requests_json");
+  const stored = inspect.prepare("SELECT unreported_pull_requests_json FROM repositories WHERE slug = 'frostyard/updex'").get() as Row;
+  inspect.close();
+  assert.ok(column, "rung 10 adds repositories.unreported_pull_requests_json");
+  assert.equal(Number(column!.notnull), 0, "the column is nullable: NULL is 'not yet observed'");
+  assert.equal(stored.unreported_pull_requests_json, null, "an existing repository reads as never observed");
+  assert.equal(queue.repositoryUnreportedPullRequests("frostyard/updex"), undefined);
+  assert.deepEqual(queue.repositoryReviewGateSettings(), [{ repository: "frostyard/updex", reviewGate: false }], "rung 8's setting is untouched");
+
+  // The observation is written whole and overwritten whole, an empty list included.
+  const url = "https://github.com/frostyard/updex/pull/370";
+  queue.recordUnreportedPullRequests(
+    "frostyard/updex",
+    { observedAt: "2026-08-19T12:00:00.000Z", pullRequests: [{ url, number: 370, draft: true, createdAt: "2026-08-19T09:00:00.000Z" }] },
+    "policy:review-gate",
+  );
+  assert.deepEqual(queue.repositoryUnreportedPullRequests("frostyard/updex"), {
+    observedAt: "2026-08-19T12:00:00.000Z",
+    pullRequests: [{ url, number: 370, draft: true, createdAt: "2026-08-19T09:00:00.000Z" }],
+  });
+  queue.recordUnreportedPullRequests("frostyard/updex", { observedAt: "2026-08-19T13:00:00.000Z", pullRequests: [] }, "operator:cli");
+  assert.deepEqual(queue.repositoryUnreportedPullRequests("frostyard/updex"), { observedAt: "2026-08-19T13:00:00.000Z", pullRequests: [] });
+  assert.throws(
+    () => queue.recordUnreportedPullRequests("frostyard/updex", { observedAt: "2026-08-19T13:00:00.000Z", pullRequests: [{ url: "https://example.com/x", number: 1, draft: false }] }, "policy:review-gate"),
+    /not a GitHub pull-request URL/,
+  );
+  assert.throws(() => queue.recordUnreportedPullRequests("frostyard/lodge", { observedAt: "2026-08-19T13:00:00.000Z", pullRequests: [] }, "policy:review-gate"), /not opted in/);
 });
 
 test("re-running the ladder from an unversioned database converges without changing the identity", async () => {

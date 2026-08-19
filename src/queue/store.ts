@@ -28,6 +28,8 @@ import {
   type ReviewResult,
   type ReviewRootInput,
   type SeedWorkInput,
+  type UnreportedPullRequest,
+  type UnreportedPullRequestObservation,
   type WorkArtifact,
   type WorkEvent,
   type WorkItem,
@@ -58,7 +60,7 @@ export const MAX_METRICS_WINDOW_EVENTS = 100_000;
  * that newer code has already migrated; newer code upgrades an older database
  * in place, forward only, inside one write transaction.
  */
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 /**
  * Backup manifest emitted by `QueueStore.backup` and re-derived by
@@ -586,6 +588,75 @@ export class QueueStore {
         .prepare("UPDATE repositories SET review_gate = ?, updated_at = ? WHERE slug = ?")
         .run(enabled ? 1 : 0, this.now(), repository);
     });
+  }
+
+  /**
+   * Records the review sweep's whole unreported-pull-request finding for one
+   * opted-in repository (ADR-0065, schema rung 10): the open pull requests
+   * GitHub listed that no completed item reported and no `pr-review`,
+   * `pr-review-fix`, or `pr-cure` item is bound to. Each pass overwrites the
+   * previous observation — an empty list included, so a closed or attached
+   * orphan disappears — and nothing else changes: no work item, no event, no
+   * artifact. Policy or operator actors only.
+   */
+  recordUnreportedPullRequests(repository: string, observation: UnreportedPullRequestObservation, actor: string): void {
+    validateOperatorActor(actor, "unreported pull requests");
+    const pullRequests = observation.pullRequests.map((pull) => {
+      if (!/^https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/[1-9][0-9]*$/.test(pull.url)) {
+        throw new Error(`unreported pull request URL is not a GitHub pull-request URL: ${pull.url}`);
+      }
+      if (!Number.isSafeInteger(pull.number) || pull.number < 1) throw new Error(`unreported pull request number is invalid: ${pull.number}`);
+      return {
+        url: pull.url,
+        number: pull.number,
+        draft: pull.draft === true,
+        ...(pull.createdAt ? { createdAt: pull.createdAt } : {}),
+      } satisfies UnreportedPullRequest;
+    });
+    this.transaction(() => {
+      this.assertRepositoryEnabled(repository);
+      this.db
+        .prepare("UPDATE repositories SET unreported_pull_requests_json = ?, updated_at = ? WHERE slug = ?")
+        .run(JSON.stringify({ observedAt: observation.observedAt, pullRequests }), this.now(), repository);
+    });
+  }
+
+  /** The last unreported-pull-request observation for a repository, or `undefined` when no sweep has observed it yet. */
+  repositoryUnreportedPullRequests(repository: string): UnreportedPullRequestObservation | undefined {
+    validateRepository(repository);
+    const row = this.db.prepare("SELECT unreported_pull_requests_json FROM repositories WHERE slug = ?").get(repository) as Row | undefined;
+    const raw = row?.unreported_pull_requests_json;
+    if (typeof raw !== "string") return undefined;
+    const parsed = JSON.parse(raw) as UnreportedPullRequestObservation;
+    return { observedAt: String(parsed.observedAt), pullRequests: parsed.pullRequests ?? [] };
+  }
+
+  /**
+   * Every pull-request URL in a repository the queue can already account for,
+   * lowercased: one a completed item reported as an artifact — any kind, any
+   * verification state, `pr-review` and `pr-review-fix` rounds included — and
+   * one a `pr-review`, `pr-review-fix`, or `pr-cure` item is bound to,
+   * whatever its status. Uncapped, so a large queue cannot make a known pull
+   * request look unreported. The complement of this set within GitHub's open
+   * listing is what the review gate reports as unreported.
+   */
+  knownPullRequestUrls(repository: string): string[] {
+    validateRepository(repository);
+    const rows = this.db
+      .prepare(
+        `SELECT lower(json_extract(artifact.value, '$.url')) AS url
+           FROM work_items item, json_each(item.result_json, '$.artifacts') artifact
+          WHERE item.repository = ? AND item.status = 'completed' AND item.result_json IS NOT NULL
+            AND json_extract(artifact.value, '$.kind') = 'pull-request'
+          UNION
+         SELECT lower(json_extract(review_json, '$.pullRequestUrl')) AS url
+           FROM work_items WHERE repository = ? AND review_json IS NOT NULL
+          UNION
+         SELECT lower(json_extract(cure_json, '$.pullRequestUrl')) AS url
+           FROM work_items WHERE repository = ? AND cure_json IS NOT NULL`,
+      )
+      .all(repository, repository, repository) as Row[];
+    return rows.map((row) => String(row.url)).filter((url) => url !== "null" && url.length > 0);
   }
 
   enqueueSeed(input: SeedWorkInput): WorkItem {
@@ -2202,6 +2273,18 @@ const MIGRATIONS: readonly Migration[] = [
     );
     if (!columns.has("kinds_json")) {
       db.exec("ALTER TABLE mcp_tokens ADD COLUMN kinds_json TEXT");
+    }
+  },
+  // Rung 10: the review gate's last unreported-pull-request observation per
+  // repository (ADR-0065) — a JSON object, or NULL for a repository the sweep
+  // has not observed yet, which is what every existing row becomes. Nullable
+  // and overwritten whole; it is an observation, never queue state.
+  (db) => {
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(repositories)").all() as Row[]).map((column) => String(column.name)),
+    );
+    if (!columns.has("unreported_pull_requests_json")) {
+      db.exec("ALTER TABLE repositories ADD COLUMN unreported_pull_requests_json TEXT");
     }
   },
 ];

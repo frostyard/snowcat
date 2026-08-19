@@ -172,6 +172,26 @@ export interface PullRequestReview {
   reviewedAt?: string;
 }
 
+/**
+ * One open pull request in a review-gated repository that no completed item
+ * reported and no `pr-review`, `pr-review-fix`, or `pr-cure` item is bound to
+ * (ADR-0065): invisible to the gate until a human closes it or attaches it to
+ * the item that should have reported it. Never work by itself.
+ */
+export interface UnreportedPullRequest {
+  url: string;
+  number: number;
+  draft: boolean;
+  /** GitHub's `created_at` for the pull request, when the listing carried it. */
+  createdAt?: string;
+}
+
+/** The whole finding of one review sweep for one repository; each pass overwrites it, an empty list included. */
+export interface UnreportedPullRequestObservation {
+  observedAt: string;
+  pullRequests: UnreportedPullRequest[];
+}
+
 export interface WorkItem {
   id: string;
   rootId: string;
