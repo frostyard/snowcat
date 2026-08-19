@@ -1,11 +1,13 @@
 import { Hono, type Context, type MiddlewareHandler } from "hono";
+
+import { AccessVerifier } from "../auth/access.ts";
 import { streamSSE } from "hono/streaming";
 
 import type { ArtifactVerifierOptions } from "../queue/artifact-verification.ts";
 import type { QueueStore } from "../queue/store.ts";
 import { readInbox } from "./inbox.ts";
 import { readItem } from "./item.ts";
-import { inboxPage, loginPage, notFoundPage, unavailablePage, type PageContext } from "./pages.ts";
+import { inboxPage, loginPage, notFoundPage, tokensPage, unavailablePage, type PageContext } from "./pages.ts";
 import { itemPage } from "./pages-item.ts";
 import { boardPage, repositoriesPage } from "./pages-repositories.ts";
 import { itemPath, repositoryPath } from "./pages.ts";
@@ -33,6 +35,7 @@ import {
 } from "./repository-actions.ts";
 import { inboxPartial, inboxPartials, type InboxPartial } from "./pages.ts";
 import { clearedSessionCookie, hasValidSession, sessionCookie, tokenMatches } from "./session.ts";
+import { WEB_ACTOR } from "./mutations.ts";
 
 export interface SurfaceStores {
   queue: QueueStore;
@@ -43,8 +46,14 @@ export interface SurfaceStores {
 }
 
 export interface SurfaceOptions {
-  /** `SNOWCAT_APP_TOKEN`; when absent every surface route answers 503, like `/agents/*`. */
+  /** `SNOWCAT_APP_TOKEN`; local mode. When Access is configured this is ignored. */
   appToken?: string;
+  /**
+   * Cloudflare Access at the edge (ADR-0063): when set, a request is a
+   * session only with a verified Access assertion, and every mutation is
+   * attributed to `member:<email>`. There is no login page in this mode.
+   */
+  access?: AccessVerifier;
   /**
    * Opens (or returns the already-open) stores. Called per request after the
    * session check so an unauthenticated visitor never triggers a database
@@ -60,22 +69,39 @@ export interface SurfaceOptions {
  * `SNOWCAT_APP_TOKEN`, then server-rendered pages over the same `QueueStore`
  * methods the CLI uses. No route mutates the queue in this slice.
  */
-export function createSurfaceApp(options: SurfaceOptions): Hono {
-  const app = new Hono();
+type SurfaceEnv = { Variables: { actor: string } };
 
-  // Fail closed for the whole surface, login included, when no token is
-  // configured. Applied per route rather than as a catch-all so mounting at
-  // `/` never shadows `/health` or an unmatched `/agents/*` path.
-  const requireConfigured: MiddlewareHandler = async (context, next) => {
-    if (!options.appToken) {
-      return context.html(unavailablePage("SNOWCAT_APP_TOKEN is not configured on this host, so the operator surface is disabled."), 503);
+export function createSurfaceApp(options: SurfaceOptions): Hono<SurfaceEnv> {
+  const app = new Hono<SurfaceEnv>();
+  const accessMode = options.access !== undefined;
+
+  // Fail closed for the whole surface, login included, when neither Access
+  // nor a token is configured. Applied per route rather than as a catch-all so
+  // mounting at `/` never shadows `/health` or an unmatched `/agents/*` path.
+  const requireConfigured: MiddlewareHandler<SurfaceEnv> = async (context, next) => {
+    if (!accessMode && !options.appToken) {
+      return context.html(unavailablePage("Neither Cloudflare Access (SNOWCAT_ACCESS_TEAM_DOMAIN + SNOWCAT_ACCESS_AUD) nor SNOWCAT_APP_TOKEN is configured on this host, so the operator surface is disabled."), 503);
     }
     await next();
   };
-  const requireSession: MiddlewareHandler = async (context, next) => {
+  // Behind Access the assertion is the session and the verified email is the
+  // actor; without it the cookie session stands in and the actor is
+  // `operator:web`. There is no fallback from one mode to the other.
+  const requireSession: MiddlewareHandler<SurfaceEnv> = async (context, next) => {
+    if (accessMode) {
+      const identity = await options.access!.verify(AccessVerifier.presented(context.req.raw.headers));
+      if (!identity) {
+        return context.html(unavailablePage("This request did not carry a valid Cloudflare Access assertion. The surface is reachable only through the Access-protected hostname; sign in there."), 401);
+      }
+      context.set("actor", `member:${identity.email}`);
+      await next();
+      return;
+    }
     if (!hasValidSession(context.req.header("Cookie"), options.appToken!)) return context.redirect("/login", 303);
+    context.set("actor", WEB_ACTOR);
     await next();
   };
+  const actorOf = (context: Context<SurfaceEnv>): string => context.get("actor") ?? WEB_ACTOR;
   // Mutations are same-origin form posts: the SameSite=Strict cookie already
   // keeps a cross-site page from carrying the session, and this refuses the
   // request outright when the browser says where it came from.
@@ -97,11 +123,13 @@ export function createSurfaceApp(options: SurfaceOptions): Hono {
   };
 
   app.get("/login", requireConfigured, (context) => {
+    if (accessMode) return context.redirect("/", 303);
     if (hasValidSession(context.req.header("Cookie"), options.appToken!)) return context.redirect("/", 303);
     return context.html(loginPage({}));
   });
 
   app.post("/login", requireConfigured, async (context) => {
+    if (accessMode) return context.redirect("/", 303);
     const body = await context.req.parseBody();
     const submitted = typeof body.token === "string" ? body.token : "";
     if (!tokenMatches(submitted, options.appToken!)) {
@@ -112,6 +140,7 @@ export function createSurfaceApp(options: SurfaceOptions): Hono {
   });
 
   app.post("/logout", requireConfigured, (context) => {
+    if (accessMode) return context.redirect(`${options.access!.teamDomain}/cdn-cgi/access/logout`, 303);
     context.header("Set-Cookie", clearedSessionCookie());
     return context.redirect("/login", 303);
   });
@@ -125,7 +154,7 @@ export function createSurfaceApp(options: SurfaceOptions): Hono {
   const page = (
     render: (stores: SurfaceStores, enrollments: Map<string, RepositoryEnrollment> | undefined, chrome: PageContext) => Response | Promise<Response>,
   ) => {
-    return async (context: Context) => {
+    return async (context: Context<SurfaceEnv>) => {
       let stores: SurfaceStores;
       try {
         stores = options.stores();
@@ -134,7 +163,7 @@ export function createSurfaceApp(options: SurfaceOptions): Hono {
       }
       try {
         const enrollments = readEnrollments(stores.controlPlanePath);
-        const chrome = pageContext(stores, enrollments, bannerFromQuery(context));
+        const chrome = pageContext(stores, enrollments, bannerFromQuery(context), actorOf(context));
         return await render(stores, enrollments, chrome);
       } catch (error) {
         return context.html(unavailablePage(`The page could not be read: ${message(error)}`), 503);
@@ -163,6 +192,47 @@ export function createSurfaceApp(options: SurfaceOptions): Hono {
     requireConfigured,
     requireSession,
     page((stores, enrollments, chrome) => new Response(repositoriesPage(chrome, readRepositoryIndex(stores.queue, enrollments)), htmlHeaders())),
+  );
+
+  // MCP tokens (ADR-0063): a member sees and manages their own; the local
+  // operator:web mode lists and revokes everyone's and mints from the CLI.
+  const tokensView = (stores: SurfaceStores, actor: string, minted?: { token: string; client: string }) => {
+    const member = actor.toLowerCase().startsWith("member:");
+    return {
+      tokens: stores.queue.listMcpTokens(member ? actor : undefined).map(({ tokenHash: _hash, ...token }) => token),
+      canMint: member,
+      ...(minted ? { minted } : {}),
+    };
+  };
+  app.get("/tokens", requireConfigured, requireSession, (context) =>
+    page((stores, _enrollments, chrome) => new Response(tokensPage(chrome, tokensView(stores, actorOf(context))), htmlHeaders()))(context),
+  );
+  app.post("/tokens/mint", requireConfigured, requireSession, requireSameOrigin, (context) =>
+    page(async (stores, _enrollments, chrome) => {
+      const actor = actorOf(context);
+      const body = await formBody(context);
+      const client = typeof body.client === "string" ? body.client.trim() : "";
+      if (!actor.toLowerCase().startsWith("member:")) {
+        return new Response(tokensPage({ ...chrome, banner: { tone: "error", text: "Minting needs a signed-in member; use the CLI in local mode." } }, tokensView(stores, actor)), htmlHeaders(403));
+      }
+      try {
+        const minted = stores.queue.mintMcpToken({ owner: actor, client });
+        return new Response(tokensPage({ ...chrome, banner: { tone: "ok", text: `Minted a token for ${minted.record.client}.` } }, tokensView(stores, actor, { token: minted.token, client: minted.record.client })), htmlHeaders());
+      } catch (error) {
+        return new Response(tokensPage({ ...chrome, banner: { tone: "error", text: `Not minted: ${message(error)}` } }, tokensView(stores, actor)), htmlHeaders(400));
+      }
+    })(context),
+  );
+  app.post("/tokens/:id/revoke", requireConfigured, requireSession, requireSameOrigin, (context) =>
+    page((stores, _enrollments, chrome) => {
+      const actor = actorOf(context);
+      try {
+        const revoked = stores.queue.revokeMcpToken(context.req.param("id"), actor);
+        return new Response(tokensPage({ ...chrome, banner: { tone: "ok", text: `Revoked ${revoked.client} (${revoked.id}).` } }, tokensView(stores, actor)), htmlHeaders());
+      } catch (error) {
+        return new Response(tokensPage({ ...chrome, banner: { tone: "error", text: `Not revoked: ${message(error)}` } }, tokensView(stores, actor)), htmlHeaders(409));
+      }
+    })(context),
   );
 
   app.get("/repositories/:owner/:name", requireConfigured, requireSession, (context) =>
@@ -263,10 +333,10 @@ export function createSurfaceApp(options: SurfaceOptions): Hono {
       const back = returnPath(body, itemPath(id));
       try {
         if (mutation === ATTACH_ARTIFACT_ACTION) {
-          const outcome = await applyAttachArtifact(stores.queue, id, body, stores.verifier ?? {});
+          const outcome = await applyAttachArtifact(stores.queue, id, body, stores.verifier ?? {}, actorOf(context));
           return redirectWithBanner(back, outcome.eventType, `${outcome.url} ${outcome.state ?? outcome.status}`);
         }
-        const outcome = applyItemMutation(stores.queue, mutation as ItemMutation, id, body);
+        const outcome = applyItemMutation(stores.queue, mutation as ItemMutation, id, body, actorOf(context));
         return redirectWithBanner(back, outcome.eventType);
       } catch (error) {
         const item = readItem(stores.queue, id, enrollments);
@@ -297,7 +367,7 @@ export function createSurfaceApp(options: SurfaceOptions): Hono {
         return new Response(notFoundPage(chrome, `No repository ${slug}: ${message(error)}`), htmlHeaders(404));
       }
       if (!board) return new Response(notFoundPage(chrome, `${slug} is neither opted in to the queue nor declared in the control plane.`), htmlHeaders(404));
-      const outcome = await applyVerifyArtifacts(stores.queue, slug, stores.verifier ?? {});
+      const outcome = await applyVerifyArtifacts(stores.queue, slug, stores.verifier ?? {}, actorOf(context));
       const detail = `${outcome.checked} checked, ${outcome.updated} updated, ${outcome.rejected} rejected, ${outcome.unavailable} unavailable, ${outcome.cured} cure item${outcome.cured === 1 ? "" : "s"} queued`;
       return redirectWithBanner(back, outcome.eventType, detail);
     })(context),
@@ -380,9 +450,10 @@ function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function pageContext(stores: SurfaceStores, enrollments: Map<string, RepositoryEnrollment> | undefined, banner: PageContext["banner"]): PageContext {
+function pageContext(stores: SurfaceStores, enrollments: Map<string, RepositoryEnrollment> | undefined, banner: PageContext["banner"], actor: string): PageContext {
   const metadata = stores.queue.metadata();
   return {
+    actor,
     queuePath: metadata.databasePath,
     controlPlanePath: stores.controlPlanePath,
     schemaVersion: metadata.schemaVersion,

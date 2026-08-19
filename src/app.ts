@@ -7,6 +7,7 @@ import { createAgentRouter } from "@flue/runtime/routing";
 import { Hono } from "hono";
 
 import { QueueClerk } from "./agents/queue-clerk.ts";
+import { AccessVerifier, accessConfigFromEnvironment } from "./auth/access.ts";
 import { mountMcpHttp } from "./mcp/http.ts";
 import type { ArtifactVerifierOptions } from "./queue/artifact-verification.ts";
 import { queueStoreOptionsFromEnvironment } from "./queue/eligibility.ts";
@@ -58,6 +59,8 @@ export interface AppOptions {
   surfaceStores?: () => SurfaceStores;
   /** Event-stream cadence for the surface; tests shorten it. */
   surfaceStream?: StreamOptions;
+  /** Cloudflare Access at the edge for the surface (ADR-0063); local mode when absent. */
+  access?: AccessVerifier;
   /**
    * The Streamable HTTP MCP endpoint at `/mcp` (ADR-0063). Off unless given
    * a queue store (the app's `surfaceStores` queue in production, a test's
@@ -92,7 +95,7 @@ export function createApp(options: AppOptions): Hono {
   }
   // The operator surface: `/login`, `/logout`, and the inbox at `/`, all
   // behind the cookie session; `/health` and `/agents/*` above are untouched.
-  app.route("/", createSurfaceApp({ appToken: options.appToken, stores: options.surfaceStores ?? defaultSurfaceStores(), stream: options.surfaceStream }));
+  app.route("/", createSurfaceApp({ appToken: options.appToken, access: options.access, stores: options.surfaceStores ?? defaultSurfaceStores(), stream: options.surfaceStream }));
 
   return app;
 }
@@ -116,8 +119,10 @@ function safeEqual(actual: string, expected: string): boolean {
 }
 
 const hostStores = defaultSurfaceStores();
+const hostAccess = accessConfigFromEnvironment();
 const app = createApp({
   appToken: process.env.SNOWCAT_APP_TOKEN,
+  access: hostAccess ? new AccessVerifier(hostAccess) : undefined,
   surfaceStores: hostStores,
   mcp: { queue: () => hostStores().queue, queuePath: queueDatabasePath() },
 });

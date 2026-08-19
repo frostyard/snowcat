@@ -96,6 +96,21 @@ exposing it beyond the host is a deployment decision recorded elsewhere, not
 a configuration this doc endorses. Single operator: no users, roles, or CSRF
 tokens beyond SameSite cookies and same-origin form posts.
 
+Since [ADR-0063](../adr/0063-authenticate-people-through-cloudflare-access-and-mint-mcp-tokens.md)
+that is the *local mode*. In *Access mode* (`SNOWCAT_ACCESS_TEAM_DOMAIN` +
+`SNOWCAT_ACCESS_AUD`) the surface has no login page: `requireSession` verifies
+the Cloudflare Access assertion ([`src/auth/access.ts`](../../src/auth/access.ts):
+RS256 against the team's certs, issuer, audience, expiry) and sets the
+request's actor to `member:<email>`, which every mutation helper takes as a
+parameter (`operator:web` remains the local-mode default); an unverified
+request is `401`, never a fallback. The sidebar shows the actor. A *MCP
+tokens* page (`/tokens`) lets a member mint tokens owned by their principal
+(plaintext once), see last use, and revoke their own; the local mode lists
+and revokes all and mints from the CLI. `/mcp` — the Streamable HTTP MCP
+endpoint behind minted tokens ([`src/mcp/http.ts`](../../src/mcp/http.ts))
+— lives in the same app and is expected to sit behind an Access *bypass*
+policy, since the token is its credential.
+
 ### Rendering and liveness
 
 Server-rendered HTML through a small template layer (`src/surface/html.ts`),

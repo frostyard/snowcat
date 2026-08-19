@@ -265,7 +265,7 @@ test("with SNOWCAT_APP_TOKEN unset every surface route returns 503 and never ope
   ] as Array<[string, RequestInit | undefined]>) {
     const response = await app.request(path, init);
     assert.equal(response.status, 503, path);
-    assert.match(await response.text(), /SNOWCAT_APP_TOKEN is not configured/);
+    assert.match(await response.text(), /nor SNOWCAT_APP_TOKEN is configured/);
   }
   assert.equal(opened, 0);
 });

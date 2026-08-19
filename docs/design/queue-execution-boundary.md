@@ -112,6 +112,15 @@ its provider credentials. The client selects its own tools and isolation. It
 must obey the item's `allowedActions`; child items must remain within the
 parent's `delegableActions`. V1 never permits merge, release, or deploy.
 
+Who the client *is* comes from the transport, not the payload
+([ADR-0063](../adr/0063-authenticate-people-through-cloudflare-access-and-mint-mcp-tokens.md)).
+Over stdio the payload's `worker` is the principal, as provenance only. Over
+`/mcp` a Snowcat-minted bearer token names a member and a client, every tool
+acts as `member:<owner>/<client>`, and the payload's `worker` is recorded as
+a label on the claim; a payload can never set or widen a `member:` identity.
+Tokens are minted and revoked on the surface (or the CLI) and stored only as
+hashes ([work queue](../specs/work-queue.md) rules 48–51).
+
 Completion records a structured summary, concrete evidence, artifact URLs, and
 zero or more bounded child items. Those reports are provenance, not independent
 attestation. Deterministic checks can reject malformed, cross-repository, or

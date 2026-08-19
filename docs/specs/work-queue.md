@@ -584,6 +584,19 @@ MCP (rule 41).
     worker as the principal. Cloudflare Access is expected to bypass `/mcp`
     (the minted token is the credential there) and to gate every other route.
 
+51. **Surface identity (ADR-0063).** With `SNOWCAT_ACCESS_TEAM_DOMAIN` and
+    `SNOWCAT_ACCESS_AUD` set, the operator surface MUST treat a request as a
+    session only when its `Cf-Access-Jwt-Assertion` header (or
+    `CF_Authorization` cookie) verifies — `RS256` against the team's published
+    keys, issuer equal to the team domain, audience containing the tag, not
+    expired, an `email` claim present — and MUST attribute every mutation to
+    `member:<email>`; an unverified request MUST answer `401` and MUST NOT
+    fall back to the token session. Without those variables the token
+    session and `operator:web` apply as before. `/tokens` MUST let a member
+    mint tokens owned by their own principal (plaintext shown once) and see
+    and revoke only their own; the local `operator:web` mode lists and
+    revokes all and mints none.
+
 ## Derived artifacts
 
 | Artifact | Derivation |

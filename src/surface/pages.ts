@@ -15,13 +15,15 @@ export interface PageContext {
   repositories: SidebarRepository[];
   /** One-line result or error banner shown under the header. */
   banner?: { tone: "ok" | "error"; text: string };
+  /** The principal every mutation on this request is attributed to: `member:<email>` behind Access, `operator:web` in local mode. */
+  actor: string;
 }
 
 interface View {
   title: string;
   eyebrow: string;
   heading: string;
-  active: "inbox" | "repositories" | "none";
+  active: "inbox" | "repositories" | "tokens" | "none";
   /** Header-right content before Refresh / Sign out (badges, ghost buttons). */
   actions?: SafeHtml;
   refresh?: boolean;
@@ -148,6 +150,57 @@ export function loginPage(options: { error?: string }): string {
   );
 }
 
+export interface TokensView {
+  /** The signed-in principal's own tokens (a member) or every token (local operator mode). */
+  tokens: Array<{ id: string; owner: string; client: string; createdAt: string; lastUsedAt?: string; revokedAt?: string; revokedBy?: string }>;
+  /** Minting needs a member identity; the local `operator:web` mode lists and revokes only (mint from the CLI). */
+  canMint: boolean;
+  /** Shown exactly once, right after minting. */
+  minted?: { token: string; client: string };
+}
+
+/**
+ * MCP tokens (ADR-0063): mint one per client, see when each was last used,
+ * revoke. The plaintext appears once, on the response to the mint, and is
+ * never stored or shown again.
+ */
+export function tokensPage(context: PageContext, view: TokensView): string {
+  const rows = view.tokens.map(
+    (token) => html`<tr class="${token.revokedAt ? "fl-muted" : ""}">
+      <td><code>${token.id}</code></td>
+      <td>${token.client}</td>
+      <td>${token.owner}</td>
+      <td>${token.createdAt.slice(0, 16).replace("T", " ")}</td>
+      <td>${token.lastUsedAt ? token.lastUsedAt.slice(0, 16).replace("T", " ") : "never"}</td>
+      <td>${
+        token.revokedAt
+          ? html`revoked ${token.revokedAt.slice(0, 16).replace("T", " ")} by ${token.revokedBy ?? "?"}`
+          : html`<form class="fl-inline" method="post" action="/tokens/${token.id}/revoke"><button class="ph-button reject" type="submit">Revoke</button></form>`
+      }</td>
+    </tr>`,
+  );
+  const minted = view.minted
+    ? html`<div class="fl-banner" role="status"><strong>Token for ${view.minted.client} — shown once, copy it now:</strong><br><code class="fl-token">${view.minted.token}</code><br><small class="fl-sub">Put it in the client's MCP configuration as <code>Authorization: Bearer …</code> against <code>/mcp</code>. Snowcat stores only its hash.</small></div>`
+    : "";
+  const mint = view.canMint
+    ? html`<form class="fl-action" method="post" action="/tokens/mint"><span class="fl-action-label">Mint a token</span><input class="fl-input" name="client" placeholder="client name, e.g. codex-laptop" maxlength="100" required><button class="ph-button" type="submit">Mint</button></form>`
+    : html`<p class="fl-sub">You are ${context.actor}; minting needs a signed-in member. Mint from the CLI: <code>npm run queue -- token mint member:&lt;email&gt; "&lt;client&gt;"</code>.</p>`;
+  return document(
+    "MCP tokens · Snowcat",
+    shell(
+      context,
+      { title: "MCP tokens", eyebrow: "snowcat · identity", heading: "MCP tokens", active: "tokens" },
+      html`<section class="fl-group" id="tokens"><div class="fl-group-head"><h2>Tokens</h2><span>each identifies one client of one member; a token grants nothing by itself</span></div>
+        ${minted}
+        ${mint}
+        <div class="fl-table-wrap"><table class="fl-table"><thead><tr><th>id</th><th>client</th><th>owner</th><th>minted</th><th>last used</th><th></th></tr></thead><tbody>${
+          rows.length === 0 ? html`<tr><td colspan="6" class="fl-empty">No tokens yet.</td></tr>` : rows
+        }</tbody></table></div>
+      </section>`,
+    ),
+  );
+}
+
 export function unavailablePage(message: string): string {
   return document(
     "Unavailable · Snowcat",
@@ -212,6 +265,7 @@ export function shell(context: PageContext, view: View, main: SafeHtml): SafeHtm
         <a class="ph-nav-link${view.active === "inbox" ? " active" : ""}" href="/"><span class="ph-nav-num">01</span>Inbox</a>
         <a class="ph-nav-link${view.active === "repositories" ? " active" : ""}" href="/repositories"><span class="ph-nav-num">02</span>Repositories</a>
         <span class="ph-nav-link disabled" title="Events page — later slice"><span class="ph-nav-num">03</span>Events</span>
+        <a class="ph-nav-link${view.active === "tokens" ? " active" : ""}" href="/tokens"><span class="ph-nav-num">04</span>MCP tokens</a>
         <div class="ph-nav-group">${context.controlPlanePath ? "Enrolled" : "Opted in"}</div>
         ${
           context.repositories.length === 0
@@ -224,7 +278,7 @@ export function shell(context: PageContext, view: View, main: SafeHtml): SafeHtm
               )
         }
       </nav>
-      <div class="fl-side-foot">operator:web<br>events cursor ${context.lastEventSequence}</div>
+      <div class="fl-side-foot">${context.actor}<br>events cursor ${context.lastEventSequence}</div>
     </aside>
     <main class="ph-main">
       <div class="ph-topbar">
