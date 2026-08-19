@@ -813,7 +813,9 @@ cd /opt/snowcat && deploy/upgrade.sh
 ```
 
 [`deploy/upgrade.sh`](../../deploy/upgrade.sh) refuses a dirty checkout, then
-`git pull --ff-only`, `npm ci`, `npm run check`, `systemctl daemon-reload`,
+`git pull --ff-only` — and if that pull changed `upgrade.sh` itself, re-runs
+the new version once so every later step is the new commit's — `npm ci`,
+`npm run check`, `systemctl daemon-reload`,
 and restarts the six timers (via `sudo` when not root; `SNOWCAT_SYSTEMCTL`
 overrides). If `check` fails it exits non-zero, does not restart the timers,
 and leaves the checkout on the new commit for inspection — roll back with
