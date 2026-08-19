@@ -621,7 +621,9 @@ Snowcat v1 runs on **one operator host** and stays there deliberately:
   [ADR-0063](../adr/0063-authenticate-people-through-cloudflare-access-and-mint-mcp-tokens.md),
   through a **Cloudflare Tunnel behind Cloudflare Access** — see
   [People and workers from anywhere](#people-and-workers-from-anywhere-adr-0063)
-  below.
+  below — or, the simpler choice for a small organization, over a
+  **private mesh in local mode** — see
+  [A private mesh instead of Access](#a-private-mesh-instead-of-access-tailscale).
 - Feeder, `verify-artifacts`, and `backup` run from three systemd timers on
   the host, shipped in [`deploy/systemd/`](../../deploy/systemd/) and linted
   by `npm run check:deploy`:
@@ -698,6 +700,48 @@ key), issuer = the team domain, audience = the tag, expiry honored. Nothing
 that fails to verify falls back to the token session: the two modes never
 mix on one host.
 
+### A private mesh instead of Access (Tailscale)
+
+Everything above is optional. If the organization is a handful of people who
+all belong on the same private network anyway, skip the tunnel, the Access
+applications, and GitHub OAuth entirely: put the host on a mesh, keep the
+surface in **local mode**, and let `/mcp` ride the same address. What you
+give up is only the `member:<email>` actor on surface decisions (they read
+`operator:web`; workers are still `member:<owner>/<client>` through their
+minted tokens, so attribution of *work* is unchanged) and browser minting
+(the tokens page mints only for a signed-in member; the CLI does it in local
+mode). What you avoid is every step of the previous section. Access mode
+stays available — same code, two environment lines — if that trade ever
+flips.
+
+With Tailscale (installed by the Incus profile; any mesh that gives the host
+a private address works the same way, minus the `serve` convenience):
+
+```bash
+incus exec <remote>:snowcat -- tailscale up --ssh=false      # prints a login URL once; approve the node in the admin console
+incus exec <remote>:snowcat -- tailscale serve --bg 3100     # https://snowcat.<tailnet>.ts.net → 127.0.0.1:3100, tailnet only
+incus exec <remote>:snowcat -- tailscale serve status
+```
+
+`tailscale serve` needs **MagicDNS** and **HTTPS certificates** enabled once
+for the tailnet (admin console → DNS); it terminates TLS with a real
+certificate for the node's name and forwards to loopback, so the surface
+still binds nothing but `127.0.0.1` and reaches nobody outside the tailnet.
+Never use `tailscale funnel` here — that is the public internet again,
+without Access in front. Sign-in is the shared `SNOWCAT_APP_TOKEN` from
+`/etc/snowcat/env` (`incus exec <remote>:snowcat -- grep APP_TOKEN
+/etc/snowcat/env`); mint worker tokens with
+`queue -- token mint member:<email> "<client>"` on the host and hand each
+client `https://snowcat.<tailnet>.ts.net/mcp` plus its bearer. Members and
+their workers join the tailnet on their own machines; a member's laptop off
+the mesh sees nothing, which is the whole access policy.
+
+Access control here is the tailnet's membership and ACLs, not Snowcat's:
+Snowcat only knows the shared token (surface) and minted tokens (`/mcp`),
+exactly as on a laptop. Restrict the node with a Tailscale ACL if the
+tailnet carries more than the organization; the default "everyone in the
+tailnet reaches everything" is fine for three people who trust each other.
+
 **Upgrade.** In the operator checkout, as the operator user:
 
 ```bash
@@ -742,10 +786,11 @@ in it): Debian 13 cloud image, `limits.cpu=2`, `limits.memory=4GiB`,
 `boot.autostart`, daily snapshots kept 14 days, and cloud-init user-data that
 creates the `snowcat` user (passwordless `sudo`, locked password), installs
 `git jq sqlite3 curl gnupg unattended-upgrades`, adds the NodeSource
-(`node_24.x`) and Cloudflare apt repositories with their signing keys fetched
-in `bootcmd` (so cloud-init's own `package_update` already trusts them),
-installs `nodejs` and `cloudflared`, and creates `/opt/snowcat` owned by
-`snowcat`. Snowcat itself is not in the image: the checkout, `/etc/snowcat/env`,
+(`node_24.x`), Tailscale, and Cloudflare apt repositories with their signing
+keys fetched in `bootcmd` (so cloud-init's own `package_update` already
+trusts them), installs `nodejs`, `tailscale`, and `cloudflared` (neither of
+the last two configured — that is the mesh-or-Access choice above), and
+creates `/opt/snowcat` owned by `snowcat`. Snowcat itself is not in the image: the checkout, `/etc/snowcat/env`,
 and the databases arrive in the next steps.
 
 Once, from any machine with the `incus` client (an operator laptop), against
@@ -780,7 +825,8 @@ once for a private clone and never stored — pass it with
 the three timers again — still enabled — so a fresh host never feeds an
 empty queue while the real databases are on their way. It ends by printing
 what remains the operator's: the GitHub token, the databases, starting the
-surface and (at cutover) the timers, then the tunnel and Access.
+surface and (at cutover) the timers, then the mesh login or the tunnel and
+Access.
 
 Day two: `incus exec <remote>:snowcat -- sudo -u snowcat -i bash -lc 'cd
 /opt/snowcat && deploy/upgrade.sh'` upgrades exactly like any host;
@@ -790,7 +836,8 @@ and `incus snapshot restore` undoes everything including the databases;
 snowcat-surface --since -1h` reads the logs; `incus file pull
 <remote>:snowcat/var/backups/snowcat/queue-<stamp>.db .` fetches a backup
 off the machine. The instance binds nothing but loopback; its only ingress
-is the tunnel of [People and workers from anywhere](#people-and-workers-from-anywhere-adr-0063),
+is the mesh of [A private mesh instead of Access](#a-private-mesh-instead-of-access-tailscale)
+or the tunnel of [People and workers from anywhere](#people-and-workers-from-anywhere-adr-0063),
 and the only way in for the operator is `incus exec` (or the server's SSH).
 
 ### Moving the host to a new machine
@@ -836,8 +883,9 @@ one queue would each admit their own work:
    is the one you meant.
 6. **Cut over:** `systemctl start snowcat-feed.timer snowcat-verify.timer
    snowcat-backup.timer` on the new host. Exactly one host now feeds. Point
-   the tunnel (or move it) at the new host and restart every MCP client
-   with the new endpoint or, for stdio clients, on the new host.
+   the tunnel (or move it) at the new host — or `tailscale up` there and
+   drop the old node from the tailnet — and restart every MCP client with
+   the new endpoint or, for stdio clients, on the new host.
 7. **Retire the old copy** once the first feed tick and the first
    `verify-artifacts` run land cleanly on the new host: leave the old
    database files as a dated backup or delete them — never start the old

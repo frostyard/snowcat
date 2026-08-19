@@ -211,7 +211,7 @@ removed. -->
   scheduler, daemon, or MCP tool inside Snowcat for
   them. `npm run check:deploy` (part of `check`; needs `shellcheck` and
   `systemd-analyze` locally) runs `systemd-analyze verify` against a stub
-  root, `shellcheck` on `deploy/bin/*` and `deploy/*.sh`, and a double
+  root, `shellcheck` on `deploy/bin/*`, `deploy/*.sh`, and `deploy/incus/*.sh`, and a double
   `install.sh` dry run, so a broken unit or a non-idempotent installer fails
   the PR; the operator runbook is
   [docs/design/queue-operations.md](docs/design/queue-operations.md).

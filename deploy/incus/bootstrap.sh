@@ -65,5 +65,6 @@ bootstrap: done. Still yours, in this order (docs/design/queue-operations.md →
      then verify them here with \`queue -- verify-backup\` and \`control -- verify-backup\`.
   3. systemctl start snowcat-surface.service   (it serves 127.0.0.1:3100; check journalctl -u snowcat-surface)
   4. At cutover — the old host's timers already disabled — systemctl start snowcat-feed.timer snowcat-verify.timer snowcat-backup.timer
-  5. Tunnel + Access (ADR-0063): cloudflared service token, then SNOWCAT_ACCESS_TEAM_DOMAIN/SNOWCAT_ACCESS_AUD and restart the surface.
+  5. Reach it: either \`tailscale up\` + \`tailscale serve --bg 3100\` (private mesh, local mode) or the tunnel + Access
+     (ADR-0063: SNOWCAT_ACCESS_TEAM_DOMAIN/SNOWCAT_ACCESS_AUD, restart the surface). Runbook: "A private mesh instead of Access".
 NEXT

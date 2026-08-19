@@ -7,9 +7,11 @@
 #   incus launch images:debian/13/cloud <remote>:snowcat --profile default --profile snowcat
 #
 # cloud-init prepares the OS only — a `snowcat` user, Node 24 (NodeSource),
-# cloudflared (installed, not configured), git/jq/sqlite3 — and leaves the
-# checkout, databases, secrets, and tunnel to deploy/incus/bootstrap.sh run by
-# the operator, so nothing secret ever sits in a profile.
+# tailscale and cloudflared (both installed, neither configured: pick the
+# private mesh or the Access edge in the runbook), git/jq/sqlite3 — and leaves
+# the checkout, databases, secrets, and mesh/tunnel login to
+# deploy/incus/bootstrap.sh and the operator, so nothing secret ever sits in
+# a profile.
 name: snowcat
 description: Snowcat operator host — queue, control plane, timers, surface, /mcp
 config:
@@ -56,14 +58,22 @@ config:
           Suites: any
           Components: main
           Signed-By: /etc/apt/keyrings/cloudflare-main.gpg
+      - path: /etc/apt/sources.list.d/tailscale.sources
+        content: |
+          Types: deb
+          URIs: https://pkgs.tailscale.com/stable/debian
+          Suites: trixie
+          Components: main
+          Signed-By: /etc/apt/keyrings/tailscale-archive-keyring.gpg
     # The signing keys must exist before cloud-init's own package_update runs,
     # so they are fetched in bootcmd (guarded: a no-op on every later boot).
     bootcmd:
       - mkdir -p /etc/apt/keyrings
       - '[ -s /etc/apt/keyrings/nodesource.asc ] || curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /etc/apt/keyrings/nodesource.asc'
       - '[ -s /etc/apt/keyrings/cloudflare-main.gpg ] || curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /etc/apt/keyrings/cloudflare-main.gpg'
+      - '[ -s /etc/apt/keyrings/tailscale-archive-keyring.gpg ] || curl -fsSL https://pkgs.tailscale.com/stable/debian/trixie.noarmor.gpg -o /etc/apt/keyrings/tailscale-archive-keyring.gpg'
     runcmd:
-      - apt-get install -y nodejs cloudflared
+      - apt-get install -y nodejs cloudflared tailscale
       - install -d -o snowcat -g snowcat -m 0755 /opt/snowcat
       - node --version > /var/lib/cloud/instance/snowcat-node-version
 devices: {}
