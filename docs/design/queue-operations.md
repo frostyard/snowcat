@@ -645,8 +645,9 @@ npm run --silent queue -- review-gate frostyard/snowcat on    # off to stop; the
 With it on, a worker must open its pull request as a **draft**
 (`gh pr create --draft`); `complete_work` refuses an open, non-draft pull
 request in a gated repository and tells the worker to `gh pr ready --undo`
-and complete again (merged and closed pull requests, `pr-cure` items, and
-anything GitHub could not verify are left alone). The same `verify-artifacts`
+and complete again (merged and closed pull requests, `pr-cure` and
+`pr-cure-change` items, a pull request the gate already released — one
+with a passed round — and anything GitHub could not verify are left alone). The same `verify-artifacts`
 pass that refreshes and cures then runs the review sweep over every draft a
 completed item reported there — reading nothing at all when no repository is
 gated — and, per draft head:

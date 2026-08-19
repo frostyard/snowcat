@@ -668,9 +668,11 @@ MCP (rule 41).
     per-repository flag (schema rung 8, off by default, a repository-level
     command like `opt-in`, not an item mutation under rule 40) for an
     opted-in repository only. While it is on, `complete_work` on any item
-    other than `pr-cure` MUST, after rule 33, refuse a completion — leaving
-    the item claimed — that reports a `pull-request` artifact verified `open`
-    and not a draft, with the message `review gate: pull request <url> is
+    other than `pr-cure` or `pr-cure-change` MUST, after rule 33, refuse a
+    completion — leaving the item claimed — that reports a `pull-request`
+    artifact verified `open` and not a draft and whose URL has no completed
+    `pr-review` round with decision `pass` (a pull request the gate released
+    is cure's and the human's thereafter), with the message `review gate: pull request <url> is
     open and not a draft in <owner/repo>; convert it with \`gh pr ready --undo
     <n>\` and complete again, or block`; merged and closed pull requests MUST
     be accepted and an `unverified` answer MUST be accepted, never refused on

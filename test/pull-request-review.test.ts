@@ -322,8 +322,20 @@ test("the review gate refuses an open non-draft pull request in a gated reposito
   // A pr-cure item is exempt: cure acts only on ready pull requests.
   const cure: WorkItem = { ...queue.get(claimed.id)!, kind: "pr-cure" };
   assertReviewGate(queue, cure, [{ kind: "pull-request", url: PR_URL, verification: { status: "verified", verifiedAt: clock().toISOString(), number: 12, state: "open" } }]);
+  // So is a pr-cure-change (a substantive cure on a ready pull request).
+  assertReviewGate(queue, { ...cure, kind: "pr-cure-change" }, [{ kind: "pull-request", url: PR_URL, verification: { status: "verified", verifiedAt: clock().toISOString(), number: 12, state: "open" } }]);
   // A pr-review-fix is not: it must keep the pull request a draft.
   assert.throws(() => assertReviewGate(queue, { ...cure, kind: REVIEW_FIX_KIND }, [{ kind: "pull-request", url: PR_URL, verification: { status: "verified", verifiedAt: clock().toISOString(), number: 12, state: "open" } }]), /review gate/);
+  // A ready pull request the gate itself released (a passed round exists for its URL) is accepted by any kind.
+  const releasedQueue = await newQueue("review-gate-released");
+  completedWithDraftPr(releasedQueue);
+  releasedQueue.setRepositoryReviewGate(REPOSITORY, true);
+  await reviewPullRequests(releasedQueue, { fetcher: apiFetcher(routesFor({})).fetcher, clock });
+  const readyArtifact = [{ kind: "pull-request" as const, url: PR_URL, verification: { status: "verified" as const, verifiedAt: clock().toISOString(), number: 12, state: "open" as const } }];
+  assert.throws(() => assertReviewGate(releasedQueue, { ...cure, kind: "issue-resolution" }, readyArtifact), /review gate/, "not yet passed: refused");
+  await completeReview(releasedQueue, { decision: "pass", blockers: [], advisories: [] });
+  assertReviewGate(releasedQueue, { ...cure, kind: "issue-resolution" }, readyArtifact);
+  assertReviewGate(releasedQueue, { ...cure, kind: REVIEW_FIX_KIND }, readyArtifact);
 
   // A verdict on a non-review item is refused at the schema (strict) and at the store.
   seed();
