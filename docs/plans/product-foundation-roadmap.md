@@ -29,13 +29,14 @@ Phases 0–6 are complete. What that means for the phases below:
 | 7 measure and stop failing processes | not started; the event ledger and `events --since` are its inputs |
 | 8 repository relationships | not started |
 | 9 feature initiative | not started |
-| 10 operate v1 as a product | first slice shipped 2026-08-18 — operator surface (ADR-0060), single-host deployment, timers, backups; fleet views, grants, process health, and restricted views remain |
+| 10 operate v1 as a product | first slice shipped 2026-08-18 — operator surface (ADR-0060), single-host deployment, timers, backups; 2026-08-19: dedicated Incus host over a private mesh, `/mcp` with minted member tokens (ADR-0063), per-command timers, pull-request section on the board; fleet views, grants, process health, and restricted views remain |
 
-**Next steps** are the recovery plan's [Phase 7](recover.md#phase-7-settle-in-next):
-install on the host, a week of steady state on two repositories with daily
-numbers, a second enrolled repository, small surface follow-ups, then PRD
-targets. The phase text below is the accepted long-range direction and is
-annotated, not rewritten.
+**Next steps** are the recovery plan's [Phase 7](recover.md#phase-7-settle-in-in-progress-steps-1-3-4-done-2-under-way):
+the host (a dedicated Incus instance since 2026-08-18), clix and std (the
+second and third enrolled repositories), and the full program catalog are
+in place; what remains is a week of steady state on four repositories with
+daily numbers, small surface follow-ups, then PRD targets. The phase text
+below is the accepted long-range direction and is annotated, not rewritten.
 
 ## Phase 0 — Canonical language and documentation integrity (completed)
 

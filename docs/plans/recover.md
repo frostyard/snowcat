@@ -190,35 +190,46 @@ and merged through the queue:
   Achieved 2026-08-18 for the browser; the timers are installed by
   `deploy/install.sh`, which the operator runs on the host (see Phase 7).
 
-## Phase 7 — Settle in (next)
+## Phase 7 — Settle in (in progress; steps 1, 3, 4 done, 2 under way)
 
 The next steps, in order; each is a queue item unless it needs the operator's
-hands on the host.
+hands on the host. Status as of 2026-08-19:
 
-1. **Install on the host** — `sudo deploy/install.sh --user bjk`, first real
-   `systemctl start` of each timer, read the journal; if `npm` cannot write
-   its cache under `ProtectSystem=strict`, fix the unit (likely a
-   `ReadWritePaths` or `npm_config_cache` line) as a queue item. Operator's
-   hands.
-2. **A week of steady state on updex and snowcat** — feeder and import on
-   timers, admission from the browser, workers started by the operator or
-   on a loop; record accepted-per-attempt, blocked, and time-to-merge daily
-   into the PRD baseline. (The Hive/Snowcat boundary was decided 2026-08-18:
+1. **Install on the host** — done 2026-08-18 on the operator laptop, then
+   the host moved the same night to a dedicated Incus instance
+   (`selfie:snowcat`, runbook sections *The host as an Incus instance* and
+   *Moving the host to a new machine*, #61) reached over a private mesh in
+   local mode (runbook *A private mesh instead of Access*, #62); the laptop
+   is retired as a host. On 2026-08-19 the single hourly feeder split into
+   four per-command timers (seed daily, import every 15 minutes,
+   dependencies daily, settings weekly) and verification moved to every
+   10 minutes (#88); `upgrade.sh` re-execs itself when a pull changes it
+   (#89).
+2. **A week of steady state on the fleet** — under way: updex, snowcat,
+   clix, and std run the full program catalog; 2026-08-19 was the first day
+   operated mostly by an orchestrating session (four concurrent worker
+   agents, model sized by item kind) plus the operator's own worker —
+   ~45 items in a day, every discovery one finding, fixes as PRs, cures
+   that refused to forge patches and filed `pr-cure-change` instead. Still
+   to do: record accepted-per-attempt, blocked, and time-to-merge daily into
+   the PRD baseline. (The Hive/Snowcat boundary was decided 2026-08-18:
    Hive retired, ADR-0062.)
-3. **Second repository** — enroll one more Frostyard Go repository (the
-   `frostyard-go-repo` skill makes it uniform: `policies/agent-governance.json`
-   plus the core declaration) and confirm the surface, timers, and gate work
-   for two repositories at once.
-4. **Maintenance programs** — honor Core's `maintenance_programs`, move the
-   discovery kinds into a catalog with per-program cadence, cure pull
-   requests per head under
+3. **Second repository** — done 2026-08-18: `frostyard/clix` and
+   `frostyard/std` enrolled after ACMM conformance, governance files, and
+   GoReleaser Pro landed there; four repositories run at once.
+4. **Maintenance programs** — done 2026-08-18 (all eight catalog programs,
+   per-program cadence, PR cure under
    [ADR-0061](../adr/0061-cure-pull-requests-as-bounded-per-head-work.md),
-   then add conformance and triage; the full list and order live in the
-   [maintenance programs plan](maintenance-programs.md).
-5. **Surface follow-ups** — decision-record view once ADR-0035 typed
-   decisions exist beyond admission; per-repository event filter on the rail;
-   keyboard-first inbox review. Small queue items, only after (2) shows they
-   matter.
+   conformance and triage after ADR-0062, the internal dependency chain and
+   the repository-settings sweep against core ADR-0040); the
+   [maintenance programs plan](maintenance-programs.md) records each phase.
+   A 2026-08-19 finding fixed the sweeps' 100-item window (#77) — verify
+   and cure had silently stopped inspecting once a repository passed 100
+   completed items.
+5. **Surface follow-ups** — the pull-request section and per-repository
+   counts landed (#49 → #74, built by the queue). Decision-record view,
+   per-repository event filter, keyboard-first review remain small queue
+   items, only after (2) shows they matter.
 6. **Runbook and PRD** — fold the week's numbers into targets and change the
    PRD status from Discovery only through its review path.
 
@@ -228,22 +239,22 @@ hands on the host.
   additional claim filters once one repository shows contention.
 - Unpark GitHub observation only if on-demand verification demonstrably
   misses state that a maintainer relied on.
-- Remote workers: authenticated Streamable HTTP for MCP, per-worker grants,
-  and per-operator surface auth — the deferred set named in the runbook's
-  Deployment section; their trigger is the first worker that must run
-  off-host, and they get their own ADR — proposed 2026-08-18 as
+- Remote workers: accepted and built 2026-08-18 as
   [ADR-0063](../adr/0063-authenticate-people-through-cloudflare-access-and-mint-mcp-tokens.md)
-  (Cloudflare Access at the edge, Snowcat-minted MCP tokens, identity-
-  attributed actors; grants still deferred).
-- The name: proposed 2026-08-18 as
-  [ADR-0064](../adr/0064-adopt-the-name-snowcat.md) (Snowcat).
+  (Streamable HTTP `/mcp` with Snowcat-minted member tokens; Cloudflare
+  Access for people, kept optional — the operator chose a private mesh in
+  local mode instead, runbook *A private mesh instead of Access*); grants
+  still deferred.
+- The name: accepted 2026-08-18 as
+  [ADR-0064](../adr/0064-adopt-the-name-snowcat.md) (Snowcat); the
+  repository, host units, and environment variables are renamed, `FLUENT_*`
+  is read for one release.
 - Tokens per accepted outcome, once a client can report them.
 
 ## Open questions
 
-- **Second dogfood repository:** the operator chooses in Phase 7 step 3;
-  a Go repository already carrying the `frostyard-go-repo` skill is the
-  default.
+- **Second dogfood repository:** resolved 2026-08-18 — clix and std
+  (Phase 7 step 3).
 - **Hive boundary:** resolved 2026-08-18 by
   [ADR-0062](../adr/0062-retire-hive-fluent-owns-conformance.md) — Hive is
   retired; Snowcat's `conformance` and `triage` programs own what it did.
