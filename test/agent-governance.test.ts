@@ -72,18 +72,30 @@ test("every protected-boundary path resolves to a file that exists", () => {
   }
 });
 
-test("docs/risk-tiers.md Tier 3 restates every authentication boundary path", () => {
+// The protected boundaries moved from Tier 3 to Tier 4 when the critical tier
+// core's governance schema fixes was restored: Tier 3 now covers broad
+// behavior, CI, dependencies, and persistence, and Tier 4 covers the security
+// boundaries. The invariant is unchanged — the doc must restate every path the
+// authentication boundary protects — so this looks in whichever tier section
+// claims the protected boundaries rather than hardcoding a tier number again.
+test("docs/risk-tiers.md restates every authentication boundary path in the tier that claims the protected boundaries", () => {
   const tiers = readFileSync(join(root, "docs", "risk-tiers.md"), "utf8");
-  const start = tiers.indexOf("## Tier 3");
-  assert.ok(start >= 0, "docs/risk-tiers.md has no '## Tier 3' heading");
-  const rest = tiers.slice(start + 1);
-  const end = rest.indexOf("\n## ");
-  const tier3 = end >= 0 ? rest.slice(0, end) : rest;
+  const sections = tiers.split(/^## /m).filter((section) => /^Tier \d+: /.test(section));
+  assert.ok(sections.length > 0, "docs/risk-tiers.md has no '## Tier N: <Name>' sections");
+
+  const claiming = sections.filter((section) => section.includes("policies/agent-governance.json"));
+  assert.equal(
+    claiming.length,
+    1,
+    `exactly one tier section must claim the protected boundaries in policies/agent-governance.json, found ${claiming.length}`,
+  );
+  const section = claiming[0]!;
+  const heading = section.slice(0, section.indexOf("\n"));
 
   for (const path of boundary("authentication").paths) {
     assert.ok(
-      tier3.includes(`\`${path}\``),
-      `docs/risk-tiers.md Tier 3 does not list ${path}, which the authentication boundary protects`,
+      section.includes(`\`${path}\``),
+      `docs/risk-tiers.md "${heading}" does not list ${path}, which the authentication boundary protects`,
     );
   }
 });
