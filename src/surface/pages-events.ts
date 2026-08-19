@@ -1,4 +1,4 @@
-import { DECISION_EVENT_TYPES, EVENTS_PAGE_MAX, type EventsData } from "./events.ts";
+import { DECISION_EVENT_TYPES, EVENTS_PAGE_MAX, eventsPath, type EventsData } from "./events.ts";
 import { html, type SafeHtml } from "./html.ts";
 import { clock, document, itemPath, payloadGist, repositoryPath, shell, type PageContext } from "./pages.ts";
 
@@ -23,9 +23,9 @@ export function eventsPage(context: PageContext, data: EventsData): string {
       html`${filterForm(data)}
       ${
         data.capped
-          ? html`<div class="fl-error">This read filled the ${EVENTS_PAGE_MAX}-event cap, so anything older than sequence ${
-              data.events.at(-1)?.sequence ?? data.since
-            } in this window is not shown. Narrow it with <code>?since=</code>, or use <code>npm run queue -- events</code> for the full ledger.</div>`
+          ? html`<div class="fl-error">This read filled the ${EVENTS_PAGE_MAX}-event cap at sequence ${data.readThrough}, so events <b>newer</b> than sequence ${data.readThrough} — up to the cursor at ${data.lastEventSequence} — are not shown. <a href="${
+              eventsPath({ ...(data.repository ? { repository: data.repository } : {}), decisions: data.decisions, since: data.readThrough })
+            }">Continue from sequence ${data.readThrough}</a>, or use <code>npm run queue -- events</code> for the full ledger.</div>`
           : ""
       }
       <section class="fl-group" id="events">

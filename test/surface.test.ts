@@ -1400,3 +1400,69 @@ test("the events page filters by repository and by operator decision, 404s an un
     assert.equal(/<script[^>]*src=/.test(body), false);
   }
 });
+
+test("the events page names the highest sequence a capped read reached, calls the hidden events newer, and drops the notice when the window is read whole", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-surface-cap-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/example", true);
+  // A ledger well past the 500-event cap: one `work.queued` event per seed.
+  let newest: { id: string } | undefined;
+  for (let index = 0; index < 700; index += 1) {
+    newest = queue.enqueueSeed({
+      repository: "frostyard/example",
+      kind: "issue-resolution",
+      objective: `Resolve frostyard/example#${index + 1}: seeded for the cap test.`,
+      instructions: "Read only.",
+      acceptanceCriteria: ["Done."],
+      allowedActions: ["read"],
+      delegableActions: [],
+      createdBy: "operator:test",
+    });
+  }
+  // One operator decision inside the newest 500 sequences, so the decisions view has a row.
+  queue.note(newest!.id, "operator:test", "Seen by the operator.");
+  const metadata = queue.metadata();
+  assert.equal(metadata.lastEventSequence, 701);
+
+  const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue }) });
+  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const read = async (path: string) => {
+    const response = await app.request(path, { headers: { Cookie: cookie } });
+    return { status: response.status, body: await response.text() };
+  };
+
+  // `?since=0` fills the cap 201 events short of the cursor: the read is
+  // ascending, so what is hidden is the NEWER end of the window. The notice
+  // names the highest sequence actually read and links onward from it.
+  const widened = await read("/events?since=0");
+  assert.equal(widened.status, 200);
+  const sequences = [...section(widened.body, "events").matchAll(/<td class="right">(\d+)<\/td>/g)].map((match) => Number(match[1]));
+  assert.equal(sequences.length, 500);
+  assert.equal(sequences[0], 500, "newest first within the read");
+  assert.equal(sequences.at(-1), 1);
+  assert.match(
+    widened.body,
+    /This read filled the 500-event cap at sequence 500, so events <b>newer<\/b> than sequence 500 — up to the cursor at 701 — are not shown\./,
+  );
+  assert.match(widened.body, /<a href="\/events\?since=500">Continue from sequence 500<\/a>/);
+  assert.equal(/older than sequence/.test(widened.body), false, "the hidden events are newer, not older");
+
+  // Following that link reaches the events the first read hid.
+  const continued = await read("/events?since=500");
+  assert.equal(continued.status, 200);
+  const continuedSequences = [...section(continued.body, "events").matchAll(/<td class="right">(\d+)<\/td>/g)].map((match) => Number(match[1]));
+  assert.equal(continuedSequences[0], 701);
+  assert.equal(continuedSequences.at(-1), 501);
+  assert.equal(continued.body.includes("-event cap"), false, "the rest of the ledger fits under the cap");
+
+  // The decisions default window is the last 500 events: the read fills the cap
+  // exactly at the cursor, so nothing of the window is hidden and there is no
+  // cap notice at all.
+  const decisionsOnly = await read("/events?decisions=1");
+  assert.equal(decisionsOnly.status, 200);
+  const decisionLedger = section(decisionsOnly.body, "events");
+  assert.match(decisionLedger, new RegExp(`since ${metadata.lastEventSequence - 500} ·`));
+  assert.match(decisionLedger, /<b>work\.noted<\/b>/);
+  assert.equal(decisionsOnly.body.includes("-event cap"), false, "the whole window was read, so it is not capped");
+});

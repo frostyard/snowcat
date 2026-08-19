@@ -52,7 +52,19 @@ export interface EventsData {
   lastEventSequence: number;
   /** How many events the read returned before the decisions filter. */
   read: number;
-  /** The read filled the 500-event cap, so older events in the window are not shown. */
+  /**
+   * The highest sequence the read actually reached. `eventsSince` reads
+   * ascending, so a read that fills the cap stops here and everything above it
+   * in the window is unread — the page names this sequence and links onward
+   * from it.
+   */
+  readThrough: number;
+  /**
+   * The read filled the cap *and* at least one more matching event exists
+   * above `readThrough`, so events of the window are genuinely not shown. A
+   * read that fills the cap exactly at the cursor hides nothing and is not
+   * capped.
+   */
   capped: boolean;
   /** Repositories the filter offers, from the same sidebar read. */
   repositories: string[];
@@ -93,6 +105,14 @@ export function readEvents(
   const since = query.since ?? Math.max(0, lastEventSequence - window);
   const read = queue.eventsSince(since, { repository, limit: EVENTS_PAGE_MAX });
   const kept = query.decisions ? read.filter((event) => DECISION_EVENT_SET.has(event.type)) : read;
+  // `eventsSince` orders by sequence ascending and LIMITs, so a read that fills
+  // the cap stops at `readThrough` and the *newer* part of the window is the
+  // part left unread. Filling the cap is not by itself truncation: the read can
+  // end exactly at the cursor, and under a repository filter the sequences above
+  // it may hold nothing that matches. One more bounded read of a single event
+  // settles it, through the same store method and still read-only.
+  const readThrough = read.at(-1)?.sequence ?? since;
+  const capped = read.length === EVENTS_PAGE_MAX && queue.eventsSince(readThrough, { repository, limit: 1 }).length > 0;
 
   return {
     events: [...kept].reverse(),
@@ -101,7 +121,8 @@ export function readEvents(
     since,
     lastEventSequence,
     read: read.length,
-    capped: read.length === EVENTS_PAGE_MAX,
+    readThrough,
+    capped,
     repositories,
   };
 }

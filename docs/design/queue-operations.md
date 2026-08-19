@@ -426,9 +426,12 @@ Four more views sit behind the same session:
   operator decisions — `work.approved`, `work.rejected`, `work.deferred`,
   `work.requeued`, `work.cancelled`, `work.prioritized`, `work.noted`,
   `artifact.attached`, `artifact.ready` — so a week's admissions and exits
-  read as one list. It reads at most 500 events per request and says so when
-  it fills that cap; use `queue -- events --since` for anything longer. The
-  page is read-only: nothing on it changes the queue.
+  read as one list. It reads at most 500 events per request, ascending from
+  `since`; when that read stops short of the ledger's cursor the page names
+  the highest sequence it reached, says the events *newer* than it are the
+  ones not shown, and links onward from that sequence — use `queue -- events
+  --since` for anything longer. The page is read-only: nothing on it changes
+  the queue.
 - `/items/<id>` — `queue -- show <id>` rendered: definition, acceptance
   criteria, result with artifacts and their verification, operator notes,
   previous results, the full event timeline, and the *Decide* card. Every
