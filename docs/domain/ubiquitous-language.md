@@ -318,21 +318,25 @@ eligible, ready, claimed, correct, or successful.
 
 The effective ability of a principal, session, or work attempt to perform a
 specific action on a specific scope at a specific time. Authority is the
-intersection of policy, work, grant, lifecycle, and product
-[ceilings](#ceiling-action-ceiling).
+intersection of policy, [work](#ceiling-delegation-ceiling), grant, lifecycle,
+and product ceilings.
 
 **Avoid:** authorization; credentials; role; capability.
 ([ADR-0017](../adr/0017-standardize-actions-boundaries-and-risk.md),
 [ADR-0032](../adr/0032-route-work-with-operator-issued-grants.md))
 
-#### Ceiling (action ceiling)
+#### Ceiling (delegation ceiling)
 
 The `delegableActions` of one work item: the most any child of that item may be
 allowed to perform or may itself delegate further. Ceiling is monotonically
 non-widening down a work lineage — a child's allowed and delegable actions can
-only narrow relative to its parent's ceiling, never widen it.
+only narrow relative to its parent's ceiling, never widen it. A repository
+declaration's action ceiling is a distinct enrollment-level ceiling over an
+enrolled repository, not this term
+([ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md)).
 
-**Avoid:** permission; role; grant.
+**Avoid:** permission; role; grant; action ceiling (the enrollment-level
+declaration ceiling).
 ([ADR-0017](../adr/0017-standardize-actions-boundaries-and-risk.md),
 [ADR-0005](../adr/0005-admit-worker-created-work-before-claiming.md))
 
@@ -391,7 +395,7 @@ work.
 
 A worker-proposed child of the item it completes. A follow-up always begins as
 a [proposal](#proposal), inherits its parent's priority, and is bounded by the
-parent's [ceiling](#ceiling-action-ceiling); one completion proposes at most
+parent's [ceiling](#ceiling-delegation-ceiling); one completion proposes at most
 ten follow-ups, and a lineage holds at most four edges below its root.
 
 **Avoid:** subtask; next step; approval.
