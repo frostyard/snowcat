@@ -183,7 +183,8 @@ the payload or a lease token), with an optional `?repository=` filter and a
 keep-alive comment every 25 seconds; the loop ends when the client goes away.
 The inbox and repository board carry one inline script (no framework, nothing
 loaded from another host) that subscribes with `EventSource`, prepends events
-to the rail (cap 30), and after a `work.*` or `artifact.verified` event
+to the rail (cap 30), and after a `work.*`, `artifact.verified`, or
+`artifact.attached` event
 refetches the page's groups as fragments (`GET /?partial=stats|proposals|
 blocked|unverified`, `GET /repositories/:owner/:name?partial=stats|queued|
 leased|completed|pull-requests`) and swaps them in; the 30-second meta refresh survives only
