@@ -87,10 +87,15 @@ npm run check
 ```
 
 For bounded dogfooding, `npm run queue -- seed-dogfood <owner/repo>` creates at
-most one active read-only root for quality, CI, security, and architecture.
-Repeated or concurrent feeder invocations do not duplicate an active specialty,
-and a specialty that just completed with no finding is cooled for 24 hours
-(`--cooldown-hours <n>`; `0` disables). Worker-created children appear under
+most one active read-only root per program in the maintenance program catalog
+([`src/queue/programs.ts`](src/queue/programs.ts)): quality, CI, security,
+architecture, conformance, triage, dependencies, and docs. Repeated or
+concurrent feeder invocations do not duplicate an active program, and a
+program that just completed with no finding is cooled for its own cadence —
+daily for quality, CI, security, and triage; weekly for architecture,
+conformance, dependencies, and docs (`--cooldown-hours <n>` overrides every
+program; `0` disables). `seed-dogfood --enrolled` seeds only the programs each
+repository's Core declaration lists. Worker-created children appear under
 `list proposed` and require operator admission before any worker can claim
 them.
 

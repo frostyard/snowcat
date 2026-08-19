@@ -11,6 +11,7 @@ import {
   parseGoModRequires,
   parseSemver,
   suggestBump,
+  sweepFailureMessage,
   sweepInternalDependencies,
 } from "../src/queue/internal-dependencies.ts";
 import { QueueStore } from "../src/queue/store.ts";
@@ -180,4 +181,32 @@ test("the enrolled sweep reads the control plane and skips enrolled repositories
   assert.equal(swept.releaseNeeded[0]!.suggestedBump, "v1.0.1 (patch)");
   assert.deepEqual(swept.dependencyBumps.map((entry) => [entry.module, entry.from, entry.to]), [["github.com/frostyard/std", "v0.1.0", "v0.2.0"]]);
   await assert.rejects(sweepInternalDependencies(queue, undefined, { fetcher: apiFetcher(routes).fetcher, clock }), /SNOWCAT_CONTROL_DB/);
+});
+
+test("the enrolled sweep's exit-code decision fails only when every repository failed", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-dependency-exit-test-"));
+  const controlPath = join(directory, "control-plane.db");
+  const store = new ControlPlaneStore(controlPath, clock);
+  test.after(() => store.close());
+  await enrollExampleRepository(store);
+  const queue = new QueueStore(join(directory, "queue.db"), clock);
+  test.after(() => queue.close());
+  // Enrolled but not opted in: nothing swept, nothing failed — exit 0.
+  const notOptedIn = await sweepInternalDependencies(queue, controlPath, { fetcher: apiFetcher({}).fetcher, clock });
+  assert.deepEqual([notOptedIn.swept, notOptedIn.failed, notOptedIn.notOptedIn], [[], [], ["frostyard/example"]]);
+  assert.equal(sweepFailureMessage(notOptedIn), undefined);
+  // Every GitHub read 404s for the one opted-in enrolled repository: all failed.
+  queue.setRepositoryEnabled("frostyard/example", true);
+  const allFailed = await sweepInternalDependencies(queue, controlPath, { fetcher: apiFetcher({}).fetcher, clock });
+  assert.deepEqual(allFailed.swept, []);
+  assert.deepEqual(allFailed.failed.map((entry) => entry.repository), ["frostyard/example"]);
+  assert.equal(sweepFailureMessage(allFailed), "sweep-dependencies --enrolled: every repository failed (frostyard/example)");
+  // At least one repository swept alongside a failure: partial, exit 0.
+  const partial = { ...allFailed, swept: ["frostyard/other"] };
+  assert.equal(sweepFailureMessage(partial), undefined);
+  // The message names every failed repository when several fail.
+  assert.equal(
+    sweepFailureMessage({ ...allFailed, failed: [{ repository: "owner/a", reason: "x" }, { repository: "owner/b", reason: "y" }] }),
+    "sweep-dependencies --enrolled: every repository failed (owner/a, owner/b)",
+  );
 });
