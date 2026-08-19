@@ -42,7 +42,12 @@ requests before starting. Write for that reader.
    worker has to watch CI before calling `complete_work`. The rest are
    mechanical: `grep -c … prints 0`, `go tool cover -func … ≥ 90%`, "test
    file X proves Y", `npm run check` / `make check` passes. Avoid criteria
-   that need judgment ("cleaner", "reasonable coverage").
+   that need judgment ("cleaner", "reasonable coverage"). In a repository with
+   the review gate on (ADR-0065) the PR is a *draft* until Snowcat's review
+   round passes — a CI-anchored criterion still works on a draft's head; do
+   not write "the PR is ready for review" as a criterion, that is the gate's
+   to decide, and write criteria the reviewer can falsify (they are what the
+   `pr-review` round checks the PR against).
 5. **Bound the blast radius.** Say what a worker should do when the change
    flips a default or touches a protected boundary (workflows, release
    pipeline, credentials): opt-in flag, review-required note, or "block and

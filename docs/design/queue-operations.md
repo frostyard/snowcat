@@ -616,6 +616,69 @@ item, and an extra instruction telling the worker the pull request was not
 opened by a Snowcat worker so it reads the description first. The `cure`
 output's `foreign` counter shows how many were `listed` and `inspected`.
 
+### Review gate
+
+**Review gate** ([ADR-0065](../adr/0065-gate-worker-pull-requests-behind-bounded-review.md),
+implementing [ADR-0029](../adr/0029-bound-adversarial-review.md)'s
+pull-request profile). Off by default; per repository:
+
+```bash
+npm run --silent queue -- review-gate frostyard/snowcat on    # off to stop; the repository must be opted in
+```
+
+With it on, a worker must open its pull request as a **draft**
+(`gh pr create --draft`); `complete_work` refuses an open, non-draft pull
+request in a gated repository and tells the worker to `gh pr ready --undo`
+and complete again (merged and closed pull requests, `pr-cure` items, and
+anything GitHub could not verify are left alone). The same `verify-artifacts`
+pass that refreshes and cures then runs the review sweep over every draft a
+completed item reported there — reading nothing at all when no repository is
+gated — and, per draft head:
+
+- **No round has judged this head yet** → one admitted root of kind
+  `pr-review`, keyed `pr-review:<url>@<head SHA>`, `read` and `run-tests`
+  only, nothing delegable, the origin item's priority. The reviewer reads the
+  origin item (`get_work`: objective, acceptance criteria, the issue), the
+  diff at exactly that head, runs the repository's checks locally, and
+  completes with `review: { decision: pass | block | unable-to-review,
+  blockers ≤ 5, advisories ≤ 3 }` — a blocker only for a concrete defect, an
+  unmet acceptance criterion, out-of-scope behaviour, false evidence, missing
+  validation, or a contract break; never style. It touches nothing on GitHub.
+  Rounds are counted **per pull request URL**: the item says "round 2 of 3"
+  and carries the previous round's blockers, and a push never resets the
+  count.
+- **The latest round `pass`ed this head** → with `SNOWCAT_REVIEW_GATE_WRITES=1`
+  in `/etc/snowcat/env`, the sweep marks the pull request ready for review
+  (GraphQL `markPullRequestReadyForReview`, as `policy:review-gate`; the token
+  then needs pull-requests write), re-reads the head, converts the pull
+  request back to a draft if a push landed in between (reported as
+  `needsHuman`), and otherwise records `artifact.ready` on the origin item —
+  Snowcat's only GitHub writes. Without the variable it reports
+  `readyToMark` and the board and inbox say "passed review — `gh pr ready N`";
+  you mark it. Either way the pull request then leaves the draft quiet zone
+  and cure, Copilot, and you take over.
+- **The latest round `block`ed this head, round 1 or 2** → one admitted root
+  of kind `pr-review-fix`, keyed `pr-review-fix:<url>@<head SHA>`, with
+  `read, write, run-tests, open-pr` and nothing delegable, carrying exactly
+  the fingerprinted blockers: address those, push, keep it a draft, report the
+  pull request. Its push is a new head and the next round.
+- **Blocked at round 3, `unable-to-review`, or a fix that completed without
+  a new head** → nothing is created; the output's `needsHuman` names the
+  reason and the inbox's **Review adjudication** group lists the pull request
+  (beside the `readyToMark` ones). You decide: push a fix, `gh pr ready`,
+  `note` or `requeue` the item, or close the pull request.
+
+The sweep never merges, approves, or dismisses. Because
+drafts are never cured, Copilot's automatic review skips drafts unless a
+ruleset opts in, and the fleet's review-apply workflows run only on
+non-drafts, review/fix and cure never act on one pull request at the same
+time. `--no-review` skips the step; the board's **Verify artifacts** button
+runs it and reports `N review items queued, N marked ready`; `show <id>` prints an item's
+`review` record (head, round, verdict, fingerprints, the models the author
+and reviewer reported). Model names are what workers report as
+`result.model` — provenance, not proof; the orchestrator uses
+`review.authorModel` to pick a different model for the reviewer.
+
 When you carried a change the last mile yourself — a follow-up whose proposal
 said "leave the change on a local branch; do not open a pull request", so the
 worker completed it with no artifacts and you opened the pull request by
@@ -1075,7 +1138,9 @@ Approved. During the dogfood week keep, per repository:
 - Rationale: [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md),
   [ADR-0003](../adr/0003-separate-work-coordination-from-execution.md),
   [ADR-0005](../adr/0005-admit-worker-created-work-before-claiming.md),
-  [ADR-0018](../adr/0018-bind-worker-sessions-and-verify-github-artifacts.md)
+  [ADR-0018](../adr/0018-bind-worker-sessions-and-verify-github-artifacts.md),
+  [ADR-0061](../adr/0061-cure-pull-requests-as-bounded-per-head-work.md),
+  [ADR-0065](../adr/0065-gate-worker-pull-requests-behind-bounded-review.md)
 - Contracts: [work queue](../specs/work-queue.md)
 - Architecture: [queue execution boundary](queue-execution-boundary.md),
   [repository enrollment](repository-enrollment.md)

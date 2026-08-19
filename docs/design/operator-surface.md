@@ -79,13 +79,16 @@ GitHub call during render**. Everything it shows is already in the store:
 | The pull request (URL, number, title) | A completed item's `pull-request` artifact; the title is the reporting item's objective, the best source without asking GitHub. A `pr-cure` root's `cure.pullRequestUrl` contributes a pull request no item reported (foreign cure), titled by the cure root's objective |
 | `state`, `headSha`, `verifiedAt`, `mergedAt` | The artifact's `verification` (`verified` or `unverified`), which `verify-artifacts` refreshes on the host timer; when several completed items report the same URL, the newest `verifiedAt` wins and each reporting item is kept |
 | Decay | The `pr-cure` root bound to the current head ([ADR-0061](../adr/0061-cure-pull-requests-as-bounded-per-head-work.md)): its status and `cure.decay`, `decayed` when that root is still proposed, queued, claimed, or blocked |
+| `draft` and the review gate | The artifact verification's `draft` flag, and the `pr-review` / `pr-review-fix` items bound to the URL ([ADR-0065](../adr/0065-gate-worker-pull-requests-behind-bounded-review.md)), derived by `deriveReviewState` the way the sweep reads them: `in review` / `fixing` while one is queued or claimed, `passed review` with the `gh pr ready N` hint when the current head passed and is still a draft, `needs human` (third-round block, unable-to-review, a fix that went nowhere, budget spent) with the reason; review and fix items never count as the pull request's reporters |
 
 Open (and `unverified`) pull requests come first, highest number first, each
 linking to GitHub, to the item that reported it, and to its cure item; then
 what merged in the last seven days, newest merge first. Closed pull requests
 and older merges are left out — the section is the operator's *now*, not a
 history. The index summary counts exactly those rows: `open` is the open
-list, `decayed` the open rows with an unfinished cure root, `merged today`
+list, `decayed` the open rows with an unfinished cure root, `awaiting you`
+(shown only when non-zero) the open rows the review gate cannot advance or
+that passed and wait to be marked ready, `merged today`
 the merges since 00:00 UTC. Source lists are capped at 100 rows like the
 board's columns, and the section says so when a cap is hit.
 

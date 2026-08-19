@@ -156,7 +156,7 @@ test("the operator surface requires a session, sets the cookie on the right toke
 
   // Structure from the artboard: sidebar, header kicker + h1, stat row, three grouped cards, events rail.
   assert.match(body, /<noscript><meta http-equiv="refresh" content="30"><\/noscript>/);
-  assert.match(body, /<script>\(function \(\) \{\s*var cfg = \{"page":"\/","partials":\["stats","proposals","blocked","unverified"\],"repository":null,"refresh":30\};/);
+  assert.match(body, /<script>\(function \(\) \{\s*var cfg = \{"page":"\/","partials":\["stats","proposals","blocked","unverified","adjudication"\],"repository":null,"refresh":30\};/);
   assert.equal(/<script[^>]*src=/.test(body), false); // nothing loaded from elsewhere
   assert.match(body, /<aside class="ph-sidebar">/);
   assert.match(body, /class="ph-eyebrow"><i><\/i>snowcat · operator inbox<\/div><h1>Needs you<\/h1>/);
@@ -512,6 +512,94 @@ test("the board's pull-request section shows open heads with their cure decay an
   assert.equal(indexBody.includes("leaseToken"), false);
 });
 
+test("the board and inbox show the review gate: draft badge, review round, passed-review hint, and the adjudication group (ADR-0065)", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-surface-review-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/example", true);
+  queue.setRepositoryReviewGate("frostyard/example", true);
+  const now = new Date();
+  const head = "a".repeat(40);
+  const url = "https://github.com/frostyard/example/pull/52";
+  const seed = queue.enqueueSeed({
+    repository: "frostyard/example",
+    kind: "issue-resolution",
+    objective: "Resolve frostyard/example#50: gate the importer",
+    instructions: "Open a draft pull request.",
+    acceptanceCriteria: ["PR open as a draft."],
+    allowedActions: ["read", "write", "open-pr"],
+    delegableActions: [],
+    createdBy: "operator:test",
+  });
+  const lease = queue.claim({ worker: "claude:example:review", repository: "frostyard/example" })!;
+  queue.complete({
+    id: seed.id,
+    leaseToken: lease.leaseToken!,
+    worker: "claude:example:review",
+    result: {
+      summary: "Opened as a draft.",
+      evidence: ["npm run check passed."],
+      artifacts: [{ kind: "pull-request", url, verification: { status: "verified", verifiedAt: now.toISOString(), number: 52, state: "open", headSha: head, draft: true } }],
+      model: "claude-sonnet-5",
+    },
+    followUps: [],
+  });
+  // Round 1 passed: the pull request is still a draft, so the gate waits for a human to mark it ready (writes off).
+  const review = queue.enqueueReviewRoot("frostyard/example", {
+    kind: "pr-review",
+    objective: "Review frostyard/example#52 (head aaaaaaa, round 1 of 3)",
+    instructions: "Read-only.",
+    acceptanceCriteria: ["Verdict supplied."],
+    allowedActions: ["read", "run-tests"],
+    delegableActions: [],
+    createdBy: "policy:review-gate",
+    sourceRef: `pr-review:${url}@${head}`,
+    review: { pullRequestUrl: url, headSha: head, round: 1, originItemId: seed.id, authorModel: "claude-sonnet-5", priorBlockers: [] },
+  })!;
+  const reviewer = queue.claim({ worker: "claude:example:reviewer", kinds: ["pr-review"] })!;
+  queue.complete({
+    id: review.id,
+    leaseToken: reviewer.leaseToken!,
+    worker: "claude:example:reviewer",
+    result: { summary: "Passes.", evidence: [`head ${head}`], artifacts: [], model: "claude-opus-5" },
+    followUps: [],
+    review: { decision: "pass", blockers: [], advisories: [{ fingerprint: "adv:naming", text: "consider renaming gate()" }] },
+  });
+
+  // No fetcher is configured anywhere: rendering must not reach GitHub.
+  const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue }) });
+  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+
+  const board = await app.request("/repositories/frostyard/example", { headers: { Cookie: cookie } });
+  assert.equal(board.status, 200);
+  const pulls = section(await board.text(), "pull-requests");
+  assert.match(pulls, /<h2>Pull requests<\/h2><span>open 1 · decayed 0 · awaiting you 1 · merged today 0<\/span>/);
+  assert.match(pulls, /<span class="ph-badge ">open<\/span><span class="ph-badge">draft<\/span><span class="ph-badge ok">passed review<\/span>/);
+  assert.match(pulls, new RegExp(`<a href="/items/${seed.id}">reported by issue-resolution</a> · <a href="/items/${review.id}">pr-review r1 completed · pass</a> · mark ready: <code>gh pr ready 52</code>`));
+  assert.equal(pulls.includes("reported by pr-review"), false, "a review item never becomes the pull request's reporter");
+
+  const inbox = await app.request("/", { headers: { Cookie: cookie } });
+  assert.equal(inbox.status, 200);
+  const inboxBody = await inbox.text();
+  assert.match(inboxBody, /<span>Review adjudication<\/span><strong>1<\/strong>/);
+  const adjudication = section(inboxBody, "adjudication");
+  assert.match(adjudication, /Review adjudication — draft pull requests waiting for you/);
+  assert.match(adjudication, /<span class="ph-badge ok">passed<\/span> round 1 · mark it ready: <code>gh pr ready 52<\/code>/);
+  assert.match(adjudication, new RegExp(`href="/items/${review.id}">Open pr-review</a>`));
+  const partial = await app.request("/?partial=adjudication", { headers: { Cookie: cookie } });
+  assert.equal(partial.status, 200);
+  assert.match(await partial.text(), /^<section class="fl-group" id="adjudication">/);
+
+  // The item page shows the review record, the verdict, and the models.
+  const item = await app.request(`/items/${review.id}`, { headers: { Cookie: cookie } });
+  assert.equal(item.status, 200);
+  const itemBody = await item.text();
+  assert.match(itemBody, /<span>review<\/span><span><a href="https:\/\/github.com\/frostyard\/example\/pull\/52" rel="noreferrer noopener">PR #52<\/a> · head aaaaaaa · round 1 · <span class="ph-badge ok">pass<\/span> · author model claude-sonnet-5/);
+  assert.match(itemBody, /advisories: consider renaming gate\(\)/);
+  assert.match(itemBody, /<span>model<\/span><span>claude-opus-5<\/span>/);
+  assert.equal(itemBody.includes("leaseToken"), false);
+});
+
 test("the item page renders the definition, artifacts with verification, operator notes, previous results, and the event timeline for a requeued-then-completed item", async () => {
   const directory = await mkdtemp(join(tmpdir(), "snowcat-surface-item-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
@@ -771,7 +859,7 @@ test("re-verify from the browser refreshes a repository's pending artifacts as o
 
   const verified = await app.request("/repositories/frostyard/example/verify-artifacts", { method: "POST", body: new URLSearchParams({ return: "/" }), headers: { Cookie: cookie } });
   assert.equal(verified.status, 303);
-  assert.equal(verified.headers.get("Location"), "/?done=artifact.verified&detail=1+checked%2C+1+updated%2C+0+rejected%2C+0+unavailable%2C+0+cure+items+queued");
+  assert.equal(verified.headers.get("Location"), "/?done=artifact.verified&detail=1+checked%2C+1+updated%2C+0+rejected%2C+0+unavailable%2C+0+cure+items+queued%2C+0+review+items+queued%2C+0+marked+ready");
   assert.deepEqual(requests, ["/repos/frostyard/example/pulls/5"]);
   const item = queue.get(seeded.unverifiedSeed.id)!;
   assert.equal(item.result!.artifacts[0]!.verification!.status, "verified");
@@ -780,7 +868,7 @@ test("re-verify from the browser refreshes a repository's pending artifacts as o
   assert.equal(event.type, "artifact.verified");
   assert.equal(event.actor, "operator:web");
   const inbox = await (await app.request(verified.headers.get("Location")!, { headers: { Cookie: cookie } })).text();
-  assert.match(inbox, /Recorded artifact\.verified — 1 checked, 1 updated, 0 rejected, 0 unavailable, 0 cure items queued\./);
+  assert.match(inbox, /Recorded artifact\.verified — 1 checked, 1 updated, 0 rejected, 0 unavailable, 0 cure items queued, 0 review items queued, 0 marked ready\./);
   assert.match(inbox, /<span>Unverified artifacts<\/span><strong>0<\/strong>/);
   assert.equal(inbox.includes(seeded.leaseToken), false);
 
@@ -1145,7 +1233,7 @@ test("board actions import labeled issues, seed dogfood, verify artifacts, and i
   });
   const verified = await post("verify-artifacts");
   assert.equal(verified.status, 303);
-  assert.equal(verified.headers.get("Location"), "/repositories/frostyard/example?done=artifact.verified&detail=1+checked%2C+1+updated%2C+0+rejected%2C+0+unavailable%2C+0+cure+items+queued");
+  assert.equal(verified.headers.get("Location"), "/repositories/frostyard/example?done=artifact.verified&detail=1+checked%2C+1+updated%2C+0+rejected%2C+0+unavailable%2C+0+cure+items+queued%2C+0+review+items+queued%2C+0+marked+ready");
   assert.deepEqual(requests.splice(0), ["/repos/frostyard/example/pulls/12"]);
   assert.equal(queue.get(done.id)!.delivery, "merged");
   const verifiedEvent = queue.events(done.id).at(-1)!;

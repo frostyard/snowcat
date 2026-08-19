@@ -3,6 +3,7 @@
 import { attachVerifiedArtifact, refreshArtifactVerifications, type AttachableArtifactKind } from "./artifact-verification.ts";
 import { queueStoreOptionsFromEnvironment } from "./eligibility.ts";
 import { curePullRequests } from "./pull-request-cure.ts";
+import { reviewGateWritesFromEnvironment, reviewPullRequests } from "./pull-request-review.ts";
 import { importLabeledIssues, importLabeledIssuesForEnrolled } from "./github-issues.ts";
 import { sweepFailureMessage, sweepInternalDependencies } from "./internal-dependencies.ts";
 import { sweepRepositorySettings } from "./repository-settings.ts";
@@ -42,6 +43,15 @@ try {
     if (value !== "on" && value !== "off") throw new Error(`cure-foreign expects on or off, got ${value}`);
     queue.setRepositoryCureForeign(repository, value === "on");
     print({ repository, cureForeign: value === "on" });
+  } else if (command === "review-gate") {
+    // Repository-level setting like opt-in: whether workers open pull requests
+    // as drafts and the verification pass creates bounded review rounds for
+    // them (ADR-0065). Off by default.
+    const repository = required(args[0], "repository");
+    const value = required(args[1], "on|off");
+    if (value !== "on" && value !== "off") throw new Error(`review-gate expects on or off, got ${value}`);
+    queue.setRepositoryReviewGate(repository, value === "on");
+    print({ repository, reviewGate: value === "on" });
   } else if (command === "rename-repository") {
     // After a GitHub rename: carry the opt-in and every item to the new slug;
     // history keeps the old strings. Attributed to the CLI operator.
@@ -220,14 +230,18 @@ try {
     print(await sweepRepositorySettings(queue, controlPlanePath, repository ? { repository } : {}));
   } else if (command === "verify-artifacts") {
     const noCure = args.includes("--no-cure");
-    const flags = parseFlags(args.filter((argument) => argument !== "--no-cure"), ["repository", "limit"]);
+    const noReview = args.includes("--no-review");
+    const flags = parseFlags(args.filter((argument) => argument !== "--no-cure" && argument !== "--no-review"), ["repository", "limit"]);
     const limit = flags.limit === undefined ? undefined : parseNonNegativeInteger(flags.limit, "limit");
     if (limit !== undefined && (limit < 1 || limit > 100)) throw new Error("limit must be between 1 and 100");
     const refreshed = await refreshArtifactVerifications(queue, { repository: flags.repository, limit });
     // The same pass detects pull-request decay and enqueues one pr-cure root
-    // per decayed head (ADR-0061); --no-cure runs the refresh alone.
+    // per decayed head (ADR-0061); --no-cure runs the refresh alone. It also
+    // advances the review gate for draft pull requests in review-gated
+    // repositories (ADR-0065); --no-review skips that step.
     const cure = noCure ? undefined : await curePullRequests(queue, { repository: flags.repository, limit });
-    print(cure ? { ...refreshed, cure } : refreshed);
+    const review = noReview ? undefined : await reviewPullRequests(queue, { repository: flags.repository, limit, writes: reviewGateWritesFromEnvironment() });
+    print({ ...refreshed, ...(cure ? { cure } : {}), ...(review ? { review } : {}) });
   } else if (command === "metadata") {
     print(queue.metadata());
   } else if (command === "backup") {
@@ -242,6 +256,7 @@ try {
     console.error("       npm run queue -- rename-repository <old owner/repo> <new owner/repo>   (after a GitHub rename; history keeps the old slug)");
     console.error("       npm run queue -- token mint <member:email> <client name> | list [member:email] | revoke <id>   (MCP tokens; ADR-0063)");
     console.error("       npm run queue -- cure-foreign <owner/repo> on|off");
+    console.error("       npm run queue -- review-gate <owner/repo> on|off   (workers open drafts; bounded pr-review rounds; ADR-0065)");
     console.error("       npm run queue -- seed-testing-gap <owner/repo>");
     console.error("       npm run queue -- seed-dogfood <owner/repo> [--cooldown-hours <n>]");
     console.error("       npm run queue -- seed-dogfood --enrolled [--cooldown-hours <n>]   (requires SNOWCAT_CONTROL_DB)");
@@ -262,7 +277,7 @@ try {
     console.error("       npm run queue -- sweep-dependencies <owner/repo>");
     console.error("       npm run queue -- sweep-dependencies --enrolled   (requires SNOWCAT_CONTROL_DB; SNOWCAT_GITHUB_TOKEN in practice)");
     console.error("       npm run queue -- sweep-repository-settings <owner/repo> | --enrolled   (requires SNOWCAT_CONTROL_DB; SNOWCAT_GITHUB_TOKEN with admin read)");
-    console.error("       npm run queue -- verify-artifacts [--repository <owner/repo>] [--limit <1-100>] [--no-cure]");
+    console.error("       npm run queue -- verify-artifacts [--repository <owner/repo>] [--limit <1-100>] [--no-cure] [--no-review]");
     console.error("       npm run queue -- metadata");
     console.error("       npm run queue -- backup <new-file-path>");
     console.error("       npm run queue -- verify-backup <backup-file-path>");

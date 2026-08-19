@@ -79,11 +79,26 @@ function definitionCard(data: ItemData): SafeHtml {
     ${row("created", `${clock(item.createdAt, true)} by ${item.createdBy}`)}
     ${row("updated", clock(item.updatedAt, true))}
     ${item.status === "claimed" ? row("lease", `${item.leaseOwner ?? "unknown worker"} · expires ${item.leaseExpiresAt ? clock(item.leaseExpiresAt, true) : "?"}`) : ""}
+    ${item.cure ? row("cure", html`<a href="${item.cure.pullRequestUrl}" rel="noreferrer noopener">${artifactLabel("pull-request", item.cure.pullRequestUrl)}</a> · head ${item.cure.headSha.slice(0, 7)} · ${item.cure.decay.join(", ")}`) : ""}
+    ${item.review ? row("review", reviewSummary(item.review)) : ""}
+    ${item.result?.model ? row("model", item.result.model) : ""}
     <div class="fl-def-label">Instructions</div>
     <pre class="fl-pre">${item.instructions}</pre>
     <div class="fl-def-label">Acceptance criteria</div>
     <ol class="fl-criteria">${item.acceptanceCriteria.map((criterion) => html`<li>${criterion}</li>`)}</ol>
   </div></section>`;
+}
+
+/** The review record (ADR-0065) on a pr-review or pr-review-fix item: binding, round, verdict, fingerprints. */
+function reviewSummary(review: NonNullable<ObservableWorkItem["review"]>): SafeHtml {
+  const blockers = review.blockers ?? [];
+  return html`<a href="${review.pullRequestUrl}" rel="noreferrer noopener">${artifactLabel("pull-request", review.pullRequestUrl)}</a> · head ${review.headSha.slice(0, 7)} · round ${review.round}${
+    review.decision ? html` · <span class="ph-badge ${review.decision === "pass" ? "ok" : review.decision === "block" ? "danger" : "warn"}">${review.decision}</span>` : ""
+  }${review.authorModel ? ` · author model ${review.authorModel}` : ""}${review.reviewerModel ? ` · reviewer model ${review.reviewerModel}` : ""}${
+    blockers.length > 0 ? html`<ul class="fl-criteria" style="margin-top:6px">${blockers.map((blocker) => html`<li><code>${blocker.fingerprint}</code> ${blocker.location}: ${blocker.contract} — ${blocker.resolution}</li>`)}</ul>` : ""
+  }${
+    (review.advisories ?? []).length > 0 ? html`<div class="fl-sub">advisories: ${(review.advisories ?? []).map((advisory) => advisory.text).join(" · ")}</div>` : ""
+  }`;
 }
 
 function resultCard(result: WorkResult, data: ItemData): SafeHtml {

@@ -368,7 +368,7 @@ export function createSurfaceApp(options: SurfaceOptions): Hono<SurfaceEnv> {
       }
       if (!board) return new Response(notFoundPage(chrome, `${slug} is neither opted in to the queue nor declared in the control plane.`), htmlHeaders(404));
       const outcome = await applyVerifyArtifacts(stores.queue, slug, stores.verifier ?? {}, actorOf(context));
-      const detail = `${outcome.checked} checked, ${outcome.updated} updated, ${outcome.rejected} rejected, ${outcome.unavailable} unavailable, ${outcome.cured} cure item${outcome.cured === 1 ? "" : "s"} queued`;
+      const detail = `${outcome.checked} checked, ${outcome.updated} updated, ${outcome.rejected} rejected, ${outcome.unavailable} unavailable, ${outcome.cured} cure item${outcome.cured === 1 ? "" : "s"} queued, ${outcome.reviewed} review item${outcome.reviewed === 1 ? "" : "s"} queued, ${outcome.markedReady} marked ready`;
       return redirectWithBanner(back, outcome.eventType, detail);
     })(context),
   );
