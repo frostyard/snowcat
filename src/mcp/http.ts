@@ -10,7 +10,8 @@ import { buildQueueMcpServer } from "./server.ts";
  * behind a Snowcat-minted bearer token. The token is verified against the
  * queue store on every request; the member and client it names become the
  * transport identity every tool acts as (`member:<owner>/<client>`), and the
- * payload's `worker` is demoted to the claim's label. No token → 401 with a
+ * payload's `worker` is demoted to the claim's label; a token minted with
+ * `kinds` may claim only those. No token → 401 with a
  * `WWW-Authenticate` challenge; a malformed, unknown, or revoked token is
  * indistinguishable from none. Cloudflare Access is expected to bypass this
  * path (the token is the credential); the surface routes stay behind Access.
@@ -30,7 +31,16 @@ export function mountMcpHttp(app: Hono, options: McpHttpOptions): McpHttpHandler
     (context) => {
       const principal = context.authInfo?.extra?.principal;
       if (typeof principal !== "string") throw new Error("MCP HTTP request reached the server factory without a verified principal");
-      return buildQueueMcpServer(options.queuePath, options.verifier ?? {}, options.storeOptions ?? {}, { principal }, options.queue());
+      // A token minted with kinds (schema rung 9) may claim only those; the
+      // restriction rides the identity and narrows claim_work in the store.
+      const kinds = context.authInfo?.extra?.kinds;
+      return buildQueueMcpServer(
+        options.queuePath,
+        options.verifier ?? {},
+        options.storeOptions ?? {},
+        { principal, ...(Array.isArray(kinds) ? { kinds: kinds as string[] } : {}) },
+        options.queue(),
+      );
     },
     { legacy: "stateless" },
   );
@@ -48,7 +58,13 @@ export function mountMcpHttp(app: Hono, options: McpHttpOptions): McpHttpHandler
       token: presented!,
       clientId: record.id,
       scopes: [],
-      extra: { principal: `${record.owner}/${record.client}`, owner: record.owner, client: record.client, tokenId: record.id },
+      extra: {
+        principal: `${record.owner}/${record.client}`,
+        owner: record.owner,
+        client: record.client,
+        tokenId: record.id,
+        ...(record.kinds ? { kinds: record.kinds } : {}),
+      },
     };
     return handler.fetch(context.req.raw, { authInfo });
   });

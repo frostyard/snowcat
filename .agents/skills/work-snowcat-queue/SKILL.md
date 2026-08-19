@@ -17,6 +17,11 @@ its sandbox; Snowcat only owns queue authorization and bookkeeping.
 3. Stop cleanly when no item is available. Do not poll or loop unless the
    operator explicitly requested continuous work.
    `proposed` items are awaiting admission and are not available work.
+   Your credential may itself be restricted to some kinds (a token minted with
+   `--kinds`, or `SNOWCAT_MCP_KINDS` on a stdio server): a restricted token
+   never yields other kinds, so `null` means no item of *your* kinds is
+   queued — do not loop expecting them, and do not widen `kinds` to get around
+   it. It never restricts finishing what you already hold.
 4. Inspect the returned objective, instructions, acceptance criteria,
    `allowedActions`, and `delegableActions`. Call `release_work` immediately if
    the repository or required capability does not match the current client.

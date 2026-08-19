@@ -197,7 +197,12 @@ removed. -->
   (Snowcat's only GitHub write), `block` admits one bounded `pr-review-fix`,
   round three waits for a human. `result.model` is worker-asserted
   provenance the gate uses to ask for a different reviewer model; never treat
-  it as verified. When
+  it as verified. A minted MCP token (or a stdio server's
+  `SNOWCAT_MCP_KINDS`) may restrict which kinds it claims — `queue -- token
+  mint member:<email> "<client>" --kinds pr-review` (schema rung 9) makes a
+  review-only client a property of the credential: `claim_work` intersects the
+  caller's `kinds` with the token's, an empty intersection claims nothing, and
+  no other tool is affected. When
   `SNOWCAT_CONTROL_DB` is set, `claim_work` also requires the repository to be
   `enrolled` in the control-plane store
   ([`src/queue/eligibility.ts`](src/queue/eligibility.ts)); the hook is the

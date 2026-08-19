@@ -58,7 +58,7 @@ export const MAX_METRICS_WINDOW_EVENTS = 100_000;
  * that newer code has already migrated; newer code upgrades an older database
  * in place, forward only, inside one write transaction.
  */
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 /**
  * Backup manifest emitted by `QueueStore.backup` and re-derived by
@@ -131,9 +131,35 @@ export interface McpTokenRecord {
   /** Empty in listings; present internally for verification only. */
   tokenHash: string;
   createdAt: string;
+  /**
+   * The work kinds this token may claim (schema rung 9). Absent means
+   * unrestricted — exactly how every token minted before the rung behaves.
+   * It narrows `claim_work` only; a restricted token still heartbeats,
+   * completes, blocks, and releases whatever it already holds.
+   */
+  kinds?: string[];
   lastUsedAt?: string;
   revokedAt?: string;
   revokedBy?: string;
+}
+
+/** The work-kind shape every seed, follow-up, and token restriction shares. */
+export const WORK_KIND_PATTERN = /^[a-z][a-z0-9-]{1,63}$/;
+
+/**
+ * Validates a claim restriction: every entry must be a work kind, and the
+ * result is sorted and de-duplicated so a restriction has one stored shape.
+ * An empty list is refused rather than read as "unrestricted": a token that
+ * may claim nothing is a mistake, and `NULL` already means unrestricted.
+ */
+export function validateWorkKinds(kinds: readonly string[], purpose: string): string[] {
+  const trimmed = kinds.map((kind) => kind.trim());
+  for (const kind of trimmed) {
+    if (!WORK_KIND_PATTERN.test(kind)) throw new Error(`${purpose}: invalid work kind: ${kind}`);
+  }
+  const unique = [...new Set(trimmed)].sort();
+  if (unique.length === 0) throw new Error(`${purpose}: at least one work kind is required`);
+  return unique;
 }
 
 function decodeMcpToken(row: Row): McpTokenRecord {
@@ -143,6 +169,7 @@ function decodeMcpToken(row: Row): McpTokenRecord {
     client: String(row.client),
     tokenHash: String(row.token_hash),
     createdAt: String(row.created_at),
+    ...(row.kinds_json == null ? {} : { kinds: JSON.parse(String(row.kinds_json)) as string[] }),
     ...(row.last_used_at == null ? {} : { lastUsedAt: String(row.last_used_at) }),
     ...(row.revoked_at == null ? {} : { revokedAt: String(row.revoked_at) }),
     ...(row.revoked_by == null ? {} : { revokedBy: String(row.revoked_by) }),
@@ -448,19 +475,23 @@ export class QueueStore {
    * person gave the process that will hold it. Token format:
    * `snowcat_<id>_<secret>`.
    */
-  mintMcpToken(input: { owner: string; client: string }): { token: string; record: McpTokenRecord } {
+  mintMcpToken(input: { owner: string; client: string; kinds?: string[] }): { token: string; record: McpTokenRecord } {
     const owner = validateMemberPrincipal(input.owner, "token owner");
     const client = input.client.trim();
     if (!client || client.length > 100 || !/^[A-Za-z0-9][A-Za-z0-9 ._:@/-]*$/.test(client)) {
       throw new Error("token client must be a short human-readable name (letters, digits, space, . _ : @ / -)");
     }
+    // Rung 9: an optional claim restriction, stored sorted and unique, or
+    // NULL for an unrestricted token. It narrows what the token may claim and
+    // can never widen it.
+    const kinds = input.kinds === undefined ? undefined : validateWorkKinds(input.kinds, "token kinds");
     const id = randomBytes(8).toString("hex");
     const secret = randomBytes(24).toString("base64url");
     const token = `snowcat_${id}_${secret}`;
     const now = this.now();
     this.db
-      .prepare("INSERT INTO mcp_tokens (id, owner, client, token_hash, created_at) VALUES (?, ?, ?, ?, ?)")
-      .run(id, owner, client, sha256Hex(secret), now);
+      .prepare("INSERT INTO mcp_tokens (id, owner, client, token_hash, created_at, kinds_json) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(id, owner, client, sha256Hex(secret), now, kinds === undefined ? null : JSON.stringify(kinds));
     return { token, record: this.mcpToken(id)! };
   }
 
@@ -1038,6 +1069,20 @@ export class QueueStore {
     const worker = validateWorkerPrincipal(input.worker);
     if (input.repository) validateRepository(input.repository);
     const leaseSeconds = boundedLease(input.leaseSeconds);
+    // A credential-carried restriction (a minted token's kinds, or the stdio
+    // server's `SNOWCAT_MCP_KINDS`) narrows the caller's own filter and can
+    // never widen it: the effective filter is the intersection, and an empty
+    // intersection claims nothing rather than raising. The guard lives here so
+    // no caller — MCP or not — can bypass it by going straight to the store.
+    const restriction = input.allowedKinds === undefined ? undefined : validateWorkKinds(input.allowedKinds, "claim allowedKinds");
+    const requested = input.kinds && input.kinds.length > 0 ? input.kinds : undefined;
+    const kinds =
+      restriction === undefined
+        ? requested
+        : requested === undefined
+          ? restriction
+          : requested.filter((kind) => restriction.includes(kind.trim()));
+    if (restriction !== undefined && kinds!.length === 0) return undefined;
 
     return this.transaction(() => {
       const now = this.now();
@@ -1050,9 +1095,9 @@ export class QueueStore {
         clauses.push("w.repository = ?");
         params.push(input.repository);
       }
-      if (input.kinds && input.kinds.length > 0) {
-        clauses.push(`w.kind IN (${input.kinds.map(() => "?").join(", ")})`);
-        params.push(...input.kinds);
+      if (kinds && kinds.length > 0) {
+        clauses.push(`w.kind IN (${kinds.map(() => "?").join(", ")})`);
+        params.push(...kinds);
       }
       if (this.claimEligibility) {
         // Ask the hook once per candidate repository, then keep the atomic
@@ -1102,6 +1147,9 @@ export class QueueStore {
         // A transport-established identity may carry the client's own name as
         // a label beside it (ADR-0063); it is provenance, never authority.
         ...(input.label !== undefined && input.label !== worker ? { label: input.label } : {}),
+        // The credential's own claim restriction, when one applied: the ledger
+        // says the lease was bounded by the token, not only by the request.
+        ...(restriction === undefined ? {} : { kindsRestriction: restriction }),
       });
       return this.getRequired(id);
     });
@@ -2143,6 +2191,17 @@ const MIGRATIONS: readonly Migration[] = [
     );
     if (!repositories.has("review_gate")) {
       db.exec("ALTER TABLE repositories ADD COLUMN review_gate INTEGER NOT NULL DEFAULT 0 CHECK (review_gate IN (0, 1))");
+    }
+  },
+  // Rung 9: the work kinds a minted MCP token may claim — a JSON array, or
+  // NULL for an unrestricted token, which is what every existing row becomes.
+  // Narrowing only: it bounds `claim_work` and nothing else.
+  (db) => {
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(mcp_tokens)").all() as Row[]).map((column) => String(column.name)),
+    );
+    if (!columns.has("kinds_json")) {
+      db.exec("ALTER TABLE mcp_tokens ADD COLUMN kinds_json TEXT");
     }
   },
 ];
