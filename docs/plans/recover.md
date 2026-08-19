@@ -210,9 +210,13 @@ hands on the host. Status as of 2026-08-19:
    operated mostly by an orchestrating session (four concurrent worker
    agents, model sized by item kind) plus the operator's own worker —
    ~45 items in a day, every discovery one finding, fixes as PRs, cures
-   that refused to forge patches and filed `pr-cure-change` instead. Still
-   to do: record accepted-per-attempt, blocked, and time-to-merge daily into
-   the PRD baseline. (The Hive/Snowcat boundary was decided 2026-08-18:
+   that refused to forge patches and filed `pr-cure-change` instead. The
+   daily numbers now come from a command instead of by hand:
+   `npm run --silent queue -- metrics` prints accepted-per-attempt, blocked,
+   and time-to-merge for a window, per repository and in total (work-queue
+   spec rule 56, runbook *What to record for the PRD*); still to do: record
+   its reading into the PRD baseline each day.
+   (The Hive/Snowcat boundary was decided 2026-08-18:
    Hive retired, ADR-0062.) The first two days also showed worker pull
    requests reaching the human with defects nothing caught, and Copilot's
    *Lite* auto-review plus the fleet's review-apply workflows looping on
