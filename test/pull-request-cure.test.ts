@@ -17,7 +17,7 @@ const PR_PATH = "/repos/frostyard/updex/pulls/12";
 const HEAD_A = "a".repeat(40);
 const HEAD_B = "b".repeat(40);
 const clock = () => new Date("2026-08-18T20:00:00.000Z");
-process.env.SNOWCAT_GITHUB_TOKEN ??= "test-token";
+process.env.SNOWCAT_GITHUB_TOKEN = "test-token";
 
 function pullRequest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
