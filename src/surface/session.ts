@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-export const SESSION_COOKIE = "fluent_session";
+export const SESSION_COOKIE = "snowcat_session";
 const SESSION_PURPOSE = "snowcat.operator-surface.session.v1";
 
 /**
