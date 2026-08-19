@@ -17,7 +17,7 @@ const PR_PATH = "/repos/frostyard/updex/pulls/12";
 const HEAD_A = "a".repeat(40);
 const HEAD_B = "b".repeat(40);
 const clock = () => new Date("2026-08-18T20:00:00.000Z");
-process.env.SNOWCAT_GITHUB_TOKEN ??= "test-token";
+process.env.SNOWCAT_GITHUB_TOKEN = "test-token";
 
 function pullRequest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -554,4 +554,54 @@ test("enqueueCureRoot validates its cure record and kind", async () => {
   assert.deepEqual(threads?.cure?.decay, ["unresolved-threads"]);
   assert.equal(queue.enqueueCureRoot(REPOSITORY, { ...base, allowedActions: [...base.allowedActions], delegableActions: [...base.delegableActions], cure }), undefined);
   assert.equal(queue.metadata().schemaVersion, 7, "rung 5 carries cure_json; rung 6 the repository cure_foreign setting; rung 7 the mcp_tokens table");
+});
+
+test("the cure sweep selects items with non-terminal artifacts, so more than 100 terminal completions cannot hide a newer decayed head", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cure-starvation-test-"));
+  let now = Date.parse("2026-08-18T20:00:00.000Z");
+  const ticking = () => new Date(now);
+  const queue = new QueueStore(join(directory, "queue.db"), ticking);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled(REPOSITORY, true);
+
+  // 105 older completions whose pull requests are all merged (terminal).
+  for (let index = 0; index < 105; index += 1) {
+    now += 1000;
+    queue.enqueueSeed({
+      repository: REPOSITORY,
+      kind: "issue-resolution",
+      objective: `Resolve #${1000 + index}`,
+      instructions: "Open a PR.",
+      acceptanceCriteria: ["PR open."],
+      allowedActions: ["read", "write", "run-tests", "open-pr"],
+      delegableActions: [],
+      priority: 7,
+      createdBy: "operator:test",
+    });
+    const claimed = queue.claim({ worker: "claude:cure-test" })!;
+    queue.complete({
+      id: claimed.id,
+      leaseToken: claimed.leaseToken!,
+      worker: "claude:cure-test",
+      result: {
+        summary: "Merged.",
+        evidence: [],
+        artifacts: [{ kind: "pull-request", url: `https://github.com/frostyard/updex/pull/${1000 + index}`, verification: { status: "verified", verifiedAt: ticking().toISOString(), number: 1000 + index, state: "merged", mergedAt: ticking().toISOString() } }],
+      },
+      followUps: [],
+    });
+  }
+  // One newer completion reporting an open pull request whose head has decayed.
+  now += 1000;
+  const originId = await completedWithOpenPr(queue, 7);
+  assert.equal(queue.list({ status: "completed", repository: REPOSITORY, limit: 100 }).some((item) => item.id === originId), false, "list()'s 100-row page does not reach the newer item");
+
+  const decayedRoutes = routesFor({ pull: pullRequest({ mergeable_state: "behind" }), checks: [{ name: "Lint", status: "completed", conclusion: "failure" }] });
+  const swept = await curePullRequests(queue, { fetcher: apiFetcher(decayedRoutes).fetcher, clock: ticking, repository: REPOSITORY });
+  assert.equal(swept.inspected, 1);
+  assert.equal(swept.enqueued.length, 1, "exactly one pr-cure root for the newer decayed head");
+  const cure = queue.get(swept.enqueued[0]!.id)!;
+  assert.equal(cure.kind, "pr-cure");
+  assert.equal(cure.sourceRef, `${PR_URL}@${HEAD_A}`);
+  assert.equal(cure.cure?.originItemId, originId);
 });

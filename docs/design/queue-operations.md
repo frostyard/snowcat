@@ -566,7 +566,10 @@ and the worker is told to fix it. To refresh state after review and merges:
 npm run --silent queue -- verify-artifacts --repository frostyard/updex
 ```
 
-`snowcat-verify.timer` runs this every 15 minutes with the default limit. It
+`snowcat-verify.timer` runs this every 15 minutes with the default limit. The
+limit bounds completed items that still have a non-terminal artifact (missing,
+`unverified`, or `open`), newest first, so a repository with hundreds of
+already-merged completions never pushes a fresh one out of the pass. It
 records `artifact.verified` events and leaves anything alone while GitHub is
 unavailable.
 
