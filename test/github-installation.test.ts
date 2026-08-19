@@ -141,6 +141,36 @@ test("installation inspection bounds redirects, bodies, and JWT refresh", async 
   assert.equal(oversized.kind, "unavailable");
 });
 
+test("installation inspection aborts pending JWT acquisition without issuing a request", { timeout: 1_000 }, async () => {
+  const controller = new AbortController();
+  let fetchCount = 0;
+  let rejectJwt!: (error: Error) => void;
+  const resultPromise = inspectGitHubRepositoryInstallation({
+    appId: "4567",
+    repositoryId: "github.com:9001",
+    owner: "frostyard",
+    name: "snowcat",
+    getAppJwt: () =>
+      new Promise<string>((_resolve, reject) => {
+        rejectJwt = reject;
+      }),
+    signal: controller.signal,
+    fetcher: async () => {
+      fetchCount += 1;
+      return Response.json(installation());
+    },
+    now,
+  });
+
+  controller.abort();
+  const result = await resultPromise;
+  assert.equal(result.kind, "unavailable");
+  assert.equal(fetchCount, 0);
+
+  rejectJwt(new Error("late JWT failure"));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+});
+
 function installation(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: 7654,

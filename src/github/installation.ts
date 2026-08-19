@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { awaitWithAbort } from "./abort.ts";
 import {
   GITHUB_API_ACCEPT,
   GITHUB_API_ORIGIN,
@@ -103,7 +104,7 @@ async function request(
   fetcher: GitHubDeliveryFetch,
   signal: AbortSignal,
 ): Promise<Response> {
-  const jwt = await getAppJwt();
+  const jwt = await awaitWithAbort(getAppJwt, signal);
   if (!/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(jwt)) {
     throw new Error("GitHub App JWT is unavailable");
   }

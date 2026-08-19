@@ -6,6 +6,7 @@ import {
   type GitHubPullRequestAction,
 } from "../control/registry.ts";
 import type { GitHubPullRequestDeliveryRepairInput } from "../control/store.ts";
+import { awaitWithAbort } from "./abort.ts";
 import {
   GITHUB_API_ACCEPT,
   GITHUB_API_ORIGIN,
@@ -378,9 +379,11 @@ async function fetchPage(
 ): Promise<PageResult> {
   let currentUrl = url;
   for (let redirectCount = 0; redirectCount <= 1; redirectCount += 1) {
+    const timeout = AbortSignal.timeout(GITHUB_DELIVERY_AUDIT_REQUEST_TIMEOUT_MS);
+    const signal = callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout;
     let jwt: string;
     try {
-      jwt = await getAppJwt();
+      jwt = await awaitWithAbort(getAppJwt, signal);
     } catch {
       throw new AuditFailure("source-unavailable", "authorization-unavailable");
     }
@@ -389,8 +392,6 @@ async function fetchPage(
     }
     let response: Response;
     try {
-      const timeout = AbortSignal.timeout(GITHUB_DELIVERY_AUDIT_REQUEST_TIMEOUT_MS);
-      const signal = callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout;
       response = await fetcher(currentUrl, {
         method: "GET",
         redirect: "manual",
@@ -435,17 +436,17 @@ async function fetchDeliveryDetail(
   }
   let currentUrl = `${GITHUB_API_ORIGIN}${DELIVERY_PATH}/${deliveryId}`;
   for (let redirectCount = 0; redirectCount <= 1; redirectCount += 1) {
+    const timeout = AbortSignal.timeout(GITHUB_DELIVERY_AUDIT_REQUEST_TIMEOUT_MS);
+    const signal = callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout;
     let jwt: string;
     try {
-      jwt = await getAppJwt();
+      jwt = await awaitWithAbort(getAppJwt, signal);
     } catch {
       throw new AuditFailure("source-unavailable", "authorization-unavailable");
     }
     if (!isAppJwt(jwt)) throw new AuditFailure("source-unavailable", "authorization-unavailable");
     let response: Response;
     try {
-      const timeout = AbortSignal.timeout(GITHUB_DELIVERY_AUDIT_REQUEST_TIMEOUT_MS);
-      const signal = callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout;
       response = await fetcher(currentUrl, {
         method: "GET",
         redirect: "manual",
