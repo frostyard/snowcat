@@ -18,36 +18,38 @@ import type { StreamOptions } from "./surface/stream.ts";
 const lemonadeBaseUrl = process.env.LEMONADE_BASE_URL ?? "http://localhost:13305/v1";
 const lemonadeModel = process.env.LEMONADE_MODEL ?? "Qwen3.8-27B-GGUF-UD-Q4_K_XL";
 
-setProvider(
-  createProvider({
-    id: "lemonade",
-    auth: {
-      apiKey: {
-        name: "Lemonade",
-        resolve: async () => ({
-          // Pi requires a non-empty API key even when the local endpoint does
-          // not authenticate. Lemonade ignores this placeholder.
-          auth: { apiKey: process.env.LEMONADE_API_KEY ?? "lemonade-local" },
-        }),
-      },
+const { refreshModels: _refreshModels, ...lemonadeProvider } = createProvider({
+  id: "lemonade",
+  auth: {
+    apiKey: {
+      name: "Lemonade",
+      resolve: async () => ({
+        // Pi requires a non-empty API key even when the local endpoint does
+        // not authenticate. Lemonade ignores this placeholder.
+        auth: { apiKey: process.env.LEMONADE_API_KEY ?? "lemonade-local" },
+      }),
     },
-    models: [
-      {
-        id: lemonadeModel,
-        name: lemonadeModel,
-        api: "openai-completions",
-        provider: "lemonade",
-        baseUrl: lemonadeBaseUrl,
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 262144,
-        maxTokens: 512,
-      },
-    ],
-    api: openAICompletionsApi(),
-  }),
-);
+  },
+  models: [
+    {
+      id: lemonadeModel,
+      name: lemonadeModel,
+      api: "openai-completions",
+      provider: "lemonade",
+      baseUrl: lemonadeBaseUrl,
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 262144,
+      maxTokens: 512,
+    },
+  ],
+  api: openAICompletionsApi(),
+});
+// Flue 2.0.3 owns a pi-ai 0.83 Models registry. This provider is static, so
+// omit pi-ai 0.84's incompatible optional refresh hook; the registered model
+// and stream request shapes are otherwise the same across this boundary.
+setProvider(lemonadeProvider as unknown as Parameters<typeof setProvider>[0]);
 
 export interface AppOptions {
   appToken?: string;
