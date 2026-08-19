@@ -11,6 +11,7 @@ import { refreshArtifactVerifications, verifyGitHubArtifact } from "../src/queue
 import {
   assertReviewCompletion,
   assertReviewGate,
+  convertPullRequestToDraft,
   markPullRequestReady,
   readPullRequestHead,
   reviewFixRootDefinition,
@@ -231,6 +232,10 @@ test("readPullRequestHead and the head read distinguish draft, ready, merged, re
   const refused = await markPullRequestReady(NODE_ID, apiFetcher(routesFor({ markReady: { errors: [{ message: "Resource not accessible by integration" }] } })).fetcher);
   assert.equal(refused.kind, "unavailable");
   assert.match((refused as { reason: string }).reason, /Resource not accessible/);
+  const converted = await convertPullRequestToDraft(NODE_ID, apiFetcher({ "graphql:SnowcatConvertToDraft": { data: { convertPullRequestToDraft: { pullRequest: { isDraft: true } } } } }).fetcher);
+  assert.deepEqual(converted, { kind: "converted" });
+  const notConverted = await convertPullRequestToDraft(NODE_ID, apiFetcher({}).fetcher);
+  assert.equal(notConverted.kind, "unavailable");
 
   assert.equal(reviewGateWritesFromEnvironment({}), false);
   assert.equal(reviewGateWritesFromEnvironment({ SNOWCAT_REVIEW_GATE_WRITES: "1" }), true);
@@ -527,6 +532,33 @@ test("pass → ready to mark (writes off) or marked ready through GraphQL with a
   assert.equal(refused.unavailable[0]?.url, PR_URL);
   assert.match(refused.unavailable[0]!.reason, /mark ready failed: GitHub GraphQL errors: Resource not accessible/);
   assert.equal(queue2.events(origin2).some((event) => event.type === "artifact.ready"), false);
+
+  // A push between the read and the mark: the re-read sees a new head, the sweep converts back to draft and reports a human, recording nothing.
+  const queue5 = await newQueue("review-pass-raced");
+  const origin5 = completedWithDraftPr(queue5);
+  queue5.setRepositoryReviewGate(REPOSITORY, true);
+  await reviewPullRequests(queue5, { fetcher: apiFetcher(routesFor({})).fetcher, clock });
+  const passed5 = await completeReview(queue5, { decision: "pass", blockers: [], advisories: [] });
+  let reads = 0;
+  const racing = apiFetcher(routesFor({}));
+  const racingFetcher = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    if (url.pathname === PR_PATH) {
+      reads += 1;
+      if (reads >= 2) return new Response(JSON.stringify(pullRequest({ head: { sha: HEAD_B }, draft: false })), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (url.pathname === "/graphql" && String(init?.body).includes("SnowcatConvertToDraft")) {
+      racing.graphqlOperations.push({ name: "SnowcatConvertToDraft", variables: (JSON.parse(String(init?.body)) as { variables: unknown }).variables });
+      return new Response(JSON.stringify({ data: { convertPullRequestToDraft: { pullRequest: { isDraft: true } } } }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return racing.fetcher(input, init);
+  }) as typeof fetch;
+  const raced = await reviewPullRequests(queue5, { fetcher: racingFetcher, clock, writes: true });
+  assert.deepEqual(raced.markedReady, []);
+  assert.deepEqual(raced.needsHuman, [{ url: PR_URL, headSha: HEAD_B, round: 1, reason: "head moved to bbbbbbb while being marked ready; converted back to draft" }]);
+  assert.deepEqual(racing.graphqlOperations.map((operation) => operation.name), ["SnowcatMarkReady", "SnowcatConvertToDraft"]);
+  assert.equal(queue5.events(origin5).some((event) => event.type === "artifact.ready"), false, "nothing recorded for a mark that was reverted");
+  assert.equal(queue5.get(passed5.id)!.review!.decision, "pass");
 
   // unable-to-review → needs human; so does a fix that completed without moving the head.
   const queue3 = await newQueue("review-unable");

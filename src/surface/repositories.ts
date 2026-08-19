@@ -349,24 +349,12 @@ export function readPullRequests(queue: QueueStore, repository: string, now: Dat
 
   for (const [key, row] of rows) row.cure = pickCure(cures.get(key) ?? [], row.headSha);
 
-  // Review-gate items (ADR-0065), oldest first per pull request, derived into
-  // one row the way the sweep would read them.
-  const reviews = new Map<string, ObservableWorkItem[]>();
-  for (const kind of [REVIEW_KIND, REVIEW_FIX_KIND]) {
-    for (const status of workStatuses) {
-      const items = queue.list({ status, kind, repository, limit: LIST_LIMIT });
-      if (items.length === LIST_LIMIT) truncated = true;
-      for (const raw of items) {
-        if (!raw.review) continue;
-        const key = raw.review.pullRequestUrl.toLowerCase();
-        reviews.set(key, [...(reviews.get(key) ?? []), withoutLeaseToken(raw)]);
-      }
-    }
-  }
-  for (const [key, items] of reviews) {
-    items.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
-    const row = rows.get(key);
-    if (!row) continue;
+  // Review-gate items (ADR-0065): the same uncapped per-pull-request read the
+  // sweep uses (`pullRequestReviewItems`, oldest first), so a repository with
+  // more than 100 completed rounds never hides the latest verdict.
+  for (const row of rows.values()) {
+    const items = queue.pullRequestReviewItems(repository, row.url).map(withoutLeaseToken);
+    if (items.length === 0) continue;
     row.review = deriveReviewState(items, row.headSha, row.draft === true);
   }
 

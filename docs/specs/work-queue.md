@@ -707,7 +707,13 @@ MCP (rule 41).
     and then record `artifact.ready` on the origin item (URL, head, review
     item), rewriting its verification without `draft`; a refused or
     unavailable mutation MUST be reported as `unavailable` and record
-    nothing; without the variable the pass MUST be reported as `readyToMark`
+    nothing. Because the mutation binds to the pull request and not to a
+    head, the sweep MUST re-read the head after marking and, when it is no
+    longer the passed head or cannot be re-read, MUST convert the pull request
+    back to a draft (`convertPullRequestToDraft`), record nothing, and report
+    the pull request as `needsHuman`; a failed conversion MUST be reported as
+    `unavailable` naming the unreviewed ready head. Without the variable the
+    pass MUST be reported as `readyToMark`
     and the surface MUST show it with the `gh pr ready <n>` command. A
     `block` at a round below three MUST create exactly one admitted root of
     kind `pr-review-fix` with `sourceRef = pr-review-fix:<url>@<head SHA>`,
@@ -722,9 +728,10 @@ MCP (rule 41).
     `pr-review-fix` that completed without a new head MUST create nothing and
     be reported as `needsHuman` with the reason; the operator inbox MUST
     list those pull requests and the `readyToMark` ones in one "Review
-    adjudication" group. The sweep MUST never merge, approve, dismiss, or
-    convert to draft, and with the variable unset MUST perform no GitHub
-    write at all.
+    adjudication" group. The sweep MUST never merge, approve, or dismiss;
+    its only writes are the ready-for-review mark and its compensating
+    conversion back to draft, and with the variable unset it MUST perform no
+    GitHub write at all.
 
 ## Derived artifacts
 

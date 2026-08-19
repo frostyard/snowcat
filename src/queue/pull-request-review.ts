@@ -34,6 +34,11 @@ const MARK_READY_MUTATION = `mutation SnowcatMarkReady($id: ID!) {
     pullRequest { isDraft }
   }
 }`;
+const CONVERT_TO_DRAFT_MUTATION = `mutation SnowcatConvertToDraft($id: ID!) {
+  convertPullRequestToDraft(input: { pullRequestId: $id }) {
+    pullRequest { isDraft }
+  }
+}`;
 
 export const REVIEW_KIND = "pr-review";
 export const REVIEW_FIX_KIND = "pr-review-fix";
@@ -109,20 +114,40 @@ export function reviewGateWritesFromEnvironment(environment: NodeJS.ProcessEnv =
 
 /**
  * Marks a draft pull request ready for review through GraphQL (REST cannot
- * flip the draft flag). The only GitHub write the review gate performs, done
- * by Snowcat as `policy:review-gate` on a recorded `pass`, never by a model.
+ * flip the draft flag). Done by Snowcat as `policy:review-gate` on a recorded
+ * `pass`, never by a model. The mutation binds to the pull request, not to a
+ * head, so the sweep re-reads the head afterwards and converts back to draft
+ * when it moved in between (`convertPullRequestToDraft`).
  */
 export async function markPullRequestReady(nodeId: string, fetcher: GitHubFetch = fetch): Promise<{ kind: "marked" } | { kind: "unavailable"; reason: string }> {
-  const response = await githubGraphql(MARK_READY_MUTATION, { id: nodeId }, AbortSignal.timeout(GITHUB_TIMEOUT_MS), fetcher);
+  return draftMutation(MARK_READY_MUTATION, "markPullRequestReadyForReview", false, nodeId, fetcher).then((outcome) => (outcome.kind === "done" ? { kind: "marked" } : outcome));
+}
+
+/** Converts a pull request back to a draft: the compensating write when a head moved while it was being marked ready. */
+export async function convertPullRequestToDraft(nodeId: string, fetcher: GitHubFetch = fetch): Promise<{ kind: "converted" } | { kind: "unavailable"; reason: string }> {
+  return draftMutation(CONVERT_TO_DRAFT_MUTATION, "convertPullRequestToDraft", true, nodeId, fetcher).then((outcome) => (outcome.kind === "done" ? { kind: "converted" } : outcome));
+}
+
+async function draftMutation(
+  mutation: string,
+  field: string,
+  expectedDraft: boolean,
+  nodeId: string,
+  fetcher: GitHubFetch,
+): Promise<{ kind: "done" } | { kind: "unavailable"; reason: string }> {
+  const response = await githubGraphql(mutation, { id: nodeId }, AbortSignal.timeout(GITHUB_TIMEOUT_MS), fetcher);
   if (response.kind === "unavailable") return { kind: "unavailable", reason: "GitHub GraphQL unavailable" };
   if (response.status !== 200) return { kind: "unavailable", reason: `GitHub GraphQL returned HTTP ${response.status}` };
   const envelope = asObject(response.value);
-  const pull = asObject(asObject(asObject(envelope?.data)?.markPullRequestReadyForReview)?.pullRequest);
-  if (pull?.isDraft === false) return { kind: "marked" };
+  const pull = asObject(asObject(asObject(envelope?.data)?.[field])?.pullRequest);
+  if (pull?.isDraft === expectedDraft) return { kind: "done" };
   const errors = Array.isArray(envelope?.errors)
     ? envelope.errors.map((error) => asObject(error)?.message).filter((message): message is string => typeof message === "string")
     : [];
-  return { kind: "unavailable", reason: errors.length > 0 ? `GitHub GraphQL errors: ${errors.join("; ")}` : "GitHub did not confirm the pull request left draft" };
+  return {
+    kind: "unavailable",
+    reason: errors.length > 0 ? `GitHub GraphQL errors: ${errors.join("; ")}` : `GitHub did not confirm the pull request ${expectedDraft ? "became a draft" : "left draft"}`,
+  };
 }
 
 export interface ReviewSweepResult {
@@ -133,7 +158,7 @@ export interface ReviewSweepResult {
   markedReady: Array<{ url: string; headSha: string; reviewItemId: string }>;
   /** Passed heads waiting for a human to mark ready (writes off). */
   readyToMark: Array<{ url: string; headSha: string; reviewItemId: string }>;
-  /** Pull requests the gate cannot advance by itself: round budget spent, third-round block, or unable-to-review. */
+  /** Pull requests the gate cannot advance by itself: round budget spent, third-round block, unable-to-review, or a head that moved while being marked ready. */
   needsHuman: Array<{ url: string; headSha: string; round: number; reason: string }>;
   skipped: Array<{ url: string; reason: string }>;
   unavailable: Array<{ url: string; reason: string }>;
@@ -217,6 +242,24 @@ export async function reviewPullRequests(
           const marked = await markPullRequestReady(head.nodeId, options.fetcher ?? fetch);
           if (marked.kind === "unavailable") {
             result.unavailable.push({ url, reason: `mark ready failed: ${marked.reason}` });
+            continue;
+          }
+          // The mutation binds to the pull request, not the head: re-read, and
+          // if a push landed between the read and the mark, convert back to a
+          // draft so no ready pull request carries an unreviewed head. The new
+          // head is then the next round's (or a human's) on a later pass.
+          const after = await readPullRequestHead(origin.repository, url, options);
+          const movedTo = after.kind === "head" && after.head.state === "open" && after.head.headSha !== head.headSha ? after.head.headSha : undefined;
+          if (after.kind === "unavailable" || movedTo) {
+            const reason = movedTo
+              ? `head moved to ${movedTo.slice(0, 7)} while being marked ready`
+              : `head could not be re-read after marking ready: ${after.kind === "unavailable" ? after.reason : "unknown"}`;
+            const reverted = await convertPullRequestToDraft(head.nodeId, options.fetcher ?? fetch);
+            if (reverted.kind === "converted") {
+              result.needsHuman.push({ url, headSha: movedTo ?? head.headSha, round: verdict.round, reason: `${reason}; converted back to draft` });
+            } else {
+              result.unavailable.push({ url, reason: `${reason}; converting back to draft failed: ${reverted.reason} — the pull request is ready with an unreviewed head` });
+            }
             continue;
           }
           queue.recordPullRequestReady(origin.originItemId, url, actor, { headSha: head.headSha, reviewItemId: latest.id });

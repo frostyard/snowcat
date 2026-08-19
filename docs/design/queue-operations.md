@@ -650,8 +650,10 @@ gated — and, per draft head:
 - **The latest round `pass`ed this head** → with `SNOWCAT_REVIEW_GATE_WRITES=1`
   in `/etc/snowcat/env`, the sweep marks the pull request ready for review
   (GraphQL `markPullRequestReadyForReview`, as `policy:review-gate`; the token
-  then needs pull-requests write) and records `artifact.ready` on the origin
-  item — Snowcat's only GitHub write. Without the variable it reports
+  then needs pull-requests write), re-reads the head, converts the pull
+  request back to a draft if a push landed in between (reported as
+  `needsHuman`), and otherwise records `artifact.ready` on the origin item —
+  Snowcat's only GitHub writes. Without the variable it reports
   `readyToMark` and the board and inbox say "passed review — `gh pr ready N`";
   you mark it. Either way the pull request then leaves the draft quiet zone
   and cure, Copilot, and you take over.
@@ -666,12 +668,12 @@ gated — and, per draft head:
   (beside the `readyToMark` ones). You decide: push a fix, `gh pr ready`,
   `note` or `requeue` the item, or close the pull request.
 
-The sweep never merges, approves, dismisses, or converts to draft. Because
+The sweep never merges, approves, or dismisses. Because
 drafts are never cured, Copilot's automatic review skips drafts unless a
 ruleset opts in, and the fleet's review-apply workflows run only on
 non-drafts, review/fix and cure never act on one pull request at the same
 time. `--no-review` skips the step; the board's **Verify artifacts** button
-runs it and reports `N review items queued`; `show <id>` prints an item's
+runs it and reports `N review items queued, N marked ready`; `show <id>` prints an item's
 `review` record (head, round, verdict, fingerprints, the models the author
 and reviewer reported). Model names are what workers report as
 `result.model` — provenance, not proof; the orchestrator uses

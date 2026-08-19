@@ -1167,8 +1167,9 @@ one bounded fix, and anything else waits for a person.
 One read-only `pr-review` work item bound to one pull request head, counted
 per pull request (not per head) toward a budget of three completed rounds
 before human adjudication. A round's verdict — pass, block, or
-unable-to-review, with at most five fingerprinted blockers — is invalidated by
-a new head and carried into the next round as prior blockers.
+unable-to-review, with at most five fingerprinted blockers — binds to that
+head alone: a new head invalidates it, and only its blockers are carried into
+the next round, as prior blockers the re-review must examine.
 
 **Avoid:** review comment; re-review of a fresh audit; attempt; lease.
 ([ADR-0065](../adr/0065-gate-worker-pull-requests-behind-bounded-review.md),

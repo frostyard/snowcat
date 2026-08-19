@@ -105,7 +105,7 @@ export async function applyVerifyArtifacts(
   repository: string,
   verifier: ArtifactVerifierOptions,
   actor: string = WEB_ACTOR,
-): Promise<MutationOutcome & { checked: number; updated: number; unavailable: number; rejected: number; cured: number; reviewed: number }> {
+): Promise<MutationOutcome & { checked: number; updated: number; unavailable: number; rejected: number; cured: number; reviewed: number; markedReady: number }> {
   const result = await refreshArtifactVerifications(queue, { ...verifier, repository, actor });
   // Same pass as the CLI: decayed pull-request heads become pr-cure roots
   // (ADR-0061) and draft heads in a review-gated repository advance through
@@ -113,13 +113,21 @@ export async function applyVerifyArtifacts(
   const cure = await curePullRequests(queue, { ...verifier, repository, actor });
   const review = await reviewPullRequests(queue, { ...verifier, repository, writes: reviewGateWritesFromEnvironment() });
   return {
-    eventType: cure.enqueued.length + review.enqueued.length > 0 ? "work.queued" : result.updated.length + result.rejected.length > 0 ? "artifact.verified" : "artifact.unchanged",
+    eventType:
+      cure.enqueued.length + review.enqueued.length > 0
+        ? "work.queued"
+        : review.markedReady.length > 0
+          ? "artifact.ready"
+          : result.updated.length + result.rejected.length > 0
+            ? "artifact.verified"
+            : "artifact.unchanged",
     checked: result.checked,
     updated: result.updated.length,
     unavailable: result.unavailable.length,
     rejected: result.rejected.length,
     cured: cure.enqueued.length,
     reviewed: review.enqueued.length,
+    markedReady: review.markedReady.length,
   };
 }
 

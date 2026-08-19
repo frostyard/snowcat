@@ -89,8 +89,11 @@ off by default.
    for review through GraphQL as `policy:review-gate`, recording
    `artifact.ready` on the origin item — only when the host sets
    `SNOWCAT_REVIEW_GATE_WRITES=1` (the token then needs pull-requests write);
-   otherwise the operator surface says "passed review — mark ready" and a
-   human runs `gh pr ready`. A `block` while the round budget lasts creates
+   because that mutation binds to the pull request and not to a head, the
+   sweep re-reads the head afterwards and converts the pull request back to
+   a draft if a push landed in between, so a ready pull request never carries
+   an unreviewed head. Otherwise the operator surface says "passed review —
+   mark ready" and a human runs `gh pr ready`. A `block` while the round budget lasts creates
    one admitted root of kind `pr-review-fix` for that head, keyed
    `pr-review-fix:<url>@<head SHA>`, carrying exactly the fingerprinted
    blockers, with `read, write, run-tests, open-pr` and nothing delegable,
@@ -127,7 +130,8 @@ automated fixer on a draft and Copilot reviews what a human is about to.
   automated actors work one pull request at once.
 - `verify-artifacts` grows one GitHub read per draft head (plus the files
   read for the patch identity) and, with writes on, Snowcat's first GitHub
-  write — a GraphQL mutation that flips draft to ready and nothing else.
+  writes — a GraphQL mutation that flips draft to ready, and the
+  compensating one that flips it back when the head moved underneath it.
   `SNOWCAT_GITHUB_TOKEN` must then carry pull-requests write; the runbook
   says so.
 - Workers gain two kinds whose success is a verdict or a new head on the
