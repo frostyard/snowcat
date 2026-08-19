@@ -23,7 +23,7 @@ interface View {
   title: string;
   eyebrow: string;
   heading: string;
-  active: "inbox" | "repositories" | "tokens" | "none";
+  active: "inbox" | "repositories" | "events" | "tokens" | "none";
   /** Header-right content before Refresh / Sign out (badges, ghost buttons). */
   actions?: SafeHtml;
   refresh?: boolean;
@@ -267,7 +267,7 @@ export function shell(context: PageContext, view: View, main: SafeHtml): SafeHtm
         <div class="ph-nav-group">Queue</div>
         <a class="ph-nav-link${view.active === "inbox" ? " active" : ""}" href="/"><span class="ph-nav-num">01</span>Inbox</a>
         <a class="ph-nav-link${view.active === "repositories" ? " active" : ""}" href="/repositories"><span class="ph-nav-num">02</span>Repositories</a>
-        <span class="ph-nav-link disabled" title="Events page — later slice"><span class="ph-nav-num">03</span>Events</span>
+        <a class="ph-nav-link${view.active === "events" ? " active" : ""}" href="/events"><span class="ph-nav-num">03</span>Events</a>
         <a class="ph-nav-link${view.active === "tokens" ? " active" : ""}" href="/tokens"><span class="ph-nav-num">04</span>MCP tokens</a>
         <div class="ph-nav-group">${context.controlPlanePath ? "Enrolled" : "Opted in"}</div>
         ${
@@ -409,7 +409,7 @@ function adjudicationGroup(rows: AdjudicationRow[]): SafeHtml {
 }
 
 function eventsRail(events: ObservedWorkEvent[], since: number): SafeHtml {
-  return html`<aside class="fl-group" id="events"><div class="fl-group-head"><h2>Events</h2><span>since ${since} · all repositories</span></div><div class="fl-events">${
+  return html`<aside class="fl-group" id="events"><div class="fl-group-head"><h2><a href="/events">Events</a></h2><span>since ${since} · all repositories</span></div><div class="fl-events">${
     events.length === 0
       ? html`<p class="fl-empty">No events yet.</p>`
       : events.map(

@@ -195,13 +195,14 @@ test("the operator surface requires a session, sets the cookie on the right toke
   // Events rail: newest first, with the "since <sequence>" caption.
   const events = section(body, "events");
   const metadata = seeded.queue.metadata();
-  assert.match(events, new RegExp(`<h2>Events</h2><span>since ${Math.max(0, metadata.lastEventSequence - 30)} · all repositories</span>`));
+  assert.match(events, new RegExp(`<h2><a href="/events">Events</a></h2><span>since ${Math.max(0, metadata.lastEventSequence - 30)} · all repositories</span>`));
   const newest = seeded.queue.eventsSince(metadata.lastEventSequence - 1)[0]!;
   assert.equal(newest.type, "work.claimed");
   const firstEvent = /<div class="fl-event">.*?<\/div><\/div><\/div>/s.exec(events)![0];
   assert.match(firstEvent, /<b>work\.claimed<\/b><a href="\/items\/[0-9a-f-]+" title="[^"]+">security-implementation<\/a>/);
 
   // Sidebar without a control plane lists opted-in repositories; footer prints paths.
+  assert.match(body, /<a class="ph-nav-link" href="\/events"><span class="ph-nav-num">03<\/span>Events<\/a>/);
   assert.match(body, /<div class="ph-nav-group">Opted in<\/div>/);
   assert.match(body, /frostyard\/example/);
   assert.match(body, /frostyard\/updex/);
@@ -1312,4 +1313,90 @@ test("hold from the board needs a control plane, and an unknown repository or ac
   const crossSite = await app.request("/repositories/frostyard/example/seed-dogfood", { method: "POST", body: new URLSearchParams({}), headers: { Cookie: cookie, "Sec-Fetch-Site": "cross-site" } });
   assert.equal(crossSite.status, 403);
   assert.equal(seeded.queue.list({ repository: "frostyard/example", kind: "ci-gap-discovery" }).length, 0);
+});
+
+test("the events page filters by repository and by operator decision, 404s an unknown repository, and never renders a lease token", async () => {
+  const seeded = await seededQueue();
+  test.after(() => seeded.queue.close());
+  // One operator decision in the ledger: the proposed follow-up, approved.
+  const proposal = seeded.queue.list({ status: "proposed" })[0]!;
+  assert.equal(proposal.repository, "frostyard/updex");
+  seeded.queue.approve(proposal.id, "operator:test");
+  const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue: seeded.queue }) });
+  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const read = async (path: string) => {
+    const response = await app.request(path, { headers: { Cookie: cookie } });
+    return { status: response.status, body: await response.text() };
+  };
+
+  // Gated like every other route.
+  const anonymous = await app.request("/events");
+  assert.equal(anonymous.status, 303);
+  assert.equal(anonymous.headers.get("Location"), "/login");
+
+  // Every repository, newest first, with the sidebar entry now active.
+  const all = await read("/events");
+  assert.equal(all.status, 200);
+  assert.match(all.body, /<a class="ph-nav-link active" href="\/events"><span class="ph-nav-num">03<\/span>Events<\/a>/);
+  assert.match(all.body, /<h1>Events<\/h1>/);
+  const ledger = section(all.body, "events");
+  const metadata = seeded.queue.metadata();
+  assert.match(ledger, new RegExp(`<h2>Ledger</h2><span>\\d+ events? · since ${Math.max(0, metadata.lastEventSequence - 100)} · all repositories</span>`));
+  const newest = seeded.queue.eventsSince(metadata.lastEventSequence - 1)[0]!;
+  assert.equal(newest.type, "work.approved");
+  const sequences = [...ledger.matchAll(/<td class="right">(\d+)<\/td>/g)].map((match) => Number(match[1]));
+  assert.equal(sequences[0], newest.sequence, "newest first");
+  assert.deepEqual(sequences, [...sequences].sort((left, right) => right - left));
+  assert.ok(ledger.includes("frostyard/example") && ledger.includes("frostyard/updex"), "all repositories");
+  assert.match(ledger, /<b>work\.claimed<\/b>/);
+
+  // One repository: only its events, and the header names it.
+  const example = await read("/events?repository=frostyard/example");
+  assert.equal(example.status, 200);
+  const exampleLedger = section(example.body, "events");
+  assert.match(exampleLedger, /<h2>Ledger<\/h2><span>\d+ events? · since \d+ · frostyard\/example<\/span>/);
+  assert.ok(exampleLedger.includes("frostyard/example"));
+  assert.equal(exampleLedger.includes("frostyard/updex"), false, "the other repository's events are filtered out");
+  assert.match(example.body, /<option value="frostyard\/example" selected>frostyard\/example<\/option>/);
+
+  // Decisions only: work.approved stays, work.claimed goes.
+  const decisions = await read("/events?decisions=1");
+  assert.equal(decisions.status, 200);
+  const decisionLedger = section(decisions.body, "events");
+  assert.match(decisionLedger, /<h2>Operator decisions<\/h2><span>\d+ events? · since \d+ · all repositories · decisions only<\/span>/);
+  assert.match(decisionLedger, /<b>work\.approved<\/b>/);
+  assert.equal(/<b>work\.claimed<\/b>/.test(decisionLedger), false);
+  assert.equal(/<b>work\.completed<\/b>/.test(decisionLedger), false);
+  assert.match(decisions.body, /<input type="checkbox" name="decisions" value="1" checked>/);
+
+  // Both filters at once, and the combination the board header links to.
+  const combined = await read("/events?repository=frostyard/updex&decisions=1");
+  assert.equal(combined.status, 200);
+  assert.match(section(combined.body, "events"), /<b>work\.approved<\/b>/);
+  const board = await read("/repositories/frostyard/updex");
+  assert.match(board.body, /<a class="ph-button secondary" href="\/events\?repository=frostyard%2Fupdex">Events<\/a>/);
+
+  // An unknown or malformed repository is the 404-in-shell page, not a 500.
+  for (const path of ["/events?repository=frostyard/nope", "/events?repository=not-a-slug", "/events?repository=a%2Fb%2Fc"]) {
+    const missing = await read(path);
+    assert.equal(missing.status, 404, path);
+    assert.match(missing.body, /<aside class="ph-sidebar">/, path);
+    assert.match(missing.body, /<h1>Not found<\/h1>/, path);
+  }
+
+  // `since` narrows the window; a junk value falls back to the default.
+  const narrowed = await read(`/events?since=${metadata.lastEventSequence - 2}`);
+  assert.equal(narrowed.status, 200);
+  assert.equal([...section(narrowed.body, "events").matchAll(/<td class="right">(\d+)<\/td>/g)].length, 2);
+  const junk = await read("/events?since=banana");
+  assert.equal(junk.status, 200);
+  assert.match(section(junk.body, "events"), new RegExp(`since ${Math.max(0, metadata.lastEventSequence - 100)} ·`));
+
+  // Read-only: no POST form, no lease token, nothing loaded from elsewhere.
+  for (const body of [all.body, example.body, decisions.body, combined.body]) {
+    assert.equal(/method="post"/.test(body.replace(/<form class="fl-logout" method="post"/g, "")), false);
+    assert.equal(body.includes(seeded.leaseToken), false);
+    assert.equal(body.includes("leaseToken"), false);
+    assert.equal(/<script[^>]*src=/.test(body), false);
+  }
 });
