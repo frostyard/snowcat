@@ -5,6 +5,8 @@ import { streamSSE } from "hono/streaming";
 
 import type { ArtifactVerifierOptions } from "../queue/artifact-verification.ts";
 import type { QueueStore } from "../queue/store.ts";
+import { readEvents } from "./events.ts";
+import { eventsPage } from "./pages-events.ts";
 import { readInbox } from "./inbox.ts";
 import { readItem } from "./item.ts";
 import { inboxPage, loginPage, notFoundPage, tokensPage, unavailablePage, type PageContext } from "./pages.ts";
@@ -255,6 +257,26 @@ export function createSurfaceApp(options: SurfaceOptions): Hono<SurfaceEnv> {
     })(context),
   );
 
+  // The event ledger as a page: the same `eventsSince` read the CLI's
+  // `queue -- events` uses, with its repository filter and an
+  // operator-decision filter applied over the read. Read-only, behind the
+  // session like every other route; no partials, no stream, no mutation.
+  app.get("/events", requireConfigured, requireSession, (context) =>
+    page((stores, enrollments, chrome) => {
+      const repository = context.req.query("repository");
+      const since = sequenceQuery(context.req.query("since"));
+      const data = readEvents(stores.queue, enrollments, {
+        ...(repository !== undefined && repository !== "" ? { repository } : {}),
+        ...(since !== undefined ? { since } : {}),
+        decisions: context.req.query("decisions") === "1",
+      });
+      if (!data) {
+        return new Response(notFoundPage(chrome, `No repository ${repository}: it is neither opted in to the queue nor declared in the control plane.`), htmlHeaders(404));
+      }
+      return new Response(eventsPage(chrome, data), htmlHeaders());
+    })(context),
+  );
+
   // Server-sent events: the ledger tail, identifying fields only. Session-
   // guarded like every surface route; polls eventsSince at a fixed cadence
   // and stops when the client goes away.
@@ -474,6 +496,14 @@ function bannerFromQuery(context: Context): PageContext["banner"] {
   const detail = context.req.query("detail");
   const safeDetail = detail && /^[\w .,:;#()\/-]{1,160}$/.test(detail) ? detail : undefined;
   return { tone: "ok", text: `Recorded ${done}${safeDetail ? ` — ${safeDetail}` : ""}.` };
+}
+
+/** `?since=<sequence>`: a non-negative integer, or undefined so the page uses its default window. */
+function sequenceQuery(value: string | undefined): number | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (!/^\d{1,15}$/.test(value)) return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 function htmlHeaders(status = 200): ResponseInit {

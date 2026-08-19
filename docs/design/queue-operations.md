@@ -381,7 +381,7 @@ the event recorded (`Recorded work.approved.`), and `queue -- show` and
 is no batch action, but the board's *Repository actions* strip is not
 CLI-only: it runs from the browser as `operator:web` too, as described below.
 
-Three more views sit behind the same session:
+Four more views sit behind the same session:
 
 - `/repositories` — every opted-in (and, with `SNOWCAT_CONTROL_DB`, declared)
   repository with its enrollment badge, per-status counts, and its pull
@@ -416,6 +416,22 @@ Three more views sit behind the same session:
   roots — the same rows `queue -- show` prints — so it is only as fresh as
   the last `verify-artifacts` pass and never calls GitHub while the page
   renders ([design](operator-surface.md#pull-requests)).
+- `/events` — the ledger as a page: `queue -- events` in the browser. Newest
+  first, one row per event with its sequence, type, the item it belongs to,
+  its repository, the actor, and a gist of the payload. The filter strip picks
+  one repository (`?repository=<owner/repo>` — the sidebar link, the board
+  header's **Events** button, and the rail's *Events* heading all land here),
+  moves the window (`?since=<sequence>`; the default is the last 100 events),
+  and turns on **Decisions only** (`?decisions=1`), which keeps just the
+  operator decisions — `work.approved`, `work.rejected`, `work.deferred`,
+  `work.requeued`, `work.cancelled`, `work.prioritized`, `work.noted`,
+  `artifact.attached`, `artifact.ready` — so a week's admissions and exits
+  read as one list. It reads at most 500 events per request, ascending from
+  `since`; when that read stops short of the ledger's cursor the page names
+  the highest sequence it reached, says the events *newer* than it are the
+  ones not shown, and links onward from that sequence — use `queue -- events
+  --since` for anything longer. The page is read-only: nothing on it changes
+  the queue.
 - `/items/<id>` — `queue -- show <id>` rendered: definition, acceptance
   criteria, result with artifacts and their verification, operator notes,
   previous results, the full event timeline, and the *Decide* card. Every
