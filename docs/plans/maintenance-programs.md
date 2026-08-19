@@ -62,7 +62,7 @@ their children may be admitted on creation.
   `test/seeds.test.ts` shows a daily program re-offered while a weekly one is
   still cooling.
 
-## Phase 3 — Widen the Core enum (Core-side, operator) — in flight 2026-08-18
+## Phase 3 — Widen the Core enum (Core-side, operator) — done 2026-08-18
 
 - Decided 2026-08-18: compatible enum widening **within v1** (core ADR-0039,
   core PR #87), not a v2 schema; all five values at once (`conformance`,
@@ -76,10 +76,10 @@ their children may be admitted on creation.
   (`src/control/registry.ts`) is the widened closed vocabulary; the feeder
   reports declared programs the catalog does not implement yet as
   `unsupportedPrograms` and seeds nothing for them.
-- Still the operator's: merge order (Snowcat PR, then core PR #87, then
-  `core -- activate`), and which repositories declare which programs (updex
-  ran `security` and `architecture` productively for two days; `conformance`
-  waits on the Hive/Snowcat boundary decision).
+- Landed 2026-08-18 in that order (Snowcat #38 with the superseded
+  revision bundled, core ADR-0039/#87, `core -- activate`); declarations
+  now name the programs each repository wants (updex all eight; snowcat,
+  clix, std their subsets) and `conformance`/`triage` followed ADR-0062.
 - **Done when:** a repository declaration listing `conformance` validates in
   Core and in Snowcat (met by `test/core-source.test.ts` on the bundled schema;
   live once #87 merges and activates), and updex's declaration names the
@@ -200,8 +200,10 @@ Hive is retired and Snowcat owns conformance and triage.
 ## Open questions
 
 - **Cure for foreign pull requests by default?** Off by default, per
-  repository (`cure-foreign`, Phase 4); revisit after a week of curing
-  Snowcat's own.
+  repository (`cure-foreign`, Phase 4); still off on every enrolled
+  repository as of 2026-08-19 — the first real cure day showed the sweep
+  finds and mechanically cures reported pull requests and turns the rest
+  into `pr-cure-change` proposals; revisit after a week.
 - **Cadence source of truth:** catalog default in Snowcat now; per-repository
   override in the Core declaration later — decide with Phase 3's schema
   change.
