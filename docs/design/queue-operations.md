@@ -219,7 +219,10 @@ you rejected is not re-asked for the same tag for seven days; a repository
 with no release tag is reported, not asked. `snowcat-feed.timer` runs the
 sweep hourly after the import; it needs `SNOWCAT_GITHUB_TOKEN` for private
 repositories and reports `swept`, `releaseNeeded`, `dependencyBumps`,
-`skipped`, `failed`, and `notOptedIn`.
+`skipped`, `failed`, and `notOptedIn`. Like the import, `--enrolled` exits
+non-zero only when `SNOWCAT_CONTROL_DB` is unset or every repository failed
+(`sweepFailureMessage` in the same module decides; a partial failure is
+reported and exits 0).
 
 **Repository settings conformance** — a second mechanical sweep
 ([`src/queue/repository-settings.ts`](../../src/queue/repository-settings.ts),

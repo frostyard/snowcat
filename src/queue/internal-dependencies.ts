@@ -63,6 +63,19 @@ export interface DependencySweepResult {
 }
 
 /**
+ * The exit-code decision for `sweep-dependencies --enrolled`, mirroring
+ * `import-issues --enrolled`: partial failure is reported, not fatal (the
+ * timer must not lose the repositories that did sweep), so this returns a
+ * message only when at least one repository failed and none was swept. A
+ * sweep with nothing but `notOptedIn` entries has no failure and returns
+ * undefined.
+ */
+export function sweepFailureMessage(result: DependencySweepResult): string | undefined {
+  if (result.failed.length === 0 || result.swept.length > 0) return undefined;
+  return `sweep-dependencies --enrolled: every repository failed (${result.failed.map((entry) => entry.repository).join(", ")})`;
+}
+
+/**
  * Sweeps every repository that is opted in and enrolled (`--enrolled`) or the
  * one named repository, reading each `go.mod`, tags, and default-branch
  * comparison from GitHub, and creating the bounded proposals above.
