@@ -1,12 +1,19 @@
 # Runs the same gate as the local recipe documented in AGENTS.md:
 # `npm run check` (docs, deploy units, typecheck, tests, build). A local pass must be a CI pass,
-# so this workflow adds no other check commands.
+# so this workflow adds no other check commands. It also runs nightly (core
+# ADR-0021's compliance run) so drift that arrives from outside the repository
+# — an npm advisory, a Node point release, a stale action pin, a transitive
+# that resolves differently — turns the check red within a day rather than on
+# the next pull request; `workflow_dispatch` allows a manual re-run.
 name: check
 
 on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 6 * * *" # nightly, 06:17 UTC
+  workflow_dispatch:
 
 # Least privilege (core ADR-0021): nothing at the workflow level, and the one
 # job reads the repository only. Actions are pinned to full commit SHAs with
