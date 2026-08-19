@@ -8,7 +8,8 @@
   },
   "scripts": {
     "build": "vite build && node scripts/check-dist.mjs && node scripts/check-boot.mjs",
-    "check": "npm run check:docs && npm run check:deploy && npm run typecheck && npm test && npm run build",
+    "check": "npm run check:audit && npm run check:docs && npm run check:deploy && npm run typecheck && npm test && npm run build",
+    "check:audit": "npm audit --audit-level=high",
     "check:deploy": "bash scripts/check-deploy.sh",
     "check:docs": "node scripts/check-docs.mjs",
     "control": "node --import tsx src/control/cli.ts",
