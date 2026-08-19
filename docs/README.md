@@ -80,6 +80,10 @@ Docs are split by the question they answer:
 - [0063 — Authenticate people through Cloudflare Access; mint MCP tokens so the ledger says who](adr/0063-authenticate-people-through-cloudflare-access-and-mint-mcp-tokens.md)
 - [0064 — Adopt the name Snowcat](adr/0064-adopt-the-name-snowcat.md)
 
+### Organization decisions
+
+- [Org-wide decisions (frostyard/core ADRs)](org-adrs.md) — the core ADRs that bind this repository and what each binds here
+
 ### Domain language
 
 - [Snowcat ubiquitous language](domain/ubiquitous-language.md)
