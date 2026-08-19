@@ -318,11 +318,27 @@ eligible, ready, claimed, correct, or successful.
 
 The effective ability of a principal, session, or work attempt to perform a
 specific action on a specific scope at a specific time. Authority is the
-intersection of policy, work, grant, lifecycle, and product ceilings.
+intersection of policy, [work](#ceiling-delegation-ceiling), grant, lifecycle,
+and product ceilings.
 
 **Avoid:** authorization; credentials; role; capability.
 ([ADR-0017](../adr/0017-standardize-actions-boundaries-and-risk.md),
 [ADR-0032](../adr/0032-route-work-with-operator-issued-grants.md))
+
+#### Ceiling (delegation ceiling)
+
+The `delegableActions` of one work item: the most any child of that item may be
+allowed to perform or may itself delegate further. Ceiling is monotonically
+non-widening down a work lineage — a child's allowed and delegable actions can
+only narrow relative to its parent's ceiling, never widen it. A repository
+declaration's action ceiling is a distinct enrollment-level ceiling over an
+enrolled repository, not this term
+([ADR-0015](../adr/0015-authorize-repository-enrollment-through-core.md)).
+
+**Avoid:** permission; role; grant; action ceiling (the enrollment-level
+declaration ceiling).
+([ADR-0017](../adr/0017-standardize-actions-boundaries-and-risk.md),
+[ADR-0005](../adr/0005-admit-worker-created-work-before-claiming.md))
 
 #### Eligibility
 
@@ -363,11 +379,34 @@ or later stale provenance.
 ([ADR-0018](../adr/0018-bind-worker-sessions-and-verify-github-artifacts.md),
 [ADR-0032](../adr/0032-route-work-with-operator-issued-grants.md))
 
+#### Root
+
+The first item of a work lineage, created by an operator, policy, or feeder
+and never by a worker. A root carries `rootId = id` for itself and every
+descendant, and is admitted or proposed according to its source, the same as
+any other work item; being first in a lineage does not make a root non-leaf
+work.
+
+**Avoid:** parent (a root can be a leaf); epic; ticket.
+([ADR-0005](../adr/0005-admit-worker-created-work-before-claiming.md),
+[ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md))
+
+#### Follow-up
+
+A worker-proposed child of the item it completes. A follow-up always begins as
+a [proposal](#proposal), inherits its parent's priority, and is bounded by the
+parent's [ceiling](#ceiling-delegation-ceiling); one completion proposes at most
+ten follow-ups, and a lineage holds at most four edges below its root.
+
+**Avoid:** subtask; next step; approval.
+([ADR-0005](../adr/0005-admit-worker-created-work-before-claiming.md),
+[ADR-0006](../adr/0006-enforce-admission-in-the-database.md))
+
 #### Work lineage
 
-The immutable root and parent-child ancestry connecting decomposition from one
-authorized work outcome to bounded follow-up proposals. Work lineage does not
-mean revisions of one document, review, or pull request.
+The immutable [root](#root) and parent-child ancestry connecting decomposition
+from one authorized work outcome to bounded [follow-up](#follow-up) proposals.
+Work lineage does not mean revisions of one document, review, or pull request.
 
 **Avoid:** conversation history; review lineage; pull-request lineage.
 ([ADR-0005](../adr/0005-admit-worker-created-work-before-claiming.md))
