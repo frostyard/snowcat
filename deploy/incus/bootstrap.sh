@@ -55,7 +55,7 @@ sudo -u snowcat bash -lc "cd $home && npm run --silent build"
 queue_db="$(. /etc/snowcat/env >/dev/null 2>&1; echo "${SNOWCAT_QUEUE_DB:-/var/lib/snowcat/queue.db}")"
 if [[ ! -s $queue_db ]]; then
   echo "bootstrap: no queue database at $queue_db yet — stopping the timers (still enabled) until the databases are restored"
-  systemctl stop snowcat-feed.timer snowcat-verify.timer snowcat-backup.timer
+  systemctl stop snowcat-seed-dogfood.timer snowcat-import-issues.timer snowcat-sweep-dependencies.timer snowcat-sweep-settings.timer snowcat-verify.timer snowcat-backup.timer
 fi
 
 cat <<NEXT
@@ -64,7 +64,7 @@ bootstrap: done. Still yours, in this order (docs/design/queue-operations.md →
   2. Restore the databases: push verified backups to $queue_db and the control-plane path in the env (owner snowcat, mode 0600),
      then verify them here with \`queue -- verify-backup\` and \`control -- verify-backup\`.
   3. systemctl start snowcat-surface.service   (it serves 127.0.0.1:3100; check journalctl -u snowcat-surface)
-  4. At cutover — the old host's timers already disabled — systemctl start snowcat-feed.timer snowcat-verify.timer snowcat-backup.timer
+  4. At cutover — the old host's timers already disabled — systemctl start snowcat-seed-dogfood.timer snowcat-import-issues.timer snowcat-sweep-dependencies.timer snowcat-sweep-settings.timer snowcat-verify.timer snowcat-backup.timer
   5. Reach it: either \`tailscale up\` + \`tailscale serve --bg 3100\` (private mesh, local mode) or the tunnel + Access
      (ADR-0063: SNOWCAT_ACCESS_TEAM_DOMAIN/SNOWCAT_ACCESS_AUD, restart the surface). Runbook: "A private mesh instead of Access".
 NEXT

@@ -1,0 +1,26 @@
+# Snowcat repository-settings sweep: read-only drift of each enrolled
+# repository's GitHub settings against core's repository settings contract
+# (ADR-0040), proposed as settings-drift work a person applies with core's
+# scripts/apply-repo-settings.sh (src/queue/repository-settings.ts).
+# Idempotent; run from snowcat-sweep-settings.timer.
+# Configure `User=` and, when SNOWCAT_HOME is not /opt/snowcat, `ReadWritePaths=`
+# in a drop-in; deploy/install.sh writes both. `npm` must resolve on systemd's
+# fixed search path (/usr/local/bin or /usr/bin) or through that drop-in.
+[Unit]
+Description=Snowcat: check repository settings against core's contract for enrolled repositories
+Documentation=https://github.com/frostyard/snowcat/blob/main/docs/design/queue-operations.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/snowcat/env
+ExecStart=npm --prefix ${SNOWCAT_HOME} run --silent queue -- sweep-repository-settings --enrolled
+NoNewPrivileges=yes
+# PrivateTmp gives tsx a writable compile cache under a private /tmp.
+PrivateTmp=yes
+ProtectSystem=strict
+# The database directory plus the checkout's data/ (only used when the
+# database variables are unset). Override ReadWritePaths= in the same drop-in
+# when SNOWCAT_HOME is not /opt/snowcat.
+ReadWritePaths=/var/lib/snowcat -/opt/snowcat/data

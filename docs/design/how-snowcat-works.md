@@ -66,8 +66,9 @@ runs code.
    whose declaration is `enabled` and whose GitHub identity and surfaces
    reconcile is `enrolled`.
 
-2. **Work flows in from three feeders**, all on an hourly timer, all
-   idempotent:
+2. **Work flows in from three feeders**, each on its own systemd timer
+   (discovery roots daily, labeled issues every 15 minutes, the dependency
+   chain daily; the settings check weekly), all idempotent:
    - **Programs.** Snowcat's catalog names a small set of *maintenance
      programs* — quality, CI, security, architecture, conformance, triage,
      dependencies, docs — each a read-only *discovery* root: "find exactly one

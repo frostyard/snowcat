@@ -17,7 +17,7 @@
 #      path does not include version managers such as Homebrew or nvm), a
 #      PATH= that lets that npm find its node, and ReadWritePaths= for the
 #      real SNOWCAT_HOME;
-#   4. `systemctl daemon-reload`, then enables and starts the three timers.
+#   4. `systemctl daemon-reload`, then enables and starts the six timers.
 #
 # It never runs `core -- activate`, never opens or moves a database, and never
 # touches the operator's shell configuration.
@@ -246,11 +246,17 @@ DROPIN
   rm -f "$rendered"
 }
 
-write_dropin snowcat-feed.service \
+write_dropin snowcat-seed-dogfood.service \
   "$state_dir -$snowcat_home/data" \
-  "$npm_path --prefix $snowcat_home run --silent queue -- seed-dogfood --enrolled" \
-  "$npm_path --prefix $snowcat_home run --silent queue -- import-issues --enrolled --label snowcat" \
-  "$npm_path --prefix $snowcat_home run --silent queue -- sweep-dependencies --enrolled" \
+  "$npm_path --prefix $snowcat_home run --silent queue -- seed-dogfood --enrolled"
+write_dropin snowcat-import-issues.service \
+  "$state_dir -$snowcat_home/data" \
+  "$npm_path --prefix $snowcat_home run --silent queue -- import-issues --enrolled --label snowcat"
+write_dropin snowcat-sweep-dependencies.service \
+  "$state_dir -$snowcat_home/data" \
+  "$npm_path --prefix $snowcat_home run --silent queue -- sweep-dependencies --enrolled"
+write_dropin snowcat-sweep-settings.service \
+  "$state_dir -$snowcat_home/data" \
   "$npm_path --prefix $snowcat_home run --silent queue -- sweep-repository-settings --enrolled"
 write_dropin snowcat-verify.service \
   "$state_dir -$snowcat_home/data" \
@@ -262,32 +268,34 @@ write_dropin snowcat-backup.service \
   "$state_dir $backup_dir -$snowcat_home/data" \
   "/bin/bash $snowcat_home/deploy/bin/snowcat-backup"
 
-# 3b. Retire the Fluent-named units this installer used to write, after the
-# Snowcat ones exist: stop and disable, then remove the unit files and their
-# drop-ins. Only files under this installer's control are touched.
+# 3b. Retire units this installer used to write and no longer ships, after
+# the current ones exist: the Fluent-named trio, and the combined
+# snowcat-feed pair that the four per-command feeder units replaced. Stop and
+# disable, then remove the unit files and their drop-ins. Only files under
+# this installer's control are touched.
 legacy_units=()
-for legacy in fluent-feed fluent-verify fluent-backup; do
+for legacy in fluent-feed fluent-verify fluent-backup snowcat-feed; do
   for suffix in timer service; do
     if [[ -e $unit_dir/$legacy.$suffix ]]; then legacy_units+=("$legacy.$suffix"); fi
   done
 done
 if [[ ${#legacy_units[@]} -gt 0 ]]; then
   if [[ ${#systemctl[@]} -gt 0 ]]; then
-    "${systemctl[@]}" disable --now fluent-feed.timer fluent-verify.timer fluent-backup.timer 2>/dev/null || true
+    "${systemctl[@]}" disable --now fluent-feed.timer fluent-verify.timer fluent-backup.timer snowcat-feed.timer 2>/dev/null || true
   fi
   for legacy in "${legacy_units[@]}"; do
     rm -f "$unit_dir/$legacy"
     rm -rf "$unit_dir/$legacy.d"
   done
-  report "removed legacy units ${legacy_units[*]} (replaced by the snowcat-* units)"
-  legacy_migrated=1
+  report "removed legacy units ${legacy_units[*]} (replaced by the current snowcat-* units)"
+  case " ${legacy_units[*]} " in *" fluent-"*) legacy_migrated=1 ;; esac
 fi
 
 # 4. Reload, enable the timers, and enable (not start) the surface: it needs a
 # built bundle (`npm run build`) and either SNOWCAT_APP_TOKEN or the Access
 # variables in /etc/snowcat/env first; `systemctl start snowcat-surface` when
 # both are in place, and again after every upgrade + build.
-timers=(snowcat-feed.timer snowcat-verify.timer snowcat-backup.timer)
+timers=(snowcat-seed-dogfood.timer snowcat-import-issues.timer snowcat-sweep-dependencies.timer snowcat-sweep-settings.timer snowcat-verify.timer snowcat-backup.timer)
 if [[ ${#systemctl[@]} -eq 0 ]]; then
   report "skipped systemctl (SNOWCAT_INSTALL_ROOT is set and SNOWCAT_SYSTEMCTL is not)"
 else

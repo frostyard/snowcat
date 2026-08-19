@@ -1,0 +1,12 @@
+# Issue import every 15 minutes, with a little jitter. Enable with
+# `systemctl enable --now snowcat-import-issues.timer`.
+[Unit]
+Description=Snowcat: import labeled issues every 15 minutes
+
+[Timer]
+OnCalendar=*:0/15
+RandomizedDelaySec=60
+Unit=snowcat-import-issues.service
+
+[Install]
+WantedBy=timers.target

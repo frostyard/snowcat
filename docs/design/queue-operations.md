@@ -68,7 +68,7 @@ sudo deploy/install.sh --user "$USER"      # dirs, /etc/snowcat/env, units, time
 "${EDITOR:-vi}" /etc/snowcat/env            # SNOWCAT_GITHUB_TOKEN=<gh auth token>
 set -a; . /etc/snowcat/env; set +a          # load it into this shell
 npm run --silent queue -- metadata         # databasePath: /var/lib/snowcat/queue.db
-systemctl list-timers 'snowcat-*'           # three timers, next run times
+systemctl list-timers 'snowcat-*'           # six timers, next run times
 ```
 
 [`deploy/install.sh`](../../deploy/install.sh) creates `/var/lib/snowcat` and
@@ -78,7 +78,7 @@ writes `/etc/snowcat/env` (0600, same owner) from
 the checkout and the database paths under `/var/lib/snowcat` — **only if the
 file is absent**, so your token and edits survive re-runs; installs the six
 units from [`deploy/systemd/`](../../deploy/systemd/) into
-`/etc/systemd/system/` — three timer/service pairs plus
+`/etc/systemd/system/` — six timer/service pairs plus
 `snowcat-surface.service`, which is enabled but not started (start it after
 `npm run build`, and it stays optional on a laptop that runs `npm run serve`
 by hand) — with one drop-in per service (`10-install.conf`:
@@ -92,7 +92,7 @@ if it still picks the wrong one — a `PATH=` that lets that npm find `node`, an
 `ReadWritePaths=` for the real `SNOWCAT_HOME`) — systemd's fixed search path
 does not include Homebrew, nvm, or similar, so the drop-in is what makes the
 timers work on such hosts; then
-`daemon-reload` and `enable --now` on the three timers. It never runs
+`daemon-reload` and `enable --now` on the six timers. It never runs
 `core -- activate` and never opens or moves a database. Set
 `SNOWCAT_INSTALL_ROOT=<dir>` to dry-run it into a directory without root
 (`systemctl` is skipped unless `SNOWCAT_SYSTEMCTL` names a substitute); that
@@ -176,9 +176,9 @@ imported again. Higher `--priority` claims first (ties by creation time).
 Priority is operator-owned; workers cannot change it.
 
 The label convention is **`snowcat`**: labeling an issue `snowcat` is the
-queue's claim on it, and the operator host imports it for you. `snowcat-feed.timer`
-runs `import-issues --enrolled --label snowcat` hourly, right after the dogfood
-feeder, for every repository that is opted in **and** `enrolled` in the
+queue's claim on it, and the operator host imports it for you. `snowcat-import-issues.timer`
+runs `import-issues --enrolled --label snowcat` every 15 minutes for every
+repository that is opted in **and** `enrolled` in the
 control-plane store:
 
 ```bash
@@ -218,8 +218,8 @@ module@tag`, one pull request, nothing else bumped). A bump is never proposed
 before the upstream release exists, so the chain orders itself. Bounds: at
 most one non-terminal `release-needed` per repository; a `release-needed`
 you rejected is not re-asked for the same tag for seven days; a repository
-with no release tag is reported, not asked. `snowcat-feed.timer` runs the
-sweep hourly after the import; it needs `SNOWCAT_GITHUB_TOKEN` for private
+with no release tag is reported, not asked. `snowcat-sweep-dependencies.timer` runs the
+sweep daily (00:45 UTC); it needs `SNOWCAT_GITHUB_TOKEN` for private
 repositories and reports `swept`, `releaseNeeded`, `dependencyBumps`,
 `skipped`, `failed`, and `notOptedIn`. Like the import, `--enrolled` exits
 non-zero only when `SNOWCAT_CONTROL_DB` is unset or every repository failed
@@ -249,7 +249,7 @@ repository's required-check names) and a worker completing the item only
 verifies, read-only, that the settings now match. Settings the token cannot
 read (admin-only fields) are reported as `unreadable`, not drift; give the
 token admin read on the fleet repositories for full coverage.
-`snowcat-feed.timer` runs it hourly as its fourth step.
+`snowcat-sweep-settings.timer` runs it weekly (Mondays 01:15 UTC).
 
 **Standing maintenance** — the maintenance program catalog in
 [`src/queue/programs.ts`](../../src/queue/programs.ts): one bounded, read-only
@@ -285,7 +285,7 @@ result names the catalog kinds it left out as `undeclaredKinds`. Explicit
 `seed-dogfood <owner/repo>` seeds every program regardless — use it only for
 a repository outside the enrollment gate. (Before 2026-08-18 the feeder
 ignored the list: updex declared `quality, ci` and ran four programs for two
-days.) It is the first thing `snowcat-feed.timer` runs hourly,
+days.) `snowcat-seed-dogfood.timer` runs it daily (00:15 UTC),
 followed by the labeled-issue import above (see
 [Deployment](#deployment-v1-decided-2026-08-17)). These roots are admitted
 immediately (they are read-only); their children are not.
@@ -568,7 +568,7 @@ and the worker is told to fix it. To refresh state after review and merges:
 npm run --silent queue -- verify-artifacts --repository frostyard/updex
 ```
 
-`snowcat-verify.timer` runs this every 15 minutes with the default limit. The
+`snowcat-verify.timer` runs this every 10 minutes with the default limit. The
 limit bounds completed items that still have a non-terminal artifact (missing,
 `unverified`, or `open`), newest first, so a repository with hundreds of
 already-merged completions never pushes a fresh one out of the pass. It
@@ -677,15 +677,25 @@ Snowcat v1 runs on **one operator host** and stays there deliberately:
   below — or, the simpler choice for a small organization, over a
   **private mesh in local mode** — see
   [A private mesh instead of Access](#a-private-mesh-instead-of-access-tailscale).
-- Feeder, `verify-artifacts`, and `backup` run from three systemd timers on
-  the host, shipped in [`deploy/systemd/`](../../deploy/systemd/) and linted
-  by `npm run check:deploy`:
+- The feeders, `verify-artifacts`, and `backup` run from six systemd timers
+  on the host, one per command so each cadence is adjusted on its own,
+  shipped in [`deploy/systemd/`](../../deploy/systemd/) and linted by
+  `npm run check:deploy`:
 
   | Timer | Cadence | Runs |
   | --- | --- | --- |
-  | `snowcat-feed.timer` | hourly (`OnCalendar=hourly`, `RandomizedDelaySec=300`) | `queue -- seed-dogfood --enrolled`, then `queue -- import-issues --enrolled --label snowcat`, then `queue -- sweep-dependencies --enrolled`, then `queue -- sweep-repository-settings --enrolled` (four `ExecStart=` lines; each runs only if the previous exited 0) |
-  | `snowcat-verify.timer` | every 15 minutes (`OnCalendar=*:0/15`) | `queue -- verify-artifacts` (default limit) |
+  | `snowcat-seed-dogfood.timer` | daily, 00:15 UTC (`OnCalendar=*-*-* 00:15:00`, `RandomizedDelaySec=300`, `Persistent=true`) | `queue -- seed-dogfood --enrolled` — each program still re-asks at its own cadence ([`src/queue/programs.ts`](../../src/queue/programs.ts)) |
+  | `snowcat-import-issues.timer` | every 15 minutes (`OnCalendar=*:0/15`, `RandomizedDelaySec=60`) | `queue -- import-issues --enrolled --label snowcat` |
+  | `snowcat-sweep-dependencies.timer` | daily, 00:45 UTC (`OnCalendar=*-*-* 00:45:00`, `RandomizedDelaySec=300`, `Persistent=true`) | `queue -- sweep-dependencies --enrolled` |
+  | `snowcat-sweep-settings.timer` | weekly, Mondays 01:15 UTC (`OnCalendar=Mon *-*-* 01:15:00`, `RandomizedDelaySec=300`, `Persistent=true`) | `queue -- sweep-repository-settings --enrolled` |
+  | `snowcat-verify.timer` | every 10 minutes (`OnCalendar=*:0/10`) | `queue -- verify-artifacts` (default limit; includes the pull-request cure sweep) |
   | `snowcat-backup.timer` | daily (`OnCalendar=daily`, `Persistent=true`) | [`deploy/bin/snowcat-backup`](../../deploy/bin/snowcat-backup) |
+
+  The four feeders are independent: one failing no longer skips the others
+  (the combined `snowcat-feed` unit that chained them is retired; the
+  installer removes it). Change a cadence fleet-wide by editing the timer in
+  `deploy/systemd/` and re-running `deploy/install.sh`; a host-only override
+  is a drop-in (`systemctl edit <timer>`), which upgrades preserve.
 
   Each service is `Type=oneshot`, reads `EnvironmentFile=/etc/snowcat/env`
   (`SNOWCAT_HOME`, `SNOWCAT_QUEUE_DB`, `SNOWCAT_CONTROL_DB`,
@@ -696,7 +706,7 @@ Snowcat v1 runs on **one operator host** and stays there deliberately:
   `data/`. [`deploy/install.sh`](../../deploy/install.sh) installs them and
   writes the per-service drop-in (`User=`, absolute `ExecStart=`, `PATH=`,
   `ReadWritePaths=` for the real `SNOWCAT_HOME`) — see
-  [Install the host](#install-the-host). Until it has run, run the three
+  [Install the host](#install-the-host). Until it has run, run the
   commands by hand as above.
 - The timers do not reach worker clients: a stdio MCP client still gets its
   environment from the shell that launches it (`.mcp.json` `env` or the
@@ -804,7 +814,7 @@ cd /opt/snowcat && deploy/upgrade.sh
 
 [`deploy/upgrade.sh`](../../deploy/upgrade.sh) refuses a dirty checkout, then
 `git pull --ff-only`, `npm ci`, `npm run check`, `systemctl daemon-reload`,
-and restarts the three timers (via `sudo` when not root; `SNOWCAT_SYSTEMCTL`
+and restarts the six timers (via `sudo` when not root; `SNOWCAT_SYSTEMCTL`
 overrides). If `check` fails it exits non-zero, does not restart the timers,
 and leaves the checkout on the new commit for inspection — roll back with
 `git checkout <previous>` and re-run, or fix forward. If the pull changed
@@ -876,7 +886,7 @@ once for a private clone and never stored — pass it with
 --user snowcat` (the same installer as any host: directories,
 `/etc/snowcat/env` from the example if absent, units, drop-ins, timers), and
 `npm run build`. When `/var/lib/snowcat` holds no queue database yet it stops
-the three timers again — still enabled — so a fresh host never feeds an
+the timers again — still enabled — so a fresh host never feeds an
 empty queue while the real databases are on their way. It ends by printing
 what remains the operator's: the GitHub token, the databases, starting the
 surface and (at cutover) the timers, then the mesh login or the tunnel and
@@ -886,7 +896,7 @@ Day two: `incus exec <remote>:snowcat -- sudo -u snowcat -i bash -lc 'cd
 /opt/snowcat && deploy/upgrade.sh'` upgrades exactly like any host;
 `incus snapshot create <remote>:snowcat pre-upgrade` before it costs nothing
 and `incus snapshot restore` undoes everything including the databases;
-`incus exec <remote>:snowcat -- journalctl -u snowcat-feed -u
+`incus exec <remote>:snowcat -- journalctl -u snowcat-seed-dogfood -u snowcat-import-issues -u
 snowcat-surface --since -1h` reads the logs; `incus file pull
 <remote>:snowcat/var/backups/snowcat/queue-<stamp>.db .` fetches a backup
 off the machine. The instance binds nothing but loopback; its only ingress
@@ -905,7 +915,7 @@ one queue would each admit their own work:
 
 1. **Freeze the old host.** Disable its timers, stop its surface, and make
    sure no worker holds a lease (`queue -- list`, or the *Watch the work*
-   view): `sudo systemctl disable --now snowcat-feed.timer
+   view): `sudo systemctl disable --now snowcat-seed-dogfood.timer snowcat-import-issues.timer snowcat-sweep-dependencies.timer snowcat-sweep-settings.timer
    snowcat-verify.timer snowcat-backup.timer` and stop `npm run serve` /
    `snowcat-surface.service`. From here on the old copy is history.
 2. **Back up both databases** on the old host into a scratch directory
@@ -935,7 +945,7 @@ one queue would each admit their own work:
    read the inbox through `incus exec` + `curl -s http://127.0.0.1:3100/`
    or the tunnel; the sidebar's repository list is the last proof the copy
    is the one you meant.
-6. **Cut over:** `systemctl start snowcat-feed.timer snowcat-verify.timer
+6. **Cut over:** `systemctl start snowcat-seed-dogfood.timer snowcat-import-issues.timer snowcat-sweep-dependencies.timer snowcat-sweep-settings.timer snowcat-verify.timer
    snowcat-backup.timer` on the new host. Exactly one host now feeds. Point
    the tunnel (or move it) at the new host — or `tailscale up` there and
    drop the old node from the tailnet — and restart every MCP client with
@@ -975,7 +985,7 @@ to WAL and changes its digest.
 `/etc/snowcat/env`; no command overwrites a live database:
 
 ```bash
-sudo systemctl stop snowcat-feed.timer snowcat-verify.timer snowcat-backup.timer   # and stop every MCP client
+sudo systemctl stop snowcat-seed-dogfood.timer snowcat-import-issues.timer snowcat-sweep-dependencies.timer snowcat-sweep-settings.timer snowcat-verify.timer snowcat-backup.timer   # and stop every MCP client
 set -a; . /etc/snowcat/env; set +a
 npm run --silent queue -- verify-backup /var/backups/snowcat/queue-<stamp>.db      # compare with queue-<stamp>.manifest.json
 install -m 0600 /var/backups/snowcat/queue-<stamp>.db /var/lib/snowcat/queue-restored-<stamp>.db
@@ -984,7 +994,7 @@ npm run --silent control -- stage-restore /var/backups/snowcat/control-plane-<st
 "${EDITOR:-vi}" /etc/snowcat/env            # SNOWCAT_QUEUE_DB= and/or SNOWCAT_CONTROL_DB= → the restored paths
 set -a; . /etc/snowcat/env; set +a
 npm run --silent queue -- metadata         # databasePath is the restored file
-sudo systemctl start snowcat-feed.timer snowcat-verify.timer snowcat-backup.timer
+sudo systemctl start snowcat-seed-dogfood.timer snowcat-import-issues.timer snowcat-sweep-dependencies.timer snowcat-sweep-settings.timer snowcat-verify.timer snowcat-backup.timer
 ```
 
 Then restart the MCP clients from a shell that sourced the new
@@ -1043,7 +1053,7 @@ Approved. During the dogfood week keep, per repository:
   MCP server opens its own connection; SQLite WAL and a busy timeout serialize
   writes.
 - Feeder, `verify-artifacts`, and `backup` are idempotent and cheap; the
-  three timers in `deploy/systemd/` (hourly, every 15 minutes, daily) are the
+  six timers in `deploy/systemd/` (daily, every 15 minutes, daily, weekly, every 10 minutes, daily) are the
   intended cadence, and running any of them by hand in between is harmless.
 - `SNOWCAT_CONTROL_DB` is the only coupling between the queue and the control
   plane. Leave it unset until `repository -- status` shows the repositories you

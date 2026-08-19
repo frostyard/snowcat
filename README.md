@@ -24,9 +24,10 @@ the [operations runbook](docs/design/queue-operations.md) for how to run it.
   admission, leases, delegation ceilings, operator notes, artifact
   verification, derived delivery, a forward-only migration ladder, verified
   backups.
-- **Sources of work:** labeled GitHub issues (`import-issues`, hourly on the
-  feed timer for enrolled repositories) and standing read-only discovery
-  roots (`seed-dogfood`) whose findings become proposals the operator admits.
+- **Sources of work:** labeled GitHub issues (`import-issues`, every 15
+  minutes on its own timer for enrolled repositories) and standing read-only
+  discovery roots (`seed-dogfood`, daily) whose findings become proposals
+  the operator admits.
 - **Authority sidecar:** the control-plane store activates `frostyard/core`
   snapshots and reconciles repository enrollment; with `SNOWCAT_CONTROL_DB`
   set, only `enrolled` repositories' work is claimable.

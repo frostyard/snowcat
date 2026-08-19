@@ -50,7 +50,7 @@ if ! npm run check; then
   exit 1
 fi
 
-timers=(snowcat-feed.timer snowcat-verify.timer snowcat-backup.timer)
+timers=(snowcat-seed-dogfood.timer snowcat-import-issues.timer snowcat-sweep-dependencies.timer snowcat-sweep-settings.timer snowcat-verify.timer snowcat-backup.timer)
 "${systemctl[@]}" daemon-reload
 "${systemctl[@]}" restart "${timers[@]}"
 echo "upgrade: restarted ${timers[*]}"

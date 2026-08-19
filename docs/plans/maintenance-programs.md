@@ -162,7 +162,7 @@ Hive is retired and Snowcat owns conformance and triage.
   exist; this covers what a reader runs). The `frostyard-repo-docs` skill is
   the procedure.
 - **Internal dependency chain (landed 2026-08-18):** `sweep-dependencies`
-  (`src/queue/internal-dependencies.ts`, third step of `snowcat-feed`) — a
+  (`src/queue/internal-dependencies.ts`, run daily by `snowcat-sweep-dependencies.timer`) — a
   mechanical sweep, no model, over enrolled repositories' `go.mod`, tags,
   and tag→branch comparison: one `release-needed` proposal on a repository
   whose default branch is ahead of its latest `vX.Y.Z` tag (svu-style
