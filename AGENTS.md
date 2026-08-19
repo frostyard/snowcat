@@ -301,6 +301,9 @@ anchors valid) and add the back-links on the targets. Use relative paths.
 
 ### Housekeeping
 
+- Every pull request declares a risk tier in
+  [`.github/pull_request_template.md`](.github/pull_request_template.md),
+  classified against [docs/risk-tiers.md](docs/risk-tiers.md).
 - New doc ⇒ add a line to the index in [docs/README.md](docs/README.md).
 - New significant decision ⇒ new ADR *first*, then update the affected design
   docs/specs in the same change.
