@@ -237,7 +237,7 @@ hands on the host. Status as of 2026-08-19:
 5. **Surface follow-ups** — the pull-request section and per-repository
    counts landed (#49 → #74, built by the queue). The decision-record view
    and the per-repository event filter landed together as `/events`
-   (#100, built by the queue): one page with a repository filter, a
+   (#100 → #103, built by the queue): one page with a repository filter, a
    `since` window, and a decisions-only toggle over the same `eventsSince`
    read the CLI uses ([operator surface](../design/operator-surface.md#views)).
    Keyboard-first review remains a small queue item, only after (2) shows it
