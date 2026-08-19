@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import { LineCounter, isMap, isScalar, parseDocument, visit, type Pair, type YAMLMap } from "yaml";
 
 const WORKFLOW_DIRECTORY = join(process.cwd(), ".github", "workflows");
 const FULL_SHA = /@[0-9a-f]{40}$/i;
@@ -49,83 +50,101 @@ jobs:
     workflowContractErrors(valid.replace("permissions: {}", "permissions: write-all")).join("\n"),
     /top-level permissions/,
   );
+  assert.match(
+    workflowContractErrors(
+      valid.replace(
+        "        with:\n          persist-credentials: false\n",
+        "        env:\n          persist-credentials: false\n",
+      ),
+    ).join("\n"),
+    /persist-credentials: false/,
+  );
 
   const pushingCheckout = valid
     .replace(" # v4.2.2", " # v4.2.2; pushes: generated release metadata")
     .replace("        with:\n          persist-credentials: false\n", "");
   assert.deepEqual(workflowContractErrors(pushingCheckout), []);
+
+  const validFlowMapping = `permissions: {}
+jobs:
+  check:
+    steps:
+      - { uses: actions/checkout@${"a".repeat(40)}, with: { persist-credentials: false } } # v4.2.2
+`;
+  assert.deepEqual(workflowContractErrors(validFlowMapping), []);
+  assert.match(
+    workflowContractErrors(validFlowMapping.replace(`@${"a".repeat(40)}`, "@v4")).join("\n"),
+    /full 40-character commit SHA/,
+  );
 });
 
 function workflowContractErrors(source: string): string[] {
-  const lines = source.split(/\r?\n/);
-  const errors = topLevelPermissionErrors(lines);
-
-  for (const [index, line] of lines.entries()) {
-    const uses = /^(\s*)(-\s+)?uses:\s*([^\s#]+)(?:\s+#\s*(.+?))?\s*$/.exec(line);
-    if (!uses) continue;
-    const indent = uses[1]!.length;
-    const rawTarget = uses[3]!;
-    const target = /^(['"])(.*)\1$/.exec(rawTarget)?.[2] ?? rawTarget;
-    const comment = uses[4]?.trim() ?? "";
-
-    if (!target.startsWith("./")) {
-      if (!FULL_SHA.test(target)) {
-        errors.push(`line ${index + 1}: external uses must end in a full 40-character commit SHA`);
-      }
-      const version = comment.split(";")[0]!.trim();
-      if (!VERSION_COMMENT.test(version)) {
-        errors.push(`line ${index + 1}: external uses must carry a human-readable version comment`);
-      }
-    }
-
-    if (!uses[2] || !/^actions\/checkout@/i.test(target)) continue;
-    let end = lines.length;
-    for (let next = index + 1; next < lines.length; next += 1) {
-      const followingStep = /^(\s*)-\s+/.exec(lines[next]!);
-      if (followingStep && followingStep[1]!.length <= indent) {
-        end = next;
-        break;
-      }
-    }
-    const step = lines.slice(index + 1, end);
-    const disablesPersistence = step.some((entry) => /^\s+persist-credentials:\s*false\s*(?:#.*)?$/.test(entry));
-    const pushes = /(?:^|;)\s*pushes:\s*\S/i.test(comment);
-    if (!disablesPersistence && !pushes) {
-      errors.push(
-        `line ${index + 1}: checkout must set persist-credentials: false or declare '; pushes: <reason>'`,
-      );
-    }
+  const lineCounter = new LineCounter();
+  const document = parseDocument(source, { lineCounter });
+  if (document.errors.length > 0) {
+    return document.errors.map((error) => `workflow must be valid YAML: ${error.message}`);
   }
+  if (!isMap(document.contents)) return ["workflow must contain a top-level mapping"];
 
+  const errors = topLevelPermissionErrors(document.contents);
+  visit(document, {
+    Pair(_key, pair, path) {
+      if (!isScalar(pair.key) || pair.key.value !== "uses") return;
+      const line = lineCounter.linePos(pair.key.range?.[0] ?? 0).line;
+      if (!isScalar(pair.value) || typeof pair.value.value !== "string") {
+        errors.push(`line ${line}: uses must be a string`);
+        return;
+      }
+
+      const target = pair.value.value;
+      const owner = path.at(-1);
+      const comment = usesComment(pair, owner);
+      if (!target.startsWith("./")) {
+        if (!FULL_SHA.test(target)) {
+          errors.push(`line ${line}: external uses must end in a full 40-character commit SHA`);
+        }
+        const version = comment.split(";")[0]!.trim();
+        if (!VERSION_COMMENT.test(version)) {
+          errors.push(`line ${line}: external uses must carry a human-readable version comment`);
+        }
+      }
+
+      if (!/^actions\/checkout@/i.test(target)) return;
+      const withNode = isMap(owner) ? owner.get("with", true) : undefined;
+      const persistCredentials = isMap(withNode) ? withNode.get("persist-credentials") : undefined;
+      const disablesPersistence = persistCredentials === false || persistCredentials === "false";
+      const pushes = /(?:^|;)\s*pushes:\s*\S/i.test(comment);
+      if (!disablesPersistence && !pushes) {
+        errors.push(`line ${line}: checkout must set persist-credentials: false or declare '; pushes: <reason>'`);
+      }
+    },
+  });
   return errors;
 }
 
-function topLevelPermissionErrors(lines: readonly string[]): string[] {
-  const declarations = lines
-    .map((line, index) => ({ index, match: /^permissions:\s*([^#]*?)(?:\s+#.*)?$/.exec(line) }))
-    .filter((entry) => entry.match !== null);
+function usesComment(pair: Pair, owner: unknown): string {
+  if (isScalar(pair.value) && pair.value.comment) return pair.value.comment.trim();
+  if (isMap(owner) && owner.flow && owner.comment) return owner.comment.trim();
+  return "";
+}
+
+function topLevelPermissionErrors(root: YAMLMap): string[] {
+  const declarations = root.items.filter(
+    (pair) => isScalar(pair.key) && pair.key.value === "permissions",
+  );
   if (declarations.length !== 1) return ["workflow must declare exactly one top-level permissions policy"];
 
-  const declaration = declarations[0]!;
-  const inline = declaration.match![1]!.trim();
-  if (inline === "{}") return [];
-  if (inline !== "") {
-    if (!/^\{\s*(?:[a-z-]+:\s*(?:read|none)\s*,?\s*)+\}$/.test(inline)) {
-      return ["top-level permissions must be {} or explicit read/none grants"];
-    }
-    return [];
-  }
-
-  const grants: string[] = [];
-  for (let index = declaration.index + 1; index < lines.length; index += 1) {
-    const line = lines[index]!;
-    if (line.trim() === "" || /^\s*#/.test(line)) continue;
-    if (/^\S/.test(line)) break;
-    grants.push(line.trim());
-  }
+  const permissions = declarations[0]!.value;
+  if (!isMap(permissions)) return ["top-level permissions must be {} or explicit read/none grants"];
+  if (permissions.items.length === 0) return [];
   if (
-    grants.length === 0 ||
-    grants.some((grant) => !/^[a-z-]+:\s*(?:read|none)\s*(?:#.*)?$/.test(grant))
+    permissions.items.some(
+      (pair) =>
+        !isScalar(pair.key) ||
+        typeof pair.key.value !== "string" ||
+        !isScalar(pair.value) ||
+        (pair.value.value !== "read" && pair.value.value !== "none"),
+    )
   ) {
     return ["top-level permissions must be {} or explicit read/none grants"];
   }
