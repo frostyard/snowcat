@@ -20,7 +20,7 @@ const PR_URL = "https://github.com/frostyard/updex/pull/12";
 const ISSUE_URL = "https://github.com/frostyard/updex/issues/7";
 const clock = () => new Date("2026-08-17T20:00:00.000Z");
 // Verification treats 404 as absence only when a credential was presented.
-process.env.SNOWCAT_GITHUB_TOKEN ??= "test-token";
+process.env.SNOWCAT_GITHUB_TOKEN = "test-token";
 
 function pullRequest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {

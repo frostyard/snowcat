@@ -9,6 +9,7 @@ import { ControlPlaneStore } from "../src/control/store.ts";
 import { controlPlaneClaimEligibility, queueStoreOptionsFromEnvironment } from "../src/queue/eligibility.ts";
 import { QueueStore } from "../src/queue/store.ts";
 import { enrollExampleRepository } from "./helpers/core-fixtures.ts";
+import { childEnvironment } from "./helpers/child-environment.ts";
 
 function seed(queue: QueueStore, repository: string, priority: number, kind = "quality-gap-discovery") {
   queue.setRepositoryEnabled(repository, true);
@@ -126,7 +127,7 @@ test("host processes wire the control-plane hook only when SNOWCAT_CONTROL_DB is
   const queue = new QueueStore(queuePath);
   const item = seed(queue, "frostyard/updex", 1);
   queue.close();
-  const baseEnv = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
+  const baseEnv = childEnvironment();
   const claimVia = (env: Record<string, string>) =>
     JSON.parse(
       execFileSync(
@@ -135,7 +136,11 @@ test("host processes wire the control-plane hook only when SNOWCAT_CONTROL_DB is
           import { Client } from "@modelcontextprotocol/client";
           import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
           const client = new Client({ name: "env-test", version: "0.1.0" });
-          await client.connect(new StdioClientTransport({ command: process.execPath, args: ["--import", "tsx", "src/mcp/stdio.ts"], env: process.env, stderr: "ignore" }));
+          // This process already runs under the test's scrubbed environment; hand the
+          // MCP server only what it needs from it, never the whole map.
+          const inherit = ["PATH", "HOME", "TMPDIR", "SNOWCAT_QUEUE_DB", "SNOWCAT_CONTROL_DB"];
+          const serverEnv = Object.fromEntries(inherit.filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
+          await client.connect(new StdioClientTransport({ command: process.execPath, args: ["--import", "tsx", "src/mcp/stdio.ts"], env: serverEnv, stderr: "ignore" }));
           const result = await client.callTool({ name: "claim_work", arguments: { worker: "claude:env-test" } });
           console.log(result.content[0].text);
           await client.close();
