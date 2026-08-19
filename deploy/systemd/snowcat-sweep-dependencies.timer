@@ -1,0 +1,14 @@
+# Daily dependency sweep at 00:45 UTC (after the seeder, before anyone is
+# awake), with jitter; Persistent=true runs a missed day at the next boot.
+# Enable with `systemctl enable --now snowcat-sweep-dependencies.timer`.
+[Unit]
+Description=Snowcat: sweep internal dependencies daily
+
+[Timer]
+OnCalendar=*-*-* 00:45:00
+RandomizedDelaySec=300
+Persistent=true
+Unit=snowcat-sweep-dependencies.service
+
+[Install]
+WantedBy=timers.target

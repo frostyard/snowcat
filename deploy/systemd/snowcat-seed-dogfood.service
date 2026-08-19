@@ -1,0 +1,26 @@
+# Snowcat seeder: for every repository that is opted in to the queue and
+# `enrolled` in the control-plane store, seeds the standing read-only discovery
+# roots — at most one active root per maintenance program the repository's
+# Core declaration lists, each program re-asked at its own cadence
+# (src/queue/programs.ts). Idempotent; run from snowcat-seed-dogfood.timer.
+# Configure `User=` and, when SNOWCAT_HOME is not /opt/snowcat, `ReadWritePaths=`
+# in a drop-in; deploy/install.sh writes both. `npm` must resolve on systemd's
+# fixed search path (/usr/local/bin or /usr/bin) or through that drop-in.
+[Unit]
+Description=Snowcat: seed discovery roots for enrolled repositories
+Documentation=https://github.com/frostyard/snowcat/blob/main/docs/design/queue-operations.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/snowcat/env
+ExecStart=npm --prefix ${SNOWCAT_HOME} run --silent queue -- seed-dogfood --enrolled
+NoNewPrivileges=yes
+# PrivateTmp gives tsx a writable compile cache under a private /tmp.
+PrivateTmp=yes
+ProtectSystem=strict
+# The database directory plus the checkout's data/ (only used when the
+# database variables are unset). Override ReadWritePaths= in the same drop-in
+# when SNOWCAT_HOME is not /opt/snowcat.
+ReadWritePaths=/var/lib/snowcat -/opt/snowcat/data

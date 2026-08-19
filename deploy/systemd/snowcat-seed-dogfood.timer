@@ -1,0 +1,15 @@
+# Daily seeding. A run at 00:15 UTC (plus up to five minutes of jitter so
+# several hosts do not hit GitHub at the same minute); Persistent=true runs a
+# missed day at the next boot. Enable with
+# `systemctl enable --now snowcat-seed-dogfood.timer`.
+[Unit]
+Description=Snowcat: seed discovery roots daily
+
+[Timer]
+OnCalendar=*-*-* 00:15:00
+RandomizedDelaySec=300
+Persistent=true
+Unit=snowcat-seed-dogfood.service
+
+[Install]
+WantedBy=timers.target

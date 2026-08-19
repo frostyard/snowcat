@@ -1,0 +1,14 @@
+# Weekly settings sweep, Mondays 01:15 UTC, with jitter; Persistent=true runs
+# a missed week at the next boot. Enable with
+# `systemctl enable --now snowcat-sweep-settings.timer`.
+[Unit]
+Description=Snowcat: check repository settings weekly
+
+[Timer]
+OnCalendar=Mon *-*-* 01:15:00
+RandomizedDelaySec=300
+Persistent=true
+Unit=snowcat-sweep-settings.service
+
+[Install]
+WantedBy=timers.target

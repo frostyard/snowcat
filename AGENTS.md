@@ -197,17 +197,19 @@ removed. -->
   in [`src/control/registry.ts`](src/control/registry.ts). Do not add a generic
   record or fact mutation surface, and do not add control-plane registry or
   schema versions that no recovery-plan phase consumes.
-- Keep host scheduling in [`deploy/`](deploy/): three systemd timer/service
-  pairs plus `deploy/bin/snowcat-backup` call the existing idempotent `queue`
-  and `control` commands (`seed-dogfood --enrolled`, `import-issues
-  --enrolled --label snowcat`, then `sweep-dependencies --enrolled` — the
+- Keep host scheduling in [`deploy/`](deploy/): six systemd timer/service
+  pairs — one per command, so each cadence is tuned on its own — plus
+  `deploy/bin/snowcat-backup` call the existing idempotent `queue`
+  and `control` commands (`seed-dogfood --enrolled` daily, `import-issues
+  --enrolled --label snowcat` every 15 minutes, `sweep-dependencies
+  --enrolled` daily — the
   mechanical release-needed / dependency-bump proposals in
   [`src/queue/internal-dependencies.ts`](src/queue/internal-dependencies.ts)
-  — then `sweep-repository-settings --enrolled` — read-only drift of each
+  — `sweep-repository-settings --enrolled` weekly — read-only drift of each
   repository's GitHub settings against core's repository settings contract
   (ADR-0040) in [`src/queue/repository-settings.ts`](src/queue/repository-settings.ts),
   applied only by a human with core's `scripts/apply-repo-settings.sh`;
-  `verify-artifacts`; `backup`); never add a
+  `verify-artifacts` every 10 minutes; `backup` daily); never add a
   scheduler, daemon, or MCP tool inside Snowcat for
   them. `npm run check:deploy` (part of `check`; needs `shellcheck` and
   `systemd-analyze` locally) runs `systemd-analyze verify` against a stub
