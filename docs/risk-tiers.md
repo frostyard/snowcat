@@ -60,8 +60,9 @@ Examples include:
 - credentials and sensitive GitHub-facing code: `src/github/**`,
   `src/queue/artifact-verification.ts`, `src/queue/github-issues.ts`, and
   `src/repository/github-api.ts`;
-- the MCP/authorization boundary: `src/mcp/**`, `src/app.ts`, and
-  `src/queue/eligibility.ts`;
+- the MCP/authorization boundary: `src/mcp/**`, `src/app.ts`,
+  `src/queue/eligibility.ts`, `src/auth/**`, `src/surface/session.ts`, and
+  `src/surface/app.ts`;
 - dependency and lockfile changes (`package.json`, `package-lock.json`);
 - the queue schema migration ladder (`src/queue/store.ts`,
   `SCHEMA_VERSION`) or control-plane schema and migrations
