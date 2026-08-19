@@ -48,16 +48,46 @@ as well as on the item page.
 | View | Route | Reads | Purpose |
 | --- | --- | --- | --- |
 | Inbox | `/` | `list({status:"proposed"})`, `list({status:"blocked"})`, completed items with any `unverified` artifact | Everything waiting on the operator, grouped: proposals to admit (children under their parent's finding), blocked items to requeue or cancel, unverified artifacts to re-check |
-| Repository board | `/repositories/:owner/:name` | `counts(repository)`, `list({repository, status})` for `queued`/`claimed`/`completed`, `events(id)` for the completing worker; `ControlPlaneStore.repositoryStatuses()` and `activeCoreSnapshot()` for the enrollment badge (effective state, Core source commit, surface commit, repository id, hold) | Three columns: queued in claim order (priority tag, `note` tag when `operatorNotes` is non-empty), leased (worker identity, lease-time bar from `updatedAt` → `leaseExpiresAt`), completed newest first with the `delivery` tag; four stat tiles (queued, leased, completed today, merged / attempts); Hold / Import issues / Seed dogfood render disabled until [#24](https://github.com/frostyard/snowcat/issues/24) |
+| Repository board | `/repositories/:owner/:name` | `counts(repository)`, `list({repository, status})` for `queued`/`claimed`/`completed`, `list({repository, kind:"pr-cure", status})` per status, `events(id)` for the completing worker; `ControlPlaneStore.repositoryStatuses()` and `activeCoreSnapshot()` for the enrollment badge (effective state, Core source commit, surface commit, repository id, hold) | Three columns: queued in claim order (priority tag, `note` tag when `operatorNotes` is non-empty), leased (worker identity, lease-time bar from `updatedAt` → `leaseExpiresAt`), completed newest first with the `delivery` tag; four stat tiles (queued, leased, completed today, merged / attempts); under them the [pull requests](#pull-requests) section; Hold / Import issues / Seed dogfood render disabled until [#24](https://github.com/frostyard/snowcat/issues/24) |
 | Item | `/items/:id` | `get(id)`, `events(id)`, `get(parentId)`, `get(rootId)`, `children(id)` | Exactly what `queue -- show` prints, rendered: header with status and delivery tags; Definition (objective, repository + enrollment, kind, lineage links to parent/root/children, priority, allowed/delegable tags, created/updated, instructions, acceptance criteria); Result (summary, evidence, artifacts table with verification tag, head SHA, merged/verified time and the re-verifying actor from `artifact.verified`); Operator notes; Previous results; the full event timeline |
 
 A repositories index (`/repositories`) lists opted-in and declared
-repositories with per-status counts from `counts(repository)` and their
-enrollment badge. Unknown repositories and items are 404 inside the shell.
+repositories with per-status counts from `counts(repository)`, their
+enrollment badge, and a pull-request summary
+(`open N · decayed N · merged today N`, linking to that repository's
+[pull requests](#pull-requests) section). Unknown repositories and items are 404 inside the shell.
 Lease tokens are never read into a template; views use `withoutLeaseToken`
 like the CLI. `QueueStore.counts(repository?)` and `QueueStore.children(id)`
 are the two read-only additions the surface needed; neither is exposed
 through MCP.
+
+### Pull requests
+
+Shipped with [#49](https://github.com/frostyard/snowcat/issues/49). The board
+carries a *Pull requests* section under the three columns, and the
+repositories index the same counts per repository, so the day's open,
+decayed, and just-merged pull requests are visible without leaving the
+surface.
+
+It is a **read-only projection over the queue** — `readPullRequests(queue,
+repository, now)` in [`src/surface/repositories.ts`](../../src/surface/repositories.ts),
+beside `readBoard` — with no state, no schema change, no mutation, and **no
+GitHub call during render**. Everything it shows is already in the store:
+
+| Shown | Read from |
+| --- | --- |
+| The pull request (URL, number, title) | A completed item's `pull-request` artifact; the title is the reporting item's objective, the best source without asking GitHub. A `pr-cure` root's `cure.pullRequestUrl` contributes a pull request no item reported (foreign cure), titled by the cure root's objective |
+| `state`, `headSha`, `verifiedAt`, `mergedAt` | The artifact's `verification` (`verified` or `unverified`), which `verify-artifacts` refreshes on the host timer; when several completed items report the same URL, the newest `verifiedAt` wins and each reporting item is kept |
+| Decay | The `pr-cure` root bound to the current head ([ADR-0061](../adr/0061-cure-pull-requests-as-bounded-per-head-work.md)): its status and `cure.decay`, `decayed` when that root is still proposed, queued, claimed, or blocked |
+
+Open (and `unverified`) pull requests come first, highest number first, each
+linking to GitHub, to the item that reported it, and to its cure item; then
+what merged in the last seven days, newest merge first. Closed pull requests
+and older merges are left out — the section is the operator's *now*, not a
+history. The index summary counts exactly those rows: `open` is the open
+list, `decayed` the open rows with an unfinished cure root, `merged today`
+the merges since 00:00 UTC. Source lists are capped at 100 rows like the
+board's columns, and the section says so when a cap is hit.
 
 ### Mutations
 
@@ -130,7 +160,7 @@ loaded from another host) that subscribes with `EventSource`, prepends events
 to the rail (cap 30), and after a `work.*` or `artifact.verified` event
 refetches the page's groups as fragments (`GET /?partial=stats|proposals|
 blocked|unverified`, `GET /repositories/:owner/:name?partial=stats|queued|
-leased|completed`) and swaps them in; the 30-second meta refresh survives only
+leased|completed|pull-requests`) and swaps them in; the 30-second meta refresh survives only
 inside `<noscript>`, and a browser with scripts but no `EventSource`
 re-inserts it. Every page prints the queue and control-plane database paths
 it is reading, the same way `metadata` does.
@@ -206,7 +236,10 @@ Phase 10 and later.
   respects. No batch action and nothing runs a worker. The event
   stream and live inbox/board shipped with
   [#23](https://github.com/frostyard/snowcat/issues/23) (see "Rendering and
-  liveness"); the meta refresh remains only as the `<noscript>` fallback. Pages inline their stylesheet (Frostyard tokens and the
+  liveness"); the board's pull-request section and the index's per-repository
+  summary shipped read-only with
+  [#49](https://github.com/frostyard/snowcat/issues/49) (see "Pull requests"),
+  refreshing live as the `pull-requests` partial; the meta refresh remains only as the `<noscript>` fallback. Pages inline their stylesheet (Frostyard tokens and the
   Pilothouse shell copied into [`src/surface/styles.ts`](../../src/surface/styles.ts));
   nothing is fetched from another host. Every page footer prints the queue
   and control-plane database paths.
@@ -219,8 +252,8 @@ Phase 10 and later.
   `frostyard/core` into `.agents/skills/` (portable instruction surface,
   [ADR-0002](../adr/0002-agent-portable-instruction-surface.md)) so agents
   implementing the pages use the organization's design rules and assets.
-- The runbook keeps its CLI instructions; a "From the browser" section is
-  added when the surface ships.
+- The runbook's ["From the browser"](queue-operations.md#from-the-browser)
+  section is the operator-facing description of these views.
 
 ## References
 

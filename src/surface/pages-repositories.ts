@@ -2,7 +2,16 @@ import { maintenancePrograms } from "../queue/programs.ts";
 import type { ObservableWorkItem } from "../queue/types.ts";
 import { html, raw, type SafeHtml } from "./html.ts";
 import { clock, document, itemPath, objective, repositoryPath, shell, type PageContext } from "./pages.ts";
-import type { BoardData, CompletedRow, LeasedRow, RepositoryEnrollment, RepositoryIndexData } from "./repositories.ts";
+import type {
+  BoardData,
+  CompletedRow,
+  LeasedRow,
+  PullRequestRow,
+  PullRequestSummary,
+  PullRequestsData,
+  RepositoryEnrollment,
+  RepositoryIndexData,
+} from "./repositories.ts";
 import { shortLabel, workerFamily } from "./repositories.ts";
 import { verifyForm } from "./forms.ts";
 
@@ -15,11 +24,12 @@ export function repositoriesPage(context: PageContext, data: RepositoryIndexData
       html`<section class="fl-group"><div class="fl-group-head"><h2>Opted in${data.controlPlaneConfigured ? " and declared" : ""}</h2><span>${data.rows.length} ${data.rows.length === 1 ? "repository" : "repositories"}</span></div>${
         data.rows.length === 0
           ? html`<p class="fl-empty">No repository is opted in. <code>npm run queue -- opt-in &lt;owner/repo&gt;</code> adds one.</p>`
-          : html`<table class="fl-table"><thead><tr><th>Repository</th><th>Enrollment</th><th class="right">Proposed</th><th class="right">Queued</th><th class="right">Leased</th><th class="right">Blocked</th><th class="right">Completed</th><th class="right">Cancelled</th></tr></thead><tbody>${data.rows.map(
+          : html`<table class="fl-table"><thead><tr><th>Repository</th><th>Enrollment</th><th class="right">Proposed</th><th class="right">Queued</th><th class="right">Leased</th><th class="right">Blocked</th><th class="right">Completed</th><th class="right">Cancelled</th><th>Pull requests</th></tr></thead><tbody>${data.rows.map(
               (row) => html`<tr>
                 <td><div class="fl-name"><strong><a href="${repositoryPath(row.slug)}">${row.slug}</a></strong></div></td>
                 <td>${enrollmentBadge(row.enrollment, data.controlPlaneConfigured)}</td>
                 <td class="right">${row.counts.proposed}</td><td class="right">${row.counts.queued}</td><td class="right">${row.counts.claimed}</td><td class="right">${row.counts.blocked}</td><td class="right">${row.counts.completed}</td><td class="right">${row.counts.cancelled}</td>
+                <td><a class="fl-facts" href="${repositoryPath(row.slug)}#pull-requests">${pullRequestSummaryLabel(row.pullRequests)}</a></td>
               </tr>`,
             )}</tbody></table>`
       }</section>`,
@@ -28,7 +38,7 @@ export function repositoriesPage(context: PageContext, data: RepositoryIndexData
 }
 
 /** The board fragments the live script refetches; each renders one element with that id. */
-export const boardPartials = ["stats", "queued", "leased", "completed"] as const;
+export const boardPartials = ["stats", "queued", "leased", "completed", "pull-requests"] as const;
 export type BoardPartial = (typeof boardPartials)[number];
 
 export function boardPartial(data: BoardData, partial: BoardPartial): string {
@@ -41,6 +51,8 @@ export function boardPartial(data: BoardData, partial: BoardPartial): string {
       return column("Leased", `${data.leased.length}`, data.leased.map(leasedRow), "No active leases.", "leased").value;
     case "completed":
       return column("Completed", `${data.stats.completedToday} today`, data.completed.map(completedRow), "Nothing completed yet.", "completed").value;
+    case "pull-requests":
+      return pullRequestsSection(data.pullRequests).value;
   }
 }
 
@@ -84,7 +96,8 @@ export function boardPage(context: PageContext, data: BoardData): string {
         ${raw(boardPartial(data, "queued"))}
         ${raw(boardPartial(data, "leased"))}
         ${raw(boardPartial(data, "completed"))}
-      </div>`,
+      </div>
+      ${raw(boardPartial(data, "pull-requests"))}`,
     ),
     { refresh: true, live: { page: repositoryPath(data.repository), partials: boardPartials, repository: data.repository } },
   );
@@ -173,6 +186,40 @@ function completedRow(row: CompletedRow): SafeHtml {
   return html`<a class="fl-row" href="${itemPath(item.id)}"><div class="fl-row-head">${objective(item)}<span class="fl-tags"><span class="ph-badge ${tone}">${delivery}</span></span></div><small>${item.kind}${pulls.length > 0 ? ` · PR ${pulls.join(", ")}` : ""} · ${clock(item.updatedAt)}${
     row.completedBy ? ` · ${workerFamily(row.completedBy)}` : ""
   }</small></a>`;
+}
+
+/** `open 3 · decayed 1 · merged today 2`, the same phrase on the board head and the index. */
+export function pullRequestSummaryLabel(summary: PullRequestSummary): string {
+  return `open ${summary.open} · decayed ${summary.decayed} · merged today ${summary.mergedToday}`;
+}
+
+/**
+ * The board's read-only pull-request section: what the queue already knows
+ * from completed items' `pull-request` artifacts and `pr-cure` roots — open
+ * (and unverified) heads first with their decay, then what merged in the last
+ * seven days. Nothing here calls GitHub.
+ */
+function pullRequestsSection(data: PullRequestsData): SafeHtml {
+  return html`<section class="fl-group" id="pull-requests"><div class="fl-group-head"><h2>Pull requests</h2><span>${pullRequestSummaryLabel(data.summary)}</span></div>
+    <div class="fl-rows">${data.open.length === 0 ? html`<p class="fl-empty">No open pull request reported.</p>` : data.open.map(pullRequestRow)}</div>
+    <div class="fl-group-head"><h2>Merged · last 7 days</h2><span>${data.merged.length}</span></div>
+    <div class="fl-rows">${data.merged.length === 0 ? html`<p class="fl-empty">Nothing merged in the last 7 days.</p>` : data.merged.map(pullRequestRow)}</div>${
+      data.truncated ? html`<p class="fl-empty">Some source rows hit the 100-row cap; use the CLI for the full list.</p>` : ""
+    }</section>`;
+}
+
+function pullRequestRow(row: PullRequestRow): SafeHtml {
+  const tone = row.state === "merged" ? "ok" : row.state === "unverified" ? "warn" : row.state === "closed" ? "danger" : "";
+  const facts = [
+    row.headSha ? `head ${short(row.headSha)}` : undefined,
+    row.mergedAt ? `merged ${clock(row.mergedAt)}` : row.verifiedAt ? `verified ${clock(row.verifiedAt)}` : "never verified",
+  ].filter((fact): fact is string => fact !== undefined);
+  const reporter = row.reportedBy[0];
+  return html`<div class="fl-row"><div class="fl-row-head"><strong><a href="${row.url}" rel="noreferrer">${row.number === undefined ? "pull request" : `#${row.number}`}</a> <span>${row.title}</span></strong><span class="fl-tags"><span class="ph-badge ${tone}">${row.state}</span>${
+    row.cure?.active ? html`<span class="ph-badge warn">decayed</span>` : ""
+  }</span></div><small>${facts.join(" · ")}${reporter ? html` · <a href="${itemPath(reporter.id)}">reported by ${reporter.kind}</a>` : " · no reporting item"}${
+    row.cure ? html` · <a href="${itemPath(row.cure.itemId)}">cure ${row.cure.status}: ${row.cure.decay.join(", ")}</a>` : ""
+  }</small></div>`;
 }
 
 export function enrollmentBadge(enrollment: RepositoryEnrollment | undefined, controlPlaneConfigured: boolean): SafeHtml {

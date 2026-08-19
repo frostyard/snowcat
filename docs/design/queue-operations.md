@@ -381,7 +381,9 @@ remain CLI-only for now.
 Three more views sit behind the same session:
 
 - `/repositories` — every opted-in (and, with `SNOWCAT_CONTROL_DB`, declared)
-  repository with its enrollment badge and per-status counts, the browser's
+  repository with its enrollment badge, per-status counts, and its pull
+  requests summarized as `open N · decayed N · merged today N` (the link jumps
+  to that repository's *Pull requests* section): the browser's
   `list --repository` at a glance.
 - `/repositories/<owner>/<name>` — the board: queued work in claim order with
   its priority and a `note` tag when an operator note is carried, leased work
@@ -402,6 +404,15 @@ Three more views sit behind the same session:
   meanwhile you are asked to try again). The badge flips to `operator-held`
   and workers stop claiming until it is cleared. Each lands you back on the
   board with a banner naming what was recorded.
+- The board's *Pull requests* section — under the three columns: every pull
+  request the queue knows about for that repository, open ones first with
+  their head SHA, when it was last verified, and the decay of the `pr-cure`
+  root bound to that head, then what merged in the last seven days. Each row
+  links to GitHub and to the item that reported it (and to its cure item).
+  It is derived from completed items' `pull-request` artifacts and `pr-cure`
+  roots — the same rows `queue -- show` prints — so it is only as fresh as
+  the last `verify-artifacts` pass and never calls GitHub while the page
+  renders ([design](operator-surface.md#pull-requests)).
 - `/items/<id>` — `queue -- show <id>` rendered: definition, acceptance
   criteria, result with artifacts and their verification, operator notes,
   previous results, the full event timeline, and the *Decide* card. Every
