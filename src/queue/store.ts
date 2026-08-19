@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
@@ -45,7 +45,7 @@ const MAX_OPERATOR_NOTE_LENGTH = 4000;
  * that newer code has already migrated; newer code upgrades an older database
  * in place, forward only, inside one write transaction.
  */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 /**
  * Backup manifest emitted by `QueueStore.backup` and re-derived by
@@ -80,7 +80,12 @@ export interface QueueMetadata {
  * lease expiry). Worker identities may not use them, so createdBy and event
  * actors cannot be spoofed to look operator- or system-authored.
  */
-export const RESERVED_PRINCIPAL_PREFIXES = ["operator:", "policy:", "system:"] as const;
+/**
+ * Namespaces a worker may not claim for itself. `member:` is the identity a
+ * transport establishes for a person (Access JWT) or a person's minted MCP
+ * token (ADR-0063); a payload-supplied `member:` is a forgery attempt.
+ */
+export const RESERVED_PRINCIPAL_PREFIXES = ["operator:", "policy:", "system:", "member:"] as const;
 
 /**
  * Principals allowed to decide about work: the operator CLI, the operator
@@ -93,12 +98,53 @@ export function validateOperatorActor(actor: string, purpose: string): string {
   const identity = actor.trim();
   if (!identity) throw new Error(`${purpose} actor is required`);
   const lowered = identity.toLowerCase();
-  if (!lowered.startsWith("operator:") && !lowered.startsWith("policy:")) {
-    throw new Error(`${purpose} actor "${identity}" must use the operator: or policy: principal namespace`);
+  if (!lowered.startsWith("operator:") && !lowered.startsWith("policy:") && !lowered.startsWith("member:")) {
+    throw new Error(`${purpose} actor "${identity}" must use the operator:, policy:, or member: principal namespace`);
   }
   return identity;
 }
 
+/** A verified person: `member:<email or login>` — set only by a transport, never by a payload. */
+export function validateMemberPrincipal(principal: string, purpose: string): string {
+  const identity = principal.trim();
+  if (!/^member:[^\s:]{1,254}$/i.test(identity)) throw new Error(`${purpose} must be a member: principal`);
+  return identity;
+}
+
+export interface McpTokenRecord {
+  id: string;
+  owner: string;
+  client: string;
+  /** Empty in listings; present internally for verification only. */
+  tokenHash: string;
+  createdAt: string;
+  lastUsedAt?: string;
+  revokedAt?: string;
+  revokedBy?: string;
+}
+
+function decodeMcpToken(row: Row): McpTokenRecord {
+  return {
+    id: String(row.id),
+    owner: String(row.owner),
+    client: String(row.client),
+    tokenHash: String(row.token_hash),
+    createdAt: String(row.created_at),
+    ...(row.last_used_at == null ? {} : { lastUsedAt: String(row.last_used_at) }),
+    ...(row.revoked_at == null ? {} : { revokedAt: String(row.revoked_at) }),
+    ...(row.revoked_by == null ? {} : { revokedBy: String(row.revoked_by) }),
+  };
+}
+
+function sha256Hex(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+/**
+ * The payload-facing rule: a worker may not name itself into any reserved
+ * namespace, `member:` included — that one is set by the transport from a
+ * verified token (ADR-0063), never accepted from a request body.
+ */
 export function validateWorkerIdentity(worker: string): string {
   const identity = worker.trim();
   if (!identity) throw new Error("worker is required");
@@ -107,6 +153,21 @@ export function validateWorkerIdentity(worker: string): string {
     throw new Error(
       `worker identity "${identity}" uses a reserved principal namespace (${RESERVED_PRINCIPAL_PREFIXES.join(", ")}, system)`,
     );
+  }
+  return identity;
+}
+
+/**
+ * The store-facing rule: any worker principal except the operator, policy,
+ * and system namespaces. `member:` is admitted here because only code that
+ * verified a token or a session can construct it.
+ */
+export function validateWorkerPrincipal(worker: string): string {
+  const identity = worker.trim();
+  if (!identity) throw new Error("worker is required");
+  const lowered = identity.toLowerCase();
+  if (lowered === "system" || ["operator:", "policy:", "system:"].some((prefix) => lowered.startsWith(prefix))) {
+    throw new Error(`worker identity "${identity}" uses a reserved principal namespace (operator:, policy:, system:)`);
   }
   return identity;
 }
@@ -329,6 +390,80 @@ export class QueueStore {
       this.db.prepare("DELETE FROM repositories WHERE slug = ?").run(from);
       return { from, to, items: Number(updated.changes) };
     });
+  }
+
+  /**
+   * Mints one MCP token for a member (ADR-0063). The plaintext is returned
+   * exactly once and never stored: the row keeps `sha256(secret)`, the owner
+   * (a `member:` principal — the verified person), and the client name the
+   * person gave the process that will hold it. Token format:
+   * `snowcat_<id>_<secret>`.
+   */
+  mintMcpToken(input: { owner: string; client: string }): { token: string; record: McpTokenRecord } {
+    const owner = validateMemberPrincipal(input.owner, "token owner");
+    const client = input.client.trim();
+    if (!client || client.length > 100 || !/^[A-Za-z0-9][A-Za-z0-9 ._:@/-]*$/.test(client)) {
+      throw new Error("token client must be a short human-readable name (letters, digits, space, . _ : @ / -)");
+    }
+    const id = randomBytes(8).toString("hex");
+    const secret = randomBytes(24).toString("base64url");
+    const token = `snowcat_${id}_${secret}`;
+    const now = this.now();
+    this.db
+      .prepare("INSERT INTO mcp_tokens (id, owner, client, token_hash, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run(id, owner, client, sha256Hex(secret), now);
+    return { token, record: this.mcpToken(id)! };
+  }
+
+  /**
+   * Resolves a presented token to its record when it exists and is not
+   * revoked; touches `last_used_at` at most once a minute. Anything else —
+   * malformed, unknown, revoked, hash mismatch — is `undefined`, never a
+   * reason.
+   */
+  verifyMcpToken(presented: string): McpTokenRecord | undefined {
+    const match = /^snowcat_([0-9a-f]{16})_([A-Za-z0-9_-]{20,})$/.exec(presented.trim());
+    if (!match) return undefined;
+    const record = this.mcpToken(match[1]!);
+    if (!record || record.revokedAt) return undefined;
+    const expected = Buffer.from(record.tokenHash, "hex");
+    const actual = Buffer.from(sha256Hex(match[2]!), "hex");
+    if (expected.byteLength !== actual.byteLength || !timingSafeEqual(expected, actual)) return undefined;
+    const now = this.now();
+    if (!record.lastUsedAt || new Date(now).getTime() - new Date(record.lastUsedAt).getTime() > 60_000) {
+      this.db.prepare("UPDATE mcp_tokens SET last_used_at = ? WHERE id = ?").run(now, record.id);
+      record.lastUsedAt = now;
+    }
+    return record;
+  }
+
+  /** Revokes one token; a member may revoke only their own, an operator any. Idempotent. */
+  revokeMcpToken(id: string, actor: string): McpTokenRecord {
+    const principal = validateOperatorActor(actor, "token revocation");
+    return this.transaction(() => {
+      const record = this.mcpToken(id);
+      if (!record) throw new Error(`token not found: ${id}`);
+      if (principal.toLowerCase().startsWith("member:") && principal.toLowerCase() !== record.owner.toLowerCase()) {
+        throw new Error(`token ${id} belongs to ${record.owner}`);
+      }
+      if (record.revokedAt) return record;
+      const now = this.now();
+      this.db.prepare("UPDATE mcp_tokens SET revoked_at = ?, revoked_by = ? WHERE id = ?").run(now, principal, id);
+      return this.mcpToken(id)!;
+    });
+  }
+
+  /** Tokens, newest first; optionally one owner's. Hashes are never returned. */
+  listMcpTokens(owner?: string): McpTokenRecord[] {
+    const rows = owner
+      ? (this.db.prepare("SELECT * FROM mcp_tokens WHERE owner = ? ORDER BY created_at DESC").all(owner) as Row[])
+      : (this.db.prepare("SELECT * FROM mcp_tokens ORDER BY created_at DESC").all() as Row[]);
+    return rows.map(decodeMcpToken).map(({ tokenHash: _hash, ...visible }) => ({ ...visible, tokenHash: "" }));
+  }
+
+  private mcpToken(id: string): McpTokenRecord | undefined {
+    const row = this.db.prepare("SELECT * FROM mcp_tokens WHERE id = ?").get(id) as Row | undefined;
+    return row ? decodeMcpToken(row) : undefined;
   }
 
   repositoryCureSettings(): Array<{ repository: string; cureForeign: boolean }> {
@@ -603,7 +738,7 @@ export class QueueStore {
   }
 
   claim(input: ClaimInput): WorkItem | undefined {
-    const worker = validateWorkerIdentity(input.worker);
+    const worker = validateWorkerPrincipal(input.worker);
     if (input.repository) validateRepository(input.repository);
     const leaseSeconds = boundedLease(input.leaseSeconds);
 
@@ -665,13 +800,18 @@ export class QueueStore {
            WHERE id = ?`,
         )
         .run(worker, token, expiresAt, now, id);
-      this.addEvent(id, "work.claimed", worker, { leaseExpiresAt: expiresAt });
+      this.addEvent(id, "work.claimed", worker, {
+        leaseExpiresAt: expiresAt,
+        // A transport-established identity may carry the client's own name as
+        // a label beside it (ADR-0063); it is provenance, never authority.
+        ...(input.label !== undefined && input.label !== worker ? { label: input.label } : {}),
+      });
       return this.getRequired(id);
     });
   }
 
   heartbeat(id: string, leaseToken: string, worker: string, leaseSeconds?: number): WorkItem {
-    validateWorkerIdentity(worker);
+    validateWorkerPrincipal(worker);
     return this.transaction(() => {
       this.assertActiveLease(id, leaseToken, worker);
       const now = this.now();
@@ -685,7 +825,7 @@ export class QueueStore {
   }
 
   complete(input: CompletionInput): { completed: WorkItem; followUps: WorkItem[] } {
-    validateWorkerIdentity(input.worker);
+    validateWorkerPrincipal(input.worker);
     validateResult(input.result);
     if (input.followUps.length > MAX_FOLLOW_UPS) {
       throw new Error(`completion may propose at most ${MAX_FOLLOW_UPS} follow-up items`);
@@ -745,7 +885,7 @@ export class QueueStore {
   }
 
   block(id: string, leaseToken: string, worker: string, reason: string): WorkItem {
-    validateWorkerIdentity(worker);
+    validateWorkerPrincipal(worker);
     if (!reason.trim()) throw new Error("block reason is required");
     return this.transaction(() => {
       this.assertActiveLease(id, leaseToken, worker);
@@ -764,7 +904,7 @@ export class QueueStore {
   }
 
   release(id: string, leaseToken: string, worker: string, reason: string): WorkItem {
-    validateWorkerIdentity(worker);
+    validateWorkerPrincipal(worker);
     return this.transaction(() => {
       this.assertActiveLease(id, leaseToken, worker);
       const now = this.now();
@@ -1582,6 +1722,24 @@ const MIGRATIONS: readonly Migration[] = [
     if (!columns.has("cure_foreign")) {
       db.exec("ALTER TABLE repositories ADD COLUMN cure_foreign INTEGER NOT NULL DEFAULT 0 CHECK (cure_foreign IN (0, 1))");
     }
+  },
+  // Rung 7: Snowcat-minted MCP tokens (ADR-0063). Only the secret's hash is
+  // stored; the owner is the verified member identity that minted it and the
+  // client is a human-readable name for the process that will hold it.
+  (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS mcp_tokens (
+        id TEXT PRIMARY KEY,
+        owner TEXT NOT NULL,
+        client TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+        last_used_at TEXT,
+        revoked_at TEXT,
+        revoked_by TEXT
+      );
+      CREATE INDEX IF NOT EXISTS mcp_tokens_owner ON mcp_tokens(owner, created_at);
+    `);
   },
 ];
 
