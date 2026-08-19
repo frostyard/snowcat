@@ -340,8 +340,9 @@ CLI and approved policy can write notes; workers cannot, and no MCP tool does.
 
 ## From the browser
 
-The same queue, read-only for now, at `http://127.0.0.1:3000/` once the
-operator host runs the surface
+The same queue at `http://127.0.0.1:3000/` once the operator host runs the
+surface: it renders the same rows the CLI prints, and carries attributed
+operator mutations besides
 ([design](operator-surface.md#operational-notes)):
 
 ```bash
@@ -377,8 +378,8 @@ the current state, and changes nothing ([spec rule 40](../specs/work-queue.md)).
 After a decision you land back where you were with a one-line banner naming
 the event recorded (`Recorded work.approved.`), and `queue -- show` and
 `events` list it exactly like a CLI decision, actor `operator:web`. There
-is no batch action; the board's Hold / Import issues / Seed dogfood buttons
-remain CLI-only for now.
+is no batch action, but the board's *Repository actions* strip is not
+CLI-only: it runs from the browser as `operator:web` too, as described below.
 
 Three more views sit behind the same session:
 
