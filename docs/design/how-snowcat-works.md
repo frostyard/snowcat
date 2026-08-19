@@ -92,11 +92,29 @@ runs code.
    proposals. The design principle: the fleet may *find* work freely; it may
    *do* work only after a person said yes.
 
-4. **Execution is bounded.** A claimed item carries its `allowedActions`
-   (never wider than the repository's governance file and core's ceiling),
+4. **Execution is bounded.** A claimed item carries its `allowedActions`,
    its acceptance criteria, and everything earlier leases learned (operator
-   notes, previous results). The worker does exactly that one thing, opens
-   one pull request, and completes with evidence and the pull request URL.
+   notes, previous results). Those actions are fixed by the feeder that
+   authored the item — the program catalog
+   ([`src/queue/programs.ts`](../../src/queue/programs.ts)), the issue import
+   ([`src/queue/github-issues.ts`](../../src/queue/github-issues.ts)), the
+   pull-request cure
+   ([`src/queue/pull-request-cure.ts`](../../src/queue/pull-request-cure.ts)),
+   the dependency sweep
+   ([`src/queue/internal-dependencies.ts`](../../src/queue/internal-dependencies.ts))
+   — and, for a worker-proposed child, bounded by its parent's
+   `delegableActions` ceiling, which the queue store enforces at
+   `complete_work`. Core's `action_ceiling` and the repository's governance
+   policy are read and recorded in the control-plane enrollment fact, but
+   the queue does not apply them to items today: the only Core coupling on
+   the work path is the enrolled-repository claim filter
+   ([`src/queue/eligibility.ts`](../../src/queue/eligibility.ts);
+   [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md),
+   Decision 3). Clamping item actions to Core's ceiling and the governance
+   file is future work that starts with an ADR and a
+   [work queue](../specs/work-queue.md) rule, not present behavior. The
+   worker does exactly that one thing, opens one pull request, and completes
+   with evidence and the pull request URL.
 
 5. **Verification is Snowcat's.** On completion, Snowcat checks every reported
    issue and pull request against GitHub — wrong repository or missing means
