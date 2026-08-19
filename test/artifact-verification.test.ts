@@ -418,3 +418,151 @@ test("verify-artifacts selects items that still need checking, so more than 100 
   assert.equal(queue.get(claimed.id)?.delivery, "merged");
   assert.deepEqual(queue.completedItemsWithPendingArtifacts({ repository: REPOSITORY }), [], "nothing left to check once the newer artifact is terminal");
 });
+
+// `rename-repository` (spec rule 47) carries items to the new slug but keeps
+// history verbatim, so an artifact reported before the rename keeps the
+// former name's URL. Rule 34: the refresh path asks GitHub with that URL's
+// own slug and verifies only what GitHub itself attests is this repository.
+const FORMER_REPOSITORY = "frostyard/fluent";
+const FORMER_PR_URL = "https://github.com/frostyard/fluent/pull/12";
+const FORMER_ISSUE_URL = "https://github.com/frostyard/fluent/issues/7";
+const FORMER_PR_PATH = "/repos/frostyard/fluent/pulls/12";
+const FORMER_ISSUE_PATH = "/repos/frostyard/fluent/issues/7";
+const formerPrArtifact: WorkArtifact = { kind: "pull-request", url: FORMER_PR_URL };
+const formerIssueArtifact: WorkArtifact = { kind: "issue", url: FORMER_ISSUE_URL };
+
+test("a former-name artifact URL verifies only when GitHub's answer names the item's repository", async () => {
+  // GitHub follows the rename: the old URL answers with this repository's
+  // canonical URL, base repository, and number.
+  const renamed = apiFetcher({
+    [FORMER_PR_PATH]: pullRequest({ state: "closed", merged: true, merged_at: "2026-08-17T19:00:00Z", closed_at: "2026-08-17T19:00:00Z" }),
+  });
+  const check = await verifyGitHubArtifact(REPOSITORY, formerPrArtifact, { fetcher: renamed.fetcher, clock, acceptFormerName: true });
+  assert.deepEqual(check, {
+    kind: "verified",
+    verification: {
+      status: "verified",
+      verifiedAt: "2026-08-17T20:00:00.000Z",
+      number: 12,
+      state: "merged",
+      headSha: "0123456789abcdef0123456789abcdef01234567",
+      mergedAt: "2026-08-17T19:00:00Z",
+      closedAt: "2026-08-17T19:00:00Z",
+    },
+  });
+  assert.deepEqual(renamed.requests, [FORMER_PR_PATH], "the URL's own slug is what GitHub is asked about");
+
+  // Everything GitHub does not attest as this repository stays rejected.
+  for (const [label, body] of Object.entries({
+    "an unrelated repository": pullRequest({ html_url: "https://github.com/frostyard/lodge/pull/12", base: { repo: { full_name: "frostyard/lodge" } } }),
+    "a different number": pullRequest({ number: 99, html_url: "https://github.com/frostyard/updex/pull/99" }),
+    "a redirect to another repository at the same number": pullRequest({ html_url: "https://github.com/frostyard/lodge/pull/12" }),
+  })) {
+    const rejected = await verifyGitHubArtifact(REPOSITORY, formerPrArtifact, { fetcher: apiFetcher({ [FORMER_PR_PATH]: body }).fetcher, clock, acceptFormerName: true });
+    assert.equal(rejected.kind, "rejected", label);
+  }
+  const absent = await verifyGitHubArtifact(REPOSITORY, formerPrArtifact, { fetcher: apiFetcher({}).fetcher, clock, acceptFormerName: true });
+  assert.equal(absent.kind, "rejected");
+
+  // Without the refresh path's opt-in, a foreign slug is refused before
+  // GitHub is asked anything: completion and attach keep rule 15's scope.
+  const strict = apiFetcher({ [FORMER_PR_PATH]: pullRequest() });
+  const scoped = await verifyGitHubArtifact(REPOSITORY, formerPrArtifact, { fetcher: strict.fetcher, clock });
+  assert.equal(scoped.kind, "rejected");
+  assert.match(scoped.kind === "rejected" ? scoped.reason : "", /is not a frostyard\/updex pull-request URL/);
+  assert.deepEqual(strict.requests, [], "no request is made for a URL outside the item's repository");
+
+  // The issue variant reads `repository_url`, and its canonical html_url.
+  const issueCheck = await verifyGitHubArtifact(REPOSITORY, formerIssueArtifact, {
+    fetcher: apiFetcher({ [FORMER_ISSUE_PATH]: issue({ state: "closed", closed_at: "2026-08-17T19:00:00Z" }) }).fetcher,
+    clock,
+    acceptFormerName: true,
+  });
+  assert.equal(issueCheck.kind, "verified");
+  assert.equal(issueCheck.kind === "verified" && issueCheck.verification.state, "closed");
+  const issueElsewhere = await verifyGitHubArtifact(REPOSITORY, formerIssueArtifact, {
+    fetcher: apiFetcher({
+      [FORMER_ISSUE_PATH]: issue({ html_url: "https://github.com/frostyard/lodge/issues/7", repository_url: "https://api.github.com/repos/frostyard/lodge" }),
+    }).fetcher,
+    clock,
+    acceptFormerName: true,
+  });
+  assert.equal(issueElsewhere.kind, "rejected");
+});
+
+test("verify-artifacts clears a pre-rename artifact, and completion still requires the current slug", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-verify-rename-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+
+  // Completed under the former name, when the slug still matched.
+  queue.setRepositoryEnabled(FORMER_REPOSITORY, true);
+  queue.enqueueSeed({
+    repository: FORMER_REPOSITORY,
+    kind: "issue-resolution",
+    objective: "Resolve #12",
+    instructions: "Open a PR.",
+    acceptanceCriteria: ["PR open."],
+    allowedActions: ["read", "write", "run-tests", "open-pr"],
+    delegableActions: [],
+    createdBy: "operator:test",
+  });
+  const before = queue.claim({ worker: "claude:verify-test" })!;
+  queue.complete({
+    id: before.id,
+    leaseToken: before.leaseToken!,
+    worker: "claude:verify-test",
+    result: {
+      summary: "Opened the PR.",
+      evidence: [],
+      artifacts: [{ kind: "pull-request", url: FORMER_PR_URL, verification: { status: "unverified", attemptedAt: "2026-08-17T19:00:00.000Z", reason: "GitHub API returned HTTP 504" } }],
+    },
+    followUps: [],
+  });
+
+  queue.renameRepository(FORMER_REPOSITORY, REPOSITORY, "operator:test");
+  const carried = queue.get(before.id)!;
+  assert.equal(carried.repository, REPOSITORY);
+  assert.equal(carried.result?.artifacts[0]?.url, FORMER_PR_URL, "history keeps the URL it was recorded with");
+  assert.deepEqual(
+    queue.completedItemsWithPendingArtifacts({ repository: REPOSITORY }).map((item) => item.id),
+    [before.id],
+    "the stale artifact is selected until it verifies",
+  );
+
+  const live = apiFetcher({ [FORMER_PR_PATH]: pullRequest({ state: "closed", merged: true, merged_at: "2026-08-17T19:00:00Z" }) });
+  const refreshed = await refreshArtifactVerifications(queue, { fetcher: live.fetcher, clock, repository: REPOSITORY });
+  assert.deepEqual(refreshed.rejected, []);
+  assert.deepEqual(refreshed.updated, [{ id: before.id, url: FORMER_PR_URL, status: "verified", state: "merged" }]);
+  assert.equal(queue.get(before.id)?.delivery, "merged");
+  assert.deepEqual(
+    queue.completedItemsWithPendingArtifacts({ repository: REPOSITORY }),
+    [],
+    "merged is terminal, so the item leaves the pending-artifact window",
+  );
+
+  // Completion-time scope validation (rule 15) is unchanged: a new report
+  // must use the item's current slug.
+  queue.enqueueSeed({
+    repository: REPOSITORY,
+    kind: "issue-resolution",
+    objective: "Resolve #13",
+    instructions: "Open a PR.",
+    acceptanceCriteria: ["PR open."],
+    allowedActions: ["read", "write", "run-tests", "open-pr"],
+    delegableActions: [],
+    createdBy: "operator:test",
+  });
+  const after = queue.claim({ worker: "claude:verify-test" })!;
+  assert.throws(
+    () =>
+      queue.complete({
+        id: after.id,
+        leaseToken: after.leaseToken!,
+        worker: "claude:verify-test",
+        result: { summary: "s", evidence: [], artifacts: [{ kind: "pull-request", url: FORMER_PR_URL }] },
+        followUps: [],
+      }),
+    /must match https:\/\/github\.com\/frostyard\/updex\/pull/,
+  );
+});

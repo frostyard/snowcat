@@ -25,6 +25,15 @@ export type ArtifactCheck =
 export interface ArtifactVerifierOptions {
   fetcher?: GitHubFetch;
   clock?: () => Date;
+  /**
+   * Ask GitHub about an artifact URL whose slug is not the item's repository —
+   * a URL recorded before `rename-repository` (spec rule 47) — and accept the
+   * answer when GitHub itself says it is this repository. Set by the
+   * `verify-artifacts` refresh only (spec rule 34): `complete_work` and
+   * `attach-artifact` keep rule 15's scope requirement and reject a foreign
+   * slug before GitHub is asked anything.
+   */
+  acceptFormerName?: boolean;
 }
 
 /** Only issues and pull requests are verifiable through the API today. */
@@ -39,8 +48,22 @@ export async function verifyGitHubArtifact(
 ): Promise<ArtifactCheck> {
   const fetcher = options.fetcher ?? fetch;
   const now = () => (options.clock ?? (() => new Date()))().toISOString();
-  const locator = parseArtifactUrl(repository, artifact);
+  const locator = parseArtifactUrl(artifact);
   if (!locator) return { kind: "rejected", reason: `artifact ${artifact.kind} URL is not a ${repository} ${artifact.kind} URL` };
+  const [owner, name] = repository.split("/") as [string, string];
+  // An artifact recorded before `rename-repository` (spec rule 47) keeps the
+  // former slug, which no longer matches the item's repository. Where the
+  // caller allows it — the `verify-artifacts` refresh, spec rule 34 — ask
+  // GitHub with the URL's own slug, because the API follows repository
+  // renames, and accept the answer below only when GitHub itself says the URL
+  // is this repository at the same number. Everywhere else a foreign slug is
+  // still rejected here, before any request, so completion-time scope
+  // validation (rule 15) is unchanged.
+  const underFormerName =
+    locator.owner.toLowerCase() !== owner.toLowerCase() || locator.name.toLowerCase() !== name.toLowerCase();
+  if (underFormerName && options.acceptFormerName !== true) {
+    return { kind: "rejected", reason: `artifact ${artifact.kind} URL is not a ${repository} ${artifact.kind} URL` };
+  }
   const path =
     artifact.kind === "pull-request"
       ? `/repos/${encodeURIComponent(locator.owner)}/${encodeURIComponent(locator.name)}/pulls/${locator.number}`
@@ -70,7 +93,14 @@ export async function verifyGitHubArtifact(
   if (!Number.isSafeInteger(record.number) || Number(record.number) !== locator.number) {
     return { kind: "rejected", reason: `${artifact.kind} number does not match ${artifact.url}` };
   }
-  if (typeof record.html_url !== "string" || record.html_url.toLowerCase() !== artifact.url.toLowerCase()) {
+  // Under a former name GitHub answers with the canonical URL — this
+  // repository's current slug at the same number and kind — so that, and not
+  // the recorded URL, is what the answer must match. A URL that resolves to
+  // another number or another repository still fails here.
+  const expectedUrl = underFormerName
+    ? `https://github.com/${repository}/${artifact.kind === "issue" ? "issues" : "pull"}/${locator.number}`
+    : artifact.url;
+  if (typeof record.html_url !== "string" || record.html_url.toLowerCase() !== expectedUrl.toLowerCase()) {
     return { kind: "rejected", reason: `${artifact.kind} ${artifact.url} resolves to a different location` };
   }
   const state = record.state;
@@ -160,7 +190,9 @@ export interface RefreshArtifactsResult {
  * says now. `limit` bounds the items that have such artifacts (newest first),
  * not arbitrary completions. A rejected artifact is recorded as unverified with the reason,
  * never deleted: the worker's report stays provenance. Unavailable answers
- * leave the previous verification in place.
+ * leave the previous verification in place. This is the one path that accepts
+ * a URL recorded under the repository's former name, and only when GitHub's
+ * own answer names the item's repository (`acceptFormerName`).
  */
 export async function refreshArtifactVerifications(
   queue: QueueStore,
@@ -176,7 +208,9 @@ export async function refreshArtifactVerifications(
   for (const item of items) {
     for (const artifact of pendingArtifacts(item)) {
       result.checked += 1;
-      const check = await verifyGitHubArtifact(item.repository, artifact, options);
+      // Only this path learns renames: an artifact reported before the
+      // repository was renamed still names GitHub's answer for this item.
+      const check = await verifyGitHubArtifact(item.repository, artifact, { ...options, acceptFormerName: true });
       if (check.kind === "unverified") {
         result.unavailable.push({ id: item.id, url: artifact.url, reason: check.verification.reason });
         continue;
@@ -280,28 +314,33 @@ function unverified(attemptedAt: string, reason: string): ArtifactCheck {
   return { kind: "unverified", verification: { status: "unverified", attemptedAt, reason } };
 }
 
-function parseArtifactUrl(
-  repository: string,
-  artifact: WorkArtifact,
-): { owner: string; name: string; number: number } | undefined {
+/**
+ * The owner, repository name, and number a well-formed GitHub issue or
+ * pull-request URL names, or `undefined` when the URL is not one. The slug is
+ * the URL's own — it is not required to match the item's repository, because
+ * a URL recorded under a former name is asked about with the slug it carries;
+ * whether GitHub's answer belongs to the item's repository is decided in
+ * `verifyGitHubArtifact` from the response itself.
+ */
+function parseArtifactUrl(artifact: WorkArtifact): { owner: string; name: string; number: number } | undefined {
   let url: URL;
   try {
     url = new URL(artifact.url);
   } catch {
     return undefined;
   }
-  const [owner, name] = repository.split("/") as [string, string];
   const segments = url.pathname.split("/");
   const expectedPath = artifact.kind === "issue" ? "issues" : "pull";
+  const slug = /^[A-Za-z0-9._-]+$/;
   if (
     url.hostname.toLowerCase() !== "github.com" ||
     segments.length !== 5 ||
-    (segments[1] ?? "").toLowerCase() !== owner.toLowerCase() ||
-    (segments[2] ?? "").toLowerCase() !== name.toLowerCase() ||
+    !slug.test(segments[1] ?? "") ||
+    !slug.test(segments[2] ?? "") ||
     segments[3] !== expectedPath ||
     !/^[1-9][0-9]*$/.test(segments[4] ?? "")
   ) {
     return undefined;
   }
-  return { owner, name, number: Number(segments[4]) };
+  return { owner: segments[1]!, name: segments[2]!, number: Number(segments[4]) };
 }
