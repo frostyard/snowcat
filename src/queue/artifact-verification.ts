@@ -154,7 +154,8 @@ export interface RefreshArtifactsResult {
 /**
  * Re-checks completed items whose issue or pull-request artifacts are not yet
  * terminal (unverified, or verified but still open) and records what GitHub
- * says now. A rejected artifact is recorded as unverified with the reason,
+ * says now. `limit` bounds the items that have such artifacts (newest first),
+ * not arbitrary completions. A rejected artifact is recorded as unverified with the reason,
  * never deleted: the worker's report stays provenance. Unavailable answers
  * leave the previous verification in place.
  */
@@ -164,7 +165,10 @@ export async function refreshArtifactVerifications(
 ): Promise<RefreshArtifactsResult> {
   const actor = options.actor ?? "operator:cli";
   const limit = options.limit ?? DEFAULT_REFRESH_LIMIT;
-  const items = queue.list({ status: "completed", repository: options.repository, limit });
+  // Select only completed items that still have something to check, newest
+  // first: list()'s priority/created ordering and 100-row clamp would let a
+  // repository with more than 100 terminal completions starve every newer one.
+  const items = queue.completedItemsWithPendingArtifacts({ repository: options.repository, limit });
   const result: RefreshArtifactsResult = { checked: 0, updated: [], unavailable: [], rejected: [] };
   for (const item of items) {
     for (const artifact of pendingArtifacts(item)) {

@@ -8,6 +8,7 @@ import test from "node:test";
 
 import { ControlPlaneStore, type ControlPlaneBackupManifest } from "../src/control/store.ts";
 import { QueueStore, type QueueBackupManifest } from "../src/queue/store.ts";
+import { childEnvironment } from "./helpers/child-environment.ts";
 
 const SCRIPT = join(process.cwd(), "deploy", "bin", "snowcat-backup");
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -46,14 +47,13 @@ test("deploy/bin/snowcat-backup writes verified queue and control-plane backups 
   const run = spawnSync("bash", [SCRIPT], {
     cwd: directory,
     encoding: "utf8",
-    env: {
-      ...stringEnvironment(process.env),
+    env: childEnvironment({
       SNOWCAT_HOME: process.cwd(),
       SNOWCAT_QUEUE_DB: queuePath,
       SNOWCAT_CONTROL_DB: controlPath,
       SNOWCAT_BACKUP_DIR: backupDir,
       SNOWCAT_BACKUP_RETAIN_DAYS: "14",
-    },
+    }),
   });
   assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
   assert.match(run.stdout, /pruned 2 file\(s\) older than 14 day\(s\)/);
@@ -106,7 +106,7 @@ test("deploy/bin/snowcat-backup writes verified queue and control-plane backups 
 
 test("deploy/bin/snowcat-backup refuses to run without its required environment and leaves no partial manifest", async () => {
   const directory = await mkdtemp(join(tmpdir(), "snowcat-deploy-backup-env-test-"));
-  const base = stringEnvironment(process.env);
+  const base = childEnvironment();
   for (const name of ["SNOWCAT_HOME", "SNOWCAT_QUEUE_DB", "SNOWCAT_CONTROL_DB", "SNOWCAT_BACKUP_DIR", "SNOWCAT_BACKUP_RETAIN_DAYS"]) {
     delete base[name];
   }
@@ -154,8 +154,3 @@ test("deploy/bin/snowcat-backup refuses to run without its required environment 
   assert.equal(written.some((name) => name.startsWith("control-plane-")), false);
 });
 
-function stringEnvironment(source: NodeJS.ProcessEnv): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(source).filter((entry): entry is [string, string] => entry[1] !== undefined),
-  );
-}

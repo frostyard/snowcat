@@ -14,6 +14,7 @@ import {
 } from "../src/core/poll-policy.ts";
 import { ControlPlaneStore } from "../src/control/store.ts";
 import { uuidV7 } from "../src/control/encoding.ts";
+import { childEnvironment } from "./helpers/child-environment.ts";
 
 test("Core poll policy validates configuration and applies bounded source backoff", () => {
   assert.equal(parseCorePollInterval(undefined), 900);
@@ -132,7 +133,7 @@ test("Core poll leases exclude overlap, recover after expiry, and persist comple
     execFileSync(process.execPath, ["--import", "tsx", "src/core/cli.ts", "poll-state"], {
       cwd: process.cwd(),
       encoding: "utf8",
-      env: { ...process.env, SNOWCAT_CONTROL_DB: path },
+      env: childEnvironment({ SNOWCAT_CONTROL_DB: path }),
     }),
   ) as Record<string, unknown>;
   assert.equal(cliState.completedRunCount, 3);
@@ -141,7 +142,7 @@ test("Core poll leases exclude overlap, recover after expiry, and persist comple
   const invalidInterval = spawnSync(process.execPath, ["--import", "tsx", "src/core/cli.ts", "poll-once"], {
     cwd: process.cwd(),
     encoding: "utf8",
-    env: { ...process.env, SNOWCAT_CONTROL_DB: path, SNOWCAT_CORE_POLL_INTERVAL_SECONDS: "0" },
+    env: childEnvironment({ SNOWCAT_CONTROL_DB: path, SNOWCAT_CORE_POLL_INTERVAL_SECONDS: "0" }),
   });
   assert.notEqual(invalidInterval.status, 0);
   assert.match(invalidInterval.stderr, /canonical positive integer/);

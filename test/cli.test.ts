@@ -10,6 +10,7 @@ import test from "node:test";
 import { ControlPlaneStore } from "../src/control/store.ts";
 import { QueueStore, SCHEMA_VERSION } from "../src/queue/store.ts";
 import { disabledDeclaration, enrollExampleRepository } from "./helpers/core-fixtures.ts";
+import { childEnvironment } from "./helpers/child-environment.ts";
 
 test("administrative queue listings do not expose a live lease token", async () => {
   const directory = await mkdtemp(join(tmpdir(), "snowcat-cli-test-"));
@@ -32,7 +33,7 @@ test("administrative queue listings do not expose a live lease token", async () 
   const output = execFileSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", "list", "claimed"], {
     cwd: process.cwd(),
     encoding: "utf8",
-    env: stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path }),
+    env: childEnvironment({ SNOWCAT_QUEUE_DB: path }),
   });
   const listed = JSON.parse(output) as Array<Record<string, unknown>>;
 
@@ -59,7 +60,7 @@ test("the list command rejects an unknown status instead of printing an empty ar
     createdBy: "operator:test",
   });
   queue.close();
-  const env = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
+  const env = childEnvironment({ SNOWCAT_QUEUE_DB: path });
   const run = (...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
       cwd: process.cwd(),
@@ -115,7 +116,7 @@ test("operator CLI exposes blocked requeue and cancellation without lease tokens
   queue.block(second.id, secondClaim.leaseToken!, "claude:updex:second", "Needs input.");
   queue.close();
 
-  const env = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
+  const env = childEnvironment({ SNOWCAT_QUEUE_DB: path });
   const run = (...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
       cwd: process.cwd(),
@@ -195,7 +196,7 @@ test("operator CLI can defer admitted work and approve it later", async () => {
   });
   queue.close();
 
-  const env = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
+  const env = childEnvironment({ SNOWCAT_QUEUE_DB: path });
   const run = (...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
       cwd: process.cwd(),
@@ -238,7 +239,7 @@ test("operator CLI --if-updated-at refuses a stale approve, prioritize, and note
   assert.notEqual(proposed.updatedAt, seed.updatedAt);
   queue.close();
 
-  const env = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
+  const env = childEnvironment({ SNOWCAT_QUEUE_DB: path });
   const run = (...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
       cwd: process.cwd(),
@@ -285,11 +286,6 @@ test("operator CLI --if-updated-at refuses a stale approve, prioritize, and note
   assert.match(usage.stderr, /approve <work-item-id> \[--if-updated-at <iso>\]/);
 });
 
-function stringEnvironment(source: NodeJS.ProcessEnv): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(source).filter((entry): entry is [string, string] => entry[1] !== undefined),
-  );
-}
 
 test("operator CLI reports metadata, backs up to a new path, and verifies the copy without printing lease tokens", async () => {
   const directory = await mkdtemp(join(tmpdir(), "snowcat-cli-backup-test-"));
@@ -308,7 +304,7 @@ test("operator CLI reports metadata, backs up to a new path, and verifies the co
   });
   const claimed = queue.claim({ worker: "claude:updex:backup" })!;
   queue.close();
-  const env = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
+  const env = childEnvironment({ SNOWCAT_QUEUE_DB: path });
   const run = (...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
       cwd: process.cwd(),
@@ -360,7 +356,7 @@ test("operator CLI validates import-issues and seed-dogfood flags before touchin
   const queue = new QueueStore(path);
   queue.setRepositoryEnabled("frostyard/updex", true);
   queue.close();
-  const env = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
+  const env = childEnvironment({ SNOWCAT_QUEUE_DB: path });
   const run = (...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
       cwd: process.cwd(),
@@ -413,7 +409,7 @@ test("operator CLI verify-artifacts validates its flags and reports an empty pas
   const directory = await mkdtemp(join(tmpdir(), "snowcat-cli-verify-test-"));
   const path = join(directory, "queue.db");
   new QueueStore(path).close();
-  const env = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
+  const env = childEnvironment({ SNOWCAT_QUEUE_DB: path });
   const run = (...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
       cwd: process.cwd(),
@@ -445,7 +441,7 @@ test("operator CLI cure-foreign is a repository-level setting: on|off for an opt
   const seeded = new QueueStore(path);
   seeded.setRepositoryEnabled("frostyard/updex", true);
   seeded.close();
-  const env = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
+  const env = childEnvironment({ SNOWCAT_QUEUE_DB: path });
   const run = (...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
       cwd: process.cwd(),
@@ -510,8 +506,7 @@ test("operator CLI attach-artifact verifies against GitHub first: refuses anothe
   const logPath = join(directory, "requests.log");
   const setGitHub = (answers: Record<string, { status: number; body?: unknown }>) => writeFile(fixturePath, JSON.stringify(answers));
   const requests = async () => (await readFile(logPath, "utf8").catch(() => "")).split("\n").filter(Boolean);
-  const env = stringEnvironment({
-    ...process.env,
+  const env = childEnvironment({
     SNOWCAT_QUEUE_DB: path,
     SNOWCAT_GITHUB_TOKEN: "test-token", // so a 404 counts as absence, exactly as complete_work treats it
     SNOWCAT_TEST_FAKE_GITHUB: fixturePath,
@@ -621,7 +616,7 @@ test("operator CLI list filters by repository and kind, and show prints an item 
   seedOne("frostyard/lodge", "quality-gap-discovery");
   const claimed = queue.claim({ worker: "claude:show-test", repository: "frostyard/updex", kinds: ["quality-gap-discovery"] })!;
   queue.close();
-  const env = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
+  const env = childEnvironment({ SNOWCAT_QUEUE_DB: path });
   const run = (...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], { cwd: process.cwd(), encoding: "utf8", env });
 
@@ -669,7 +664,7 @@ test("operator CLI events reads the ledger since a sequence as JSON without leas
   seedOne("frostyard/lodge");
   const claimed = queue.claim({ worker: "claude:events-test", repository: "frostyard/updex" })!;
   queue.close();
-  const env = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
+  const env = childEnvironment({ SNOWCAT_QUEUE_DB: path });
   const run = (...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], { cwd: process.cwd(), encoding: "utf8", env });
 
@@ -722,7 +717,7 @@ test("operator CLI watch tails new events as JSON lines and stops cleanly when s
     delegableActions: [],
     createdBy: "operator:test",
   });
-  const env = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
+  const env = childEnvironment({ SNOWCAT_QUEUE_DB: path });
 
   const invalid = spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", "watch", "--interval", "0"], {
     cwd: process.cwd(),
@@ -798,7 +793,7 @@ test("operator CLI seed-dogfood --enrolled requires SNOWCAT_CONTROL_DB and seeds
   queue.setRepositoryEnabled("frostyard/example", true);
   queue.setRepositoryEnabled("frostyard/retired", true);
   queue.close();
-  const baseEnvironment = stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path });
+  const baseEnvironment = childEnvironment({ SNOWCAT_QUEUE_DB: path });
   delete baseEnvironment.SNOWCAT_CONTROL_DB;
   const run = (env: Record<string, string>, ...args: string[]) =>
     spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
