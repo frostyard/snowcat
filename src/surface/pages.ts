@@ -23,7 +23,7 @@ interface View {
   title: string;
   eyebrow: string;
   heading: string;
-  active: "inbox" | "repositories" | "tokens" | "none";
+  active: "inbox" | "repositories" | "events" | "tokens" | "none";
   /** Header-right content before Refresh / Sign out (badges, ghost buttons). */
   actions?: SafeHtml;
   refresh?: boolean;
@@ -152,7 +152,7 @@ export function loginPage(options: { error?: string }): string {
 
 export interface TokensView {
   /** The signed-in principal's own tokens (a member) or every token (local operator mode). */
-  tokens: Array<{ id: string; owner: string; client: string; createdAt: string; lastUsedAt?: string; revokedAt?: string; revokedBy?: string }>;
+  tokens: Array<{ id: string; owner: string; client: string; kinds?: string[]; createdAt: string; lastUsedAt?: string; revokedAt?: string; revokedBy?: string }>;
   /** Minting needs a member identity; the local `operator:web` mode lists and revokes only (mint from the CLI). */
   canMint: boolean;
   /** Shown exactly once, right after minting. */
@@ -160,9 +160,10 @@ export interface TokensView {
 }
 
 /**
- * MCP tokens (ADR-0063): mint one per client, see when each was last used,
- * revoke. The plaintext appears once, on the response to the mint, and is
- * never stored or shown again.
+ * MCP tokens (ADR-0063): mint one per client, see when each was last used and
+ * which work kinds it may claim, revoke. The plaintext appears once, on the
+ * response to the mint, and is never stored or shown again. A restriction is
+ * minted from the CLI (`token mint … --kinds pr-review`); the page shows it.
  */
 export function tokensPage(context: PageContext, view: TokensView): string {
   const rows = view.tokens.map(
@@ -170,6 +171,7 @@ export function tokensPage(context: PageContext, view: TokensView): string {
       <td><code>${token.id}</code></td>
       <td>${token.client}</td>
       <td>${token.owner}</td>
+      <td>${token.kinds ? token.kinds.join(", ") : "unrestricted"}</td>
       <td>${token.createdAt.slice(0, 16).replace("T", " ")}</td>
       <td>${token.lastUsedAt ? token.lastUsedAt.slice(0, 16).replace("T", " ") : "never"}</td>
       <td>${
@@ -193,8 +195,8 @@ export function tokensPage(context: PageContext, view: TokensView): string {
       html`<section class="fl-group" id="tokens"><div class="fl-group-head"><h2>Tokens</h2><span>each identifies one client of one member; a token grants nothing by itself</span></div>
         ${minted}
         ${mint}
-        <div class="fl-table-wrap"><table class="fl-table"><thead><tr><th>id</th><th>client</th><th>owner</th><th>minted</th><th>last used</th><th></th></tr></thead><tbody>${
-          rows.length === 0 ? html`<tr><td colspan="6" class="fl-empty">No tokens yet.</td></tr>` : rows
+        <div class="fl-table-wrap"><table class="fl-table"><thead><tr><th>id</th><th>client</th><th>owner</th><th>may claim</th><th>minted</th><th>last used</th><th></th></tr></thead><tbody>${
+          rows.length === 0 ? html`<tr><td colspan="7" class="fl-empty">No tokens yet.</td></tr>` : rows
         }</tbody></table></div>
       </section>`,
     ),
@@ -267,7 +269,7 @@ export function shell(context: PageContext, view: View, main: SafeHtml): SafeHtm
         <div class="ph-nav-group">Queue</div>
         <a class="ph-nav-link${view.active === "inbox" ? " active" : ""}" href="/"><span class="ph-nav-num">01</span>Inbox</a>
         <a class="ph-nav-link${view.active === "repositories" ? " active" : ""}" href="/repositories"><span class="ph-nav-num">02</span>Repositories</a>
-        <span class="ph-nav-link disabled" title="Events page — later slice"><span class="ph-nav-num">03</span>Events</span>
+        <a class="ph-nav-link${view.active === "events" ? " active" : ""}" href="/events"><span class="ph-nav-num">03</span>Events</a>
         <a class="ph-nav-link${view.active === "tokens" ? " active" : ""}" href="/tokens"><span class="ph-nav-num">04</span>MCP tokens</a>
         <div class="ph-nav-group">${context.controlPlanePath ? "Enrolled" : "Opted in"}</div>
         ${
@@ -409,7 +411,7 @@ function adjudicationGroup(rows: AdjudicationRow[]): SafeHtml {
 }
 
 function eventsRail(events: ObservedWorkEvent[], since: number): SafeHtml {
-  return html`<aside class="fl-group" id="events"><div class="fl-group-head"><h2>Events</h2><span>since ${since} · all repositories</span></div><div class="fl-events">${
+  return html`<aside class="fl-group" id="events"><div class="fl-group-head"><h2><a href="/events">Events</a></h2><span>since ${since} · all repositories</span></div><div class="fl-events">${
     events.length === 0
       ? html`<p class="fl-empty">No events yet.</p>`
       : events.map(

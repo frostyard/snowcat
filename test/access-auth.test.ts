@@ -132,11 +132,17 @@ test("in local mode the surface still uses the token session, attributes to oper
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.mintMcpToken({ owner: "member:me@frostyard.org", client: "cli-minted" });
+  queue.mintMcpToken({ owner: "member:me@frostyard.org", client: "cli-reviewer", kinds: ["pr-review"] });
   const app = createApp({ appToken: "local-token", surfaceStores: () => ({ queue }) });
   const login = await app.request("/login", { method: "POST", body: new URLSearchParams({ token: "local-token" }) });
   const cookie = login.headers.get("Set-Cookie")!.split(";")[0]!;
   const tokens = await (await app.request("/tokens", { headers: { Cookie: cookie } })).text();
   assert.match(tokens, /cli-minted/);
+  // The claim restriction (schema rung 9) is visible on the page; a token
+  // without one reads "unrestricted", and no hash is ever rendered.
+  assert.match(tokens, /<th>may claim<\/th>/);
+  assert.match(tokens, /<td>pr-review<\/td>/);
+  assert.match(tokens, /<td>unrestricted<\/td>/);
   assert.match(tokens, /operator:web/);
   assert.match(tokens, /minting needs a signed-in member/);
   const mint = await app.request("/tokens/mint", { method: "POST", headers: { Cookie: cookie, "Sec-Fetch-Site": "same-origin" }, body: new URLSearchParams({ client: "x" }) });

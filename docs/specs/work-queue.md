@@ -57,7 +57,7 @@ summary, an evidence string array, and an artifact array.
 | --- | --- | --- |
 | `list_work` | Filter queue bookkeeping by status/repository | None; never returns lease token |
 | `get_work` | Read one item and its lineage fields | None; never returns lease token |
-| `claim_work` | Lease the highest-priority eligible item | Worker identity outside the reserved principal namespaces; optional repository/kind filters |
+| `claim_work` | Lease the highest-priority eligible item | Worker identity outside the reserved principal namespaces; optional repository/kind filters, intersected with the credential's own kind restriction (rule 50) |
 | `heartbeat_work` | Renew an active lease for 30–3600 seconds | Matching item, worker, and lease token |
 | `complete_work` | Verify reported issues and pull requests against GitHub, then atomically store a result and up to ten child items | Matching item, worker, and lease token |
 | `block_work` | Preserve an item as blocked; the reason is stored as `result.summary` and in the `work.blocked` event payload | Matching item, worker, and lease token |
@@ -228,7 +228,9 @@ MCP (rule 41).
     and `previous_results_json` (rule 37); rung 5 adds `cure_json` (rule 44);
     rung 6 adds `repositories.cure_foreign` (rule 42); rung 7 adds
     `mcp_tokens` (rule 49); rung 8 adds `review_json` and
-    `repositories.review_gate` (rules 52–53). Processes running code from before
+    `repositories.review_gate` (rules 52–53); rung 9 adds
+    `mcp_tokens.kinds_json`, the claim restriction of rule 49, `NULL` for
+    every token that existed before it. Processes running code from before
     the version guard existed are stopped by rule 20's database constraint,
     not by this check.
 22. Scheduling priority is operator-owned. Only operator-authored or
@@ -614,6 +616,17 @@ MCP (rule 41).
     member and client, and the repository's governance and the item's
     `allowedActions` bound what that identity may do.
 
+    A token MAY additionally carry a **claim restriction**: `token mint …
+    [--kinds <kind>[,<kind>…]]` MUST validate every entry against the work-kind
+    shape `^[a-z][a-z0-9-]{1,63}$`, MUST refuse an empty list and a malformed
+    kind by naming it, and MUST store the sorted, de-duplicated list in
+    `mcp_tokens.kinds_json` (schema rung 9) — or `NULL` for an unrestricted
+    token, which is what every token minted before the rung is. Verification
+    MUST return the restriction with the record, and `token list` and the
+    surface's `/tokens` page MUST show it (`unrestricted` when absent) and
+    still never a hash. The restriction narrows claiming only; `revoke` is
+    unchanged.
+
 50. **HTTP MCP endpoint (ADR-0063).** The app MUST serve the same MCP tools
     as stdio at `/mcp` over Streamable HTTP, and MUST require a Snowcat-minted
     token as a bearer header: absent, malformed, unknown, revoked, or
@@ -624,6 +637,19 @@ MCP (rule 41).
     the token's last use. Stdio remains the local mode with the payload's
     worker as the principal. Cloudflare Access is expected to bypass `/mcp`
     (the minted token is the credential there) and to gate every other route.
+
+    When the credential carries a claim restriction — a token's `kinds` (rule
+    49) over HTTP, or `SNOWCAT_MCP_KINDS` (a comma-separated list, validated
+    and refused the same way) on the stdio server — `claim_work`'s effective
+    kind filter MUST be the **intersection** of the caller's `kinds` and the
+    credential's. The restriction MUST NOT be settable or widenable from a
+    request payload, an empty intersection MUST claim nothing (`null`, never
+    an error), and the store MUST apply the intersection itself so a non-MCP
+    caller cannot bypass it. `list_work`, `get_work`, `heartbeat_work`,
+    `complete_work`, `block_work`, and `release_work` MUST be unaffected: a
+    restricted client still finishes what it already holds. A claim bounded by
+    a restriction MUST record it as `kindsRestriction` in the `work.claimed`
+    event payload. No MCP tool is added and no tool's schema changes.
 
 51. **Surface identity (ADR-0063).** With `SNOWCAT_ACCESS_TEAM_DOMAIN` and
     `SNOWCAT_ACCESS_AUD` set, the operator surface MUST treat a request as a
@@ -778,7 +804,7 @@ MCP (rule 41).
 | Review gate | `review-gate` flag and draft refusal per rule 52; `verify-artifacts` enqueues `pr-review` rounds and `pr-review-fix` roots and marks passed drafts ready per rules 53 and 55; `complete_work` accepts the bound verdict per rule 54 |
 | Internal dependency chain | `sweep-dependencies` maps tags, branch comparison, and `go.mod` to `release-needed` and `dependency-bump` proposals per rule 45 |
 | Repository settings drift | `sweep-repository-settings` diffs live GitHub settings against core's contract into `settings-drift` proposals per rule 46 |
-| MCP tokens | `token mint | list | revoke` over the `mcp_tokens` table per rule 49; identities per rule 48 |
+| MCP tokens | `token mint [--kinds …] | list | revoke` over the `mcp_tokens` table per rule 49; identities per rule 48; claim restriction per rule 50 |
 | PRD baseline metrics | `metrics` aggregates items created in a window with its `work.claimed`, `work.completed`, `work.blocked`, and `work.cancelled` events and the completed items' current `delivery` per rule 56 |
 | MCP worker behavior | Portable `work-snowcat-queue` skill constrained by this contract |
 | Testing-gap seed | Deterministic CLI instance of this contract |

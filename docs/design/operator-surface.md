@@ -50,6 +50,12 @@ as well as on the item page.
 | Inbox | `/` | `list({status:"proposed"})`, `list({status:"blocked"})`, `completedItemsWithPendingArtifacts({ unverifiedOnly: true })` — completed items with an `unverified` issue or pull-request artifact, newest first, selected in the store rather than filtered out of the first 100 completions | Everything waiting on the operator, grouped: proposals to admit (children under their parent's finding), blocked items to requeue or cancel, unverified artifacts to re-check |
 | Repository board | `/repositories/:owner/:name` | `counts(repository)`, `list({repository, status})` for `queued`/`claimed`/`completed`, `list({repository, kind:"pr-cure", status})` per status, `events(id)` for the completing worker; `ControlPlaneStore.repositoryStatuses()` and `activeCoreSnapshot()` for the enrollment badge (effective state, Core source commit, surface commit, repository id, hold) | Three columns: queued in claim order (priority tag, `note` tag when `operatorNotes` is non-empty), leased (worker identity, lease-time bar from `updatedAt` → `leaseExpiresAt`), completed newest first with the `delivery` tag; four stat tiles (queued, leased, completed today, merged / attempts — the attempts denominator counts only completed items whose `allowedActions` include `open-pr`, see below); under them the [pull requests](#pull-requests) section; the header's Verify artifacts / Import issues / Seed dogfood / Hold (or Clear hold) actions, each one same-origin `POST` (see [Mutations](#mutations) and the operational notes below; [spec rule 40](../specs/work-queue.md)) |
 | Item | `/items/:id` | `get(id)`, `events(id)`, `get(parentId)`, `get(rootId)`, `children(id)` | Exactly what `queue -- show` prints, rendered: header with status and delivery tags; Definition (objective, repository + enrollment, kind, lineage links to parent/root/children, priority, allowed/delegable tags, created/updated, instructions, acceptance criteria); Result (summary, evidence, artifacts table with verification tag, head SHA, merged/verified time and the re-verifying actor from `artifact.verified`); Operator notes; Previous results; the full event timeline |
+| Events | `/events` | `eventsSince(since, {repository, limit: 500})` — the store's own repository filter; the decision-type filter is applied over that read in [`src/surface/events.ts`](../../src/surface/events.ts), no new store method | The ledger as a page, newest first: time, sequence, event type, item link, repository link, actor, payload gist. `?repository=<owner/repo>` scopes it to one repository, `?since=<sequence>` moves the window (default: the last 100 events, the last 500 when filtering decisions), and `?decisions=1` keeps only the operator-decision event types (`work.approved`, `work.rejected`, `work.deferred`, `work.requeued`, `work.cancelled`, `work.prioritized`, `work.noted`, `artifact.attached`, `artifact.ready`). The filters are one `GET` form — the page has no `POST` — and when the read fills the 500-event cap short of the ledger cursor the page names the highest sequence it reached, says the newer events are the hidden ones, and links onward from it |
+
+The sidebar's third entry links to the events view (it was a disabled
+placeholder until [#100](https://github.com/frostyard/snowcat/issues/100)); the
+inbox rail's *Events* heading opens the same page unfiltered, and the
+repository board's header opens it as `/events?repository=<owner/repo>`.
 
 A repositories index (`/repositories`) lists opted-in and declared
 repositories with per-status counts from `counts(repository)`, their
@@ -151,7 +157,11 @@ parameter (`operator:web` remains the local-mode default); an unverified
 request is `401`, never a fallback. The sidebar shows the actor. A *MCP
 tokens* page (`/tokens`) lets a member mint tokens owned by their principal
 (plaintext once), see last use, and revoke their own; the local mode lists
-and revokes all and mints from the CLI. `/mcp` — the Streamable HTTP MCP
+and revokes all and mints from the CLI. Its **may claim** column shows each
+token's claim restriction — the work kinds a token minted with
+`token mint … --kinds pr-review` may lease, or `unrestricted` — never the
+hash; a restriction is set at mint time from the CLI (see
+[Operating the work queue](queue-operations.md#a-review-only-client)). `/mcp` — the Streamable HTTP MCP
 endpoint behind minted tokens ([`src/mcp/http.ts`](../../src/mcp/http.ts))
 — lives in the same app and is expected to sit behind an Access *bypass*
 policy, since the token is its credential.

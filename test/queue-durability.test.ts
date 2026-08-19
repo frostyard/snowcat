@@ -92,7 +92,7 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
   const directory = await mkdtemp(join(tmpdir(), "snowcat-ladder-test-"));
   const path = join(directory, "queue.db");
   const { itemId } = createVersionOneDatabase(path);
-  assert.equal(SCHEMA_VERSION, 8, "this test pins the ladder at rung 8; extend it when a rung is added");
+  assert.equal(SCHEMA_VERSION, 9, "this test pins the ladder at rung 9; extend it when a rung is added");
 
   const queue = new QueueStore(path);
   test.after(() => queue.close());
@@ -115,6 +115,11 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
   // Rung 7 arrived too: MCP tokens mint and verify on the upgraded database.
   const minted = queue.mintMcpToken({ owner: "member:ladder@frostyard.org", client: "ladder-test" });
   assert.equal(queue.verifyMcpToken(minted.token)?.client, "ladder-test");
+  assert.equal(queue.verifyMcpToken(minted.token)?.kinds, undefined, "rung 9 leaves a token unrestricted unless kinds are given");
+
+  // Rung 9 arrived too: a restricted token is stored and read back sorted.
+  const restricted = queue.mintMcpToken({ owner: "member:ladder@frostyard.org", client: "ladder-reviewer", kinds: ["pr-review-fix", "pr-review"] });
+  assert.deepEqual(queue.verifyMcpToken(restricted.token)?.kinds, ["pr-review", "pr-review-fix"]);
 
   // Rung 5 arrived too: a pr-cure root carries its typed cure record on the upgraded database.
   const cured = queue.enqueueCureRoot("frostyard/updex", {
@@ -314,6 +319,57 @@ test("a version-7 database gains rung 8's review_json column and review_gate set
   queue.setRepositoryEnabled("frostyard/updex", false);
   assert.deepEqual(queue.repositoryReviewGateSettings(), [], "only opted-in repositories carry a review-gate setting");
   assert.equal(queue.reviewGateEnabled("frostyard/updex"), false, "a disabled repository is not gated");
+});
+
+test("a version-8 database gains rung 9's mcp_tokens.kinds_json column, NULL for every existing token", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-ladder-v8-test-"));
+  const path = join(directory, "queue.db");
+  createVersionOneDatabase(path);
+  // Bring the hand-built database to exactly version 8 with rungs 2–8's objects,
+  // and give it one pre-rung-9 token row.
+  const raw = new DatabaseSync(path);
+  raw.exec(`
+    CREATE TABLE queue_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    INSERT INTO queue_metadata (key, value) VALUES ('database_id', '88888888-8888-4888-8888-888888888888');
+    INSERT INTO queue_metadata (key, value) VALUES ('created_at', '2026-08-15T00:00:00.000Z');
+    ALTER TABLE work_items ADD COLUMN source_ref TEXT;
+    CREATE UNIQUE INDEX work_items_source_ref ON work_items(repository, source_ref) WHERE source_ref IS NOT NULL;
+    ALTER TABLE work_items ADD COLUMN operator_notes_json TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE work_items ADD COLUMN previous_results_json TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE work_items ADD COLUMN cure_json TEXT;
+    ALTER TABLE repositories ADD COLUMN cure_foreign INTEGER NOT NULL DEFAULT 0 CHECK (cure_foreign IN (0, 1));
+    CREATE TABLE mcp_tokens (id TEXT PRIMARY KEY, owner TEXT NOT NULL, client TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT, revoked_by TEXT);
+    CREATE INDEX mcp_tokens_owner ON mcp_tokens(owner, created_at);
+    INSERT INTO mcp_tokens (id, owner, client, token_hash, created_at)
+      VALUES ('0123456789abcdef', 'member:legacy@frostyard.org', 'legacy-client', 'deadbeef', '2026-08-18T00:00:00.000Z');
+    ALTER TABLE work_items ADD COLUMN review_json TEXT;
+    ALTER TABLE repositories ADD COLUMN review_gate INTEGER NOT NULL DEFAULT 0 CHECK (review_gate IN (0, 1));
+    PRAGMA user_version = 8;
+  `);
+  const before = new Set((raw.prepare("PRAGMA table_info(mcp_tokens)").all() as Row[]).map((column) => String(column.name)));
+  assert.ok(!before.has("kinds_json"));
+  raw.close();
+
+  const queue = new QueueStore(path);
+  test.after(() => queue.close());
+  assert.equal(queue.schemaVersion(), SCHEMA_VERSION);
+  assert.equal(queue.metadata().databaseId, "88888888-8888-4888-8888-888888888888");
+  const inspect = new DatabaseSync(path, { readOnly: true });
+  const column = (inspect.prepare("PRAGMA table_info(mcp_tokens)").all() as Row[]).find((entry) => String(entry.name) === "kinds_json");
+  const stored = inspect.prepare("SELECT kinds_json FROM mcp_tokens WHERE id = '0123456789abcdef'").get() as Row;
+  inspect.close();
+  assert.ok(column, "rung 9 adds mcp_tokens.kinds_json");
+  assert.equal(Number(column!.notnull), 0, "the column is nullable: NULL is unrestricted");
+  assert.equal(stored.kinds_json, null, "an existing token stays unrestricted");
+  assert.equal(queue.listMcpTokens("member:legacy@frostyard.org")[0]?.kinds, undefined);
+  assert.deepEqual(queue.repositoryReviewGateSettings(), [{ repository: "frostyard/updex", reviewGate: false }], "rung 8's setting is untouched");
+
+  // The new restriction narrows only claiming: the legacy row keeps behaving
+  // as before and a fresh restricted token stores its sorted, unique list.
+  const restricted = queue.mintMcpToken({ owner: "member:reviewer@frostyard.org", client: "codex reviewer", kinds: ["pr-review", "pr-review", "issue-resolution"] });
+  assert.deepEqual(queue.verifyMcpToken(restricted.token)?.kinds, ["issue-resolution", "pr-review"]);
+  assert.throws(() => queue.mintMcpToken({ owner: "member:reviewer@frostyard.org", client: "bad", kinds: ["Bad Kind"] }), /invalid work kind: Bad Kind/);
+  assert.throws(() => queue.mintMcpToken({ owner: "member:reviewer@frostyard.org", client: "empty", kinds: [] }), /at least one work kind/);
 });
 
 test("re-running the ladder from an unversioned database converges without changing the identity", async () => {

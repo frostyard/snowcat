@@ -1,6 +1,7 @@
 import { maintenancePrograms } from "../queue/programs.ts";
 import type { ObservableWorkItem } from "../queue/types.ts";
 import { html, raw, type SafeHtml } from "./html.ts";
+import { eventsPath } from "./events.ts";
 import { clock, document, itemPath, objective, repositoryPath, shell, type PageContext } from "./pages.ts";
 import type {
   BoardData,
@@ -78,7 +79,7 @@ export function boardPage(context: PageContext, data: BoardData): string {
     : [];
   const actions = html`${enrollmentBadge(enrollment, context.controlPlanePath !== undefined)}${enrollment?.held ? html` <span class="ph-badge danger">held</span>` : ""}${
     facts.length > 0 ? html`<span class="fl-facts">${facts.join(" · ")}</span>` : ""
-  }`;
+  }<a class="ph-button secondary" href="${eventsPath({ repository: data.repository })}">Events</a>`;
   return document(
     `${data.repository} · Snowcat`,
     shell(

@@ -66,10 +66,14 @@ try {
     if (action === "mint") {
       const owner = required(args[1], "token owner (member:<email>)");
       const client = required(args[2], "token client name");
-      const minted = queue.mintMcpToken({ owner, client });
-      print({ token: minted.token, id: minted.record.id, owner: minted.record.owner, client: minted.record.client, createdAt: minted.record.createdAt, note: "The token is shown once; store it in the client's MCP configuration as a bearer header." });
+      // --kinds narrows what the token may claim (schema rung 9); omitted, it
+      // claims anything the queue offers, exactly as before.
+      const flags = parseFlags(args.slice(3), ["kinds"]);
+      const kinds = flags.kinds === undefined ? undefined : flags.kinds.split(",").map((kind) => kind.trim()).filter((kind) => kind !== "");
+      const minted = queue.mintMcpToken({ owner, client, ...(kinds === undefined ? {} : { kinds }) });
+      print({ token: minted.token, id: minted.record.id, owner: minted.record.owner, client: minted.record.client, kinds: minted.record.kinds ?? "unrestricted", createdAt: minted.record.createdAt, note: "The token is shown once; store it in the client's MCP configuration as a bearer header." });
     } else if (action === "list") {
-      print(queue.listMcpTokens(args[1]).map(({ tokenHash: _hash, ...token }) => token));
+      print(queue.listMcpTokens(args[1]).map(({ tokenHash: _hash, kinds, ...token }) => ({ ...token, kinds: kinds ?? "unrestricted" })));
     } else if (action === "revoke") {
       const id = required(args[1], "token id");
       const { tokenHash: _hash, ...revoked } = queue.revokeMcpToken(id, "operator:cli");
