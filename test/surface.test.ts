@@ -7,6 +7,7 @@ import test from "node:test";
 import { createApp } from "../src/app.ts";
 import { ControlPlaneStore } from "../src/control/store.ts";
 import { QueueStore } from "../src/queue/store.ts";
+import type { WorkArtifact } from "../src/queue/types.ts";
 import { sessionDigest } from "../src/surface/session.ts";
 import { enrollExampleRepository } from "./helpers/core-fixtures.ts";
 
@@ -401,6 +402,114 @@ test("the repository board shows queued, leased, and completed columns with the 
   assert.match(await missing.text(), /neither opted in to the queue nor declared/);
   const anonymous = await app.request("/repositories/frostyard/example");
   assert.equal(anonymous.status, 303);
+});
+
+test("the board's pull-request section shows open heads with their cure decay and recent merges; the index summarizes them per repository", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-surface-pulls-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/example", true);
+  const now = new Date();
+  const tenDaysAgo = new Date(now.getTime() - 10 * 24 * 3600 * 1000).toISOString();
+  const openHead = "a".repeat(40);
+
+  /** Completes one seeded item with one verified pull-request artifact. */
+  const report = (objective: string, artifact: WorkArtifact) => {
+    const seed = queue.enqueueSeed({
+      repository: "frostyard/example",
+      kind: "issue-resolution",
+      objective,
+      instructions: "Open a pull request.",
+      acceptanceCriteria: ["PR open."],
+      allowedActions: ["read", "write", "open-pr"],
+      delegableActions: [],
+      createdBy: "operator:test",
+    });
+    const lease = queue.claim({ worker: "claude:example:pulls", repository: "frostyard/example" })!;
+    assert.equal(lease.id, seed.id);
+    queue.complete({
+      id: seed.id,
+      leaseToken: lease.leaseToken!,
+      worker: "claude:example:pulls",
+      result: { summary: "Opened.", evidence: ["npm run check passed."], artifacts: [artifact] },
+      followUps: [],
+    });
+    return seed.id;
+  };
+
+  const openItem = report("Resolve frostyard/example#40: stream the ledger tail", {
+    kind: "pull-request",
+    url: "https://github.com/frostyard/example/pull/41",
+    verification: { status: "verified", verifiedAt: now.toISOString(), number: 41, state: "open", headSha: openHead },
+  });
+  const mergedTodayItem = report("Resolve frostyard/example#30: bound the delivery sweep", {
+    kind: "pull-request",
+    url: "https://github.com/frostyard/example/pull/31",
+    verification: { status: "verified", verifiedAt: now.toISOString(), number: 31, state: "merged", headSha: "b".repeat(40), mergedAt: now.toISOString() },
+  });
+  report("Resolve frostyard/example#20: retire the old importer", {
+    kind: "pull-request",
+    url: "https://github.com/frostyard/example/pull/21",
+    verification: { status: "verified", verifiedAt: tenDaysAgo, number: 21, state: "merged", headSha: "c".repeat(40), mergedAt: tenDaysAgo },
+  });
+
+  // The open head has decayed: one admitted pr-cure root bound to it (ADR-0061).
+  const cure = queue.enqueueCureRoot("frostyard/example", {
+    kind: "pr-cure",
+    objective: "Cure frostyard/example#41 (head aaaaaaa): behind, failing-checks",
+    instructions: "Rebase and make the checks pass.",
+    acceptanceCriteria: ["Checks green."],
+    allowedActions: ["read", "write", "run-tests", "open-pr"],
+    delegableActions: [],
+    createdBy: "operator:test",
+    sourceRef: `https://github.com/frostyard/example/pull/41@${openHead}`,
+    cure: {
+      pullRequestUrl: "https://github.com/frostyard/example/pull/41",
+      headSha: openHead,
+      patchDigest: `sha256:${"d".repeat(64)}`,
+      decay: ["behind", "failing-checks"],
+      originItemId: openItem,
+    },
+  })!;
+  assert.ok(cure);
+
+  // No fetcher is configured anywhere: rendering must not reach GitHub.
+  const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue }) });
+  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+
+  const board = await app.request("/repositories/frostyard/example", { headers: { Cookie: cookie } });
+  assert.equal(board.status, 200);
+  const body = await board.text();
+  const pulls = section(body, "pull-requests");
+  assert.match(pulls, /<h2>Pull requests<\/h2><span>open 1 · decayed 1 · merged today 1<\/span>/);
+
+  // Open first, with its cure decay and a link to the cure item and to GitHub.
+  const openRow = pulls.indexOf('href="https://github.com/frostyard/example/pull/41"');
+  const mergedRow = pulls.indexOf('href="https://github.com/frostyard/example/pull/31"');
+  assert.ok(openRow > -1 && mergedRow > -1 && openRow < mergedRow, "the open pull request is listed before the merged one");
+  assert.ok(openRow < pulls.indexOf("<h2>Merged · last 7 days</h2>"), "the open pull request is above the merged sub-list");
+  assert.ok(mergedRow > pulls.indexOf("<h2>Merged · last 7 days</h2>"), "the merged pull request is under Merged");
+  assert.match(pulls, /<span class="ph-badge ">open<\/span><span class="ph-badge warn">decayed<\/span>/);
+  assert.match(pulls, new RegExp(`head aaaaaaa · verified \\d\\d:\\d\\d · <a href="/items/${openItem}">reported by issue-resolution</a> · <a href="/items/${cure.id}">cure queued: behind, failing-checks</a>`));
+  assert.match(pulls, new RegExp(`<span class="ph-badge ok">merged</span></span></div><small>head bbbbbbb · merged \\d\\d:\\d\\d · <a href="/items/${mergedTodayItem}">`));
+
+  // The ten-day-old merge is out of the window.
+  assert.equal(pulls.includes("/pull/21"), false);
+  assert.equal(body.includes("leaseToken"), false);
+
+  // The section is a live partial like the columns.
+  const fragment = await app.request("/repositories/frostyard/example?partial=pull-requests", { headers: { Cookie: cookie } });
+  assert.equal(fragment.status, 200);
+  const fragmentBody = await fragment.text();
+  assert.match(fragmentBody, /^<section class="fl-group" id="pull-requests">/);
+  assert.equal(fragmentBody.includes("ph-sidebar"), false);
+
+  // The index summarizes the same counts and links to the section.
+  const index = await app.request("/repositories", { headers: { Cookie: cookie } });
+  assert.equal(index.status, 200);
+  const indexBody = await index.text();
+  assert.match(indexBody, /<td><a class="fl-facts" href="\/repositories\/frostyard\/example#pull-requests">open 1 · decayed 1 · merged today 1<\/a><\/td>/);
+  assert.equal(indexBody.includes("leaseToken"), false);
 });
 
 test("the item page renders the definition, artifacts with verification, operator notes, previous results, and the event timeline for a requeued-then-completed item", async () => {
