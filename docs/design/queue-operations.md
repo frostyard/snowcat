@@ -718,14 +718,25 @@ under it. A fleet client that does not heartbeat will produce orphans.
 
 The sweep never merges, approves, or dismisses.
 
-**Merging a batch.** Every enrolled repository's ruleset requires strict
-up-to-date checks (core ADR-0040), so merging N ready pull requests in a row
-means each one after the first must be updated against `main` and re-checked.
-The 2-minute verify cadence means the cure sweep does the update for you
-(`behind` → mechanical update, patch identity unchanged): merge one, and the
-others are updated and re-checked by the time you reach them — click merge as
-they go green. Until core ADR-0042 (merge queue, proposed 2026-08-19) lands,
-that is the shape; a merge queue removes the wait entirely. Because
+**Merging a batch.** Since 2026-08-19 every enrolled repository's default
+branch has a **merge queue** (core ADR-0042, applied with core's
+`scripts/rollout-merge-queue.sh`; each repository's CI runs on `merge_group`):
+enqueue each gate-released pull request and GitHub rebuilds it on the queue
+tip, runs the required checks there, and merges in order — no update-branch,
+no waiting between merges, and strict up-to-date checks are still what lands.
+Enqueue with the **Merge when ready** button, or from a shell with the same
+mutation it uses:
+
+```bash
+id=$(gh api graphql -f query='{ repository(owner:"frostyard", name:"<repo>") { pullRequest(number:<n>) { id } } }' --jq .data.repository.pullRequest.id)
+gh api graphql -f query="mutation { enqueuePullRequest(input:{pullRequestId:\"$id\"}) { mergeQueueEntry { position state } } }"
+```
+
+`gh pr merge` does **not** work here: on a queue-protected branch it calls the
+auto-merge API, and the contract keeps `allow_auto_merge` off. Pull requests
+you have not enqueued still decay like before, and the cure sweep (every 2
+minutes) keeps updating `behind` heads mechanically; a pull request in the
+queue is GitHub's to rebuild. Because
 drafts are never cured, Copilot's automatic review skips drafts unless a
 ruleset opts in, and the fleet's review-apply workflows run only on
 non-drafts, review/fix and cure never act on one pull request at the same
