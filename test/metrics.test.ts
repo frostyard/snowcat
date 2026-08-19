@@ -196,6 +196,19 @@ test("the default window is the last 24 hours ending now", () => {
   assert.equal(metrics.repositories[REPOSITORY]?.created.queued, 1);
 });
 
+test("one bound alone pins the window rule 56 describes", () => {
+  const now = new Date("2026-08-19T09:00:00.000Z");
+
+  assert.deepEqual(resolveMetricsWindow({ since: DAY_START }, now), {
+    since: DAY_START,
+    until: "2026-08-19T09:00:00.000Z",
+  });
+  assert.deepEqual(resolveMetricsWindow({ until: NEXT_DAY }, now), {
+    since: "2026-08-19T00:00:00.000Z",
+    until: NEXT_DAY,
+  });
+});
+
 test("a repository-narrowed reading counts only that repository", () => {
   const { queue, at } = frozenStore("2026-08-19T09:00:00.000Z");
   test.after(() => queue.close());

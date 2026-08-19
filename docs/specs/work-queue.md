@@ -743,8 +743,8 @@ MCP (rule 41).
     <iso>] [--until <iso>]` MUST print exactly one JSON object for the
     half-open window `[since, until)` — `since` inclusive, `until` exclusive,
     both ISO-8601 timestamps normalized to UTC, defaulting to the last 24
-    hours ending now (either bound given alone fixes its end and the other
-    follows 24 hours from it) — carrying the window, one entry per repository
+    hours ending now (`--since` alone runs from it to now; `--until` alone
+    starts 24 hours before it) — carrying the window, one entry per repository
     that appears in it, and an `all` entry totalling the same scope, each
     entry with exactly: `created`, the items *created* in the window counted
     by the logical status they hold *now* (`proposed`, `queued`, `claimed`,

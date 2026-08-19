@@ -76,8 +76,9 @@ export function parseMetricsTimestamp(value: string, name: string): string {
 
 /**
  * The half-open window `[since, until)` a reading covers: the last
- * `DEFAULT_METRICS_WINDOW_HOURS` hours ending now, with either bound the
- * caller supplies replacing its end and the other bound following from it.
+ * `DEFAULT_METRICS_WINDOW_HOURS` hours ending now, `since` alone running
+ * from it to now, and `until` alone starting
+ * `DEFAULT_METRICS_WINDOW_HOURS` hours before it.
  */
 export function resolveMetricsWindow(
   options: { since?: string; until?: string } = {},
