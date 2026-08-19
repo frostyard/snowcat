@@ -37,7 +37,7 @@ const EXPECTED_SCHEMA_DIGESTS = {
   governance: "sha256:254e131a94c5477e861b0ec792defa1fd05ddebe380fc4e062d03cefc3ab8ebe",
   verificationProfile: "sha256:5562df1740d133ff32a7bcfc488907b3783a3eda9ba8e8e1d9559a07f44a4507",
   goal: "sha256:76341409e4dc33fbc50d1432d2488e1ecec767263733939f0abe9bf173aada0b",
-  settings: "sha256:a0008dbdd77d11e604ddee20a12218d1c692748fe80d037d589d2acd051871e1",
+  settings: "sha256:d1b7964d78607ee18fdb1de6c311f04a8dce704f46a5872110a7357ab05cbf2f",
 } as const;
 /**
  * Earlier revisions of a v1 schema that Snowcat reviewed and bundled before a
@@ -52,6 +52,14 @@ const SUPERSEDED_SCHEMA_REVISIONS: Partial<Record<SchemaKind, ReadonlyArray<{ di
     {
       digest: "sha256:2419d096faac298b8c4a75a3a83b617f4797e4e5f190ccd918ead73ba604bead",
       url: new URL("./schemas/v1/superseded/repository.schema.2419d096.json", import.meta.url),
+    },
+  ],
+  // Core ADR-0042 widened `default_branch_ruleset.merge_queue` from `const false`
+  // to a boolean; the revision before it is still accepted.
+  settings: [
+    {
+      digest: "sha256:a0008dbdd77d11e604ddee20a12218d1c692748fe80d037d589d2acd051871e1",
+      url: new URL("./schemas/v1/superseded/repository-settings.schema.a0008dbd.json", import.meta.url),
     },
   ],
 };
@@ -247,7 +255,8 @@ export interface RepositorySettingsContract {
     strict_required_status_checks: boolean;
     block_deletions: boolean;
     block_force_pushes: boolean;
-    merge_queue: false;
+    /** Core ADR-0042: `true` requires the `merge_queue` rule on the default-branch ruleset; older contracts say `false`. */
+    merge_queue: boolean;
     classic_branch_protection: "absent";
   };
   tag_ruleset: { pattern: string; enforcement: "active"; block_deletions: boolean; block_force_pushes: boolean; restrict_creation: boolean };

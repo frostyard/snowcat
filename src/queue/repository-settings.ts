@@ -261,7 +261,7 @@ function checkDefaultBranchRuleset(
   }
   drift("default_branch_ruleset.block_deletions", want.block_deletions, Boolean(has("deletion")));
   drift("default_branch_ruleset.block_force_pushes", want.block_force_pushes, Boolean(has("non_fast_forward")));
-  drift("default_branch_ruleset.merge_queue", false, Boolean(has("merge_queue")));
+  drift("default_branch_ruleset.merge_queue", want.merge_queue, Boolean(has("merge_queue")));
 }
 
 function checkTagRuleset(

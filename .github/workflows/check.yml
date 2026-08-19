@@ -5,13 +5,17 @@
 # ADR-0021's compliance run) so drift that arrives from outside the repository
 # — an npm advisory, a Node point release, a stale action pin, a transitive
 # that resolves differently — turns the check red within a day rather than on
-# the next pull request; `workflow_dispatch` allows a manual re-run.
+# the next pull request; `workflow_dispatch` allows a manual re-run. The same
+# two checks also run on a merge-queue branch (core ADR-0042): a required check
+# that never reports there stalls every queue entry, so the trigger stays here
+# and no job excludes itself with an event-level `if`.
 name: check
 
 on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
   schedule:
     - cron: "17 6 * * *" # nightly, 06:17 UTC
   workflow_dispatch:
