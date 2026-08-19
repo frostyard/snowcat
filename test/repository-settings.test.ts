@@ -159,6 +159,22 @@ test("a conformant repository reads with zero drift; each contract section is di
       }),
     ).fetcher,
   );
+  // Core ADR-0042: a contract that wants a merge queue reports its absence as drift,
+  // and a ruleset carrying the rule satisfies it (the bundled schema accepts both).
+  const queueContract = { ...CONTRACT, default_branch_ruleset: { ...CONTRACT.default_branch_ruleset, merge_queue: true } };
+  const withoutQueue = await readRepositorySettings(REPO, queueContract, apiFetcher(conformantRoutes()).fetcher);
+  assert.deepEqual(withoutQueue.drifts, [{ setting: "default_branch_ruleset.merge_queue", expected: true, observed: false }]);
+  const withQueue = await readRepositorySettings(
+    REPO,
+    queueContract,
+    apiFetcher(
+      conformantRoutes({
+        "rulesets/1": (body: unknown) => ({ ...(body as { rules: unknown[] }), rules: [...(body as { rules: unknown[] }).rules, { type: "merge_queue", parameters: { merge_method: "SQUASH", grouping_strategy: "ALLGREEN" } }] }),
+      }),
+    ).fetcher,
+  );
+  assert.deepEqual(withQueue.drifts, []);
+
   const settings = drifted.drifts.map((drift) => drift.setting).sort();
   assert.deepEqual(settings, [
     "actions.can_approve_pull_request_reviews",
