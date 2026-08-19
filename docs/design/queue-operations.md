@@ -677,7 +677,10 @@ runs it and reports `N review items queued, N marked ready`; `show <id>` prints 
 `review` record (head, round, verdict, fingerprints, the models the author
 and reviewer reported). Model names are what workers report as
 `result.model` — provenance, not proof; the orchestrator uses
-`review.authorModel` to pick a different model for the reviewer.
+`review.authorModel` to pick a different model for the reviewer. Make the
+reviewer's *credential* enforce its half of that separation too: mint it a
+token that may claim only `pr-review` — see the
+[review-only client](#a-review-only-client) recipe.
 
 When you carried a change the last mile yourself — a follow-up whose proposal
 said "leave the change on a local branch; do not open a pull request", so the
@@ -827,6 +830,69 @@ Access verification is `RS256` against the team's published keys
 key), issuer = the team domain, audience = the tag, expiry honored. Nothing
 that fails to verify falls back to the token session: the two modes never
 mix on one host.
+
+#### A review-only client
+
+A reviewer that can only review is a property of its credential, not of its
+brief. Mint the token with `--kinds` and the client may claim nothing else,
+however it calls `claim_work`:
+
+```bash
+npm run --silent queue -- token mint member:you@frostyard.org "codex reviewer" --kinds pr-review
+# {"token":"snowcat_…","id":"…","owner":"member:you@frostyard.org",
+#  "client":"codex reviewer","kinds":["pr-review"],"createdAt":"…", "note":"The token is shown once; …"}
+```
+
+Give the plaintext to that client and nothing else changes in its MCP
+configuration — the same bearer header as any other token:
+
+```json
+{ "mcpServers": { "snowcat": {
+  "type": "http", "url": "https://snowcat.frostyard.org/mcp",
+  "headers": { "Authorization": "Bearer snowcat_…" } } } }
+```
+
+What the client then sees:
+
+| It calls | It gets |
+| --- | --- |
+| `claim_work {"worker":"codex:reviewer:1"}` (no `kinds`) | the next queued `pr-review` item — or `null` when none is queued, even if `issue-resolution` work is waiting |
+| `claim_work {"worker":"…","kinds":["pr-review"]}` | the same item; the filter and the token agree |
+| `claim_work {"worker":"…","kinds":["issue-resolution"]}` | `null` — the intersection is empty. Never an error, never widened |
+| `heartbeat_work`, `complete_work`, `block_work`, `release_work` | unaffected: a restricted client still finishes whatever it already holds |
+
+The ledger says so too: a claim bounded this way carries
+`kindsRestriction: ["pr-review"]` in its `work.claimed` payload, so
+`show <id>` and `events` show that the token, not only the request, chose the
+kind.
+
+The stdio equivalent, for a client on the host itself, is an environment
+variable on the client's own process — `npm run mcp` reads it at startup and
+refuses to start on a malformed kind:
+
+```json
+{ "mcpServers": { "snowcat": {
+  "command": "npm", "args": ["run", "--silent", "mcp"],
+  "cwd": "/opt/snowcat",
+  "env": { "SNOWCAT_QUEUE_DB": "/var/lib/snowcat/queue.db", "SNOWCAT_MCP_KINDS": "pr-review" } } } }
+```
+
+See and revoke restricted tokens exactly like any other — `token list` prints
+each token's `kinds` (or `unrestricted`), and the *MCP tokens* page has a **may
+claim** column:
+
+```bash
+npm run --silent queue -- token list                      # every token: client, owner, kinds, last use
+npm run --silent queue -- token revoke <id>               # idempotent; the token verifies as absent at once
+```
+
+Existing tokens are unrestricted and behave exactly as before; a restriction
+can only narrow, never widen, and is fixed at mint time — to change it, revoke
+and mint again. Give a review-only token to a **different client and model**
+than the authors run: [ADR-0029](../adr/0029-bound-adversarial-review.md)'s
+reviewer-independence is strongest when the reviewer shares neither the
+author's session nor its model, and the token makes the first half of that
+enforceable.
 
 ### A private mesh instead of Access (Tailscale)
 

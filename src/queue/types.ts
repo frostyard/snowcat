@@ -261,6 +261,13 @@ export interface ClaimInput {
   worker: string;
   repository?: string;
   kinds?: string[];
+  /**
+   * The kinds the caller's credential allows it to claim — a minted token's
+   * `kinds` (ADR-0063) or the stdio server's `SNOWCAT_MCP_KINDS`. Set by the
+   * transport, never by a request payload: the store intersects it with
+   * `kinds`, and an empty intersection claims nothing.
+   */
+  allowedKinds?: string[];
   leaseSeconds?: number;
   /** The client's self-declared name, recorded beside a transport-established `worker` as a label (ADR-0063). */
   label?: string;

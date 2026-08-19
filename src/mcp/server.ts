@@ -4,7 +4,7 @@ import * as z from "zod/v4";
 import { verifyCompletionArtifacts, type ArtifactVerifierOptions } from "../queue/artifact-verification.ts";
 import { assertCureCompletion } from "../queue/pull-request-cure.ts";
 import { assertReviewCompletion, assertReviewGate } from "../queue/pull-request-review.ts";
-import { QueueStore, queueDatabasePath, validateWorkerIdentity, type QueueStoreOptions } from "../queue/store.ts";
+import { QueueStore, queueDatabasePath, validateWorkerIdentity, validateWorkKinds, type QueueStoreOptions } from "../queue/store.ts";
 import {
   allowedActions,
   MAX_REVIEW_ADVISORIES,
@@ -70,7 +70,31 @@ const followUpSchema = z.strictObject({
  * is the principal, as before.
  */
 export interface McpIdentity {
-  principal: string;
+  /**
+   * The transport-established principal. Present for the HTTP endpoint (a
+   * verified minted token); absent for stdio, where the payload's worker is
+   * the principal as before.
+   */
+  principal?: string;
+  /**
+   * The work kinds this credential may claim: a minted token's `kinds`
+   * (schema rung 9) or stdio's `SNOWCAT_MCP_KINDS`. Absent is unrestricted.
+   * It bounds `claim_work` only — a restricted client still heartbeats,
+   * completes, blocks, and releases whatever it already holds.
+   */
+  kinds?: string[];
+}
+
+/**
+ * The stdio equivalent of a token's kinds: `SNOWCAT_MCP_KINDS=pr-review` (or
+ * a comma-separated list) restricts what the local server may claim. Unset or
+ * blank is unrestricted; anything that is not a work kind is refused loudly at
+ * startup rather than silently widening.
+ */
+export function mcpKindsFromEnvironment(env: NodeJS.ProcessEnv = process.env): string[] | undefined {
+  const raw = env.SNOWCAT_MCP_KINDS?.trim();
+  if (!raw) return undefined;
+  return validateWorkKinds(raw.split(",").map((kind) => kind.trim()).filter((kind) => kind !== ""), "SNOWCAT_MCP_KINDS");
 }
 
 export function buildQueueMcpServer(
@@ -134,7 +158,18 @@ export function buildQueueMcpServer(
         leaseSeconds: z.number().int().min(30).max(3600).optional(),
       }),
     },
-    async (input) => toolResult(queue.claim(identity ? { ...input, worker: identity.principal, label: input.worker } : input) ?? null),
+    async (input) =>
+      toolResult(
+        queue.claim({
+          ...input,
+          // A verified token's identity replaces the payload's worker and
+          // demotes it to a label (ADR-0063).
+          ...(identity?.principal ? { worker: identity.principal, label: input.worker } : {}),
+          // The credential's own restriction, intersected by the store with
+          // whatever `kinds` the caller asked for.
+          ...(identity?.kinds ? { allowedKinds: identity.kinds } : {}),
+        }) ?? null,
+      ),
   );
 
   server.registerTool(

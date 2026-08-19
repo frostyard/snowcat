@@ -139,7 +139,11 @@ parameter (`operator:web` remains the local-mode default); an unverified
 request is `401`, never a fallback. The sidebar shows the actor. A *MCP
 tokens* page (`/tokens`) lets a member mint tokens owned by their principal
 (plaintext once), see last use, and revoke their own; the local mode lists
-and revokes all and mints from the CLI. `/mcp` — the Streamable HTTP MCP
+and revokes all and mints from the CLI. Its **may claim** column shows each
+token's claim restriction — the work kinds a token minted with
+`token mint … --kinds pr-review` may lease, or `unrestricted` — never the
+hash; a restriction is set at mint time from the CLI (see
+[Operating the work queue](queue-operations.md#a-review-only-client)). `/mcp` — the Streamable HTTP MCP
 endpoint behind minted tokens ([`src/mcp/http.ts`](../../src/mcp/http.ts))
 — lives in the same app and is expected to sit behind an Access *bypass*
 policy, since the token is its credential.
