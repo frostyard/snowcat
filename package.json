@@ -32,7 +32,7 @@
   "devDependencies": {
     "@flue/vite": "2.0.3",
     "@modelcontextprotocol/client": "2.0.0",
-    "@types/node": "24.3.1",
+    "@types/node": "24.13.3",
     "tsx": "4.23.12",
     "typescript": "7.0.2",
     "vite": "8.1.2"
