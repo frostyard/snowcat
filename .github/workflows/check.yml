@@ -1,6 +1,7 @@
 # Runs the same gate as the local recipe documented in AGENTS.md:
-# `npm run check` (docs, deploy units, typecheck, tests, build). A local pass must be a CI pass,
-# so this workflow adds no other check commands. It also runs nightly (core
+# `npm run check` (dependency audit at high severity, docs, deploy units,
+# typecheck, tests, build). A local pass must be a CI pass, so this workflow
+# adds no other check commands. It also runs nightly (core
 # ADR-0021's compliance run) so drift that arrives from outside the repository
 # — an npm advisory, a Node point release, a stale action pin, a transitive
 # that resolves differently — turns the check red within a day rather than on
