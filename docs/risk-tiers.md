@@ -50,33 +50,60 @@ and evidence are appropriate.
 
 ## Tier 3: High
 
-Changes that affect a security control, trust boundary, privileged
-operation, or software supply chain — including every protected boundary in
-[`policies/agent-governance.json`](../policies/agent-governance.json).
+Changes with broad behavioral, CI/build, dependency, persistence, or
+operational impact that do not themselves cross a protected security
+boundary.
 
 Examples include:
 
-- workflow and CI permissions: anything under `.github/workflows/**`;
-- credentials and sensitive GitHub-facing code: `src/github/**`,
-  `src/queue/artifact-verification.ts`, `src/queue/github-issues.ts`, and
-  `src/repository/github-api.ts`;
-- the MCP/authorization boundary: `src/mcp/**`, `src/app.ts`,
-  `src/queue/eligibility.ts`, `src/auth/**`, `src/surface/session.ts`, and
-  `src/surface/app.ts`;
+- broad behavioral change across the queue, control plane, or surface;
+- CI and build changes outside `.github/workflows/**` — test configuration,
+  build scripts, and the checks `npm run check` runs;
 - dependency and lockfile changes (`package.json`, `package-lock.json`);
 - the queue schema migration ladder (`src/queue/store.ts`,
   `SCHEMA_VERSION`) or control-plane schema and migrations
   (`src/control/store.ts`, `CONTROL_PLANE_SCHEMA_VERSION`); and
-- deploy units under `deploy/` (systemd services/timers, `install.sh`,
-  `upgrade.sh`, the Incus profile and bootstrap script) that change what
-  runs on the operator host or with what privileges.
+- external commands and operational behavior that do not change what runs on
+  the operator host or with what privileges.
 
-**Required evidence:** Obtain explicit maintainer review of the security and
-reliability impact. Document the trust boundary crossed, abuse and failure
-modes, compatibility impact, and rollback or recovery. Include focused
-adversarial and failure-path tests. The author or generating agent must not
-self-approve, auto-merge, weaken a required check, or disclose vulnerability
-details in a public pull request.
+**Required evidence:** Obtain maintainer review of the reliability impact.
+Document failure modes, compatibility impact, and rollback or recovery.
+Include targeted negative tests for the failure paths. The author or
+generating agent must not self-approve, auto-merge, or weaken a required
+check.
+
+## Tier 4: Critical
+
+Changes touching credentials, trust, destructive operations, privileged
+environments, publication, deployment, or another protected security
+boundary — including every protected boundary in
+[`policies/agent-governance.json`](../policies/agent-governance.json).
+
+Examples include:
+
+- the `workflow-and-permissions` boundary: anything under
+  `.github/workflows/**`;
+- the `credentials-and-sensitive-data` boundary: `src/github/**`,
+  `src/queue/artifact-verification.ts`, `src/queue/github-issues.ts`, and
+  `src/repository/github-api.ts`;
+- the `authentication` boundary: `src/mcp/**`, `src/app.ts`,
+  `src/queue/eligibility.ts`, `src/auth/**`, `src/surface/session.ts`, and
+  `src/surface/app.ts`;
+- credential handling anywhere — tokens, session secrets, `/etc/snowcat/env`
+  — and anything that changes who may authenticate or what they may do;
+- publication and release: anything that publishes an artifact or changes
+  what a release contains; and
+- deployment: deploy units under `deploy/` (systemd services/timers,
+  `install.sh`, `upgrade.sh`, the Incus profile and bootstrap script) that
+  change what runs on the operator host or with what privileges, and
+  destructive operations against live databases.
+
+**Required evidence:** Provide a threat and abuse analysis naming the trust
+boundary crossed. Obtain security-owner review. Include adversarial or
+end-to-end evidence that the boundary holds. State an explicit rollback
+plan. The author or generating agent must not self-approve, auto-merge,
+weaken a required check, or disclose vulnerability details in a public pull
+request.
 
 ## Classification workflow
 

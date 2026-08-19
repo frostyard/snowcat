@@ -86,7 +86,7 @@ Docs are split by the question they answer:
 
 ### Governance
 
-- [Change risk tiers](risk-tiers.md) — the three-tier scale every pull request declares (core ADR-0019), in terms of this repository's protected boundaries
+- [Change risk tiers](risk-tiers.md) — the four-tier scale every pull request declares (core ADR-0019), in terms of this repository's protected boundaries
 
 ### Domain language
 
