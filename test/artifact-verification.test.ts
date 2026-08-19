@@ -20,7 +20,7 @@ const PR_URL = "https://github.com/frostyard/updex/pull/12";
 const ISSUE_URL = "https://github.com/frostyard/updex/issues/7";
 const clock = () => new Date("2026-08-17T20:00:00.000Z");
 // Verification treats 404 as absence only when a credential was presented.
-process.env.SNOWCAT_GITHUB_TOKEN ??= "test-token";
+process.env.SNOWCAT_GITHUB_TOKEN = "test-token";
 
 function pullRequest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -346,4 +346,75 @@ test("delivery derives from pull-request artifacts only, and recordArtifactVerif
   const updated = queue.recordArtifactVerification(claimed.id, ISSUE_URL, { status: "unverified", attemptedAt: "t", reason: "later" }, "operator:test");
   assert.equal(updated.result?.artifacts[0]?.verification?.status, "unverified");
   assert.equal(updated.result?.artifacts[1]?.verification, undefined);
+});
+
+/**
+ * Seeds `count` completed items in REPOSITORY, each reporting a distinct
+ * pull request already verified `merged` (terminal). The clock advances one
+ * second per item so `updated_at` orders them oldest first.
+ */
+function seedTerminalCompletions(queue: QueueStore, count: number, tick: () => void): void {
+  queue.setRepositoryEnabled(REPOSITORY, true);
+  for (let index = 0; index < count; index += 1) {
+    tick();
+    queue.enqueueSeed({
+      repository: REPOSITORY,
+      kind: "issue-resolution",
+      objective: `Resolve #${1000 + index}`,
+      instructions: "Open a PR.",
+      acceptanceCriteria: ["PR open."],
+      allowedActions: ["read", "write", "run-tests", "open-pr"],
+      delegableActions: [],
+      createdBy: "operator:test",
+    });
+    const claimed = queue.claim({ worker: "claude:verify-test" })!;
+    queue.complete({
+      id: claimed.id,
+      leaseToken: claimed.leaseToken!,
+      worker: "claude:verify-test",
+      result: {
+        summary: "Merged.",
+        evidence: [],
+        artifacts: [
+          {
+            kind: "pull-request",
+            url: `https://github.com/frostyard/updex/pull/${1000 + index}`,
+            verification: { status: "verified", verifiedAt: "2026-08-17T20:00:00.000Z", number: 1000 + index, state: "merged", mergedAt: "2026-08-17T20:00:00.000Z" },
+          },
+        ],
+      },
+      followUps: [],
+    });
+  }
+}
+
+test("verify-artifacts selects items that still need checking, so more than 100 terminal completions cannot starve a newer one", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-verify-starvation-test-"));
+  let now = Date.parse("2026-08-17T20:00:00.000Z");
+  const ticking = () => new Date(now);
+  const tick = () => { now += 1000; };
+  const queue = new QueueStore(join(directory, "queue.db"), ticking);
+  test.after(() => queue.close());
+
+  // 105 older completions, every artifact merged: nothing to check there.
+  seedTerminalCompletions(queue, 105, tick);
+  // One newer completion whose pull request is still unverified.
+  tick();
+  const claimed = await seedClaimed(queue);
+  queue.complete({
+    id: claimed.id,
+    leaseToken: claimed.leaseToken!,
+    worker: "claude:verify-test",
+    result: { summary: "Opened the PR.", evidence: [], artifacts: [{ kind: "pull-request", url: PR_URL, verification: { status: "unverified", attemptedAt: ticking().toISOString(), reason: "GitHub API returned HTTP 504" } }] },
+    followUps: [],
+  });
+  assert.equal(queue.get(claimed.id)?.delivery, "unverified");
+  assert.equal(queue.list({ status: "completed", repository: REPOSITORY, limit: 100 }).some((item) => item.id === claimed.id), false, "list()'s 100-row page does not reach the newer item");
+
+  const live = apiFetcher({ [PR_PATH]: pullRequest({ state: "closed", merged: true, merged_at: "2026-08-17T21:00:00Z" }) });
+  const refreshed = await refreshArtifactVerifications(queue, { fetcher: live.fetcher, clock: ticking, repository: REPOSITORY });
+  assert.equal(refreshed.checked, 1, "only the one pending artifact is checked");
+  assert.deepEqual(refreshed.updated, [{ id: claimed.id, url: PR_URL, status: "verified", state: "merged" }]);
+  assert.equal(queue.get(claimed.id)?.delivery, "merged");
+  assert.deepEqual(queue.completedItemsWithPendingArtifacts({ repository: REPOSITORY }), [], "nothing left to check once the newer artifact is terminal");
 });

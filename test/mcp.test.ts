@@ -8,6 +8,7 @@ import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 
 import { QueueStore } from "../src/queue/store.ts";
+import { childEnvironment } from "./helpers/child-environment.ts";
 
 test("a manually started MCP client can claim, complete, and create child work", async () => {
   const directory = await mkdtemp(join(tmpdir(), "snowcat-mcp-test-"));
@@ -31,7 +32,7 @@ test("a manually started MCP client can claim, complete, and create child work",
     command: process.execPath,
     args: ["--import", "tsx", "src/mcp/stdio.ts"],
     cwd: process.cwd(),
-    env: stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path }),
+    env: childEnvironment({ SNOWCAT_QUEUE_DB: path }),
   });
   await client.connect(transport);
   test.after(async () => client.close());
@@ -122,7 +123,7 @@ test("the MCP boundary rejects a follow-up that supplies priority", async () => 
     command: process.execPath,
     args: ["--import", "tsx", "src/mcp/stdio.ts"],
     cwd: process.cwd(),
-    env: stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path }),
+    env: childEnvironment({ SNOWCAT_QUEUE_DB: path }),
   });
   await client.connect(transport);
   test.after(async () => client.close());
@@ -191,7 +192,7 @@ test("the MCP boundary rejects worker identities in reserved principal namespace
     command: process.execPath,
     args: ["--import", "tsx", "src/mcp/stdio.ts"],
     cwd: process.cwd(),
-    env: stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path }),
+    env: childEnvironment({ SNOWCAT_QUEUE_DB: path }),
   });
   await client.connect(transport);
   test.after(async () => client.close());
@@ -242,7 +243,7 @@ test("the MCP release path omits the old token and permits reclaim by another wo
     command: process.execPath,
     args: ["--import", "tsx", "src/mcp/stdio.ts"],
     cwd: process.cwd(),
-    env: stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path }),
+    env: childEnvironment({ SNOWCAT_QUEUE_DB: path }),
   });
   await client.connect(transport);
   test.after(async () => client.close());
@@ -307,7 +308,7 @@ test("claim_work on a requeued item carries operator notes and prior results, an
     command: process.execPath,
     args: ["--import", "tsx", "src/mcp/stdio.ts"],
     cwd: process.cwd(),
-    env: stringEnvironment({ ...process.env, SNOWCAT_QUEUE_DB: path }),
+    env: childEnvironment({ SNOWCAT_QUEUE_DB: path }),
   });
   await client.connect(transport);
   test.after(async () => client.close());
@@ -387,8 +388,3 @@ function parseToolText(result: { content: unknown[] }): any {
   return JSON.parse(first.text!);
 }
 
-function stringEnvironment(source: NodeJS.ProcessEnv): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(source).filter((entry): entry is [string, string] => entry[1] !== undefined),
-  );
-}
