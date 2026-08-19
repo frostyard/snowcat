@@ -1,10 +1,12 @@
-# Artifact verification and the pull-request cure sweep every 10 minutes.
+# Artifact verification, the pull-request cure sweep, and the review gate every 2 minutes
+# (fast enough that a ready pull request that falls behind is updated before the
+# operator reaches it; each pass is a handful of bounded GitHub reads).
 # Enable with `systemctl enable --now snowcat-verify.timer`.
 [Unit]
-Description=Snowcat: refresh artifact verification every 10 minutes
+Description=Snowcat: refresh artifact verification every 2 minutes
 
 [Timer]
-OnCalendar=*:0/10
+OnCalendar=*:0/2
 Unit=snowcat-verify.service
 
 [Install]

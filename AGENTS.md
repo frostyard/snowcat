@@ -225,7 +225,7 @@ removed. -->
   repository's GitHub settings against core's repository settings contract
   (ADR-0040) in [`src/queue/repository-settings.ts`](src/queue/repository-settings.ts),
   applied only by a human with core's `scripts/apply-repo-settings.sh`;
-  `verify-artifacts` every 10 minutes; `backup` daily); never add a
+  `verify-artifacts` every 2 minutes; `backup` daily); never add a
   scheduler, daemon, or MCP tool inside Snowcat for
   them. `npm run check:deploy` (part of `check`; needs `shellcheck` and
   `systemd-analyze` locally) runs `systemd-analyze verify` against a stub
