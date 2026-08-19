@@ -977,7 +977,11 @@ daily: one queue and one control-plane copy under `/var/backups/snowcat` (or
 `control-plane-<UTC stamp>.db`, each with its manifest as
 `<name>.manifest.json` beside it, then it deletes only those backup files older
 than `SNOWCAT_BACKUP_RETAIN_DAYS` (default 14, from `/etc/snowcat/env`) and never
-touches the live databases. Start the service by hand before an upgrade or a
+touches the live databases. The two databases are backed up independently: a
+failure of one does not prevent the other's copy from being written, and the
+retention prune is skipped whenever either failed, so a run that could not
+write today's copy never deletes older ones (it exits non-zero and names the
+failed backups on stderr). Start the service by hand before an upgrade or a
 risky operator action. Backups contain lease tokens and are created mode
 `0600` in a `0750` directory; keep them as private as the live files. Do not
 open a backup with a queue command before verifying it — opening migrates it

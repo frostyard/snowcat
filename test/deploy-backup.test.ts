@@ -154,3 +154,71 @@ test("deploy/bin/snowcat-backup refuses to run without its required environment 
   assert.equal(written.some((name) => name.startsWith("control-plane-")), false);
 });
 
+
+test("deploy/bin/snowcat-backup still backs up the control plane when the queue backup fails, and skips the prune", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-deploy-backup-independent-test-"));
+  const queuePath = join(directory, "live", "queue.db");
+  const controlPath = join(directory, "live", "control-plane.db");
+  const backupDir = join(directory, "backups");
+  await mkdir(join(directory, "live"), { recursive: true });
+  await mkdir(backupDir, { recursive: true });
+
+  // A queue database that cannot be backed up: not SQLite at all.
+  await writeFile(queuePath, "this is not a SQLite database");
+  // A healthy control-plane database beside it.
+  const control = new ControlPlaneStore(controlPath);
+  const liveLineage = control.metadata().databaseLineageId;
+  control.close();
+
+  // An expired backup that the prune would delete on a fully successful run.
+  const stale = "control-plane-20260101T000000Z.db";
+  const now = Date.now();
+  await writeFile(join(backupDir, stale), "old");
+  await utimes(join(backupDir, stale), new Date(now - 20 * DAY_MS), new Date(now - 20 * DAY_MS));
+
+  const run = spawnSync("bash", [SCRIPT], {
+    cwd: directory,
+    encoding: "utf8",
+    env: childEnvironment({
+      SNOWCAT_HOME: process.cwd(),
+      SNOWCAT_QUEUE_DB: queuePath,
+      SNOWCAT_CONTROL_DB: controlPath,
+      SNOWCAT_BACKUP_DIR: backupDir,
+      SNOWCAT_BACKUP_RETAIN_DAYS: "14",
+    }),
+  });
+
+  // (a) the run fails, and (b) names the failing backup.
+  assert.notEqual(run.status, 0, `${run.stdout}\n${run.stderr}`);
+  assert.match(run.stderr, /queue backup .* failed/);
+
+  const remaining = (await readdir(backupDir)).sort();
+
+  // (c) the control-plane backup happened anyway — the point of this test.
+  const controlBackups = remaining.filter((name) => /^control-plane-\d{8}T\d{6}Z\.db$/.test(name) && name !== stale);
+  assert.equal(controlBackups.length, 1, `expected one fresh control-plane backup, got: ${remaining.join(", ")}`);
+  const stamp = controlBackups[0]!.slice("control-plane-".length, -".db".length);
+  assert.equal(remaining.includes(`control-plane-${stamp}.manifest.json`), true, remaining.join(", "));
+
+  // That copy is real: it verifies against the live database's lineage.
+  const controlManifest = JSON.parse(
+    await readFile(join(backupDir, `control-plane-${stamp}.manifest.json`), "utf8"),
+  ) as ControlPlaneBackupManifest;
+  const verified = ControlPlaneStore.verifyBackup(controlManifest, {
+    databaseLineageId: liveLineage,
+    minimumLastTransactionSequence: 1,
+  });
+  assert.equal(verified.quickCheck, "ok");
+
+  // The summary line names which backup failed.
+  assert.match(run.stderr, /failed backups: .*queue/);
+
+  // The failing queue backup left nothing behind.
+  assert.equal(remaining.some((name) => name.startsWith("queue-")), false, remaining.join(", "));
+  assert.equal(remaining.some((name) => name.endsWith(".partial")), false, remaining.join(", "));
+
+  // The prune stayed conservative: a run that could not write one of today's
+  // copies must not delete older ones.
+  assert.equal(remaining.includes(stale), true, `${stale} should survive a failed run`);
+  assert.doesNotMatch(run.stdout, /pruned \d+ file\(s\)/);
+});
