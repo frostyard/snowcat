@@ -340,7 +340,13 @@ MCP (rule 41).
     state, MUST record a now-rejected artifact as `unverified` with a
     `rejected:` reason rather than delete it, and MUST leave the previous
     verification in place when GitHub is unavailable. Merged and closed
-    artifacts are terminal and are not re-checked.
+    artifacts are terminal and are not re-checked. Selection MUST consider
+    only completed items that still have a non-terminal issue or pull-request
+    artifact, newest first by `updated_at`
+    (`QueueStore.completedItemsWithPendingArtifacts`), so `--limit` bounds
+    the items that need checking rather than arbitrary completions and a
+    repository with more than 100 terminal completions cannot starve a newer
+    one; the pull-request cure sweep (rules 42–43) MUST use the same selection.
 35. `delivery` MUST be derived on read from a completed item's pull-request
     artifacts, never stored separately: `merged` if any is merged, otherwise
     `unverified` if any lacks a verified state, otherwise `open` if any is

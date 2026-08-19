@@ -282,7 +282,11 @@ export async function curePullRequests(
   options: CureOptions & { repository?: string; limit?: number; actor?: string } = {},
 ): Promise<CureSweepResult> {
   const actor = options.actor ?? "operator:cli";
-  const items = queue.list({ status: "completed", repository: options.repository, limit: options.limit ?? 100 });
+  // The same selection as refreshArtifactVerifications: completed items with a
+  // non-terminal issue or pull-request artifact, newest first, so a repository
+  // with more than 100 terminal completions cannot hide a newer open head.
+  // The per-artifact filter below (verified and open) stays authoritative.
+  const items = queue.completedItemsWithPendingArtifacts({ repository: options.repository, limit: options.limit ?? 100 });
   const candidates = new Map<string, { repository: string; priority: number; originItemId: string }>();
   for (const item of items) {
     for (const artifact of item.result?.artifacts ?? []) {
