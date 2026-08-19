@@ -38,7 +38,10 @@
       "paths": [
         "src/mcp/**",
         "src/app.ts",
-        "src/queue/eligibility.ts"
+        "src/queue/eligibility.ts",
+        "src/auth/**",
+        "src/surface/session.ts",
+        "src/surface/app.ts"
       ],
       "detectors": []
     }
