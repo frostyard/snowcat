@@ -5,6 +5,7 @@ import { queueStoreOptionsFromEnvironment } from "./eligibility.ts";
 import { curePullRequests } from "./pull-request-cure.ts";
 import { reviewGateWritesFromEnvironment, reviewPullRequests } from "./pull-request-review.ts";
 import { importLabeledIssues, importLabeledIssuesForEnrolled } from "./github-issues.ts";
+import { parseMetricsTimestamp, queueMetrics } from "./metrics.ts";
 import { sweepFailureMessage, sweepInternalDependencies } from "./internal-dependencies.ts";
 import { sweepRepositorySettings } from "./repository-settings.ts";
 import { QueueStore, queueDatabasePath, type MutationPrecondition } from "./store.ts";
@@ -196,6 +197,21 @@ try {
     if (requested < 1) throw new Error("interval must be at least 1 second");
     const intervalSeconds = Math.max(requested, MIN_WATCH_INTERVAL_SECONDS);
     await watchEvents(queue, { repository: flags.repository, intervalSeconds });
+  } else if (command === "metrics") {
+    // The PRD baseline numbers over one window: created items by current
+    // status, attempts, completions by delivery, acceptance per attempt,
+    // blocks, cancellations, and time to merge. It is a read of the ledger
+    // and the current items — it writes nothing and is not exposed through
+    // MCP. The window is half-open, `[since, until)`, and defaults to the
+    // last 24 hours ending now.
+    const flags = parseFlags(args, ["repository", "since", "until"]);
+    print(
+      queueMetrics(queue, {
+        repository: flags.repository,
+        since: flags.since === undefined ? undefined : parseMetricsTimestamp(flags.since, "--since"),
+        until: flags.until === undefined ? undefined : parseMetricsTimestamp(flags.until, "--until"),
+      }),
+    );
   } else if (command === "sweep-dependencies") {
     // The internal dependency chain: release-needed on enrolled repositories
     // ahead of their latest tag, dependency-bump on ones behind a frostyard
@@ -274,6 +290,7 @@ try {
     console.error("       npm run queue -- show <work-item-id>");
     console.error("       npm run queue -- events [--since <sequence>] [--repository <owner/repo>] [--limit <1-500>]");
     console.error("       npm run queue -- watch [--repository <owner/repo>] [--interval <seconds>]");
+    console.error("       npm run queue -- metrics [--repository <owner/repo>] [--since <iso>] [--until <iso>]   (read-only PRD baseline; default window the last 24 hours)");
     console.error("       npm run queue -- sweep-dependencies <owner/repo>");
     console.error("       npm run queue -- sweep-dependencies --enrolled   (requires SNOWCAT_CONTROL_DB; SNOWCAT_GITHUB_TOKEN in practice)");
     console.error("       npm run queue -- sweep-repository-settings <owner/repo> | --enrolled   (requires SNOWCAT_CONTROL_DB; SNOWCAT_GITHUB_TOKEN with admin read)");

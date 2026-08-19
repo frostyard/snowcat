@@ -41,7 +41,8 @@ export interface WorkArtifact {
  * Derived from a completed item's pull-request artifacts. Delivery is the
  * merge of the reported pull request, not the achievement of an outcome.
  */
-export type DeliveryState = "none" | "unverified" | "open" | "closed" | "merged";
+export const deliveryStates = ["none", "unverified", "open", "closed", "merged"] as const;
+export type DeliveryState = (typeof deliveryStates)[number];
 
 export interface WorkResult {
   summary: string;
