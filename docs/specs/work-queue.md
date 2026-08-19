@@ -573,6 +573,17 @@ MCP (rule 41).
     member and client, and the repository's governance and the item's
     `allowedActions` bound what that identity may do.
 
+50. **HTTP MCP endpoint (ADR-0063).** The app MUST serve the same MCP tools
+    as stdio at `/mcp` over Streamable HTTP, and MUST require a Snowcat-minted
+    token as a bearer header: absent, malformed, unknown, revoked, or
+    mismatched tokens MUST all answer `401` with a `WWW-Authenticate: Bearer`
+    challenge and no distinguishing reason. A verified token MUST make every
+    tool act as `member:<owner>/<client>` — the payload's `worker` becomes the
+    claim's `label` and can never set or widen the identity — and MUST record
+    the token's last use. Stdio remains the local mode with the payload's
+    worker as the principal. Cloudflare Access is expected to bypass `/mcp`
+    (the minted token is the credential there) and to gate every other route.
+
 ## Derived artifacts
 
 | Artifact | Derivation |

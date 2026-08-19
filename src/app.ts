@@ -7,6 +7,9 @@ import { createAgentRouter } from "@flue/runtime/routing";
 import { Hono } from "hono";
 
 import { QueueClerk } from "./agents/queue-clerk.ts";
+import { mountMcpHttp } from "./mcp/http.ts";
+import type { ArtifactVerifierOptions } from "./queue/artifact-verification.ts";
+import { queueStoreOptionsFromEnvironment } from "./queue/eligibility.ts";
 import { QueueStore, queueDatabasePath } from "./queue/store.ts";
 import { createSurfaceApp, type SurfaceStores } from "./surface/app.ts";
 import type { StreamOptions } from "./surface/stream.ts";
@@ -55,6 +58,12 @@ export interface AppOptions {
   surfaceStores?: () => SurfaceStores;
   /** Event-stream cadence for the surface; tests shorten it. */
   surfaceStream?: StreamOptions;
+  /**
+   * The Streamable HTTP MCP endpoint at `/mcp` (ADR-0063). Off unless given
+   * a queue store (the app's `surfaceStores` queue in production, a test's
+   * store otherwise); minted bearer tokens are verified against it.
+   */
+  mcp?: { queue: () => QueueStore; queuePath: string; verifier?: ArtifactVerifierOptions };
 }
 
 export function createApp(options: AppOptions): Hono {
@@ -76,6 +85,11 @@ export function createApp(options: AppOptions): Hono {
     await next();
   });
   app.route("/agents/queue-clerk", createAgentRouter(QueueClerk));
+  // Workers over HTTP: `/mcp`, bearer = Snowcat-minted token, identity from
+  // the token. Stdio (`npm run mcp`) stays the local mode.
+  if (options.mcp) {
+    mountMcpHttp(app, { queue: options.mcp.queue, queuePath: options.mcp.queuePath, verifier: options.mcp.verifier, storeOptions: queueStoreOptionsFromEnvironment() });
+  }
   // The operator surface: `/login`, `/logout`, and the inbox at `/`, all
   // behind the cookie session; `/health` and `/agents/*` above are untouched.
   app.route("/", createSurfaceApp({ appToken: options.appToken, stores: options.surfaceStores ?? defaultSurfaceStores(), stream: options.surfaceStream }));
@@ -101,6 +115,11 @@ function safeEqual(actual: string, expected: string): boolean {
   return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
 }
 
-const app = createApp({ appToken: process.env.SNOWCAT_APP_TOKEN });
+const hostStores = defaultSurfaceStores();
+const app = createApp({
+  appToken: process.env.SNOWCAT_APP_TOKEN,
+  surfaceStores: hostStores,
+  mcp: { queue: () => hostStores().queue, queuePath: queueDatabasePath() },
+});
 
 export default app;

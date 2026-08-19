@@ -38,12 +38,26 @@ const followUpSchema = z.strictObject({
   delegableActions: z.array(actionSchema),
 });
 
+/**
+ * A transport-established identity (ADR-0063): the `member:<owner>/<client>`
+ * principal derived from a verified minted token. When present, every tool
+ * acts as that principal — the payload's `worker` becomes the claim's label
+ * — and can never widen it. Absent (stdio, local mode) the payload's worker
+ * is the principal, as before.
+ */
+export interface McpIdentity {
+  principal: string;
+}
+
 export function buildQueueMcpServer(
   path = queueDatabasePath(),
   verifier: ArtifactVerifierOptions = {},
   storeOptions: QueueStoreOptions = {},
+  identity?: McpIdentity,
+  sharedQueue?: QueueStore,
 ): McpServer {
-  const queue = new QueueStore(path, undefined, storeOptions);
+  const queue = sharedQueue ?? new QueueStore(path, undefined, storeOptions);
+  const actor = (declared: string) => identity?.principal ?? declared;
   const server = new McpServer(
     { name: "snowcat-queue", version: "0.1.0" },
     {
@@ -95,7 +109,7 @@ export function buildQueueMcpServer(
         leaseSeconds: z.number().int().min(30).max(3600).optional(),
       }),
     },
-    async (input) => toolResult(queue.claim(input) ?? null),
+    async (input) => toolResult(queue.claim(identity ? { ...input, worker: identity.principal, label: input.worker } : input) ?? null),
   );
 
   server.registerTool(
@@ -110,7 +124,7 @@ export function buildQueueMcpServer(
       }),
     },
     async ({ id, leaseToken, worker, leaseSeconds }) =>
-      toolResult(withoutLeaseToken(queue.heartbeat(id, leaseToken, worker, leaseSeconds))),
+      toolResult(withoutLeaseToken(queue.heartbeat(id, leaseToken, actor(worker), leaseSeconds))),
   );
 
   server.registerTool(
@@ -142,7 +156,7 @@ export function buildQueueMcpServer(
       // A pr-cure completion is refused when the pull request's patch identity
       // changed (ADR-0061): mechanical is a fact Snowcat computes, not a claim.
       if (item) await assertCureCompletion(item, artifacts, verifier);
-      return toolResult(queue.complete({ ...input, result: { ...input.result, artifacts } }));
+      return toolResult(queue.complete({ ...input, worker: actor(input.worker), result: { ...input.result, artifacts } }));
     },
   );
 
@@ -157,7 +171,7 @@ export function buildQueueMcpServer(
         reason: z.string().min(1),
       }),
     },
-    async ({ id, leaseToken, worker, reason }) => toolResult(queue.block(id, leaseToken, worker, reason)),
+    async ({ id, leaseToken, worker, reason }) => toolResult(queue.block(id, leaseToken, actor(worker), reason)),
   );
 
   server.registerTool(
@@ -171,7 +185,7 @@ export function buildQueueMcpServer(
         reason: z.string().min(1),
       }),
     },
-    async ({ id, leaseToken, worker, reason }) => toolResult(queue.release(id, leaseToken, worker, reason)),
+    async ({ id, leaseToken, worker, reason }) => toolResult(queue.release(id, leaseToken, actor(worker), reason)),
   );
 
   return server;
