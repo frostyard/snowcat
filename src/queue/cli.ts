@@ -48,6 +48,24 @@ try {
     const from = required(args[0], "old repository");
     const to = required(args[1], "new repository");
     print(queue.renameRepository(from, to, "operator:cli"));
+  } else if (command === "token") {
+    // Snowcat-minted MCP tokens (ADR-0063): mint prints the plaintext exactly
+    // once; list never shows hashes; revoke is idempotent.
+    const action = required(args[0], "token action (mint|list|revoke)");
+    if (action === "mint") {
+      const owner = required(args[1], "token owner (member:<email>)");
+      const client = required(args[2], "token client name");
+      const minted = queue.mintMcpToken({ owner, client });
+      print({ token: minted.token, id: minted.record.id, owner: minted.record.owner, client: minted.record.client, createdAt: minted.record.createdAt, note: "The token is shown once; store it in the client's MCP configuration as a bearer header." });
+    } else if (action === "list") {
+      print(queue.listMcpTokens(args[1]).map(({ tokenHash: _hash, ...token }) => token));
+    } else if (action === "revoke") {
+      const id = required(args[1], "token id");
+      const { tokenHash: _hash, ...revoked } = queue.revokeMcpToken(id, "operator:cli");
+      print(revoked);
+    } else {
+      throw new Error(`unknown token action: ${action} (mint|list|revoke)`);
+    }
   } else if (command === "seed-testing-gap") {
     const repository = required(args[0], "repository");
     print(enqueueTestingGap(queue, repository));
@@ -212,6 +230,7 @@ try {
     console.error("Usage: npm run queue -- opt-in <owner/repo>");
     console.error("       npm run queue -- opt-out <owner/repo>");
     console.error("       npm run queue -- rename-repository <old owner/repo> <new owner/repo>   (after a GitHub rename; history keeps the old slug)");
+    console.error("       npm run queue -- token mint <member:email> <client name> | list [member:email] | revoke <id>   (MCP tokens; ADR-0063)");
     console.error("       npm run queue -- cure-foreign <owner/repo> on|off");
     console.error("       npm run queue -- seed-testing-gap <owner/repo>");
     console.error("       npm run queue -- seed-dogfood <owner/repo> [--cooldown-hours <n>]");

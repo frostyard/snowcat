@@ -92,7 +92,7 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
   const directory = await mkdtemp(join(tmpdir(), "snowcat-ladder-test-"));
   const path = join(directory, "queue.db");
   const { itemId } = createVersionOneDatabase(path);
-  assert.equal(SCHEMA_VERSION, 6, "this test pins the ladder at rung 6; extend it when a rung is added");
+  assert.equal(SCHEMA_VERSION, 7, "this test pins the ladder at rung 7; extend it when a rung is added");
 
   const queue = new QueueStore(path);
   test.after(() => queue.close());
@@ -111,6 +111,10 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
   assert.equal(item?.priority, 3);
   const claimed = queue.claim({ worker: "claude:ladder-test" });
   assert.equal(claimed?.id, itemId);
+
+  // Rung 7 arrived too: MCP tokens mint and verify on the upgraded database.
+  const minted = queue.mintMcpToken({ owner: "member:ladder@frostyard.org", client: "ladder-test" });
+  assert.equal(queue.verifyMcpToken(minted.token)?.client, "ladder-test");
 
   // Rung 5 arrived too: a pr-cure root carries its typed cure record on the upgraded database.
   const cured = queue.enqueueCureRoot("frostyard/updex", {
@@ -228,7 +232,7 @@ test("a version-5 database gains rung 6's cure_foreign column, off for every exi
 
   const queue = new QueueStore(path);
   test.after(() => queue.close());
-  assert.equal(queue.schemaVersion(), 6);
+  assert.equal(queue.schemaVersion(), SCHEMA_VERSION);
   assert.equal(queue.metadata().databaseId, "55555555-5555-4555-8555-555555555555");
   const inspect = new DatabaseSync(path, { readOnly: true });
   const column = (inspect.prepare("PRAGMA table_info(repositories)").all() as Row[]).find((entry) => String(entry.name) === "cure_foreign");

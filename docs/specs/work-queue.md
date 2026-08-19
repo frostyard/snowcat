@@ -551,6 +551,28 @@ MCP (rule 41).
     rename (ADR-0064), whose immutable repository ID keeps enrollment
     continuous once the Core declaration is renamed.
 
+48. **Principals (ADR-0063).** `member:<email-or-login>` is the identity of
+    a verified person, set only by a transport — an Access session or a
+    Snowcat-minted MCP token — never accepted from a request payload: the
+    MCP `worker` field MUST reject it like `operator:`, `policy:`, and
+    `system:`, while the store MUST accept it as a worker principal for
+    leases and as an operator actor for decisions (a member is an
+    operator). A claim MAY carry the client's self-declared name as `label`
+    in its `work.claimed` payload beside the transport identity; the label is
+    provenance, never authority.
+49. **Minted MCP tokens (ADR-0063).** `token mint <member:…> <client>`
+    MUST create one token `snowcat_<id>_<secret>`, print the plaintext exactly
+    once, and store only `sha256(secret)` with the owner and client name in
+    the `mcp_tokens` table (schema rung 7). Verification MUST compare hashes
+    in constant time, MUST answer nothing distinguishable for a malformed,
+    unknown, revoked, or mismatched token, and MAY touch `last_used_at` at
+    most once a minute. `token revoke <id>` MUST be idempotent, MUST let a
+    member revoke only their own tokens and an `operator:` any, and MUST
+    make the token verify as absent immediately. `token list` MUST never
+    return a hash. A token grants no action by itself: it identifies the
+    member and client, and the repository's governance and the item's
+    `allowedActions` bound what that identity may do.
+
 ## Derived artifacts
 
 | Artifact | Derivation |
@@ -562,6 +584,7 @@ MCP (rule 41).
 | Pull-request cure | `verify-artifacts` enqueues `pr-cure` roots per decayed head per rules 42–43; `complete_work` enforces patch identity per rule 44 |
 | Internal dependency chain | `sweep-dependencies` maps tags, branch comparison, and `go.mod` to `release-needed` and `dependency-bump` proposals per rule 45 |
 | Repository settings drift | `sweep-repository-settings` diffs live GitHub settings against core's contract into `settings-drift` proposals per rule 46 |
+| MCP tokens | `token mint | list | revoke` over the `mcp_tokens` table per rule 49; identities per rule 48 |
 | MCP worker behavior | Portable `work-snowcat-queue` skill constrained by this contract |
 | Testing-gap seed | Deterministic CLI instance of this contract |
 

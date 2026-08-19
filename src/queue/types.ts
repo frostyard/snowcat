@@ -176,6 +176,8 @@ export interface ClaimInput {
   repository?: string;
   kinds?: string[];
   leaseSeconds?: number;
+  /** The client's self-declared name, recorded beside a transport-established `worker` as a label (ADR-0063). */
+  label?: string;
 }
 
 export interface CompletionInput {

@@ -45,7 +45,7 @@ test("attachArtifact appends a verified pull request to a completed item so deli
   const queue = new QueueStore(join(directory, "queue.db"), () => now);
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/updex", true);
-  assert.equal(SCHEMA_VERSION, 6, "attaching needs no schema rung of its own: result_json already holds artifacts (rung 5 is the pull-request cure column, rung 6 the repository cure_foreign setting)");
+  assert.equal(SCHEMA_VERSION, 7, "attaching needs no schema rung of its own: result_json already holds artifacts (rung 5 is the pull-request cure column, rung 6 the repository cure_foreign setting, rung 7 the mcp_tokens table)");
 
   const completed = completedLocalOnly(queue);
   assert.equal(completed.delivery, "none");
@@ -123,7 +123,7 @@ test("attachArtifact refuses non-completed items, other repositories, non-GitHub
   assertUnchanged(queued.id, () => queue.attachArtifact(queued.id, "operator:cli", { kind: "pull-request", url, verification: MERGED }), /work item is not completed/);
 
   // Only an operator or policy actor may attach.
-  assertUnchanged(completed.id, () => queue.attachArtifact(completed.id, "claude:updex:local", { kind: "pull-request", url, verification: MERGED }), /must use the operator: or policy: principal namespace/);
+  assertUnchanged(completed.id, () => queue.attachArtifact(completed.id, "claude:updex:local", { kind: "pull-request", url, verification: MERGED }), /must use the operator:, policy:, or member: principal namespace/);
   // Only the item's own repository.
   assertUnchanged(
     completed.id,

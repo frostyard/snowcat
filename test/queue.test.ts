@@ -444,7 +444,7 @@ test("an operator can defer admitted work and later approve it again", async () 
 
   assert.throws(() => queue.defer(seed.id, "", "later"), /actor is required/);
   assert.throws(() => queue.defer(seed.id, "operator:test", ""), /reason is required/);
-  assert.throws(() => queue.defer(seed.id, "claude:worker", "later"), /operator: or policy: principal namespace/);
+  assert.throws(() => queue.defer(seed.id, "claude:worker", "later"), /operator:, policy:, or member: principal namespace/);
   const deferred = queue.defer(seed.id, "operator:test", "Serialize repository writers.");
   assert.equal(deferred.status, "proposed");
   assert.equal(deferred.leaseOwner, undefined);
@@ -876,7 +876,7 @@ test("an operator can requeue blocked work and a different worker can claim it",
 
   assert.throws(() => queue.requeue(seed.id, "", "resume"), /actor is required/);
   assert.throws(() => queue.requeue(seed.id, "operator:test", ""), /reason is required/);
-  assert.throws(() => queue.requeue(seed.id, "claude:core:first", "resume"), /operator: or policy: principal namespace/);
+  assert.throws(() => queue.requeue(seed.id, "claude:core:first", "resume"), /operator:, policy:, or member: principal namespace/);
   const requeued = queue.requeue(seed.id, "operator:test", "Input supplied.");
   assert.equal(requeued.status, "queued");
   assert.equal(requeued.result, undefined);
@@ -962,7 +962,7 @@ test("an operator can prioritize proposed, queued, or blocked work, and only an 
   assert.equal(child.priority, 0);
 
   // Prioritizing works while proposed, and the event carries previous, new, and reason.
-  assert.throws(() => queue.prioritize(child.id, "claude:updex:worker", 9, "urgent"), /operator: or policy: principal namespace/);
+  assert.throws(() => queue.prioritize(child.id, "claude:updex:worker", 9, "urgent"), /operator:, policy:, or member: principal namespace/);
   assert.throws(() => queue.prioritize(child.id, "operator:test", 1.5, "urgent"), /safe integer/);
   assert.throws(() => queue.prioritize(child.id, "operator:test", 9, " "), /prioritize reason is required/);
   const proposed = queue.prioritize(child.id, "operator:test", 9, "Security fix outranks discovery.");
@@ -1013,9 +1013,9 @@ test("an operator note appends to the item without changing its status, and work
 
   assert.throws(() => queue.note(seed.id, "", "hello"), /note actor is required/);
   assert.throws(() => queue.note(seed.id, "operator:test", "  "), /note text is required/);
-  assert.throws(() => queue.note(seed.id, "claude:core:worker", "hello"), /operator: or policy: principal namespace/);
-  assert.throws(() => queue.note(seed.id, "system", "hello"), /operator: or policy: principal namespace/);
-  assert.throws(() => queue.note(seed.id, "system:expiry", "hello"), /operator: or policy: principal namespace/);
+  assert.throws(() => queue.note(seed.id, "claude:core:worker", "hello"), /operator:, policy:, or member: principal namespace/);
+  assert.throws(() => queue.note(seed.id, "system", "hello"), /operator:, policy:, or member: principal namespace/);
+  assert.throws(() => queue.note(seed.id, "system:expiry", "hello"), /operator:, policy:, or member: principal namespace/);
   assert.throws(() => queue.note(seed.id, "operator:test", "x".repeat(4001)), /exceeds 4000 characters/);
   assert.throws(() => queue.note("00000000-0000-0000-0000-000000000000", "operator:test", "hello"), /not found/);
 
@@ -1322,7 +1322,7 @@ test("approve, reject, and cancel accept only operator or policy actors and chan
   const refused = (id: string, call: () => unknown) => {
     const before = queue.get(id)!;
     const events = queue.events(id).length;
-    assert.throws(call, /must use the operator: or policy: principal namespace/);
+    assert.throws(call, /must use the operator:, policy:, or member: principal namespace/);
     assert.deepEqual(queue.get(id), before);
     assert.equal(queue.events(id).length, events);
   };
@@ -1500,7 +1500,7 @@ test("rename-repository carries the opt-in and every item to the new slug and le
   ]);
   assert.throws(() => queue.renameRepository("frostyard/before", "frostyard/before", "operator:test"), /different slug/);
   assert.throws(() => queue.renameRepository("frostyard/nope", "frostyard/after", "operator:test"), /not known/);
-  assert.throws(() => queue.renameRepository("frostyard/before", "frostyard/after", "claude:worker"), /operator: or policy:/);
+  assert.throws(() => queue.renameRepository("frostyard/before", "frostyard/after", "claude:worker"), /operator:, policy:, or member:/);
   const renamed = queue.renameRepository("frostyard/before", "frostyard/after", "operator:test");
   assert.deepEqual(renamed, { from: "frostyard/before", to: "frostyard/after", items: 2 });
   assert.deepEqual(queue.enabledRepositories(), ["frostyard/after"]);

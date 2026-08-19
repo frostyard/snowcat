@@ -553,5 +553,5 @@ test("enqueueCureRoot validates its cure record and kind", async () => {
   });
   assert.deepEqual(threads?.cure?.decay, ["unresolved-threads"]);
   assert.equal(queue.enqueueCureRoot(REPOSITORY, { ...base, allowedActions: [...base.allowedActions], delegableActions: [...base.delegableActions], cure }), undefined);
-  assert.equal(queue.metadata().schemaVersion, 6, "rung 5 carries cure_json; rung 6 the repository cure_foreign setting");
+  assert.equal(queue.metadata().schemaVersion, 7, "rung 5 carries cure_json; rung 6 the repository cure_foreign setting; rung 7 the mcp_tokens table");
 });
