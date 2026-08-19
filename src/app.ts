@@ -11,7 +11,7 @@ import { QueueStore, queueDatabasePath } from "./queue/store.ts";
 import { createSurfaceApp, type SurfaceStores } from "./surface/app.ts";
 import type { StreamOptions } from "./surface/stream.ts";
 
-const lemonadeBaseUrl = process.env.LEMONADE_BASE_URL ?? "http://10.0.1.200:13305/v1";
+const lemonadeBaseUrl = process.env.LEMONADE_BASE_URL ?? "http://localhost:13305/v1";
 const lemonadeModel = process.env.LEMONADE_MODEL ?? "Qwen3.8-27B-GGUF-UD-Q4_K_XL";
 
 setProvider(
