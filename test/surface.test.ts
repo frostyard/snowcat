@@ -7,7 +7,7 @@ import test from "node:test";
 import { createApp } from "../src/app.ts";
 import { ControlPlaneStore } from "../src/control/store.ts";
 import { QueueStore } from "../src/queue/store.ts";
-import type { WorkArtifact } from "../src/queue/types.ts";
+import type { AllowedAction, WorkArtifact } from "../src/queue/types.ts";
 import { sessionDigest } from "../src/surface/session.ts";
 import { enrollExampleRepository } from "./helpers/core-fixtures.ts";
 
@@ -1312,4 +1312,65 @@ test("hold from the board needs a control plane, and an unknown repository or ac
   const crossSite = await app.request("/repositories/frostyard/example/seed-dogfood", { method: "POST", body: new URLSearchParams({}), headers: { Cookie: cookie, "Sec-Fetch-Site": "cross-site" } });
   assert.equal(crossSite.status, 403);
   assert.equal(seeded.queue.list({ repository: "frostyard/example", kind: "ci-gap-discovery" }).length, 0);
+});
+
+test("the board's attempts denominator counts only completed items that could have opened a pull request", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-surface-attempts-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/example", true);
+
+  /** Seed one item, claim it, and complete it with the given artifacts, so each claim is unambiguous. */
+  const seedAndComplete = (kind: string, objective: string, allowedActions: AllowedAction[], artifacts: WorkArtifact[]) => {
+    const item = queue.enqueueSeed({
+      repository: "frostyard/example",
+      kind,
+      objective,
+      instructions: "Do it.",
+      acceptanceCriteria: ["Done."],
+      allowedActions,
+      delegableActions: [],
+      createdBy: "operator:test",
+    });
+    const lease = queue.claim({ worker: `claude:example:${kind}`, repository: "frostyard/example" })!;
+    assert.equal(lease.id, item.id);
+    queue.complete({
+      id: item.id,
+      leaseToken: lease.leaseToken!,
+      worker: `claude:example:${kind}`,
+      result: { summary: "Done.", evidence: ["observed"], artifacts },
+      followUps: [],
+    });
+    return item;
+  };
+
+  // Could never merge a pull request: read-only discovery, a read/run-tests review, a proposals-only sweep.
+  const discovery = seedAndComplete("quality-discovery", "Find one quality gap.", ["read", "create-followup"], []);
+  seedAndComplete("ci-discovery", "Read the workflow runs.", ["read", "run-tests"], []);
+  seedAndComplete("settings-drift", "Report repository settings drift.", ["read", "create-followup"], []);
+
+  // Could deliver a pull request: one merged, one that reported none.
+  const merged = seedAndComplete("issue-resolution", "Resolve frostyard/example#9.", ["read", "write", "open-pr"], [
+    {
+      kind: "pull-request",
+      url: "https://github.com/frostyard/example/pull/12",
+      verification: { status: "verified", verifiedAt: "2026-08-18T01:00:00.000Z", number: 12, state: "merged", headSha: "abcdef0123456789", mergedAt: "2026-08-18T00:59:00.000Z" },
+    },
+  ]);
+  seedAndComplete("docs-drift-fix", "Fix the drifted doc.", ["read", "write", "open-pr"], []);
+
+  const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue }) });
+  const cookie = `fluent_session=${sessionDigest(TOKEN)}`;
+  const board = await app.request("/repositories/frostyard/example", { headers: { Cookie: cookie } });
+  assert.equal(board.status, 200);
+  const body = await board.text();
+
+  // Five completed items, but only the two `open-pr` items are attempts.
+  assert.match(body, /<span>Completed today<\/span><strong>5<\/strong>/);
+  assert.match(body, /<span>Merged \/ attempts<\/span><strong>1 \/ 2<\/strong>/);
+
+  // The excluded items are still completed work on the board — they are only out of the denominator.
+  const completed = section(body, "completed");
+  assert.equal(completed.includes(discovery.id), true);
+  assert.equal(completed.includes(merged.id), true);
 });

@@ -76,6 +76,7 @@ export interface BoardData {
     completedToday: number;
     completedTodayCaption: string;
     merged: number;
+    /** Completed items that could have delivered a pull request; see `couldOpenPullRequest`. */
     attempts: number;
     mergedCaption: string;
   };
@@ -190,6 +191,7 @@ export function readBoard(
 
   const startOfToday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
   const completedToday = completed.filter((item) => item.updatedAt >= startOfToday);
+  const attempted = completed.filter(couldOpenPullRequest);
   const merged = completed.filter((item) => item.delivery === "merged").length;
   const open = completed.filter((item) => item.delivery === "open").length;
   const unverified = completed.filter((item) => item.delivery === "unverified").length;
@@ -215,7 +217,7 @@ export function readBoard(
       completedToday: completedToday.length,
       completedTodayCaption: `${mergedToday} merged · ${openToday} open`,
       merged,
-      attempts: completed.length,
+      attempts: attempted.length,
       mergedCaption: `${open} open · ${unverified} unverified · ${counts.blocked} blocked now`,
     },
     queued,
@@ -224,6 +226,19 @@ export function readBoard(
     pullRequests: readPullRequests(queue, repository, now),
     truncated,
   };
+}
+
+/**
+ * Whether a completed item could ever have delivered a pull request, and so
+ * belongs in the board's `merged / attempts` denominator. The test is the
+ * item's own authority, not its kind: `open-pr` is the only action under which
+ * a `pull-request` artifact may be reported ([spec rule
+ * 10](../../docs/specs/work-queue.md)), so an item without it — a read-only
+ * discovery root, a `pr-review` round, a settings-drift or proposals-only
+ * sweep — could not have merged anything and is not a failed attempt.
+ */
+function couldOpenPullRequest(item: ObservableWorkItem): boolean {
+  return item.allowedActions.includes("open-pr");
 }
 
 /** Pull requests merged within this window are still shown on the board. */
