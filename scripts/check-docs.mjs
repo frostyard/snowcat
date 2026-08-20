@@ -214,6 +214,11 @@ if (!fs.existsSync(contextPath) || !fs.lstatSync(contextPath).isSymbolicLink()) 
   fail(`CONTEXT.md: expected target ${expectedContextTarget}`);
 }
 
+const hostEnvExample = fs.readFileSync(path.join(root, "deploy", "env.example"), "utf8");
+if (!/^SNOWCAT_APP_TOKEN=$/m.test(hostEnvExample)) {
+  fail("deploy/env.example: must expose SNOWCAT_APP_TOKEN for local surface mode");
+}
+
 if (failures.length > 0) {
   console.error(`Documentation validation failed (${failures.length}):`);
   for (const failure of failures) console.error(`- ${failure}`);

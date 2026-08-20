@@ -65,11 +65,19 @@ sudo install -d -o "$USER" -g "$(id -gn)" /opt/snowcat
 git clone https://github.com/frostyard/snowcat.git /opt/snowcat
 cd /opt/snowcat && npm ci
 sudo deploy/install.sh --user "$USER"      # dirs, /etc/snowcat/env, units, timers
-"${EDITOR:-vi}" /etc/snowcat/env            # SNOWCAT_GITHUB_TOKEN=<gh auth token>
+app_token="$(node -e 'console.log(require("node:crypto").randomBytes(32).toString("hex"))')"
+sed -i "s/^SNOWCAT_APP_TOKEN=.*/SNOWCAT_APP_TOKEN=$app_token/" /etc/snowcat/env
+unset app_token
+"${EDITOR:-vi}" /etc/snowcat/env            # also set SNOWCAT_GITHUB_TOKEN=<gh auth token>
 set -a; . /etc/snowcat/env; set +a          # load it into this shell
 npm run --silent queue -- metadata         # databasePath: /var/lib/snowcat/queue.db
 systemctl list-timers 'snowcat-*'           # six timers, next run times
 ```
+
+The generated `SNOWCAT_APP_TOKEN` enables local mode. After building and
+starting the surface, open `/login` and enter that same value; retrieve it from
+the loaded environment with `printf '%s\n' "$SNOWCAT_APP_TOKEN"`. Access mode
+uses its two Access variables instead and ignores this token.
 
 [`deploy/install.sh`](../../deploy/install.sh) creates `/var/lib/snowcat` and
 `/var/backups/snowcat` (0750, owned by `--user`, default the sudo caller);
@@ -867,6 +875,11 @@ at the edge; workers hold Snowcat-minted tokens; every event says who.
 | Actor on every decision | `operator:web` | `member:<email>` (the email in the assertion) |
 | Unauthenticated request | redirect to `/login` | `401` with a note that the surface is reachable only through the Access hostname |
 | MCP | stdio (`npm run mcp`), self-declared worker identity | `/mcp` over Streamable HTTP with a minted bearer token; the worker acts as `member:<owner>/<client>` and the payload's `worker` is only a label. Stdio still works locally. |
+
+For local mode, generate and persist `SNOWCAT_APP_TOKEN` during
+[host installation](#install-the-host), source `/etc/snowcat/env`, then enter
+that value on `/login`. Without either that token or both Access variables, the
+surface deliberately returns 503.
 
 **Minted MCP tokens.** Sign in, open *MCP tokens* (sidebar), mint one per
 client (name it: "codex on the laptop"); the plaintext appears once — put it in
