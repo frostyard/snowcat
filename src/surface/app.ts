@@ -12,6 +12,7 @@ import { readItem } from "./item.ts";
 import { inboxPage, loginPage, notFoundPage, tokensPage, unavailablePage, type PageContext } from "./pages.ts";
 import { itemPage } from "./pages-item.ts";
 import { boardPage, repositoriesPage } from "./pages-repositories.ts";
+import { progressPage } from "./pages-progress.ts";
 import { itemPath, repositoryPath } from "./pages.ts";
 import {
   ATTACH_ARTIFACT_ACTION,
@@ -25,6 +26,7 @@ import {
   type ItemMutation,
 } from "./mutations.ts";
 import { readBoard, readEnrollments, readRepositoryIndex, sidebarFromEnrollments, type RepositoryEnrollment } from "./repositories.ts";
+import { readProgress } from "./progress-state.ts";
 import { DEFAULT_STREAM_HEARTBEAT_MS, DEFAULT_STREAM_POLL_MS, STREAM_PAGE_SIZE, toStreamedEvent, type StreamOptions } from "./stream.ts";
 import { boardPartial, boardPartials, type BoardPartial } from "./pages-repositories.ts";
 import {
@@ -194,6 +196,13 @@ export function createSurfaceApp(options: SurfaceOptions): Hono<SurfaceEnv> {
     requireConfigured,
     requireSession,
     page((stores, enrollments, chrome) => new Response(repositoriesPage(chrome, readRepositoryIndex(stores.queue, enrollments)), htmlHeaders())),
+  );
+
+  app.get(
+    "/progress",
+    requireConfigured,
+    requireSession,
+    page((stores, _enrollments, chrome) => new Response(progressPage(chrome, readProgress(stores.queue)), htmlHeaders())),
   );
 
   // MCP tokens (ADR-0063): a member sees and manages their own; the local
