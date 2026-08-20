@@ -213,6 +213,11 @@ inside `<noscript>`, and a browser with scripts but no `EventSource`
 re-inserts it. The progress view uses the same subscriber and queue-affecting
 event gate, but schedules a full-page reload no sooner than the stream's
 2-second poll interval so every lifecycle strip is derived again together.
+On every page, a due refresh — fragment swap or full reload alike — is
+deferred while the operator is editing a form (an editable field focused, or
+holding text that differs from its default) and resumes after submit, reset,
+or blurring with nothing typed, so a live update never discards a half-typed
+requeue reason ([#155](https://github.com/frostyard/snowcat/issues/155)).
 Every page prints the queue and control-plane database paths
 it is reading, the same way `metadata` does.
 

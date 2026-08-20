@@ -67,6 +67,11 @@ export interface LiveOptions {
  * `artifact.verified`, or `artifact.attached` event refetch this page's groups as HTML fragments and
  * swap them in. No framework, nothing loaded from anywhere else. Without
  * `EventSource` it re-inserts the 30-second meta refresh and stops.
+ *
+ * A due refresh — fragment swap or full reload alike — is deferred while the
+ * operator is editing a form (an editable field focused, or holding text that
+ * differs from its default), and resumes after submit, reset, or blurring
+ * with nothing typed, so a reload never discards a half-typed reason.
  */
 function liveScript(live: LiveOptions | undefined): SafeHtml {
   if (!live) return html``;
@@ -97,13 +102,36 @@ const LIVE_SCRIPT = String.raw`(function () {
   var url = "/events/stream" + (cfg.repository ? "?repository=" + encodeURIComponent(cfg.repository) : "");
   var source = new EventSource(url);
   var pending = null;
+  var deferred = false;
   function setPill(text, ok) {
     if (!pill) return;
     pill.lastChild.nodeValue = text;
     pill.classList.toggle("stale", !ok);
   }
+  function editable(field) {
+    if (!field || !field.tagName) return false;
+    if (field.tagName === "TEXTAREA") return true;
+    if (field.tagName !== "INPUT") return false;
+    var t = field.type;
+    return t !== "hidden" && t !== "submit" && t !== "button" && t !== "checkbox" && t !== "radio";
+  }
+  function formBusy() {
+    if (editable(document.activeElement)) return true;
+    var fields = document.querySelectorAll("form input, form textarea");
+    for (var i = 0; i < fields.length; i += 1) {
+      if (editable(fields[i]) && fields[i].value !== fields[i].defaultValue) return true;
+    }
+    return false;
+  }
+  function resume() {
+    if (deferred && !formBusy()) { deferred = false; scheduleRefetch(); }
+  }
+  document.addEventListener("submit", resume);
+  document.addEventListener("reset", function () { setTimeout(resume, 0); });
+  document.addEventListener("focusout", function () { setTimeout(resume, 0); });
   function refetch() {
     pending = null;
+    if (formBusy()) { deferred = true; setPill("Live · paused while editing", true); return; }
     if (cfg.reload) { location.reload(); return; }
     cfg.partials.forEach(function (name) {
       var target = document.getElementById(name);

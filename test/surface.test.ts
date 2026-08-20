@@ -158,6 +158,17 @@ test("the operator surface requires a session, sets the cookie on the right toke
   assert.match(body, /<noscript><meta http-equiv="refresh" content="30"><\/noscript>/);
   assert.match(body, /<script>\(function \(\) \{\s*var cfg = \{"page":"\/","partials":\["stats","proposals","blocked","unverified","adjudication"\],"repository":null,"refresh":30,"reload":false,"reloadDelay":2000,"queueEventPrefix":"work\.","queueEventTypes":\["artifact\.verified","artifact\.attached"\]\};/);
   assert.equal(/<script[^>]*src=/.test(body), false); // nothing loaded from elsewhere
+
+  // The dirty-form guard (issue #155): a due refresh — reload or fragment swap —
+  // is deferred while a form is being edited, and resumes on submit/reset/blur.
+  // The guard gates BOTH refresh paths, so a page with no forms (formBusy()
+  // trivially false over zero fields) keeps plain reload/swap behavior.
+  assert.match(body, /function formBusy\(\) \{\s*if \(editable\(document\.activeElement\)\) return true;\s*var fields = document\.querySelectorAll\("form input, form textarea"\);/);
+  assert.match(body, /function refetch\(\) \{\s*pending = null;\s*if \(formBusy\(\)\) \{ deferred = true; setPill\("Live · paused while editing", true\); return; \}\s*if \(cfg\.reload\) \{ location\.reload\(\); return; \}/);
+  assert.match(body, /document\.addEventListener\("submit", resume\);/);
+  assert.match(body, /document\.addEventListener\("focusout", function \(\) \{ setTimeout\(resume, 0\); \}\);/);
+  // Hidden inputs (precondition fields) and submit buttons never count as edits.
+  assert.match(body, /return t !== "hidden" && t !== "submit" && t !== "button" && t !== "checkbox" && t !== "radio";/);
   assert.match(body, /<aside class="ph-sidebar">/);
   assert.match(body, /class="ph-eyebrow"><i><\/i>snowcat · operator inbox<\/div><h1>Needs you<\/h1>/);
   assert.match(body, /<div class="ph-stats" id="stats">/);
