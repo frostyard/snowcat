@@ -4,7 +4,12 @@ import test from "node:test";
 import { createApp } from "../src/app.ts";
 import { QueueStore } from "../src/queue/store.ts";
 import type { ObservableWorkItem, SeedWorkInput, WorkArtifact } from "../src/queue/types.ts";
-import { deriveProgressRow, readProgress } from "../src/surface/progress-state.ts";
+import {
+  deriveProgressRow,
+  progressSummaryBuckets,
+  readProgress,
+  type ProgressSummaryBucket,
+} from "../src/surface/progress-state.ts";
 import { sessionDigest } from "../src/surface/session.ts";
 
 const TOKEN = "progress-test-token";
@@ -61,6 +66,100 @@ test("progress derivation marks closed, cancelled, and third-round review stops"
     reason: "needs human review decision",
     tone: "amber",
   });
+});
+
+test("progress renders ledger-derived stage entry times and the current-stage duration", async (t) => {
+  const at = (hours: number) => new Date(NOW.getTime() - hours * 60 * 60 * 1000);
+  let clock = at(6.5);
+  const queue = new QueueStore(":memory:", () => clock);
+  t.after(() => queue.close());
+  queue.setRepositoryEnabled(REPOSITORY, true);
+  queue.setRepositoryReviewGate(REPOSITORY, true);
+
+  const [origin] = queue.enqueueProposedRoots(REPOSITORY, [
+    {
+      ...definition("Known event history", "timeline-implementation"),
+      sourceRef: "https://github.com/frostyard/example/issues/139",
+    },
+  ]).created;
+  assert.ok(origin);
+  clock = at(5.5);
+  queue.approve(origin.id, "operator:test");
+  clock = at(4.5);
+  const lease = queue.claim({
+    worker: "worker:timeline",
+    repository: REPOSITORY,
+    kinds: [origin.kind],
+    leaseSeconds: 3600,
+  })!;
+  clock = at(4);
+  queue.heartbeat(origin.id, lease.leaseToken!, "worker:timeline", 3600);
+  clock = at(3.5);
+  queue.complete({
+    id: origin.id,
+    leaseToken: lease.leaseToken!,
+    worker: "worker:timeline",
+    result: {
+      summary: "Done.",
+      evidence: ["tests pass"],
+      artifacts: [
+        {
+          kind: "pull-request",
+          url: "https://github.com/frostyard/example/pull/139",
+          verification: {
+            status: "verified",
+            verifiedAt: clock.toISOString(),
+            number: 139,
+            state: "open",
+            headSha: "b".repeat(40),
+            draft: true,
+          },
+        },
+      ],
+    },
+    followUps: [],
+  });
+  clock = at(2.5);
+  queue.enqueueReviewRoot(REPOSITORY, {
+    kind: "pr-review",
+    objective: "Review known event history",
+    instructions: "Review.",
+    acceptanceCriteria: ["Verdict."],
+    allowedActions: ["read", "run-tests"],
+    delegableActions: [],
+    createdBy: "policy:review-gate",
+    sourceRef: `pr-review:https://github.com/frostyard/example/pull/139@${"b".repeat(40)}`,
+    review: {
+      pullRequestUrl: "https://github.com/frostyard/example/pull/139",
+      headSha: "b".repeat(40),
+      round: 1,
+      originItemId: origin.id,
+      priorBlockers: [],
+    },
+  });
+
+  const data = readProgress(queue, NOW);
+  const row = data.repositories.flatMap((group) => group.rows).find((candidate) => candidate.item?.id === origin.id);
+  assert.ok(row);
+  assert.deepEqual(row.enteredAt, {
+    "awaiting-import": at(6.5).toISOString(),
+    proposed: at(6.5).toISOString(),
+    queued: at(5.5).toISOString(),
+    working: at(4.5).toISOString(),
+    "pr-open": at(3.5).toISOString(),
+    review: at(2.5).toISOString(),
+  });
+
+  const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue }) });
+  const response = await app.request("/progress", {
+    headers: { Cookie: `snowcat_session=${sessionDigest(TOKEN)}` },
+  });
+  assert.equal(response.status, 200);
+  const body = await response.text();
+  for (const enteredAt of Object.values(row.enteredAt)) {
+    assert.match(body, new RegExp(`title="Entered at ${enteredAt}"`));
+  }
+  assert.match(body, /round 1\/3 · in this stage for 2 hours 30 minutes/);
 });
 
 test("the session-guarded progress page renders every stage, folds review satellites, pins attention, and ages out old terminals", async () => {
@@ -144,6 +243,14 @@ test("the session-guarded progress page renders every stage, folds review satell
   const data = readProgress(queue, NOW);
   assert.equal(data.total, 9);
   assert.equal(data.active, 2);
+  assert.deepEqual(data.summary, {
+    "awaiting-import": 1,
+    proposed: 1,
+    queued: 1,
+    working: 2,
+    "in-review": 2,
+    "awaiting-merge": 1,
+  });
   assert.ok(data.attention.some((row) => row.item?.id === blocked.id));
   assert.equal(data.repositories.flatMap((group) => group.rows).some((row) => row.item?.id === review.id), false);
   assert.equal(data.repositories.flatMap((group) => group.rows).some((row) => row.title === "Old merged item"), false);
@@ -200,6 +307,25 @@ test("the session-guarded progress page renders every stage, folds review satell
   for (const itemWithoutActions of [queued, working, freshMerged]) {
     assert.equal(article(body, itemWithoutActions.id).includes("<form"), false);
   }
+
+  assert.match(body, /new EventSource\(url\)/);
+  assert.match(body, /var url = "\/events\/stream"/);
+  assert.match(body, /if \(cfg\.reload\) \{ location\.reload\(\); return; \}/);
+  assert.match(body, /reloadDelay":2000/);
+  assert.match(body, /queueEventPrefix":"work\."/);
+  assert.match(body, /queueEventTypes":\["artifact\.verified","artifact\.attached"\]/);
+  assert.match(body, /if \(affectsQueueView\(ev\.type\)\) scheduleRefetch\(\)/);
+  // The assertions above hold for every live page, so they only prove the shared
+  // script is present. /progress ships no partials, which makes `reload` its whole
+  // refresh handler: pin this page's own config so flipping it to false fails here.
+  assert.match(body, /"page":"\/progress","partials":\[\],"repository":null,"refresh":30,"reload":true/);
+
+  for (const bucket of progressSummaryBuckets) {
+    assert.equal(summaryCount(body, bucket), data.summary[bucket]);
+    assert.equal(summaryCount(body, bucket), renderedBucketCount(body, bucket));
+  }
+  assert.equal(summaryCount(body, "attention"), data.attention.length);
+  assert.ok(body.indexOf('aria-label="Progress summary"') < body.indexOf('id="attention"'));
 });
 
 test("the progress view selects terminal items newest first, so more than 100 aged-out completions cannot hide today's work", async () => {
@@ -338,4 +464,21 @@ function article(body: string, itemId: string): string {
   const match = new RegExp(`<article class="fl-progress-row" data-progress-key="item:${itemId}">.*?</article>`, "s").exec(body);
   assert.ok(match, `progress row for item ${itemId} present`);
   return match[0];
+}
+
+function summaryCount(body: string, bucket: ProgressSummaryBucket | "attention"): number {
+  const match = new RegExp(`data-progress-summary-bucket="${bucket}"><strong>(\\d+)</strong>`).exec(body);
+  assert.ok(match, `summary bucket ${bucket} present`);
+  return Number(match[1]);
+}
+
+function renderedBucketCount(body: string, bucket: ProgressSummaryBucket): number {
+  const stages =
+    bucket === "in-review"
+      ? ["pr-open", "review"]
+      : [bucket];
+  return stages.reduce(
+    (count, stage) => count + (body.match(new RegExp(`data-progress-stage="${stage}"`, "g"))?.length ?? 0),
+    0,
+  );
 }

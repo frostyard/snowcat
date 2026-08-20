@@ -1684,6 +1684,31 @@ export class QueueStore {
   }
 
   /**
+   * Reads the newest bounded slice of one item's ledger, returned oldest
+   * first so callers can derive transitions without loading an item's
+   * unbounded history.
+   */
+  recentEvents(id: string, limit = DEFAULT_EVENTS_SINCE_LIMIT): WorkEvent[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_EVENTS_SINCE_LIMIT) {
+      throw new Error(`limit must be between 1 and ${MAX_EVENTS_SINCE_LIMIT}`);
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT *
+         FROM (
+           SELECT *
+           FROM work_events
+           WHERE work_item_id = ?
+           ORDER BY sequence DESC
+           LIMIT ?
+         )
+         ORDER BY sequence`,
+      )
+      .all(id, limit) as Row[];
+    return rows.map(decodeWorkEvent);
+  }
+
+  /**
    * Reads ledger events across items strictly after a global `sequence`,
    * oldest first, each joined with its item's `repository`, `kind`,
    * `sourceRef`, and current logical status. This is the read-only operator
