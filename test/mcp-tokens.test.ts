@@ -11,7 +11,7 @@ test("minted MCP tokens verify by hash, touch last_used_at sparingly, revoke ide
   let now = new Date("2026-08-18T22:00:00.000Z");
   const queue = new QueueStore(join(directory, "queue.db"), () => now);
   test.after(() => queue.close());
-  assert.equal(SCHEMA_VERSION, 11);
+  assert.equal(SCHEMA_VERSION, 12);
 
   const minted = queue.mintMcpToken({ owner: "member:bketelsen@gmail.com", client: "codex on the laptop" });
   assert.match(minted.token, /^snowcat_[0-9a-f]{16}_[A-Za-z0-9_-]{20,}$/);
