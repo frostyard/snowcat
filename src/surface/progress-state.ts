@@ -316,7 +316,9 @@ function leaseIsActive(item: ObservableWorkItem, now: Date): boolean {
 }
 
 function isAgedOut(item: ObservableWorkItem, now: Date): boolean {
-  const terminal = item.status === "cancelled" || (item.status === "completed" && item.delivery === "merged");
+  const terminal =
+    item.status === "cancelled" ||
+    (item.status === "completed" && (item.delivery === "merged" || item.delivery === "published"));
   return terminal && now.getTime() - Date.parse(item.updatedAt) > TERMINAL_AGE_MS;
 }
 

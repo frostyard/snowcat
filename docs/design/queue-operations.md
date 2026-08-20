@@ -377,8 +377,9 @@ item (the textarea is the note carried to the next lease, or the cancellation
 reason), and **Re-verify** on each unverified artifact (re-checks that
 repository's pending artifacts). The item page's *Decide* card offers every
 action its state allows, plus **Prioritize**, **Note**, and, on a completed
-item, **Attach artifact** (`attach-artifact`: a pull request or issue URL in
-the item's repository, checked against GitHub before it is written). Each is a
+item, **Attach artifact** (`attach-artifact`: a pull request, issue, or
+release URL in the item's repository, checked against GitHub before it is
+written). Each is a
 same-origin form attributed `operator:web` that carries the item's `status`
 and `updatedAt` as rendered; if a worker or another shell moved the item
 first, the surface refuses with *this item changed since you read it*, shows
@@ -782,6 +783,17 @@ once, only `completed` items accept one, and the item's ledger gains one
 the item moved since you read it. The item page's *Decide* card offers the
 same form. Workers never attach: `complete_work` is their only way to report,
 and this command is not an MCP tool.
+
+**Releases are the same shape** ([spec rules 59–60](../specs/work-queue.md),
+[ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)):
+a release slice's worker prepares the release and reports
+`https://github.com/<owner>/<repo>/releases/tag/<tag>` as a `release`
+artifact — or you attach it with the same `attach-artifact` command once you
+have the tag — **you** publish it on GitHub, and the next `verify-artifacts`
+pass observes the draft become `published`, at which point the item's
+`delivery` reads `published` instead of `open`. Snowcat only reads: it never
+publishes, tags, or merges anything, and there is no `release` allowed action
+for a worker to hold.
 
 **Blocked items** need an operator exit:
 

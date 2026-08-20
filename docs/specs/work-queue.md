@@ -392,7 +392,8 @@ MCP (rule 41).
     artifacts, never stored separately: `merged` if any is merged, otherwise
     `unverified` if any lacks a verified state, otherwise `open` if any is
     open, otherwise `closed`; `none` when no pull request was reported. Issues,
-    commits, and reports do not constitute delivery.
+    commits, and reports do not constitute delivery; release artifacts extend
+    this derivation under rule 60.
 
 36. `QueueStore` MUST accept an optional claim-eligibility hook
     `(repository) => boolean` applied on top of repository opt-in. With a
@@ -890,6 +891,44 @@ MCP (rule 41).
     Until the claim gate lands, predecessors MUST NOT affect claim selection,
     admission, or any MCP tool or schema — an admitted item with unsatisfied
     predecessors MUST still be claimable.
+59. **Release artifacts ([ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)).**
+    A reported `release` artifact URL MUST be
+    `https://github.com/<owner>/<repository>/releases/tag/<tag>` on the item's
+    own repository — rule 15's scope validation with one more path segment,
+    the tag percent-decoded and at most 128 characters of
+    `A-Za-z0-9._+/-`, never beginning with `-` and never containing a `..`
+    component — and MUST require no `allowedActions` entry, because Snowcat
+    never publishes, tags, or merges anything: the release a worker reports is
+    one a human published. `complete_work` MUST verify it exactly as rule 33
+    verifies a pull request, through GET reads only. `GET
+    /repos/<owner>/<name>/releases/tags/<tag>` names a published release; a
+    credentialed not-found MUST fall back to one bounded page of `GET
+    /repos/<owner>/<name>/releases` and MAY verify a **draft** whose
+    `tag_name` is the reported tag, because a release nobody has published yet
+    has no tag for GitHub to answer by. The repository binding MUST be the
+    release's own API `url` rather than its `html_url`, because a draft's
+    `html_url` names an `untagged-…` placeholder and because the API follows
+    repository renames. A confirmed release MUST be stored with
+    `verification.state` `published` or `draft`, `number` = GitHub's release
+    id, `tag` = the observed `tag_name`, and `publishedAt` when GitHub reports
+    one. An answer naming another repository, another tag, or no release at
+    all MUST be refused with the item left `claimed`; an unavailable or
+    unreadable answer MUST record `unverified` with the reason, and rule 33's
+    404-without-credential rule is unchanged. `verify-artifacts` (rule 34)
+    MUST treat `draft` as non-terminal and `published` as terminal, so the
+    sweep observes the human's publication and then stops asking, and
+    `attach-artifact` (rule 41) MUST accept a release URL under the same
+    verify-then-write rule, never fabricating a verification. This requires no
+    schema rung: `result_json` already holds artifacts and their
+    verifications.
+60. **Release delivery ([ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md); extends rule 35).**
+    Where a completed item reported at least one `release` artifact, that
+    artifact — not a pull request that merely prepared it — is the item's
+    delivery boundary: `delivery` MUST be `published` if any release is
+    verified `published`, otherwise `unverified` if any release lacks a
+    verified state, otherwise `open` (every release observed as a draft). An
+    item that reported no release artifact MUST derive exactly rule 35's
+    pull-request result, value for value.
 
 ## Derived artifacts
 
@@ -898,7 +937,7 @@ MCP (rule 41).
 | SQLite schema | Created and upgraded by `QueueStore`'s migration ladder from this work-item model; admission triggers and `user_version` per rules 20–21 |
 | Backup manifest | Derived by `backup` and re-derived by `verify-backup` per rules 28–29 |
 | Issue import | `import-issues` maps labeled open GitHub issues to proposed `issue-resolution` roots per rules 30–31 and records the latest bounded labeled-issue observation per rule 57 |
-| Artifact verification | Completion-time, `attach-artifact`, and `verify-artifacts` observations per rules 33–35 and 41; `delivery` derived per rule 35 |
+| Artifact verification | Completion-time, `attach-artifact`, and `verify-artifacts` observations per rules 33–35, 41, and 59; `delivery` derived per rules 35 and 60 |
 | Pull-request cure | `verify-artifacts` enqueues `pr-cure` roots per decayed head per rules 42–43; `complete_work` enforces patch identity per rule 44 |
 | Review gate | `review-gate` flag and draft refusal per rule 52; `verify-artifacts` enqueues `pr-review` rounds and `pr-review-fix` roots and marks passed drafts ready per rules 53 and 55; `complete_work` accepts the bound verdict per rule 54 |
 | Internal dependency chain | `sweep-dependencies` maps tags, branch comparison, and `go.mod` to `release-needed` and `dependency-bump` proposals per rule 45 |
@@ -916,7 +955,9 @@ MCP (rule 41).
   admission policy from
   [ADR-0005](../adr/0005-admit-worker-created-work-before-claiming.md) and
   database-enforced admission from
-  [ADR-0006](../adr/0006-enforce-admission-in-the-database.md)
+  [ADR-0006](../adr/0006-enforce-admission-in-the-database.md), and release
+  artifacts from
+  [ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)
 - Product: [maintenance fleet PRD](../prd/agent-fleet.md)
 - Context: [queue execution boundary](../design/queue-execution-boundary.md),
   the [operations runbook](../design/queue-operations.md), and the planned

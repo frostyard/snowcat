@@ -8,7 +8,8 @@ import { admissionForm, attachArtifactForm, deferForm, exitForm, noteForm, prior
 export function itemPage(context: PageContext, data: ItemData): string {
   const item = data.item;
   const statusTone = item.status === "completed" ? "ok" : item.status === "blocked" ? "warn" : item.status === "cancelled" ? "danger" : "";
-  const deliveryTone = item.delivery === "merged" ? "ok" : item.delivery === "unverified" ? "warn" : "";
+  const deliveryTone =
+    item.delivery === "merged" || item.delivery === "published" ? "ok" : item.delivery === "unverified" ? "warn" : "";
   const actions = html`<span class="ph-badge ${statusTone}">${item.status}</span>${
     item.status === "completed" ? html`<span class="ph-badge ${deliveryTone}">delivery · ${item.delivery ?? "none"}</span>` : ""
   }`;

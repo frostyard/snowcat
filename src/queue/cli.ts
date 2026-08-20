@@ -289,7 +289,7 @@ try {
     console.error("       npm run queue -- cancel <work-item-id> <reason> [--if-updated-at <iso>]");
     console.error("       npm run queue -- prioritize <work-item-id> <priority> <reason> [--if-updated-at <iso>]");
     console.error("       npm run queue -- note <work-item-id> <text> [--if-updated-at <iso>]");
-    console.error("       npm run queue -- attach-artifact <work-item-id> <url> [--kind pull-request|issue] [--description <text>] [--if-updated-at <iso>]");
+    console.error("       npm run queue -- attach-artifact <work-item-id> <url> [--kind pull-request|issue|release] [--description <text>] [--if-updated-at <iso>]");
     console.error("       npm run queue -- list [proposed|queued|claimed|completed|blocked|cancelled] [--repository <owner/repo>] [--kind <kind>] [--limit <1-100>]");
     console.error("       npm run queue -- show <work-item-id>");
     console.error("       npm run queue -- events [--since <sequence>] [--repository <owner/repo>] [--limit <1-500>]");
@@ -400,8 +400,8 @@ function currentStatusPrecondition(id: string, ifUpdatedAt: string | undefined):
 
 function parseAttachableKind(value: string | undefined): AttachableArtifactKind | undefined {
   if (value === undefined) return undefined;
-  if (value === "pull-request" || value === "issue") return value;
-  throw new Error(`--kind must be pull-request or issue: ${value}`);
+  if (value === "pull-request" || value === "issue" || value === "release") return value;
+  throw new Error(`--kind must be pull-request, issue, or release: ${value}`);
 }
 
 function parseStatus(value: string | undefined): WorkStatus | undefined {

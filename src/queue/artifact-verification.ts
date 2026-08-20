@@ -1,9 +1,12 @@
+import { GITHUB_API_ORIGIN } from "../github/api-contract.ts";
 import { githubApiJson, type GitHubFetch } from "../repository/github-api.ts";
 import type { MutationPrecondition, QueueStore } from "./store.ts";
-import type { ArtifactVerification, WorkArtifact, WorkItem } from "./types.ts";
+import { RELEASE_TAG_PATTERN, type ArtifactVerification, type WorkArtifact, type WorkItem } from "./types.ts";
 
 const GITHUB_TIMEOUT_MS = 30_000;
 const DEFAULT_REFRESH_LIMIT = 100;
+/** One bounded page of releases is read only to observe a reported draft (ADR-0066). */
+const RELEASE_PAGE_SIZE = 100;
 
 /**
  * Outcome of checking one reported artifact against GitHub.
@@ -36,9 +39,9 @@ export interface ArtifactVerifierOptions {
   acceptFormerName?: boolean;
 }
 
-/** Only issues and pull requests are verifiable through the API today. */
+/** Only issues, pull requests, and releases are verifiable through the API today. */
 export function isVerifiableArtifact(artifact: WorkArtifact): boolean {
-  return artifact.kind === "issue" || artifact.kind === "pull-request";
+  return artifact.kind === "issue" || artifact.kind === "pull-request" || artifact.kind === "release";
 }
 
 export async function verifyGitHubArtifact(
@@ -51,6 +54,14 @@ export async function verifyGitHubArtifact(
   const locator = parseArtifactUrl(artifact);
   if (!locator) return { kind: "rejected", reason: `artifact ${artifact.kind} URL is not a ${repository} ${artifact.kind} URL` };
   const [owner, name] = repository.split("/") as [string, string];
+  if (locator.kind === "release") {
+    const underFormerSlug =
+      locator.owner.toLowerCase() !== owner.toLowerCase() || locator.name.toLowerCase() !== name.toLowerCase();
+    if (underFormerSlug && options.acceptFormerName !== true) {
+      return { kind: "rejected", reason: `artifact release URL is not a ${repository} release URL` };
+    }
+    return verifyRelease(repository, artifact, locator, fetcher, now);
+  }
   // An artifact recorded before `rename-repository` (spec rule 47) keeps the
   // former slug, which no longer matches the item's repository. Where the
   // caller allows it — the `verify-artifacts` refresh, spec rule 34 — ask
@@ -155,9 +166,107 @@ export async function verifyGitHubArtifact(
 }
 
 /**
- * Verifies every issue and pull-request artifact for a completion. Throws on
- * the first rejected artifact so the whole completion is refused; other kinds
- * pass through unchanged.
+ * Reads one GitHub release by the tag its URL names (ADR-0066). A published
+ * release answers the by-tag endpoint directly. A release the human has not
+ * published yet has no tag for GitHub to answer by, so a credentialed
+ * not-found falls back to one bounded page of the repository's releases and
+ * accepts a *draft* whose `tag_name` is the reported one — the state the
+ * operator flow starts in (worker prepares the release, a human publishes,
+ * the sweep observes it become `published`). Both reads are GETs: Snowcat
+ * never creates, tags, or publishes a release.
+ *
+ * The repository binding is the release's own API `url`, not the reported HTML
+ * URL, because a draft's `html_url` names an `untagged-…` placeholder and
+ * because the API follows repository renames — so `acceptFormerName` needs no
+ * separate comparison here.
+ */
+async function verifyRelease(
+  repository: string,
+  artifact: WorkArtifact,
+  locator: Extract<ArtifactLocator, { kind: "release" }>,
+  fetcher: GitHubFetch,
+  now: () => string,
+): Promise<ArtifactCheck> {
+  const base = `/repos/${encodeURIComponent(locator.owner)}/${encodeURIComponent(locator.name)}/releases`;
+  const response = await githubApiJson(`${base}/tags/${encodeURIComponent(locator.tag)}`, AbortSignal.timeout(GITHUB_TIMEOUT_MS), fetcher);
+  if (response.kind === "unavailable") return unverified(now(), "GitHub API unavailable");
+  if (response.status === 404 || response.status === 410) {
+    if (!process.env.SNOWCAT_GITHUB_TOKEN) {
+      return unverified(
+        now(),
+        `GitHub returned ${response.status} without SNOWCAT_GITHUB_TOKEN; private repositories cannot be verified unauthenticated`,
+      );
+    }
+    return findDraftRelease(repository, artifact, locator, base, fetcher, now);
+  }
+  if (response.status !== 200) return unverified(now(), `GitHub API returned HTTP ${response.status}`);
+  return readRelease(repository, artifact, locator, response.value, now);
+}
+
+async function findDraftRelease(
+  repository: string,
+  artifact: WorkArtifact,
+  locator: Extract<ArtifactLocator, { kind: "release" }>,
+  base: string,
+  fetcher: GitHubFetch,
+  now: () => string,
+): Promise<ArtifactCheck> {
+  const response = await githubApiJson(`${base}?per_page=${RELEASE_PAGE_SIZE}`, AbortSignal.timeout(GITHUB_TIMEOUT_MS), fetcher);
+  if (response.kind === "unavailable") return unverified(now(), "GitHub API unavailable");
+  // Credentialed and still not found: neither a published release at that tag
+  // nor a release listing for that repository exists.
+  if (response.status === 404 || response.status === 410) {
+    return { kind: "rejected", reason: `release ${artifact.url} does not exist on GitHub` };
+  }
+  if (response.status !== 200) return unverified(now(), `GitHub API returned HTTP ${response.status}`);
+  if (!Array.isArray(response.value)) return unverified(now(), "GitHub release listing was not an array");
+  const match = response.value.find(
+    (entry) =>
+      entry !== null &&
+      typeof entry === "object" &&
+      !Array.isArray(entry) &&
+      (entry as Record<string, unknown>).tag_name === locator.tag &&
+      (entry as Record<string, unknown>).draft === true,
+  );
+  if (match === undefined) return { kind: "rejected", reason: `release ${artifact.url} does not exist on GitHub` };
+  return readRelease(repository, artifact, locator, match, now);
+}
+
+function readRelease(
+  repository: string,
+  artifact: WorkArtifact,
+  locator: Extract<ArtifactLocator, { kind: "release" }>,
+  value: unknown,
+  now: () => string,
+): ArtifactCheck {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return unverified(now(), "GitHub response was not an object");
+  const record = value as Record<string, unknown>;
+  if (typeof record.url !== "string") return unverified(now(), "GitHub response has no repository");
+  if (!record.url.toLowerCase().startsWith(`${GITHUB_API_ORIGIN.toLowerCase()}/repos/${repository.toLowerCase()}/releases/`)) {
+    return { kind: "rejected", reason: `release ${artifact.url} belongs to another repository` };
+  }
+  if (record.tag_name !== locator.tag) {
+    return { kind: "rejected", reason: `release tag does not match ${artifact.url}` };
+  }
+  if (!Number.isSafeInteger(record.id) || Number(record.id) < 1) return unverified(now(), "GitHub response has no release id");
+  if (record.draft !== true && record.draft !== false) return unverified(now(), "GitHub response has no recognizable state");
+  return {
+    kind: "verified",
+    verification: {
+      status: "verified",
+      verifiedAt: now(),
+      number: Number(record.id),
+      state: record.draft === true ? "draft" : "published",
+      tag: locator.tag,
+      ...(typeof record.published_at === "string" ? { publishedAt: record.published_at } : {}),
+    },
+  };
+}
+
+/**
+ * Verifies every issue, pull-request, and release artifact for a completion.
+ * Throws on the first rejected artifact so the whole completion is refused;
+ * other kinds pass through unchanged.
  */
 export async function verifyCompletionArtifacts(
   repository: string,
@@ -240,19 +349,20 @@ export async function refreshArtifactVerifications(
   return result;
 }
 
-export type AttachableArtifactKind = "issue" | "pull-request";
+export type AttachableArtifactKind = "issue" | "pull-request" | "release";
 
 export interface AttachArtifactInput {
   url: string;
-  /** Defaults from the URL path: `/pull/<n>` → `pull-request`, `/issues/<n>` → `issue`. */
+  /** Defaults from the URL path: `/pull/<n>` → `pull-request`, `/issues/<n>` → `issue`, `/releases/tag/<tag>` → `release`. */
   kind?: AttachableArtifactKind;
   description?: string;
 }
 
 /**
- * The artifact kind a GitHub URL's path names, or `undefined` when the path
- * is neither `/pull/<n>` nor `/issues/<n>`. Used to default `--kind`; the
- * repository check happens in verification and in the store.
+ * The artifact kind a GitHub URL's path names, or `undefined` when the path is
+ * none of `/pull/<n>`, `/issues/<n>`, or `/releases/tag/<tag>`. Used to
+ * default `--kind`; the repository check happens in verification and in the
+ * store.
  */
 export function artifactKindFromUrl(url: string): AttachableArtifactKind | undefined {
   let parsed: URL;
@@ -262,6 +372,10 @@ export function artifactKindFromUrl(url: string): AttachableArtifactKind | undef
     return undefined;
   }
   const segments = parsed.pathname.split("/");
+  if (segments.length === 6 && segments[3] === "releases" && segments[4] === "tag") {
+    const tag = decodeTag(segments[5] ?? "");
+    return tag !== undefined && RELEASE_TAG_PATTERN.test(tag) ? "release" : undefined;
+  }
   if (segments.length !== 5 || !/^[1-9][0-9]*$/.test(segments[4] ?? "")) return undefined;
   if (segments[3] === "pull") return "pull-request";
   if (segments[3] === "issues") return "issue";
@@ -269,8 +383,8 @@ export function artifactKindFromUrl(url: string): AttachableArtifactKind | undef
 }
 
 /**
- * Operator attach: checks one issue or pull-request URL against GitHub
- * exactly as `complete_work` does, then records it on the completed item
+ * Operator attach: checks one issue, pull-request, or release URL against
+ * GitHub exactly as `complete_work` does, then records it on the completed item
  * through `QueueStore.attachArtifact`. A rejected answer (not in the item's
  * repository, wrong number, absent) throws `artifact rejected: <reason>` and
  * writes nothing; an unavailable answer attaches the artifact `unverified`
@@ -288,7 +402,11 @@ export async function attachVerifiedArtifact(
   const item = queue.get(id);
   if (!item) throw new Error(`work item not found: ${id}`);
   const kind = input.kind ?? artifactKindFromUrl(input.url);
-  if (!kind) throw new Error(`artifact URL must be a GitHub pull-request or issue URL (…/pull/<n> or …/issues/<n>): ${input.url}`);
+  if (!kind) {
+    throw new Error(
+      `artifact URL must be a GitHub pull-request, issue, or release URL (…/pull/<n>, …/issues/<n>, or …/releases/tag/<tag>): ${input.url}`,
+    );
+  }
   const artifact: WorkArtifact = { kind, url: input.url, ...(input.description !== undefined ? { description: input.description } : {}) };
   const check = await verifyGitHubArtifact(item.repository, artifact, options);
   if (check.kind === "rejected") throw new Error(`artifact rejected: ${check.reason}`);
@@ -306,7 +424,9 @@ function pendingArtifacts(item: WorkItem): WorkArtifact[] {
     if (!isVerifiableArtifact(artifact)) return false;
     const verification = artifact.verification;
     if (!verification || verification.status === "unverified") return true;
-    return verification.state === "open";
+    // `open` (issue, pull request) and `draft` (release) are the non-terminal
+    // observed states; `closed`, `merged`, and `published` are terminal.
+    return verification.state === "open" || verification.state === "draft";
   });
 }
 
@@ -314,15 +434,20 @@ function unverified(attemptedAt: string, reason: string): ArtifactCheck {
   return { kind: "unverified", verification: { status: "unverified", attemptedAt, reason } };
 }
 
+type ArtifactLocator =
+  | { kind: "issue" | "pull-request"; owner: string; name: string; number: number }
+  | { kind: "release"; owner: string; name: string; tag: string };
+
 /**
- * The owner, repository name, and number a well-formed GitHub issue or
- * pull-request URL names, or `undefined` when the URL is not one. The slug is
- * the URL's own — it is not required to match the item's repository, because
- * a URL recorded under a former name is asked about with the slug it carries;
- * whether GitHub's answer belongs to the item's repository is decided in
- * `verifyGitHubArtifact` from the response itself.
+ * The owner, repository name, and number (or, for a release, tag) a
+ * well-formed GitHub issue, pull-request, or release URL names, or `undefined`
+ * when the URL is not one. The slug is the URL's own — it is not required to
+ * match the item's repository, because a URL recorded under a former name is
+ * asked about with the slug it carries; whether GitHub's answer belongs to the
+ * item's repository is decided in `verifyGitHubArtifact` from the response
+ * itself.
  */
-function parseArtifactUrl(artifact: WorkArtifact): { owner: string; name: string; number: number } | undefined {
+function parseArtifactUrl(artifact: WorkArtifact): ArtifactLocator | undefined {
   let url: URL;
   try {
     url = new URL(artifact.url);
@@ -330,17 +455,29 @@ function parseArtifactUrl(artifact: WorkArtifact): { owner: string; name: string
     return undefined;
   }
   const segments = url.pathname.split("/");
-  const expectedPath = artifact.kind === "issue" ? "issues" : "pull";
   const slug = /^[A-Za-z0-9._-]+$/;
-  if (
-    url.hostname.toLowerCase() !== "github.com" ||
-    segments.length !== 5 ||
-    !slug.test(segments[1] ?? "") ||
-    !slug.test(segments[2] ?? "") ||
-    segments[3] !== expectedPath ||
-    !/^[1-9][0-9]*$/.test(segments[4] ?? "")
-  ) {
+  if (url.hostname.toLowerCase() !== "github.com" || !slug.test(segments[1] ?? "") || !slug.test(segments[2] ?? "")) {
     return undefined;
   }
-  return { owner: segments[1]!, name: segments[2]!, number: Number(segments[4]) };
+  const owner = segments[1]!;
+  const name = segments[2]!;
+  if (artifact.kind === "release") {
+    // `/<owner>/<name>/releases/tag/<tag>` — six segments, and the tag is the
+    // identifier, decoded because a Git tag may contain `/`.
+    if (segments.length !== 6 || segments[3] !== "releases" || segments[4] !== "tag") return undefined;
+    const tag = decodeTag(segments[5] ?? "");
+    if (tag === undefined || !RELEASE_TAG_PATTERN.test(tag)) return undefined;
+    return { kind: "release", owner, name, tag };
+  }
+  const expectedPath = artifact.kind === "issue" ? "issues" : "pull";
+  if (segments.length !== 5 || segments[3] !== expectedPath || !/^[1-9][0-9]*$/.test(segments[4] ?? "")) return undefined;
+  return { kind: artifact.kind === "issue" ? "issue" : "pull-request", owner, name, number: Number(segments[4]) };
+}
+
+function decodeTag(segment: string): string | undefined {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return undefined;
+  }
 }

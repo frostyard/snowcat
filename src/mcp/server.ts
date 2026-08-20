@@ -32,7 +32,7 @@ const workerSchema = z.string().min(1).refine(
 // Strict: `verification` is Snowcat's own observation, computed by the server
 // at completion time; a worker-supplied value is rejected, not stripped.
 const artifactSchema = z.strictObject({
-  kind: z.enum(["issue", "pull-request", "commit", "report", "other"]),
+  kind: z.enum(["issue", "pull-request", "release", "commit", "report", "other"]),
   url: z.url().startsWith("https://"),
   description: z.string().min(1).optional(),
 });
