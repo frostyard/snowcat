@@ -11,7 +11,8 @@ closes. -->
 <!-- The gate from AGENTS.md — run before opening the PR. -->
 
 - [ ] `npm run check` green — `check:audit` (high severity), `check:docs`,
-      `check:deploy`, `typecheck`, `test`, and `build` (`vite build` plus
+      `check:deploy`, `typecheck`, built-in Node test coverage (51% lines,
+      71% branches, 45% functions), and `build` (`vite build` plus
       `check-dist.mjs` and `check-boot.mjs`)
 - [ ] `src/queue/**` or `src/mcp/**` changed: the
       [work-queue spec](../docs/specs/work-queue.md) rule touched (added or

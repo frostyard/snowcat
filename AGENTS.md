@@ -261,11 +261,14 @@ removed. -->
   otherwise; exposure is a deployment decision. Pages inline their
   stylesheet from [`src/surface/styles.ts`](src/surface/styles.ts) (copied
   from the `frostyard-design` skill) and load nothing from another host.
-- Run `npm run check` before calling any change done. CI must run the same
-  recipe, so a local pass is a CI pass.
+- Run `npm run check` before calling any change done. It audits dependencies,
+  checks docs and deployment artifacts, typechecks, enforces the built-in Node
+  test coverage floors (51% lines, 71% branches, 45% functions), and builds.
+  CI must run the same recipe, so a local pass is a CI pass.
 - Tests are `*.test.ts` files anywhere under `test/`, discovered recursively by
   Node's test runner (the pattern in `package.json` is quoted so the shell
-  never expands it).
+  never expands it). Use `npm test` for the ordinary unmeasured development
+  loop; the canonical gate uses `npm run test:coverage`.
 
 ## Repository boundary
 
