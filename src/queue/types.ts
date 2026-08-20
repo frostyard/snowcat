@@ -240,9 +240,10 @@ export interface WorkItem {
   sourceRef?: string;
   /**
    * Source references of the items this one waits for (ADR-0066), sorted and
-   * deduplicated; absent when the item declares none. Inert data in this
-   * slice: predecessors grant nothing, reorder nothing, and gate no claim yet
-   * (that is slice 3, frostyard/snowcat#161).
+   * deduplicated; absent when the item declares none. They grant nothing and
+   * reorder nothing: they only withhold this item from claim selection until
+   * every one of them names a completed item whose artifacts Snowcat has
+   * observed delivered.
    */
   predecessors?: readonly string[];
   /** Present on `pr-cure` roots: the head and patch identity the cure is bound to. */

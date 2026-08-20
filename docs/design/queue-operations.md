@@ -345,6 +345,32 @@ notes override nothing in the objective, instructions, or acceptance criteria
 (change those by cancelling and re-importing or re-seeding). Only the operator
 CLI and approved policy can write notes; workers cannot, and no MCP tool does.
 
+**A project's slices wait for each other** ([spec rules 58, 62–63](../specs/work-queue.md),
+[ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)).
+An imported slice may carry `predecessors` — the issue URLs of the slices it
+waits for. Admit the whole plan in one sitting: admission is the plan-review
+moment, and the gate, not your pacing, decides what a worker may claim next. A
+slice is claimable only once every predecessor URL names a work item that is
+`completed` **and** whose artifacts Snowcat observed delivered — every reported
+pull request `merged`, every reported release `published`, and completion alone
+where it reported neither. Anything else leaves it queued and simply not a
+candidate, and the claim takes the next eligible item instead. Nothing here
+reads GitHub at claim time: the observations come from `verify-artifacts`, so a
+merge lands in the queue on that timer, not instantly.
+
+```bash
+npm run --silent queue -- show <id>   # `predecessors`: each edge, satisfied or the reason it is not
+```
+
+An unmet edge is not a block: the item keeps its status, its ledger, and its
+place, and `show` says which predecessor is waiting and why (`no work item in
+this queue carries this source reference` for one you have not imported yet).
+Nothing cascades — a cancelled or abandoned predecessor leaves its successors
+queued and ineligible forever, on purpose, so a dying project stays
+conspicuous; cancel or refile them yourself. Two slices that name each other
+are not rejected either: neither ever becomes eligible. The rest of the queue
+is unaffected throughout.
+
 
 ## From the browser
 

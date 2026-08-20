@@ -23,6 +23,7 @@ import {
   type ObservedWorkEvent,
   type OperatorNote,
   type CureRootInput,
+  type DeliveryState,
   type ProposedRootInput,
   type PullRequestCure,
   type PullRequestReview,
@@ -257,6 +258,29 @@ export type ClaimEligibility = (repository: string) => boolean;
 
 export interface QueueStoreOptions {
   claimEligibility?: ClaimEligibility;
+}
+
+/**
+ * What one predecessor source reference of one item means right now
+ * ([ADR-0066](../../docs/adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)
+ * decision 3). It is derived entirely from stored state — the imported item
+ * with that source reference and the verifications the `verify-artifacts`
+ * sweep wrote — so reading it, like the claim gate that shares its code,
+ * never touches GitHub.
+ */
+export interface PredecessorStatus {
+  /** The source reference the successor declared, verbatim. */
+  sourceRef: string;
+  /** True only when an item with this source reference is completed and its artifacts are observed delivered. */
+  satisfied: boolean;
+  /** Why it is not satisfied yet, in operator words; absent when it is. */
+  reason?: string;
+  /** The item this status was decided from: the satisfying one, or the most recent candidate; absent when none exists. */
+  itemId?: string;
+  /** That item's logical status, when one exists. */
+  status?: WorkStatus;
+  /** That item's derived delivery state, when it is completed. */
+  delivery?: DeliveryState;
 }
 
 /**
@@ -937,9 +961,10 @@ export class QueueStore {
    * nothing new, whatever the earlier item's status became.
    *
    * A candidate may declare `predecessors` (ADR-0066): the source references it
-   * waits for, stored sorted and deduplicated. They are inert here — nothing
-   * resolves, gates, or reorders on them in this slice — and this is the only
-   * creation path that accepts them.
+   * waits for, stored sorted and deduplicated. They change nothing here —
+   * creation, admission, and order are what they always were — and this is the
+   * only creation path that accepts them; they are read at claim time, where
+   * an item whose predecessors are not observed delivered is not a candidate.
    */
   enqueueProposedRoots(
     repository: string,
@@ -992,8 +1017,9 @@ export class QueueStore {
    * or cancelled — because admission is the plan-review moment and nothing may
    * move an edge under work the operator already approved. One write
    * transaction, one `work.predecessors-updated` event, nothing else: no
-   * status, priority, admission, or lease change, and no claim effect (gating
-   * is slice 3, frostyard/snowcat#161). Operator or policy actors only.
+   * status, priority, admission, or lease change. What the edges then mean for
+   * eligibility is decided at claim time, never written here. Operator or
+   * policy actors only.
    */
   replaceProposedPredecessors(id: string, predecessors: readonly string[], actor: string): WorkItem {
     validateOperatorActor(actor, "predecessors");
@@ -1011,6 +1037,76 @@ export class QueueStore {
       this.addEvent(id, "work.predecessors-updated", actor, { predecessors: replacement ?? [], previous });
       return this.getRequired(id);
     });
+  }
+
+  /**
+   * The current satisfaction of each predecessor one item declares, in stored
+   * order (ADR-0066 decision 3), for `show` and any other read that must say
+   * why a gated item is not claimable. It is the same evaluation the claim
+   * transaction runs, so what an operator reads here is what the gate decides;
+   * an item that declares none returns an empty list. Read-only, and — like
+   * the gate — GitHub is never asked: only the verifications the
+   * `verify-artifacts` sweep already wrote count.
+   */
+  predecessorStatuses(id: string): PredecessorStatus[] {
+    const item = this.getRequired(id);
+    const cache = new Map<string, PredecessorStatus>();
+    return (item.predecessors ?? []).map((sourceRef) => this.predecessorStatus(sourceRef, cache));
+  }
+
+  /**
+   * One predecessor's satisfaction, memoized per call site so a claim pass
+   * costs one read per distinct source reference however many successors — or
+   * cycle members — name it.
+   */
+  private predecessorStatus(sourceRef: string, cache: Map<string, PredecessorStatus>): PredecessorStatus {
+    const cached = cache.get(sourceRef);
+    if (cached) return cached;
+    const status = this.evaluatePredecessor(sourceRef);
+    cache.set(sourceRef, status);
+    return status;
+  }
+
+  /**
+   * Decides one predecessor source reference against stored state alone: an
+   * item carrying it must exist in this database, be `completed`, and have
+   * every pull-request artifact observed `merged` and every release artifact
+   * observed `published`; an item that reported neither satisfies on
+   * completion. Nothing else — a missing item, an incomplete one, an
+   * `unverified` or open artifact, a cancelled one — satisfies, and no
+   * satisfaction ever cascades to a third item.
+   */
+  private evaluatePredecessor(sourceRef: string): PredecessorStatus {
+    const rows = this.db
+      .prepare("SELECT * FROM work_items WHERE source_ref = ? ORDER BY created_at DESC, id ASC")
+      .all(sourceRef) as Row[];
+    if (rows.length === 0) {
+      return { sourceRef, satisfied: false, reason: "no work item in this queue carries this source reference" };
+    }
+    const items = rows.map((row) => withDelivery(decodeWorkItem(row)));
+    for (const item of items) {
+      if (item.status !== "completed") continue;
+      const undelivered = undeliveredArtifact(item);
+      if (undelivered === undefined) {
+        return { sourceRef, satisfied: true, itemId: item.id, status: item.status, delivery: item.delivery };
+      }
+    }
+    // Nothing satisfies: report the most recent candidate, which is the one an
+    // operator is most likely to be looking at.
+    const item = items[0]!;
+    const undelivered = item.status === "completed" ? undeliveredArtifact(item) : undefined;
+    const reason =
+      item.status !== "completed"
+        ? `work item ${item.id} is ${item.status}, not completed`
+        : `work item ${item.id} completed, but its ${undelivered!.kind} ${undelivered!.url} is observed ${undelivered!.observed}`;
+    return {
+      sourceRef,
+      satisfied: false,
+      reason,
+      itemId: item.id,
+      status: item.status,
+      ...(item.delivery === undefined ? {} : { delivery: item.delivery }),
+    };
   }
 
   get(id: string): WorkItem | undefined {
@@ -1311,15 +1407,37 @@ export class QueueStore {
         params.push(...eligible);
       }
 
-      const row = this.db
+      // Claim order is priority then age, and predecessors change only who is
+      // in the running (ADR-0066 decision 3). The best ungated candidate is
+      // still one indexed row; gated candidates are walked in the same order
+      // and the first one whose every predecessor is observed delivered
+      // competes with it. An item whose predecessors are unmet is simply not a
+      // candidate — the claim moves on to the next — and nothing here asks
+      // GitHub: satisfaction reads the verifications `verify-artifacts` wrote.
+      const ungated = this.db
         .prepare(
           `SELECT w.* FROM work_items w
            JOIN repositories r ON r.slug = w.repository
-           WHERE ${clauses.join(" AND ")}
+           WHERE ${clauses.join(" AND ")} AND w.predecessors_json IS NULL
            ORDER BY w.priority DESC, w.created_at ASC
            LIMIT 1`,
         )
         .get(...params) as Row | undefined;
+      const gatedCandidates = this.db
+        .prepare(
+          `SELECT w.* FROM work_items w
+           JOIN repositories r ON r.slug = w.repository
+           WHERE ${clauses.join(" AND ")} AND w.predecessors_json IS NOT NULL
+           ORDER BY w.priority DESC, w.created_at ASC`,
+        )
+        .all(...params) as Row[];
+      const satisfaction = new Map<string, PredecessorStatus>();
+      const gated = gatedCandidates.find((candidate) =>
+        parseJson<string[]>(candidate.predecessors_json, []).every(
+          (sourceRef) => this.predecessorStatus(sourceRef, satisfaction).satisfied,
+        ),
+      );
+      const row = betterClaimCandidate(ungated, gated);
       if (!row) return undefined;
 
       const id = String(row.id);
@@ -2026,6 +2144,42 @@ function appendOperatorNote(item: WorkItem, note: OperatorNote): string {
 function validateOperatorNoteReason(reason: string, name: string): void {
   if (!reason.trim()) throw new Error(`${name} is required`);
   if (reason.length > MAX_OPERATOR_NOTE_LENGTH) throw new Error(`${name} exceeds ${MAX_OPERATOR_NOTE_LENGTH} characters`);
+}
+
+/**
+ * The claim-order winner of two candidate rows: higher priority first, then
+ * the older `created_at`, then the lower id — exactly the SQL ordering, so
+ * splitting the candidates into gated and ungated queries cannot reorder what
+ * a claim returns.
+ */
+function betterClaimCandidate(left: Row | undefined, right: Row | undefined): Row | undefined {
+  if (!left) return right;
+  if (!right) return left;
+  const byPriority = Number(right.priority) - Number(left.priority);
+  if (byPriority !== 0) return byPriority > 0 ? right : left;
+  if (String(left.created_at) !== String(right.created_at)) {
+    return String(left.created_at) < String(right.created_at) ? left : right;
+  }
+  return String(left.id) <= String(right.id) ? left : right;
+}
+
+/**
+ * The first artifact of a completed item that is not observed delivered
+ * (ADR-0066 decision 3): a pull request Snowcat has not seen `merged`, or a
+ * release it has not seen `published`. `undefined` means every reported
+ * pull request and release is delivered — including the case where the item
+ * reported neither, which completion alone satisfies. Only stored
+ * verifications count: an artifact with none, or with an `unverified` one, is
+ * undelivered, because delivery is an observation and not an assertion.
+ */
+function undeliveredArtifact(item: WorkItem): { kind: string; url: string; observed: string } | undefined {
+  for (const artifact of item.result?.artifacts ?? []) {
+    if (artifact.kind !== "pull-request" && artifact.kind !== "release") continue;
+    const observed = artifact.verification?.status === "verified" ? artifact.verification.state : "unverified";
+    const delivered = artifact.kind === "pull-request" ? observed === "merged" : observed === "published";
+    if (!delivered) return { kind: artifact.kind === "pull-request" ? "pull request" : "release", url: artifact.url, observed };
+  }
+  return undefined;
 }
 
 function withDelivery(item: WorkItem): WorkItem {
