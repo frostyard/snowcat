@@ -1,7 +1,7 @@
 import { githubApiJson, type GitHubFetch } from "../repository/github-api.ts";
 import { enrolledRepositories } from "./eligibility.ts";
 import type { QueueStore } from "./store.ts";
-import type { AllowedAction, ProposedRootInput, WorkItem } from "./types.ts";
+import { PREDECESSOR_URL_PATTERN, type AllowedAction, type ProposedRootInput, type WorkItem } from "./types.ts";
 
 const GITHUB_TIMEOUT_MS = 30_000;
 const PAGE_SIZE = 100;
@@ -14,12 +14,15 @@ const MAX_PREDECESSOR_CHARS = 512;
 
 /**
  * One `depends-on:` line: optional surrounding whitespace, the key in any case,
- * and exactly one absolute GitHub issue URL — the same shape the store accepts
- * as a predecessor. A line carrying anything else (a bare issue number, a
- * second URL, a trailing comment, a pull-request URL) simply does not match,
- * which is what "malformed lines are ignored" means for an untrusted body.
+ * and exactly one non-whitespace token. The token is then held against
+ * `PREDECESSOR_URL_PATTERN` — the store's own constant — so the case-insensitive
+ * key can never widen the URL shape this parser accepts beyond the shape the
+ * store stores. A line carrying anything else (a bare issue number, a second
+ * URL, a trailing comment, a pull-request URL, an upper-cased scheme or host)
+ * is dropped, which is what "malformed lines are ignored" means for an
+ * untrusted body.
  */
-const DEPENDS_ON_LINE = /^[ \t]*depends-on[ \t]*:[ \t]*(https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/issues\/[1-9][0-9]*)[ \t]*$/i;
+const DEPENDS_ON_LINE = /^[ \t]*depends-on[ \t]*:[ \t]*(\S+)[ \t]*$/i;
 
 export const ISSUE_WORK_KIND = "issue-resolution";
 
@@ -81,10 +84,12 @@ export async function fetchLabeledOpenIssues(
 /**
  * The predecessor source references one issue body declares (ADR-0066), sorted
  * and deduplicated. The body is untrusted GitHub-authored text, so parsing
- * never fails it: a non-matching line, an over-long URL, and a self-edge (the
- * issue's own canonical URL — an item cannot wait for itself) are all dropped
- * silently, duplicates collapse, and at most the first `MAX_DEPENDS_ON`
- * survivors are kept so the store's ceiling can never be hit as an exception.
+ * never fails it: a non-matching line, a URL outside the store's exact
+ * (case-sensitive) shape, an over-long URL, and a self-edge (the issue's own
+ * canonical URL — an item cannot wait for itself) are all dropped silently,
+ * duplicates collapse, and at most the first `MAX_DEPENDS_ON` survivors are
+ * kept so the store's ceiling can never be hit as an exception. Every survivor
+ * is a value the store accepts, so a body can never abort an import.
  * Safe by direction: an edge read here can only delay the item that declares
  * it — it authorizes nothing and touches no other item.
  */
@@ -97,6 +102,9 @@ export function parseDependsOn(body: string, selfUrl: string): string[] {
     if (!match) continue;
     const url = match[1]!;
     if (url.length > MAX_PREDECESSOR_CHARS) continue;
+    // The store's shape, verbatim: anything it would refuse is dropped here
+    // rather than carried into a transaction that would throw on it.
+    if (!PREDECESSOR_URL_PATTERN.test(url)) continue;
     const key = url.toLowerCase();
     if (key === self || seen.has(key)) continue;
     seen.add(key);

@@ -43,6 +43,17 @@ export type ArtifactVerification =
  */
 export const RELEASE_TAG_PATTERN = /^(?!-)(?!.*\.\.)[A-Za-z0-9._+/-]{1,128}$/;
 
+/**
+ * The one shape a predecessor source reference may take (ADR-0066): an
+ * absolute GitHub issue URL over HTTPS. Deliberately case-sensitive — the
+ * scheme, host, and `/issues/` segment are matched verbatim so a stored edge
+ * is byte-identical to the `sourceRef` of the item it names. The store
+ * validates against this pattern and the `depends-on:` parser accepts against
+ * the same constant, so the writer can never produce a value the reader
+ * refuses.
+ */
+export const PREDECESSOR_URL_PATTERN = /^https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/issues\/[1-9][0-9]*$/;
+
 export interface WorkArtifact {
   kind: "issue" | "pull-request" | "release" | "commit" | "report" | "other";
   url: string;

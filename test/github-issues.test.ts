@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { fetchLabeledOpenIssues, importLabeledIssues, ISSUE_WORK_KIND, issueWorkCandidate, parseDependsOn } from "../src/queue/github-issues.ts";
 import { QueueStore } from "../src/queue/store.ts";
+import { PREDECESSOR_URL_PATTERN } from "../src/queue/types.ts";
 
 const REPOSITORY = "frostyard/updex";
 
@@ -444,4 +445,62 @@ test("re-import refreshes the predecessors of a still-proposed item and never th
   assert.deepEqual(cleared.refreshedSourceRefs, [gated!.sourceRef]);
   assert.equal(queue.get(gated!.id)?.predecessors, undefined);
   assert.deepEqual(queue.get(admittedItem!.id)?.predecessors, [first]);
+});
+
+test("a depends-on URL outside the store's exact shape is dropped, never carried into a write that throws", async () => {
+  // The key is case-insensitive; the URL is not. An upper-cased scheme, host,
+  // or path segment is a value `normalizePredecessors` refuses, so the parser
+  // must refuse it too — otherwise one untrusted body aborts the transaction
+  // that imports every other labeled issue in the repository.
+  const shouted = "HTTPS://GITHUB.COM/frostyard/updex/ISSUES/9";
+  assert.equal(PREDECESSOR_URL_PATTERN.test(shouted), false, "the store's shape rejects it");
+  assert.deepEqual(
+    parseDependsOn(`depends-on: ${shouted}`, "https://github.com/frostyard/updex/issues/50"),
+    [],
+    "so the parser drops it silently, like any other malformed line",
+  );
+  assert.deepEqual(
+    parseDependsOn(
+      ["DEPENDS-ON: https://github.com/frostyard/updex/issues/9", "depends-on: https://GitHub.com/frostyard/updex/issues/10"].join("\n"),
+      "https://github.com/frostyard/updex/issues/50",
+    ),
+    ["https://github.com/frostyard/updex/issues/9"],
+    "the key may shout; the host may not",
+  );
+  // Everything the parser does return is a value the store accepts.
+  for (const url of parseDependsOn("depends-on: https://github.com/frostyard/core/issues/3", "https://github.com/frostyard/updex/issues/50")) {
+    assert.equal(PREDECESSOR_URL_PATTERN.test(url), true);
+  }
+
+  const crafted = issueWorkCandidate(REPOSITORY, {
+    number: 50,
+    title: "Crafted body",
+    body: `Please fix.\ndepends-on: ${shouted}`,
+    htmlUrl: "https://github.com/frostyard/updex/issues/50",
+    labels: ["snowcat"],
+  });
+  assert.equal(crafted.predecessors, undefined, "nothing survives, so no predecessors field at all");
+  assert.doesNotMatch(crafted.instructions, /Snowcat read/);
+
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-depends-on-case-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled(REPOSITORY, true);
+
+  // The whole batch: the crafted issue must not take the clean one down with it.
+  const pages: Record<number, unknown[]> = { 1: [issue(50, { body: `Please fix.\ndepends-on: ${shouted}` }), issue(51)] };
+  const { fetcher } = pagedFetcher(pages);
+  const imported = await importLabeledIssues(queue, REPOSITORY, "snowcat", { fetcher });
+  assert.equal(imported.created.length, 2, "both issues import; the untrusted body throws nothing");
+  assert.equal(imported.created.find((item) => item.sourceRef?.endsWith("/51"))?.status, "proposed");
+  assert.equal(imported.created.find((item) => item.sourceRef?.endsWith("/50"))?.predecessors, undefined);
+  assert.equal(imported.observed, 2, "and rule 57's observations are still recorded");
+
+  // The refresh path reaches `replaceProposedPredecessors` with the same parse:
+  // an edited body that shouts its URL leaves the proposed item alone instead
+  // of throwing after the enqueue.
+  pages[1] = [issue(50, { body: `Please fix.\ndepends-on: HTTPS://GITHUB.COM/frostyard/core/ISSUES/3` }), issue(51)];
+  const refreshed = await importLabeledIssues(queue, REPOSITORY, "snowcat", { fetcher });
+  assert.deepEqual(refreshed.refreshedSourceRefs, [], "an unparseable edge is not a changed edge set");
+  assert.equal(queue.proposedItemBySourceRef(REPOSITORY, "https://github.com/frostyard/updex/issues/50")?.predecessors, undefined);
 });

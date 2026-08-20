@@ -9,6 +9,7 @@ import {
   MAX_REVIEW_ADVISORIES,
   MAX_REVIEW_BLOCKERS,
   MODEL_NAME_PATTERN,
+  PREDECESSOR_URL_PATTERN,
   pullRequestDecays,
   RELEASE_TAG_PATTERN,
   reviewDecisions,
@@ -2130,9 +2131,10 @@ function validateSourceRef(sourceRef: string): void {
 }
 
 /**
- * Normalizes the source references an item waits for (ADR-0066): each entry is
- * a verbatim absolute GitHub issue URL over HTTPS, at most
- * `MAX_SOURCE_REF_LENGTH` characters, at most `MAX_PREDECESSORS` of them.
+ * Normalizes the source references an item waits for (ADR-0066): each entry
+ * matches `PREDECESSOR_URL_PATTERN` — a verbatim, case-sensitive absolute
+ * GitHub issue URL over HTTPS — at most `MAX_SOURCE_REF_LENGTH` characters,
+ * at most `MAX_PREDECESSORS` of them.
  * Returns them deduplicated and sorted so storage is deterministic, or
  * `undefined` when none are declared — which is what stores NULL. It resolves
  * nothing: an unimported predecessor is a normal, visible state.
@@ -2148,7 +2150,7 @@ function normalizePredecessors(values: readonly string[] | undefined): string[] 
     if (value.length > MAX_SOURCE_REF_LENGTH) {
       throw new Error(`predecessor exceeds ${MAX_SOURCE_REF_LENGTH} characters`);
     }
-    if (!/^https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/issues\/[1-9][0-9]*$/.test(value)) {
+    if (!PREDECESSOR_URL_PATTERN.test(value)) {
       throw new Error(`predecessor is not a GitHub issue URL: ${value}`);
     }
   }

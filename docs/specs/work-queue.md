@@ -935,6 +935,10 @@ MCP (rule 41).
     counts — for lines of the form `depends-on: <url>`: optional surrounding
     whitespace, the key in any letter case, and exactly one absolute GitHub
     issue URL, which becomes one predecessor of rule 58 on the created root.
+    Only the key is case-insensitive: the URL MUST match rule 58's predecessor
+    shape exactly, case included (`https://github.com/<owner>/<repo>/issues/<n>`
+    over a lower-case scheme and host), so that every parsed entry is a value
+    the store accepts and no body can turn into a rejected write.
     The body is untrusted GitHub-authored text, so parsing MUST never fail an
     import: a line that does not match that shape, an entry longer than 512
     characters, and a URL naming the issue's own canonical HTML URL — a

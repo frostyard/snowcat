@@ -188,7 +188,9 @@ an issue body becomes a predecessor on the imported item
 ([ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)):
 the import reads the raw body, keeps at most 20 of them, and silently ignores
 anything that is not exactly one issue URL on the line — including a link to
-the issue itself. The item's instructions name the predecessors Snowcat read,
+the issue itself. The key may be written in any case; the URL may not — write
+it exactly as GitHub does (`https://github.com/<owner>/<repo>/issues/<n>`), or
+the line is ignored like any other malformed one. The item's instructions name the predecessors Snowcat read,
 and `import-issues` reports them under `refreshedSourceRefs` when a re-import
 changes them. Editing the `depends-on` lines on GitHub refreshes the edges only
 while the item is still `proposed`; **once you admit it, cancel the item and
