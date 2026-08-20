@@ -156,7 +156,7 @@ test("the operator surface requires a session, sets the cookie on the right toke
 
   // Structure from the artboard: sidebar, header kicker + h1, stat row, three grouped cards, events rail.
   assert.match(body, /<noscript><meta http-equiv="refresh" content="30"><\/noscript>/);
-  assert.match(body, /<script>\(function \(\) \{\s*var cfg = \{"page":"\/","partials":\["stats","proposals","blocked","unverified","adjudication"\],"repository":null,"refresh":30\};/);
+  assert.match(body, /<script>\(function \(\) \{\s*var cfg = \{"page":"\/","partials":\["stats","proposals","blocked","unverified","adjudication"\],"repository":null,"refresh":30,"reload":false,"reloadDelay":2000,"queueEventPrefix":"work\.","queueEventTypes":\["artifact\.verified","artifact\.attached"\]\};/);
   assert.equal(/<script[^>]*src=/.test(body), false); // nothing loaded from elsewhere
   assert.match(body, /<aside class="ph-sidebar">/);
   assert.match(body, /class="ph-eyebrow"><i><\/i>snowcat · operator inbox<\/div><h1>Needs you<\/h1>/);

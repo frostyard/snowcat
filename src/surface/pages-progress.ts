@@ -46,7 +46,7 @@ FORM: An operations timeline extended from the incumbent queue shell; no new vis
   return document(
     "Progress · Snowcat",
     shell(context, { title: "Progress", eyebrow: "snowcat · delivery progress", heading: "Progress", active: "progress", refresh: true }, body),
-    { refresh: true },
+    { refresh: true, live: { page: "/progress", partials: [], reload: true } },
   );
 }
 

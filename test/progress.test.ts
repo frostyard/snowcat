@@ -183,6 +183,13 @@ test("the session-guarded progress page renders every stage, folds review satell
   assert.equal(body.includes("Old merged item"), false);
   assert.equal(body.includes(workingLease.leaseToken!), false);
   assert.equal(body.includes(reviewLease.leaseToken!), false);
+  assert.match(body, /new EventSource\(url\)/);
+  assert.match(body, /var url = "\/events\/stream"/);
+  assert.match(body, /if \(cfg\.reload\) \{ location\.reload\(\); return; \}/);
+  assert.match(body, /reloadDelay":2000/);
+  assert.match(body, /queueEventPrefix":"work\."/);
+  assert.match(body, /queueEventTypes":\["artifact\.verified","artifact\.attached"\]/);
+  assert.match(body, /if \(affectsQueueView\(ev\.type\)\) scheduleRefetch\(\)/);
 });
 
 test("the progress view selects terminal items newest first, so more than 100 aged-out completions cannot hide today's work", async () => {
