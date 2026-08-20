@@ -8,19 +8,9 @@
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-// FLUENT_* is read for one release (Snowcat ADR-0064): adopt any legacy
-// variable whose SNOWCAT_* twin is unset before the app reads its config.
-const adopted = [];
-for (const [key, value] of Object.entries(process.env)) {
-  if (!key.startsWith("FLUENT_") || value === undefined) continue;
-  const modern = `SNOWCAT_${key.slice("FLUENT_".length)}`;
-  if (process.env[modern] === undefined) {
-    process.env[modern] = value;
-    adopted.push(key);
-  }
-}
-if (adopted.length > 0) console.error(`snowcat: adopted legacy ${adopted.sort().join(", ")}; rename to SNOWCAT_* (FLUENT_* is read for one release only)`);
+import { adoptLegacyEnvironment } from "../src/env-compat.ts";
 
+adoptLegacyEnvironment();
 const entry = new URL("../dist/app.mjs", import.meta.url);
 if (!existsSync(fileURLToPath(entry))) {
   console.error("dist/app.mjs is missing; run `npm run build` first.");
