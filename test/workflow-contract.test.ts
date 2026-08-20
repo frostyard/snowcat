@@ -24,6 +24,7 @@ test("the workflow contract rejects mutable pins, missing version comments, and 
   const valid = `permissions: {}
 jobs:
   check:
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -59,6 +60,18 @@ jobs:
     ).join("\n"),
     /persist-credentials: false/,
   );
+  assert.match(
+    workflowContractErrors(valid.replace("    timeout-minutes: 30\n", "")).join("\n"),
+    /timeout-minutes/,
+  );
+  assert.match(
+    workflowContractErrors(valid.replace("timeout-minutes: 30", "timeout-minutes: 0")).join("\n"),
+    /between 1 and 30/,
+  );
+  assert.match(
+    workflowContractErrors(valid.replace("timeout-minutes: 30", "timeout-minutes: 31")).join("\n"),
+    /between 1 and 30/,
+  );
 
   const pushingCheckout = valid
     .replace(" # v4.2.2", " # v4.2.2; pushes: generated release metadata")
@@ -68,6 +81,7 @@ jobs:
   const validFlowMapping = `permissions: {}
 jobs:
   check:
+    timeout-minutes: 30
     steps:
       - { uses: actions/checkout@${"a".repeat(40)}, with: { persist-credentials: false } } # v4.2.2
 `;
@@ -86,7 +100,10 @@ function workflowContractErrors(source: string): string[] {
   }
   if (!isMap(document.contents)) return ["workflow must contain a top-level mapping"];
 
-  const errors = topLevelPermissionErrors(document.contents);
+  const errors = [
+    ...topLevelPermissionErrors(document.contents),
+    ...jobTimeoutErrors(document.contents),
+  ];
   visit(document, {
     Pair(_key, pair, path) {
       if (!isScalar(pair.key) || pair.key.value !== "uses") return;
@@ -119,6 +136,25 @@ function workflowContractErrors(source: string): string[] {
       }
     },
   });
+  return errors;
+}
+
+function jobTimeoutErrors(root: YAMLMap): string[] {
+  const jobs = root.get("jobs", true);
+  if (!isMap(jobs)) return ["workflow must contain a jobs mapping"];
+
+  const errors: string[] = [];
+  for (const pair of jobs.items) {
+    const jobName = isScalar(pair.key) ? String(pair.key.value) : "<unknown>";
+    if (!isMap(pair.value)) {
+      errors.push(`job ${jobName}: job must be a mapping`);
+      continue;
+    }
+    const timeout = pair.value.get("timeout-minutes");
+    if (typeof timeout !== "number" || !Number.isInteger(timeout) || timeout < 1 || timeout > 30) {
+      errors.push(`job ${jobName}: timeout-minutes must be an integer between 1 and 30`);
+    }
+  }
   return errors;
 }
 
