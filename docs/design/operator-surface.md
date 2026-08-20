@@ -207,7 +207,10 @@ refetches the page's groups as fragments (`GET /?partial=stats|proposals|
 blocked|unverified`, `GET /repositories/:owner/:name?partial=stats|queued|
 leased|completed|pull-requests`) and swaps them in; the 30-second meta refresh survives only
 inside `<noscript>`, and a browser with scripts but no `EventSource`
-re-inserts it. Every page prints the queue and control-plane database paths
+re-inserts it. The progress view uses the same subscriber and queue-affecting
+event gate, but schedules a full-page reload no sooner than the stream's
+2-second poll interval so every lifecycle strip is derived again together.
+Every page prints the queue and control-plane database paths
 it is reading, the same way `metadata` does.
 
 ### What it does not do

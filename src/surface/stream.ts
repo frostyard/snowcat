@@ -7,6 +7,10 @@ export const DEFAULT_STREAM_HEARTBEAT_MS = 25_000;
 /** Ledger events read per poll; the same cap `events --limit` allows. */
 export const STREAM_PAGE_SIZE = 500;
 
+/** The shared client/server contract for events that can change a queue-derived view. */
+export const QUEUE_VIEW_EVENT_PREFIX = "work.";
+export const QUEUE_VIEW_EVENT_TYPES = ["artifact.verified", "artifact.attached"] as const;
+
 export interface StreamOptions {
   pollMs?: number;
   heartbeatMs?: number;
@@ -46,5 +50,5 @@ export function toStreamedEvent(event: ObservedWorkEvent): StreamedEvent {
 
 /** Event types after which a page's queue-derived groups can have changed. */
 export function affectsQueueView(type: string): boolean {
-  return type.startsWith("work.") || type === "artifact.verified" || type === "artifact.attached";
+  return type.startsWith(QUEUE_VIEW_EVENT_PREFIX) || QUEUE_VIEW_EVENT_TYPES.some((eventType) => eventType === type);
 }

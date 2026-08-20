@@ -2,6 +2,7 @@ import type { ObservableWorkItem, ObservedWorkEvent } from "../queue/types.ts";
 import { html, raw, type SafeHtml } from "./html.ts";
 import type { AdjudicationRow, BlockedRow, InboxData, ProposalRow, SidebarRepository, UnverifiedRow } from "./inbox.ts";
 import { admissionForm, exitForm, verifyForm } from "./forms.ts";
+import { DEFAULT_STREAM_POLL_MS, QUEUE_VIEW_EVENT_PREFIX, QUEUE_VIEW_EVENT_TYPES } from "./stream.ts";
 import { surfaceStylesheet } from "./styles.ts";
 
 const REFRESH_SECONDS = 30;
@@ -56,6 +57,8 @@ export interface LiveOptions {
   partials: readonly string[];
   /** Only events for this repository refresh the page (the stream is filtered too). */
   repository?: string;
+  /** Reload the whole page at most once per stream poll instead of swapping named fragments. */
+  reload?: boolean;
 }
 
 /**
@@ -67,7 +70,16 @@ export interface LiveOptions {
  */
 function liveScript(live: LiveOptions | undefined): SafeHtml {
   if (!live) return html``;
-  const config = JSON.stringify({ page: live.page, partials: live.partials, repository: live.repository ?? null, refresh: REFRESH_SECONDS });
+  const config = JSON.stringify({
+    page: live.page,
+    partials: live.partials,
+    repository: live.repository ?? null,
+    refresh: REFRESH_SECONDS,
+    reload: live.reload ?? false,
+    reloadDelay: DEFAULT_STREAM_POLL_MS,
+    queueEventPrefix: QUEUE_VIEW_EVENT_PREFIX,
+    queueEventTypes: QUEUE_VIEW_EVENT_TYPES,
+  });
   return html`<script>${raw(LIVE_SCRIPT.replace("__CONFIG__", config.replaceAll("<", "\\u003c")))}</script>`;
 }
 
@@ -92,6 +104,7 @@ const LIVE_SCRIPT = String.raw`(function () {
   }
   function refetch() {
     pending = null;
+    if (cfg.reload) { location.reload(); return; }
     cfg.partials.forEach(function (name) {
       var target = document.getElementById(name);
       if (!target) return;
@@ -101,7 +114,10 @@ const LIVE_SCRIPT = String.raw`(function () {
         .catch(function () { setPill("Live · retrying", false); });
     });
   }
-  function scheduleRefetch() { if (pending === null) pending = setTimeout(refetch, 250); }
+  function scheduleRefetch() { if (pending === null) pending = setTimeout(refetch, cfg.reload ? cfg.reloadDelay : 250); }
+  function affectsQueueView(type) {
+    return type.indexOf(cfg.queueEventPrefix) === 0 || cfg.queueEventTypes.indexOf(type) !== -1;
+  }
   function prepend(ev) {
     if (!rail) return;
     var empty = rail.querySelector(".fl-empty"); if (empty) empty.remove();
@@ -126,7 +142,7 @@ const LIVE_SCRIPT = String.raw`(function () {
     try { ev = JSON.parse(message.data); } catch (e) { return; }
     if (cfg.repository && ev.repository !== cfg.repository) return;
     prepend(ev);
-    if (/^work\./.test(ev.type) || /^artifact\.(verified|attached)$/.test(ev.type)) scheduleRefetch();
+    if (affectsQueueView(ev.type)) scheduleRefetch();
   });
   source.onerror = function () { setPill("Live · reconnecting", false); };
 })();`;

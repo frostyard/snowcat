@@ -290,6 +290,17 @@ test("the session-guarded progress page renders every stage, folds review satell
   assert.equal(body.includes("Old merged item"), false);
   assert.equal(body.includes(workingLease.leaseToken!), false);
   assert.equal(body.includes(reviewLease.leaseToken!), false);
+  assert.match(body, /new EventSource\(url\)/);
+  assert.match(body, /var url = "\/events\/stream"/);
+  assert.match(body, /if \(cfg\.reload\) \{ location\.reload\(\); return; \}/);
+  assert.match(body, /reloadDelay":2000/);
+  assert.match(body, /queueEventPrefix":"work\."/);
+  assert.match(body, /queueEventTypes":\["artifact\.verified","artifact\.attached"\]/);
+  assert.match(body, /if \(affectsQueueView\(ev\.type\)\) scheduleRefetch\(\)/);
+  // The assertions above hold for every live page, so they only prove the shared
+  // script is present. /progress ships no partials, which makes `reload` its whole
+  // refresh handler: pin this page's own config so flipping it to false fails here.
+  assert.match(body, /"page":"\/progress","partials":\[\],"repository":null,"refresh":30,"reload":true/);
 
   for (const bucket of progressSummaryBuckets) {
     assert.equal(summaryCount(body, bucket), data.summary[bucket]);
