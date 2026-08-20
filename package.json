@@ -19,7 +19,7 @@
     "repository": "node --import tsx src/repository/cli.ts",
     "serve": "node scripts/serve.mjs",
     "test": "node --import tsx --test 'test/**/*.test.ts'",
-    "test:coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-lines=51 --test-coverage-branches=71 --test-coverage-functions=45 'test/**/*.test.ts'",
+    "test:coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-include='src/**/*.ts' --test-coverage-exclude='test/**/*.ts' --test-coverage-lines=51 --test-coverage-branches=71 --test-coverage-functions=45 'test/**/*.test.ts'",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

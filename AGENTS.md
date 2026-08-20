@@ -263,8 +263,11 @@ removed. -->
   from the `frostyard-design` skill) and load nothing from another host.
 - Run `npm run check` before calling any change done. It audits dependencies,
   checks docs and deployment artifacts, typechecks, enforces the built-in Node
-  test coverage floors (51% lines, 71% branches, 45% functions), and builds.
-  CI must run the same recipe, so a local pass is a CI pass.
+  test coverage floors over every production `src/**/*.ts` module (51% lines,
+  71% branches, 45% functions; `test/**/*.ts` is excluded), and builds. A
+  production module that no test imports contributes zero coverage rather than
+  disappearing from the denominator. CI must run the same recipe, so a local
+  pass is a CI pass.
 - Tests are `*.test.ts` files anywhere under `test/`, discovered recursively by
   Node's test runner (the pattern in `package.json` is quoted so the shell
   never expands it). Use `npm test` for the ordinary unmeasured development
