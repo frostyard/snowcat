@@ -63,3 +63,48 @@ test("GitHub GraphQL accepts valid JSON whose body is exactly at the byte limit"
     { kind: "response", status: 200, value: { data: { repository: null } } },
   );
 });
+
+function cancellableBody(): { body: ReadableStream<Uint8Array>; cancelled: () => boolean } {
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array([123, 125]));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  return { body, cancelled: () => cancelled };
+}
+
+test("GitHub JSON reads cancel the body of a non-ok response", async () => {
+  const { body, cancelled } = cancellableBody();
+  const fetcher = (async () => new Response(body, { status: 503 })) as GitHubFetch;
+
+  const result = await githubApiJson("/repos/frostyard/snowcat", signal, fetcher);
+
+  assert.deepEqual(result, { kind: "response", status: 503, value: null });
+  assert.equal(cancelled(), true);
+});
+
+test("GitHub JSON reads cancel the body on a malformed Content-Length", async () => {
+  const { body, cancelled } = cancellableBody();
+  const fetcher = (async () =>
+    new Response(body, { status: 200, headers: { "content-length": "not-a-number" } })) as GitHubFetch;
+
+  const result = await githubApiJson("/repos/frostyard/snowcat", signal, fetcher);
+
+  assert.deepEqual(result, { kind: "unavailable" });
+  assert.equal(cancelled(), true);
+});
+
+test("GitHub JSON reads cancel the body on an oversized Content-Length", async () => {
+  const { body, cancelled } = cancellableBody();
+  const fetcher = (async () =>
+    new Response(body, { status: 200, headers: { "content-length": String(MAX_RESPONSE_BYTES + 1) } })) as GitHubFetch;
+
+  const result = await githubApiJson("/repos/frostyard/snowcat", signal, fetcher);
+
+  assert.deepEqual(result, { kind: "unavailable" });
+  assert.equal(cancelled(), true);
+});

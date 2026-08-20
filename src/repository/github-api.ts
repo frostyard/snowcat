@@ -63,16 +63,22 @@ async function githubJson(
     let response = await request(initialUrl);
     if (isRedirect(response.status)) {
       const redirected = sameOriginUrl(response.headers.get("location"));
+      // The redirect response's body is never read; release it before
+      // rejecting or following the redirect so the stream is not abandoned.
+      await response.body?.cancel();
       if (!redirected) return { kind: "unavailable" };
       response = await request(redirected);
-      if (isRedirect(response.status)) return { kind: "unavailable" };
+      if (isRedirect(response.status)) return unavailable(response);
     }
-    if (!response.ok) return { kind: "response", status: response.status, value: null };
+    if (!response.ok) {
+      await response.body?.cancel();
+      return { kind: "response", status: response.status, value: null };
+    }
     const declaredLength = response.headers.get("content-length");
     if (declaredLength !== null) {
-      if (!/^(?:0|[1-9][0-9]*)$/.test(declaredLength)) return { kind: "unavailable" };
+      if (!/^(?:0|[1-9][0-9]*)$/.test(declaredLength)) return unavailable(response);
       const length = Number(declaredLength);
-      if (!Number.isSafeInteger(length) || length > MAX_RESPONSE_BYTES) return { kind: "unavailable" };
+      if (!Number.isSafeInteger(length) || length > MAX_RESPONSE_BYTES) return unavailable(response);
     }
     const bytes = await boundedBody(response, MAX_RESPONSE_BYTES);
     if (bytes === null) return { kind: "unavailable" };
@@ -88,6 +94,14 @@ async function githubJson(
   } catch {
     return { kind: "unavailable" };
   }
+}
+
+// Release an unread response body before reporting the read unavailable.
+// Undici/Node responses whose bodies are neither consumed nor cancelled
+// retain stream and connection resources and block connection reuse.
+async function unavailable(response: Response): Promise<GitHubJsonResponse> {
+  await response.body?.cancel();
+  return { kind: "unavailable" };
 }
 
 async function boundedBody(response: Response, maximumBytes: number): Promise<Uint8Array | null> {
