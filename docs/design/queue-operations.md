@@ -12,7 +12,7 @@ Contract: [work queue](../specs/work-queue.md). Architecture:
 ## Overview
 
 This is the operator runbook for running Snowcat's v1 work engine on one host,
-in the order you do it: install the host, enroll a repository, fill the queue,
+in the order you do it: install the host, onboard a repository, fill the queue,
 admit work, run coding agents against it, watch what they produce, and keep
 the database safe (upgrade, back up, restore). It
 follows the [recovery plan](../plans/recover.md) and is written for the first
@@ -118,23 +118,64 @@ set -a; . /etc/snowcat/env; set +a
 Timers get it through `EnvironmentFile=`; nothing else does — a client
 started from a shell that did not source it sees no `SNOWCAT_*` variables.
 
-## One-time: enroll a repository
+## Onboard a repository
 
-Enrollment is optional for the queue itself (repository opt-in is enough to
-run) but required if you set `SNOWCAT_CONTROL_DB`, because then `claim_work`
-only leases items whose repository is `enrolled` in the control plane.
+Bringing an existing repository into the fleet touches four surfaces, in
+order: a declaration in `frostyard/core`, canonical surfaces and settings on
+the repository itself, Core activation and reconciliation on the host, and
+the queue's own opt-in. The interactive procedure — an agent drafts every
+file and prints every command below for the operator to run, then proves the
+loop end to end — is core's
+[frostyard-onboard-repo skill](https://github.com/frostyard/core/blob/main/.agents/skills/frostyard-onboard-repo/SKILL.md);
+this section is the reference it follows. Two things are out of scope:
+de-boarding (a repository leaves the fleet through a `disabled` declaration,
+which is retained, never deleted) and host bootstrap (the sections above own
+that). Enrollment is optional for the queue itself (repository opt-in is
+enough to run) but required if you set `SNOWCAT_CONTROL_DB`, because then
+`claim_work` only leases items whose repository is `enrolled` in the control
+plane.
 
-1. In `frostyard/core`, declare the repository with `fleet_state: enabled`
-   under `organization/repositories/<owner>/<name>.json`
+1. **Declare it in core.** In `frostyard/core`, declare the repository with
+   `fleet_state: enabled` under `organization/repositories/<owner>/<name>.json`
    ([core#83](https://github.com/frostyard/core/pull/83) does this for
-   updex). Validate before merging:
+   updex): copy an existing declaration, set the numeric GitHub id as a
+   string (`gh api repos/<owner>/<name> --jq .id`), the accountable owners,
+   and the `maintenance_programs` this repository actually runs — an enabled
+   declaration needs at least one program and one ceiling action. In the
+   same core change, bump the declaration count in
+   `test/organization-validation.test.mjs` and add the repository to
+   `.github/skills-sync.json` so it receives the shared skills. Validate
+   with core's `npm ci && npm run check`, and before merging:
    `npm run --silent core -- verify` after pointing `SNOWCAT_CORE_REF` at the
    branch reports the catalog, or fails with the exact reason.
-2. In the repository, make sure the four canonical surfaces exist:
-   `AGENTS.md`, `policies/agent-governance.json`, `.agents/skills/`, and
-   `docs/README.md` ([updex#297](https://github.com/frostyard/updex/pull/297)
-   adds the governance file).
-3. After both merge, activate and reconcile:
+2. **Give it the canonical surfaces.** In the repository, make sure the four
+   canonical surfaces exist: `AGENTS.md`, `policies/agent-governance.json`,
+   `.agents/skills/`, and `docs/README.md`
+   ([updex#297](https://github.com/frostyard/updex/pull/297) adds the
+   governance file; core's `frostyard-repo-docs` and
+   `frostyard-acmm-conformance` skills scaffold the rest). The governance
+   file's only per-repository content is its protected-boundary paths —
+   everything else is fixed by core's schema; start from core's valid
+   fixture. `.agents/skills` must be a real git tree at the default-branch
+   head — the surface probe reads the tree API, where a symlink is a blob,
+   and the reconcile pass refuses it.
+3. **Apply the settings contract.** From a core checkout, dry-run then apply
+   the repository-settings contract (ADR-0040) and the merge queue
+   (ADR-0042) — these also create the `snowcat` import label the timers
+   depend on:
+
+```bash
+scripts/apply-repo-settings.sh <owner/repo> --required-checks "<ctx>[,<ctx>…]"
+scripts/apply-repo-settings.sh <owner/repo> --required-checks "…" --apply
+scripts/rollout-merge-queue.sh <owner/repo> --apply
+```
+
+   The rollout script refuses a repository whose CI does not trigger on
+   `merge_group`; that one workflow edit is part of onboarding. The apply
+   script never writes a LICENSE or description — it prints `NOTE` lines for
+   what stays manual.
+4. **Activate and reconcile on the host.** After the core and repository
+   changes merge:
 
 ```bash
 npm run --silent control -- metadata            # note lastTransactionSequence
@@ -143,15 +184,43 @@ npm run --silent repository -- reconcile        # reads GitHub identity and surf
 npm run --silent repository -- status           # want "effectiveState": "enrolled"
 ```
 
-`repository -- reconcile` is safe to repeat; it converges. States other than
-`enrolled` name what is missing (`awaiting-surfaces`, `surface-held`,
-`disabled`, `operator-held`, …). To stop a repository's work without touching
-Core: `npm run --silent repository -- hold <sequence> github.com:<id> "<reason>"`
-and later `clear-hold`.
+   `core -- activate` runs the repository reconciliation pass itself;
+   `repository -- reconcile` re-runs it and is safe to repeat — it
+   converges. States other than `enrolled` name what is missing
+   (`awaiting-surfaces`, `surface-held`, `disabled`, `operator-held`, …),
+   and `npm run --silent core -- readiness` explains a refusal to activate.
+   For a private repository, `SNOWCAT_GITHUB_TOKEN` in `/etc/snowcat/env`
+   must read it (and the cure/review sweeps use GraphQL, which needs the
+   token even for public repositories). To stop a repository's work without
+   touching Core: `npm run --silent repository -- hold <sequence>
+   github.com:<id> "<reason>"` and later `clear-hold`.
+5. **Opt it into the queue and choose its gates.** Queue opt-in is separate
+   from Core enrollment, and the two per-repository toggles require it
+   first:
+
+```bash
+npm run --silent queue -- opt-in <owner/repo>
+npm run --silent queue -- review-gate <owner/repo> on   # recommended (ADR-0065)
+npm run --silent queue -- cure-foreign <owner/repo> on  # optional, off by default
+```
+
+   An enrolled repository that is not opted in is skipped by the `--enrolled`
+   feeders and reported as `notOptedIn`.
+6. **Prove the loop.** Onboarding is done when the engine has demonstrably
+   run for this repository, not when the checklist is: seed it
+   (`npm run --silent queue -- seed-dogfood --enrolled`, or wait for the
+   00:15 UTC timer) and confirm discovery roots appear only for the declared
+   programs; watch one item get claimed and completed
+   (`npm run --silent queue -- watch --repository <owner/repo>`, or the
+   `/progress` page); with the review gate on, see its draft pull request
+   pass a review round and the artifact verify. Labeling one issue `snowcat`
+   and watching the 15-minute import pick it up proves the issue path the
+   same way.
 
 ## Fill the queue
 
-Opt the repository into the queue (this is separate from Core enrollment):
+Opt the repository into the queue if onboarding has not already (step 5
+above; the command is idempotent):
 
 ```bash
 npm run --silent queue -- opt-in frostyard/updex
