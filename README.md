@@ -50,7 +50,7 @@ the [operations runbook](docs/design/queue-operations.md) for how to run it.
 npm ci
 sudo deploy/install.sh --user "$USER"      # dirs, /etc/snowcat/env, timers
 app_token="$(node -e 'console.log(require("node:crypto").randomBytes(32).toString("hex"))')"
-sed -i "s/^SNOWCAT_APP_TOKEN=.*/SNOWCAT_APP_TOKEN=$app_token/" /etc/snowcat/env
+sudo sed -i "s/^SNOWCAT_APP_TOKEN=.*/SNOWCAT_APP_TOKEN=$app_token/" /etc/snowcat/env
 unset app_token
 set -a; . /etc/snowcat/env; set +a
 npm run --silent queue -- opt-in frostyard/updex

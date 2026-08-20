@@ -66,7 +66,7 @@ git clone https://github.com/frostyard/snowcat.git /opt/snowcat
 cd /opt/snowcat && npm ci
 sudo deploy/install.sh --user "$USER"      # dirs, /etc/snowcat/env, units, timers
 app_token="$(node -e 'console.log(require("node:crypto").randomBytes(32).toString("hex"))')"
-sed -i "s/^SNOWCAT_APP_TOKEN=.*/SNOWCAT_APP_TOKEN=$app_token/" /etc/snowcat/env
+sudo sed -i "s/^SNOWCAT_APP_TOKEN=.*/SNOWCAT_APP_TOKEN=$app_token/" /etc/snowcat/env
 unset app_token
 "${EDITOR:-vi}" /etc/snowcat/env            # also set SNOWCAT_GITHUB_TOKEN=<gh auth token>
 set -a; . /etc/snowcat/env; set +a          # load it into this shell
