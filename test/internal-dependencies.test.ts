@@ -15,7 +15,8 @@ import {
   sweepInternalDependencies,
 } from "../src/queue/internal-dependencies.ts";
 import { QueueStore } from "../src/queue/store.ts";
-import { enrollExampleRepository } from "./helpers/core-fixtures.ts";
+import { reconcileRepositories } from "../src/repository/controller.ts";
+import { enabledDeclaration, enrollExampleRepository, validSurfaceProbe } from "./helpers/core-fixtures.ts";
 
 const clock = () => new Date("2026-08-18T20:00:00.000Z");
 process.env.SNOWCAT_GITHUB_TOKEN = "test-token";
@@ -181,6 +182,62 @@ test("the enrolled sweep reads the control plane and skips enrolled repositories
   assert.equal(swept.releaseNeeded[0]!.suggestedBump, "v1.0.1 (patch)");
   assert.deepEqual(swept.dependencyBumps.map((entry) => [entry.module, entry.from, entry.to]), [["github.com/frostyard/std", "v0.1.0", "v0.2.0"]]);
   await assert.rejects(sweepInternalDependencies(queue, undefined, { fetcher: apiFetcher(routes).fetcher, clock }), /SNOWCAT_CONTROL_DB/);
+});
+
+test("the enrolled sweep reports an unavailable required upstream once and retains successful downstream work", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-dependency-upstream-failure-test-"));
+  const controlPath = join(directory, "control-plane.db");
+  const store = new ControlPlaneStore(controlPath, clock);
+  test.after(() => store.close());
+  const second = {
+    ...enabledDeclaration(),
+    repository: { owner: "frostyard", name: "second", repository_id: "9002" },
+  };
+  await enrollExampleRepository(store, { additionalDeclarations: [second] });
+  await reconcileRepositories(
+    store,
+    async ({ owner, name }) => ({
+      kind: "found",
+      repositoryId: name === "example" ? "9001" : "9002",
+      owner,
+      name,
+      archived: false,
+      defaultBranch: "main",
+    }),
+    async () => validSurfaceProbe(),
+  );
+
+  const queue = new QueueStore(join(directory, "queue.db"), clock);
+  test.after(() => queue.close());
+  for (const slug of ["frostyard/example", "frostyard/second"]) queue.setRepositoryEnabled(slug, true);
+  const goMod = (name: string) =>
+    `module github.com/frostyard/${name}\n\ngo 1.26\n\nrequire (\n\tgithub.com/frostyard/missing v0.1.0\n\tgithub.com/frostyard/std v0.1.0\n)\n`;
+  const routes = routesFor([
+    { slug: "frostyard/example", tags: [{ name: "v1.0.0", sha: TAG_SHA }], goMod: goMod("example") },
+    { slug: "frostyard/second", tags: [{ name: "v1.0.0", sha: TAG_SHA }], goMod: goMod("second") },
+    { slug: "frostyard/std", tags: [{ name: "v0.2.0", sha: TAG_SHA }] },
+  ]);
+  const { fetcher, requests } = apiFetcher(routes);
+
+  const result = await sweepInternalDependencies(queue, controlPath, { fetcher, clock });
+
+  assert.deepEqual(result.swept, ["frostyard/example", "frostyard/second"]);
+  assert.deepEqual(result.failed, [
+    { repository: "frostyard/missing", reason: "GitHub repository read failed for frostyard/missing" },
+  ]);
+  assert.equal(
+    requests.filter((request) => request === "/repos/frostyard/missing").length,
+    1,
+    "a shared unavailable upstream is acquired only once",
+  );
+  assert.deepEqual(
+    result.dependencyBumps.map((entry) => [entry.repository, entry.module, entry.from, entry.to]),
+    [
+      ["frostyard/example", "github.com/frostyard/std", "v0.1.0", "v0.2.0"],
+      ["frostyard/second", "github.com/frostyard/std", "v0.1.0", "v0.2.0"],
+    ],
+  );
+  assert.equal(sweepFailureMessage(result), undefined, "an upstream acquisition failure remains a reported partial failure");
 });
 
 test("the enrolled sweep's exit-code decision fails only when every repository failed", async () => {

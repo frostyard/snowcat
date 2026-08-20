@@ -106,8 +106,10 @@ export async function sweepInternalDependencies(
   }
 
   const releases = new Map<string, RepositoryRelease>();
+  const releaseAttempts = new Set<string>();
   const manifests = new Map<string, Map<string, string>>();
   for (const repository of targets) {
+    releaseAttempts.add(repository);
     try {
       const release = await readRepositoryRelease(repository, fetcher);
       releases.set(repository, release);
@@ -121,11 +123,12 @@ export async function sweepInternalDependencies(
   for (const requires of manifests.values()) {
     for (const module of requires.keys()) {
       const upstream = frostyardRepositoryOf(module);
-      if (!upstream || releases.has(upstream)) continue;
+      if (!upstream || releaseAttempts.has(upstream)) continue;
+      releaseAttempts.add(upstream);
       try {
         releases.set(upstream, await readRepositoryRelease(upstream, fetcher));
-      } catch {
-        // No tag data: no bump proposals for this module this run.
+      } catch (error) {
+        result.failed.push({ repository: upstream, reason: error instanceof Error ? error.message : String(error) });
       }
     }
   }
