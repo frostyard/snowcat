@@ -929,6 +929,29 @@ MCP (rule 41).
     verified state, otherwise `open` (every release observed as a draft). An
     item that reported no release artifact MUST derive exactly rule 35's
     pull-request result, value for value.
+61. **`depends-on` import parsing ([ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md); extends rules 30–31 and 58).**
+    `import-issues` MUST parse each issue's **raw** body — before rule 31's
+    16,000-character quoting bound, so an edge sitting past the cut still
+    counts — for lines of the form `depends-on: <url>`: optional surrounding
+    whitespace, the key in any letter case, and exactly one absolute GitHub
+    issue URL, which becomes one predecessor of rule 58 on the created root.
+    The body is untrusted GitHub-authored text, so parsing MUST never fail an
+    import: a line that does not match that shape, an entry longer than 512
+    characters, and a URL naming the issue's own canonical HTML URL — a
+    self-edge, which an item can never wait on — MUST all be dropped silently,
+    duplicates MUST collapse, and at most the first 20 surviving entries MUST
+    be kept. An issue declaring none MUST import with no predecessors. The
+    root's instructions MUST state, above the quoted body, which predecessors
+    Snowcat read. Where rule 30 skips an existing `sourceRef` whose item is
+    still `proposed`, the import MUST re-parse that issue's body and, when the
+    parsed set differs from the stored one, replace it through rule 58's
+    `replaceProposedPredecessors` as `operator:import-issues` and report the
+    refreshed source references; an unchanged set MUST write no event, and an
+    item that is admitted, claimed, completed, blocked, or cancelled MUST NOT
+    be touched — correcting its edges is cancel-and-refile. Parsing MUST make
+    no GitHub read of its own, MUST create nothing beyond rule 30's proposed
+    roots, MUST leave rule 57's observation semantics unchanged, and MUST NOT
+    affect claim selection or admission.
 
 ## Derived artifacts
 
@@ -936,7 +959,7 @@ MCP (rule 41).
 | --- | --- |
 | SQLite schema | Created and upgraded by `QueueStore`'s migration ladder from this work-item model; admission triggers and `user_version` per rules 20–21 |
 | Backup manifest | Derived by `backup` and re-derived by `verify-backup` per rules 28–29 |
-| Issue import | `import-issues` maps labeled open GitHub issues to proposed `issue-resolution` roots per rules 30–31 and records the latest bounded labeled-issue observation per rule 57 |
+| Issue import | `import-issues` maps labeled open GitHub issues to proposed `issue-resolution` roots per rules 30–31, reads their `depends-on` lines into rule 58's predecessors per rule 61, and records the latest bounded labeled-issue observation per rule 57 |
 | Artifact verification | Completion-time, `attach-artifact`, and `verify-artifacts` observations per rules 33–35, 41, and 59; `delivery` derived per rules 35 and 60 |
 | Pull-request cure | `verify-artifacts` enqueues `pr-cure` roots per decayed head per rules 42–43; `complete_work` enforces patch identity per rule 44 |
 | Review gate | `review-gate` flag and draft refusal per rule 52; `verify-artifacts` enqueues `pr-review` rounds and `pr-review-fix` roots and marks passed drafts ready per rules 53 and 55; `complete_work` accepts the bound verdict per rule 54 |

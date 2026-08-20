@@ -1013,6 +1013,20 @@ export class QueueStore {
     });
   }
 
+  /**
+   * The still-`proposed` item carrying one source reference, or `undefined`
+   * when the repository has no item for it or that item has moved past
+   * proposal. The re-import predecessor refresh (ADR-0066) reads this to decide
+   * whether an edge may still be replaced; absence is the answer "not yours to
+   * move", not an error. Read-only: it creates, admits, and changes nothing.
+   */
+  proposedItemBySourceRef(repository: string, sourceRef: string): WorkItem | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM work_items WHERE repository = ? AND source_ref = ? AND status = 'queued' AND admitted = 0 LIMIT 1")
+      .get(repository, sourceRef) as Row | undefined;
+    return row ? withDelivery(decodeWorkItem(row)) : undefined;
+  }
+
   get(id: string): WorkItem | undefined {
     const row = this.db.prepare("SELECT * FROM work_items WHERE id = ?").get(id) as Row | undefined;
     return row ? withDelivery(decodeWorkItem(row)) : undefined;
