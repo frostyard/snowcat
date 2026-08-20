@@ -670,7 +670,7 @@ verification is one event with a global, monotonic `sequence`:
 npm run --silent queue -- watch                                 # one JSON line per new event, until Ctrl-C
 npm run --silent queue -- watch --repository frostyard/updex --interval 5
 npm run --silent queue -- events --since 0 --limit 500          # replay from the start (or any sequence)
-npm run --silent queue -- events --repository frostyard/updex   # newest 100 after sequence 0, oldest first
+npm run --silent queue -- events --repository frostyard/updex   # first/oldest 100 after sequence 0, ascending by sequence
 npm run --silent queue -- show <id>                             # one item in full: result, artifacts, verification, events
 ```
 

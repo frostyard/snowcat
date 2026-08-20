@@ -40,3 +40,16 @@ test("the runbook names every Repository actions button as a browser action", ()
     "docs/design/queue-operations.md no longer describes the Repository actions strip as running as operator:web",
   );
 });
+
+test("the runbook describes the default bounded events query as the first 100 in ascending order", () => {
+  assert.match(
+    runbook,
+    /events --repository frostyard\/updex\s+# first\/oldest 100 after sequence 0, ascending by sequence/,
+    "docs/design/queue-operations.md must describe the default --since 0 query as the first/oldest 100 matching events in ascending sequence order",
+  );
+  assert.doesNotMatch(
+    runbook,
+    /newest 100/i,
+    'docs/design/queue-operations.md must not claim the default bounded events query returns the "newest 100"',
+  );
+});
