@@ -8,6 +8,7 @@ import {
   type LabeledIssueObservation,
   type ObservableWorkItem,
   type WorkArtifact,
+  type WorkStatus,
 } from "../queue/types.ts";
 import { deriveReviewState } from "./review-state.ts";
 
@@ -61,13 +62,24 @@ export interface ProgressData {
 const SATELLITE_KINDS = new Set([REVIEW_KIND, REVIEW_FIX_KIND, CURE_KIND]);
 const LIST_LIMIT = 100;
 const TERMINAL_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * The statuses `isAgedOut` can retire. Read newest first in the store rather
+ * than filtered out of the first `LIST_LIMIT` rows of claim order: a queue
+ * that has completed more than that many items (frostyard/snowcat passed it
+ * long ago) would otherwise fill the whole budget with old merged work that
+ * this view then ages out, leaving the page empty.
+ */
+const RECENT_FIRST_STATUSES = new Set<WorkStatus>(["completed", "cancelled"]);
 
 /** The queue-only progress projection. Rendering never asks GitHub or changes queue state. */
 export function readProgress(queue: QueueStore, now: Date = new Date()): ProgressData {
   const all: ObservableWorkItem[] = [];
   const truncated: string[] = [];
   for (const status of workStatuses) {
-    const items = queue.list({ status, limit: LIST_LIMIT }).map(withoutLeaseToken);
+    const rows = RECENT_FIRST_STATUSES.has(status)
+      ? queue.recentlyUpdatedItems({ status, limit: LIST_LIMIT })
+      : queue.list({ status, limit: LIST_LIMIT });
+    const items = rows.map(withoutLeaseToken);
     all.push(...items);
     if (items.length === LIST_LIMIT) truncated.push(status);
   }

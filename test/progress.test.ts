@@ -9,7 +9,14 @@ import { sessionDigest } from "../src/surface/session.ts";
 
 const TOKEN = "progress-test-token";
 const REPOSITORY = "frostyard/example";
-const NOW = new Date("2026-08-20T02:00:00.000Z");
+/**
+ * The `/progress` route reads the real clock, so a fixture pinned to a literal
+ * instant would decide lease activity and the seven-day age-out against
+ * whenever the suite happens to run. Anchoring the fixture to the run instant
+ * keeps a one-hour lease in the future and an "old" item old, forever.
+ */
+const NOW = new Date();
+const LONG_AGO = new Date(NOW.getTime() - 30 * 24 * 60 * 60 * 1000);
 
 test("progress derivation marks closed, cancelled, and third-round review stops", () => {
   const closed = item({
@@ -57,14 +64,14 @@ test("progress derivation marks closed, cancelled, and third-round review stops"
 });
 
 test("the session-guarded progress page renders every stage, folds review satellites, pins attention, and ages out old terminals", async () => {
-  let clock = new Date("2026-08-10T00:00:00.000Z");
+  let clock = LONG_AGO;
   const queue = new QueueStore(":memory:", () => clock);
   test.after(() => queue.close());
   queue.setRepositoryEnabled(REPOSITORY, true);
   queue.setRepositoryEnabled("frostyard/plain", true);
   queue.setRepositoryReviewGate(REPOSITORY, true);
 
-  completeWithPullRequest(queue, REPOSITORY, "Old merged item", "merged");
+  completeWithPullRequest(queue, REPOSITORY, "Old merged item", "merged", undefined, LONG_AGO);
   clock = NOW;
   completeWithPullRequest(queue, REPOSITORY, "Fresh merged item", "merged");
   completeWithPullRequest(queue, REPOSITORY, "Waiting for GitHub", "unverified");
@@ -178,12 +185,46 @@ test("the session-guarded progress page renders every stage, folds review satell
   assert.equal(body.includes(reviewLease.leaseToken!), false);
 });
 
+test("the progress view selects terminal items newest first, so more than 100 aged-out completions cannot hide today's work", async () => {
+  let clock = LONG_AGO;
+  const queue = new QueueStore(":memory:", () => clock);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled(REPOSITORY, true);
+
+  // 105 completions, all merged and older than the seven-day age-out — more
+  // than QueueStore.list's hard ceiling, and all of them ahead of the fresh
+  // item in claim order (same priority, created first).
+  for (let index = 0; index < 105; index += 1) {
+    clock = new Date(LONG_AGO.getTime() + index * 1000);
+    completeWithPullRequest(queue, REPOSITORY, `Aged out merged item ${index}`, "merged", undefined, clock);
+  }
+  clock = NOW;
+  const fresh = completeWithPullRequest(queue, REPOSITORY, "Fresh item awaiting merge", "open");
+
+  const data = readProgress(queue, NOW);
+  assert.deepEqual(
+    data.repositories.flatMap((group) => group.rows).map((row) => row.item?.id),
+    [fresh.id],
+    "every aged-out completion is retired and the fresh one survives the limit",
+  );
+
+  const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue }) });
+  const response = await app.request("/progress", { headers: { Cookie: `snowcat_session=${sessionDigest(TOKEN)}` } });
+  assert.equal(response.status, 200);
+  const body = await response.text();
+  assert.match(body, /Fresh item awaiting merge/);
+  assert.match(body, /waiting for merge/);
+  assert.equal(body.includes("Aged out merged item"), false);
+  assert.equal(body.includes("No current progress to show."), false);
+});
+
 function completeWithPullRequest(
   queue: QueueStore,
   repository: string,
   objective: string,
   state: "open" | "merged" | "unverified",
   sourceRef?: string,
+  at: Date = NOW,
 ): ObservableWorkItem {
   const seed = queue.enqueueSeed({
     ...definition(objective, `implementation-${objective.toLowerCase().replaceAll(" ", "-")}`, repository),
@@ -192,14 +233,14 @@ function completeWithPullRequest(
   const lease = queue.claim({ worker: `worker:${seed.id}`, repository, kinds: [seed.kind] })!;
   const verification: WorkArtifact["verification"] =
     state === "unverified"
-      ? { status: "unverified", attemptedAt: NOW.toISOString(), reason: "GitHub unavailable" }
+      ? { status: "unverified", attemptedAt: at.toISOString(), reason: "GitHub unavailable" }
       : {
           status: "verified",
-          verifiedAt: NOW.toISOString(),
+          verifiedAt: at.toISOString(),
           number: 7,
           state,
           headSha: "a".repeat(40),
-          ...(state === "merged" ? { mergedAt: NOW.toISOString() } : { draft: repository === REPOSITORY }),
+          ...(state === "merged" ? { mergedAt: at.toISOString() } : { draft: repository === REPOSITORY }),
         };
   return queue.complete({
     id: seed.id,

@@ -29,7 +29,7 @@ FORM: An operations timeline extended from the incumbent queue shell; no new vis
     </div>
     ${
       data.truncated.length > 0
-        ? html`<div class="fl-error">Showing the first 100 ${data.truncated.join(", ")} items. Use the CLI for the full history.</div>`
+        ? html`<div class="fl-error">Showing at most 100 ${data.truncated.join(", ")} items — the most recently updated ones for completed and cancelled. Use the CLI for the full history.</div>`
         : ""
     }
     ${
