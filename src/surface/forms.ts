@@ -53,12 +53,12 @@ export function noteForm(item: ObservableWorkItem, returnTo: string): SafeHtml {
 }
 
 /**
- * Attach one pull-request or issue URL the worker did not report to a
- * completed item (`queue -- attach-artifact`). GitHub is asked first; the
+ * Attach one pull-request, issue, or release URL the worker did not report to
+ * a completed item (`queue -- attach-artifact`). GitHub is asked first; the
  * kind follows the URL path.
  */
 export function attachArtifactForm(item: ObservableWorkItem, returnTo: string): SafeHtml {
-  return html`<form class="fl-decide" method="post" action="${itemPath(item.id)}/attach-artifact">${preconditionFields(item, returnTo)}<div class="fl-actions"><input class="fl-input" type="url" name="url" placeholder="https://github.com/${item.repository}/pull/N or …/issues/N" maxlength="512" required><button class="ph-button secondary" type="submit">Attach artifact</button></div><input class="fl-input" name="description" placeholder="Description (optional)" maxlength="4000"><small class="fl-sub">Records a pull request or issue the operator carried the last mile — verified against GitHub before it is written; refused outside ${item.repository}.</small></form>`;
+  return html`<form class="fl-decide" method="post" action="${itemPath(item.id)}/attach-artifact">${preconditionFields(item, returnTo)}<div class="fl-actions"><input class="fl-input" type="url" name="url" placeholder="https://github.com/${item.repository}/pull/N, …/issues/N, or …/releases/tag/TAG" maxlength="512" required><button class="ph-button secondary" type="submit">Attach artifact</button></div><input class="fl-input" name="description" placeholder="Description (optional)" maxlength="4000"><small class="fl-sub">Records a pull request, issue, or release the operator carried the last mile — verified against GitHub before it is written; refused outside ${item.repository}.</small></form>`;
 }
 
 /** Re-verify a repository's pending issue and pull-request artifacts. */

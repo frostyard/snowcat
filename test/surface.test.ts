@@ -943,7 +943,7 @@ test("attach artifact from the item page verifies against GitHub and attaches as
   // The item page offers the form only because the item is completed; the queued/proposed pages do not.
   const page = await (await app.request(`/items/${completed.id}`, { headers: { Cookie: cookie } })).text();
   assert.match(section(page, "actions"), new RegExp(`<form class="fl-decide" method="post" action="/items/${completed.id}/attach-artifact"><input type="hidden" name="status" value="completed"><input type="hidden" name="updatedAt" value="${completed.updatedAt}">`));
-  assert.match(section(page, "actions"), /<input class="fl-input" type="url" name="url" placeholder="https:\/\/github\.com\/frostyard\/updex\/pull\/N or …\/issues\/N" maxlength="512" required>/);
+  assert.match(section(page, "actions"), /<input class="fl-input" type="url" name="url" placeholder="https:\/\/github\.com\/frostyard\/updex\/pull\/N, …\/issues\/N, or …\/releases\/tag\/TAG" maxlength="512" required>/);
   const proposedId = queue.list({ status: "proposed" })[0]!.id;
   const proposedPage = await (await app.request(`/items/${proposedId}`, { headers: { Cookie: cookie } })).text();
   assert.equal(proposedPage.includes("/attach-artifact"), false);

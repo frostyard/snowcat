@@ -130,11 +130,11 @@ test("attachArtifact refuses non-completed items, other repositories, non-GitHub
     () => queue.attachArtifact(completed.id, "operator:cli", { kind: "pull-request", url: "https://github.com/frostyard/lodge/pull/1", verification: { ...MERGED, number: 1 } }),
     /artifact pull-request URL must match https:\/\/github\.com\/frostyard\/updex\/pull\/<positive integer>/,
   );
-  // Only issue or pull-request kinds, and never without a verification.
+  // Only issue, pull-request, or release kinds, and never without a verification.
   assertUnchanged(
     completed.id,
     () => queue.attachArtifact(completed.id, "operator:cli", { kind: "commit" as "issue", url: "https://github.com/frostyard/updex/commit/0123456789abcdef", verification: MERGED }),
-    /artifact kind must be issue or pull-request/,
+    /artifact kind must be issue, pull-request, or release/,
   );
   assertUnchanged(
     completed.id,

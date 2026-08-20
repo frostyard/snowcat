@@ -183,7 +183,14 @@ function completedRow(row: CompletedRow): SafeHtml {
     })
     .filter((label): label is string => label !== undefined);
   const delivery = item.delivery ?? "none";
-  const tone = delivery === "merged" ? "ok" : delivery === "unverified" ? "warn" : delivery === "closed" ? "danger" : "";
+  const tone =
+    delivery === "merged" || delivery === "published"
+      ? "ok"
+      : delivery === "unverified"
+        ? "warn"
+        : delivery === "closed"
+          ? "danger"
+          : "";
   return html`<a class="fl-row" href="${itemPath(item.id)}"><div class="fl-row-head">${objective(item)}<span class="fl-tags"><span class="ph-badge ${tone}">${delivery}</span></span></div><small>${item.kind}${pulls.length > 0 ? ` · PR ${pulls.join(", ")}` : ""} · ${clock(item.updatedAt)}${
     row.completedBy ? ` · ${workerFamily(row.completedBy)}` : ""
   }</small></a>`;

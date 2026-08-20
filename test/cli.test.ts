@@ -650,10 +650,10 @@ test("operator CLI attach-artifact verifies against GitHub first: refuses anothe
   // Usage names the command; a malformed kind or a non-GitHub URL is refused before GitHub is asked.
   await setGitHub({});
   const usage = run();
-  assert.match(usage.stderr, /attach-artifact <work-item-id> <url> \[--kind pull-request\|issue\] \[--description <text>\] \[--if-updated-at <iso>\]/);
+  assert.match(usage.stderr, /attach-artifact <work-item-id> <url> \[--kind pull-request\|issue\|release\] \[--description <text>\] \[--if-updated-at <iso>\]/);
   const badKind = run("attach-artifact", seed.id, "https://github.com/frostyard/updex/pull/326", "--kind", "commit");
   assert.notEqual(badKind.status, 0);
-  assert.match(badKind.stderr, /--kind must be pull-request or issue/);
+  assert.match(badKind.stderr, /--kind must be pull-request, issue, or release/);
   const notGitHub = run("attach-artifact", seed.id, "https://example.com/frostyard/updex/pull/326");
   assert.notEqual(notGitHub.status, 0);
   assert.match(notGitHub.stderr, /artifact pull-request URL is not a frostyard\/updex pull-request URL/);

@@ -10,6 +10,7 @@ import {
   MAX_REVIEW_BLOCKERS,
   MODEL_NAME_PATTERN,
   pullRequestDecays,
+  RELEASE_TAG_PATTERN,
   reviewDecisions,
   workStatuses,
   type AllowedAction,
@@ -1033,10 +1034,11 @@ export class QueueStore {
   }
 
   /**
-   * Completed items with at least one issue or pull-request artifact that is
-   * not yet terminal — no verification, `verification.status` `unverified`,
-   * or `verification.state` `open` (the predicate the artifact sweeps apply
-   * per artifact) — newest first by `updated_at`, so `verify-artifacts` and
+   * Completed items with at least one issue, pull-request, or release artifact
+   * that is not yet terminal — no verification, `verification.status`
+   * `unverified`, or `verification.state` `open` (issue, pull request) or
+   * `draft` (release: the tag is not published yet) — the predicate the
+   * artifact sweeps apply per artifact — newest first by `updated_at`, so `verify-artifacts` and
    * the cure sweep never starve a recent completion behind older, already
    * terminal ones. Unlike list(), the limit bounds items that need checking
    * and is not clamped to 100; the callers own their ceilings.
@@ -1059,14 +1061,14 @@ export class QueueStore {
       ? `json_extract(artifact.value, '$.verification.status') = 'unverified'`
       : `json_type(artifact.value, '$.verification') IS NULL
                  OR json_extract(artifact.value, '$.verification.status') = 'unverified'
-                 OR json_extract(artifact.value, '$.verification.state') = 'open'`;
+                 OR json_extract(artifact.value, '$.verification.state') IN ('open', 'draft')`;
     const rows = this.db
       .prepare(
         `SELECT * FROM work_items item
          WHERE status = 'completed' AND result_json IS NOT NULL ${repositoryClause}
            AND EXISTS (
              SELECT 1 FROM json_each(item.result_json, '$.artifacts') artifact
-             WHERE json_extract(artifact.value, '$.kind') IN ('issue', 'pull-request')
+             WHERE json_extract(artifact.value, '$.kind') IN ('issue', 'pull-request', 'release')
                AND (
                  ${pending}
                )
@@ -1593,7 +1595,7 @@ export class QueueStore {
       const index = item.result.artifacts.findIndex((artifact) => artifact.url === url);
       if (index === -1) throw new Error(`work item ${id} has no artifact ${url}`);
       const artifact = item.result.artifacts[index]!;
-      if (artifact.kind !== "issue" && artifact.kind !== "pull-request") {
+      if (artifact.kind !== "issue" && artifact.kind !== "pull-request" && artifact.kind !== "release") {
         throw new Error(`artifact ${artifact.kind} is not verifiable: ${url}`);
       }
       const artifacts = item.result.artifacts.slice();
@@ -1614,16 +1616,17 @@ export class QueueStore {
   }
 
   /**
-   * Appends one issue or pull-request artifact to a completed item's result
-   * and records `artifact.attached`. This is the operator's way to record a
-   * GitHub artifact the worker did not report — typically a local-only
-   * follow-up whose pull request the operator opened by hand — so `delivery`
+   * Appends one issue, pull-request, or release artifact to a completed item's
+   * result and records `artifact.attached`. This is the operator's way to
+   * record a GitHub artifact the worker did not report — typically a local-only
+   * follow-up whose pull request the operator opened by hand, or the release
+   * tag a human published for a release slice (ADR-0066) — so `delivery`
    * and later `verify-artifacts` passes see it. The caller MUST have checked
    * the URL against GitHub first and supplies that observation as
    * `verification` (`verified`, or `unverified` with the reason); the store
    * never invents one and never accepts an artifact without one. Only an
-   * operator or policy actor may attach; the URL must be a GitHub issue or
-   * pull-request URL in the item's own repository; the same URL is attached
+   * operator or policy actor may attach; the URL must be a GitHub issue,
+   * pull-request, or release URL in the item's own repository; the same URL is attached
    * at most once. Unlike a worker's completion report, attaching does not
    * require the item's `allowedActions` to include `open-pr` or
    * `open-issue`: the operator, not the worker, produced the artifact.
@@ -1632,12 +1635,12 @@ export class QueueStore {
   attachArtifact(
     id: string,
     actor: string,
-    artifact: { kind: "issue" | "pull-request"; url: string; description?: string; verification: ArtifactVerification },
+    artifact: { kind: "issue" | "pull-request" | "release"; url: string; description?: string; verification: ArtifactVerification },
     precondition?: MutationPrecondition,
   ): WorkItem {
     validateOperatorActor(actor, "attach-artifact");
-    if (artifact.kind !== "issue" && artifact.kind !== "pull-request") {
-      throw new Error(`artifact kind must be issue or pull-request: ${String(artifact.kind)}`);
+    if (artifact.kind !== "issue" && artifact.kind !== "pull-request" && artifact.kind !== "release") {
+      throw new Error(`artifact kind must be issue, pull-request, or release: ${String(artifact.kind)}`);
     }
     if (artifact.verification === undefined) throw new Error("attached artifact requires a verification");
     validateVerification(artifact.verification);
@@ -1861,7 +1864,10 @@ export class QueueStore {
       if (action && !item.allowedActions.includes(action)) {
         throw new Error(`artifact ${artifact.kind} requires allowed action ${action}`);
       }
-      if (action) assertGitHubArtifactScope(item.repository, artifact);
+      // A release carries no required action: Snowcat never publishes or tags
+      // anything (ADR-0066), so a reported release is one a human published
+      // and there is no `release` action to hold. It is scoped like the rest.
+      if (action || artifact.kind === "release") assertGitHubArtifactScope(item.repository, artifact);
     }
   }
 
@@ -2061,7 +2067,9 @@ function validateSourceRef(sourceRef: string): void {
 function validateVerification(verification: ArtifactVerification): void {
   if (verification.status === "verified") {
     if (!Number.isSafeInteger(verification.number) || verification.number < 1) throw new Error("verification number is invalid");
-    if (!["open", "closed", "merged"].includes(verification.state)) throw new Error("verification state is invalid");
+    if (!["open", "closed", "merged", "published", "draft"].includes(verification.state)) {
+      throw new Error("verification state is invalid");
+    }
     if (!verification.verifiedAt.trim()) throw new Error("verification verifiedAt is required");
     return;
   }
@@ -2127,7 +2135,7 @@ function validateResult(result: WorkResult): void {
 
 function validateArtifact(artifact: WorkArtifact): void {
   if (artifact.verification !== undefined) {
-    if (artifact.kind !== "issue" && artifact.kind !== "pull-request") {
+    if (artifact.kind !== "issue" && artifact.kind !== "pull-request" && artifact.kind !== "release") {
       throw new Error(`artifact ${artifact.kind} cannot carry verification`);
     }
     validateVerification(artifact.verification);
@@ -2146,28 +2154,48 @@ function assertGitHubArtifactScope(repository: string, artifact: WorkArtifact): 
   const url = new URL(artifact.url);
   const [owner, name] = repository.split("/") as [string, string];
   const segments = url.pathname.split("/");
-  const expectedPath = artifact.kind === "issue" ? "issues" : artifact.kind === "pull-request" ? "pull" : "commit";
-  const identifier = segments[4] ?? "";
-  const validIdentifier =
-    artifact.kind === "commit" ? /^[0-9a-f]{7,64}$/i.test(identifier) : /^[1-9][0-9]*$/.test(identifier);
+  // A release names a tag, not a number, and its URL carries one more segment
+  // (`/releases/tag/<tag>`) than the other kinds (ADR-0066).
+  const release = artifact.kind === "release";
+  const expectedPath = release ? "releases/tag" : artifact.kind === "issue" ? "issues" : artifact.kind === "pull-request" ? "pull" : "commit";
+  const identifier = release ? decodeTagSegment(segments[5] ?? "") : (segments[4] ?? "");
+  const validIdentifier = release
+    ? RELEASE_TAG_PATTERN.test(identifier)
+    : artifact.kind === "commit"
+      ? /^[0-9a-f]{7,64}$/i.test(identifier)
+      : /^[1-9][0-9]*$/.test(identifier);
   const matchesRepository =
     (segments[1] ?? "").toLowerCase() === owner.toLowerCase() &&
     (segments[2] ?? "").toLowerCase() === name.toLowerCase();
+  const matchesPath = release ? segments[3] === "releases" && segments[4] === "tag" : segments[3] === expectedPath;
 
   if (
     url.hostname.toLowerCase() !== "github.com" ||
     url.port !== "" ||
     url.search !== "" ||
     url.hash !== "" ||
-    segments.length !== 5 ||
+    segments.length !== (release ? 6 : 5) ||
     !matchesRepository ||
-    segments[3] !== expectedPath ||
+    !matchesPath ||
     !validIdentifier
   ) {
-    const identifierShape = artifact.kind === "commit" ? "<7-64 hexadecimal characters>" : "<positive integer>";
+    const identifierShape = release
+      ? "<tag>"
+      : artifact.kind === "commit"
+        ? "<7-64 hexadecimal characters>"
+        : "<positive integer>";
     throw new Error(
       `artifact ${artifact.kind} URL must match https://github.com/${repository}/${expectedPath}/${identifierShape}`,
     );
+  }
+}
+
+/** A percent-decoded release tag segment, or `""` when the segment is not decodable. */
+function decodeTagSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return "";
   }
 }
 

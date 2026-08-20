@@ -12,36 +12,50 @@ export const allowedActions = [
 export type AllowedAction = (typeof allowedActions)[number];
 
 /**
- * Snowcat's own observation of a reported issue or pull request, taken through
- * the GitHub API at completion time and refreshed by `verify-artifacts`.
- * Workers never supply it; the MCP boundary rejects it as input.
+ * Snowcat's own observation of a reported issue, pull request, or release,
+ * taken through the GitHub API at completion time and refreshed by
+ * `verify-artifacts`. Workers never supply it; the MCP boundary rejects it as
+ * input.
  */
 export type ArtifactVerification =
   | {
       status: "verified";
       verifiedAt: string;
+      /** The issue or pull-request number, or — for a release — GitHub's own release id. */
       number: number;
-      state: "open" | "closed" | "merged";
+      state: "open" | "closed" | "merged" | "published" | "draft";
       headSha?: string;
       mergedAt?: string;
       closedAt?: string;
       /** A pull request GitHub reports as a draft (ADR-0065); omitted when not a draft, so older records read as not-draft. */
       draft?: boolean;
+      /** A release's observed `tag_name` (ADR-0066); the URL names a tag, not a number. */
+      tag?: string;
+      /** A release's observed `published_at`; absent while the release is still a draft. */
+      publishedAt?: string;
     }
   | { status: "unverified"; attemptedAt: string; reason: string };
 
+/**
+ * A Git tag as a GitHub release URL may carry it (ADR-0066): printable, no
+ * whitespace, bounded, and — since the decoded tag becomes one path segment of
+ * the API read — never a leading `-` and never a `..` component.
+ */
+export const RELEASE_TAG_PATTERN = /^(?!-)(?!.*\.\.)[A-Za-z0-9._+/-]{1,128}$/;
+
 export interface WorkArtifact {
-  kind: "issue" | "pull-request" | "commit" | "report" | "other";
+  kind: "issue" | "pull-request" | "release" | "commit" | "report" | "other";
   url: string;
   description?: string;
   verification?: ArtifactVerification;
 }
 
 /**
- * Derived from a completed item's pull-request artifacts. Delivery is the
- * merge of the reported pull request, not the achievement of an outcome.
+ * Derived from a completed item's pull-request and release artifacts.
+ * Delivery is the merge of the reported pull request or the publication of the
+ * reported release, not the achievement of an outcome (ADR-0031, ADR-0066).
  */
-export const deliveryStates = ["none", "unverified", "open", "closed", "merged"] as const;
+export const deliveryStates = ["none", "unverified", "open", "closed", "merged", "published"] as const;
 export type DeliveryState = (typeof deliveryStates)[number];
 
 export interface WorkResult {
@@ -234,7 +248,7 @@ export interface WorkItem {
   leaseToken?: string;
   leaseExpiresAt?: string;
   result?: WorkResult;
-  /** Present on completed items: the delivery state derived from pull-request artifact verifications. */
+  /** Present on completed items: the delivery state derived from pull-request and release artifact verifications. */
   delivery?: DeliveryState;
   /** Operator and policy annotations, oldest first; never written by workers. */
   operatorNotes: OperatorNote[];
@@ -243,6 +257,19 @@ export interface WorkItem {
 }
 
 export function deriveDelivery(result: WorkResult | undefined): DeliveryState {
+  // A release slice's delivery boundary is the tag a human published
+  // (ADR-0066), so where a release was reported it — not a pull request that
+  // merely prepared it — decides. Items with no release artifact take exactly
+  // the pull-request derivation they always did.
+  const releases = (result?.artifacts ?? []).filter((artifact) => artifact.kind === "release");
+  if (releases.length > 0) {
+    const releaseStates = releases.map((artifact) =>
+      artifact.verification?.status === "verified" ? artifact.verification.state : "unverified",
+    );
+    if (releaseStates.includes("published")) return "published";
+    if (releaseStates.includes("unverified")) return "unverified";
+    return "open";
+  }
   const pullRequests = (result?.artifacts ?? []).filter((artifact) => artifact.kind === "pull-request");
   if (pullRequests.length === 0) return "none";
   const states = pullRequests.map((artifact) =>

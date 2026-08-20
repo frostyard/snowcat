@@ -132,7 +132,7 @@ export async function applyVerifyArtifacts(
 }
 
 /**
- * Attaches one issue or pull-request URL to a completed item, attributed
+ * Attaches one issue, pull-request, or release URL to a completed item, attributed
  * `operator:web`, through the same verify-then-write path as
  * `queue -- attach-artifact`: GitHub is asked first, a rejected answer
  * throws and writes nothing, an unavailable answer attaches `unverified`.
@@ -150,9 +150,15 @@ export async function applyAttachArtifact(
   const url = field(body, "url").trim();
   if (!url) throw new MutationInputError("Enter the pull request or issue URL.");
   const rawKind = typeof body.kind === "string" && body.kind.length > 0 ? body.kind : undefined;
-  if (rawKind !== undefined && rawKind !== "pull-request" && rawKind !== "issue") throw new MutationInputError("kind must be pull-request or issue");
+  if (rawKind !== undefined && rawKind !== "pull-request" && rawKind !== "issue" && rawKind !== "release") {
+    throw new MutationInputError("kind must be pull-request, issue, or release");
+  }
   const kind = rawKind ?? artifactKindFromUrl(url);
-  if (!kind) throw new MutationInputError("Enter a GitHub pull request (…/pull/<n>) or issue (…/issues/<n>) URL in the item's repository.");
+  if (!kind) {
+    throw new MutationInputError(
+      "Enter a GitHub pull request (…/pull/<n>), issue (…/issues/<n>), or release (…/releases/tag/<tag>) URL in the item's repository.",
+    );
+  }
   const description = typeof body.description === "string" && body.description.trim().length > 0 ? body.description.trim() : undefined;
   const { check } = await attachVerifiedArtifact(queue, id, actor, { url, kind, description }, { ...verifier, precondition });
   return {

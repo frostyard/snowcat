@@ -9,6 +9,7 @@ import type { QueueStore } from "../queue/store.ts";
 import {
   withoutLeaseToken,
   workStatuses,
+  type ArtifactVerification,
   type ObservableWorkItem,
   type PullRequestDecay,
   type UnreportedPullRequest,
@@ -420,6 +421,18 @@ export function readPullRequests(queue: QueueStore, repository: string, now: Dat
   };
 }
 
+/**
+ * The pull-request board's states. Only pull-request artifacts reach
+ * `absorbArtifact`, so `published` and `draft` — a release's observed states
+ * (ADR-0066) — are unreachable here and read as unobserved rather than widen
+ * the board's vocabulary.
+ */
+type VerifiedArtifactState = Extract<ArtifactVerification, { status: "verified" }>["state"];
+
+function pullRequestBoardState(state: VerifiedArtifactState): PullRequestRow["state"] {
+  return state === "published" || state === "draft" ? "unverified" : state;
+}
+
 /** Folds one completed item's pull-request artifact into the row for its URL, keeping the newest verification. */
 function absorbArtifact(rows: Map<string, PullRequestRow>, item: ObservableWorkItem, artifact: WorkArtifact): void {
   const key = artifact.url.toLowerCase();
@@ -428,7 +441,7 @@ function absorbArtifact(rows: Map<string, PullRequestRow>, item: ObservableWorkI
     verification?.status === "verified"
       ? {
           number: verification.number,
-          state: verification.state,
+          state: pullRequestBoardState(verification.state),
           headSha: verification.headSha,
           verifiedAt: verification.verifiedAt,
           mergedAt: verification.mergedAt,

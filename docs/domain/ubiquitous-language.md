@@ -259,13 +259,16 @@ and is never written by a worker.
 #### Delivery state
 
 The state derived on read from a completed work item's verified pull-request
-artifacts: none, unverified, open, closed, or merged. It records whether the
-reported pull request was merged, not whether the intended outcome was
-achieved.
+artifacts — none, unverified, open, closed, or merged — or, where the item
+reported a release, from its release artifacts, which read published once a
+human has published the tag and open while it is still a draft. It records
+whether the reported pull request was merged or the reported release
+published, not whether the intended outcome was achieved.
 
 **Avoid:** delivered (the initiative projection); done; success.
 ([ADR-0031](../adr/0031-separate-delivery-from-outcome-achievement.md),
-[ADR-0018](../adr/0018-bind-worker-sessions-and-verify-github-artifacts.md))
+[ADR-0018](../adr/0018-bind-worker-sessions-and-verify-github-artifacts.md),
+[ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md))
 
 #### Claim eligibility
 
