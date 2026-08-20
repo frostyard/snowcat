@@ -625,7 +625,7 @@ async function runConcurrentIntegrity(
   const runs = workers.map((worker) => {
     let ready!: () => void;
     let settle!: (result: { ok: boolean; value?: { transactionSequence: number }; error?: string }) => void;
-    let reject!: (error: Error) => void;
+    let reject!: (error: unknown) => void;
     const readyPromise = new Promise<void>((resolve) => {
       ready = resolve;
     });
