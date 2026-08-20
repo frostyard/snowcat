@@ -103,14 +103,26 @@ test("importing proposes each labeled issue once, needs admission, and never par
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
 
-  const { fetcher } = pagedFetcher({ 1: [issue(1), issue(2, { body: null })] });
+  const pages = { 1: [issue(1), issue(2, { body: null })] };
+  const { fetcher } = pagedFetcher(pages);
   await assert.rejects(importLabeledIssues(queue, REPOSITORY, "snowcat", { fetcher }), /not opted in/);
   queue.setRepositoryEnabled(REPOSITORY, true);
 
   const first = await importLabeledIssues(queue, REPOSITORY, "snowcat", { fetcher, priority: 5 });
   assert.equal(first.fetched, 2);
+  assert.equal(first.observed, 2, "the CLI result includes the observed-issue count");
   assert.equal(first.created.length, 2);
   assert.deepEqual(first.skippedSourceRefs, []);
+  const firstObservation = queue.repositoryLabeledIssueObservations(REPOSITORY)!;
+  assert.equal(firstObservation.truncated, false);
+  assert.deepEqual(
+    firstObservation.issues.map(({ url, title, outcome }) => ({ url, title, outcome })),
+    [
+      { url: "https://github.com/frostyard/updex/issues/1", title: "Issue 1", outcome: "created" },
+      { url: "https://github.com/frostyard/updex/issues/2", title: "Issue 2", outcome: "created" },
+    ],
+  );
+  assert.ok(firstObservation.issues.every((entry) => !Number.isNaN(Date.parse(entry.seenAt))));
   for (const item of first.created) {
     assert.equal(item.status, "proposed");
     assert.equal(item.priority, 5);
@@ -122,10 +134,17 @@ test("importing proposes each labeled issue once, needs admission, and never par
   assert.equal(queue.list({ status: "proposed", repository: REPOSITORY }).length, 2);
   assert.equal(queue.claim({ worker: "claude:import-test" }), undefined, "proposed roots are not claimable");
 
-  // Re-running creates nothing, and a second issue on a new page still dedupes against the first.
+  // Re-running after issue 1 lost the label replaces the observation wholesale;
+  // issue 2 remains and is recorded as an existing sourceRef.
+  pages[1] = [issue(2, { body: null })];
   const second = await importLabeledIssues(queue, REPOSITORY, "snowcat", { fetcher });
   assert.deepEqual(second.created, []);
-  assert.deepEqual(second.skippedSourceRefs, first.created.map((item) => item.sourceRef));
+  assert.equal(second.observed, 1);
+  assert.deepEqual(second.skippedSourceRefs, ["https://github.com/frostyard/updex/issues/2"]);
+  assert.deepEqual(
+    queue.repositoryLabeledIssueObservations(REPOSITORY)!.issues.map(({ url, title, outcome }) => ({ url, title, outcome })),
+    [{ url: "https://github.com/frostyard/updex/issues/2", title: "Issue 2", outcome: "existing" }],
+  );
 
   // Admission makes it claimable; the same source is still not re-imported after completion or rejection.
   const admitted = queue.approve(first.created[0]!.id, "operator:test");
@@ -146,6 +165,7 @@ test("importing proposes each labeled issue once, needs admission, and never par
     importLabeledIssues(queue, "frostyard/missing", "snowcat", { fetcher: pagedFetcher({}, { status: 404 }).fetcher }),
     /not opted in|not found/,
   );
+  assert.equal(queue.repositoryLabeledIssueObservations(REPOSITORY)!.issues.length, 1, "failed listings leave the last successful observation standing");
   assert.equal(queue.list({ repository: REPOSITORY, limit: 100 }).length, 2);
 
   // The unique index backs the store-level dedupe even against a duplicate within one batch.
@@ -155,6 +175,26 @@ test("importing proposes each labeled issue once, needs admission, and never par
   ]);
   assert.equal(batch.created.length, 1);
   assert.deepEqual(batch.skippedSourceRefs, ["https://github.com/frostyard/updex/issues/9"]);
+});
+
+test("labeled issue observations are bounded to the latest 500 entries", () => {
+  const queue = new QueueStore(":memory:", () => new Date("2026-08-20T02:00:00.000Z"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled(REPOSITORY, true);
+
+  const observation = queue.recordLabeledIssueObservations(
+    REPOSITORY,
+    Array.from({ length: 501 }, (_, index) => ({
+      url: `https://github.com/frostyard/updex/issues/${index + 1}`,
+      title: `Issue ${index + 1}`,
+      outcome: "existing" as const,
+    })),
+    "operator:import-issues",
+  );
+  assert.equal(observation.issues.length, 500);
+  assert.equal(observation.truncated, true);
+  assert.ok(observation.issues.every((entry) => entry.seenAt === "2026-08-20T02:00:00.000Z"));
+  assert.deepEqual(queue.repositoryLabeledIssueObservations(REPOSITORY), observation);
 });
 
 test("import-issues --enrolled imports only opted-in enrolled repositories, is idempotent, and reports a failed listing without stopping the rest", async () => {

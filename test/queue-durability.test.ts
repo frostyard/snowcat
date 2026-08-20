@@ -92,7 +92,7 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
   const directory = await mkdtemp(join(tmpdir(), "snowcat-ladder-test-"));
   const path = join(directory, "queue.db");
   const { itemId } = createVersionOneDatabase(path);
-  assert.equal(SCHEMA_VERSION, 10, "this test pins the ladder at rung 10; extend it when a rung is added");
+  assert.equal(SCHEMA_VERSION, 11, "this test pins the ladder at rung 11; extend it when a rung is added");
 
   const queue = new QueueStore(path);
   test.after(() => queue.close());
@@ -424,6 +424,7 @@ test("a version-9 database gains rung 10's repositories.unreported_pull_requests
     observedAt: "2026-08-19T12:00:00.000Z",
     pullRequests: [{ url, number: 370, draft: true, createdAt: "2026-08-19T09:00:00.000Z" }],
   });
+
   queue.recordUnreportedPullRequests("frostyard/updex", { observedAt: "2026-08-19T13:00:00.000Z", pullRequests: [] }, "operator:cli");
   assert.deepEqual(queue.repositoryUnreportedPullRequests("frostyard/updex"), { observedAt: "2026-08-19T13:00:00.000Z", pullRequests: [] });
   assert.throws(
@@ -431,6 +432,37 @@ test("a version-9 database gains rung 10's repositories.unreported_pull_requests
     /not a GitHub pull-request URL/,
   );
   assert.throws(() => queue.recordUnreportedPullRequests("frostyard/lodge", { observedAt: "2026-08-19T13:00:00.000Z", pullRequests: [] }, "policy:review-gate"), /not opted in/);
+});
+
+test("the schema ladder invariant holds and a version-10 database gains rung 11's labeled-issue observation column", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-ladder-v10-test-"));
+  const path = join(directory, "queue.db");
+  const current = new QueueStore(path);
+  current.setRepositoryEnabled("frostyard/updex", true);
+  current.close();
+
+  const raw = new DatabaseSync(path);
+  raw.exec(`
+    ALTER TABLE repositories DROP COLUMN labeled_issue_observations_json;
+    PRAGMA user_version = 10;
+  `);
+  const before = new Set((raw.prepare("PRAGMA table_info(repositories)").all() as Row[]).map((column) => String(column.name)));
+  assert.ok(!before.has("labeled_issue_observations_json"));
+  raw.close();
+
+  const migrated = new QueueStore(path);
+  test.after(() => migrated.close());
+  assert.equal(migrated.schemaVersion(), SCHEMA_VERSION, "importing the store also enforces SCHEMA_VERSION === MIGRATIONS.length");
+  const inspect = new DatabaseSync(path, { readOnly: true });
+  const column = (inspect.prepare("PRAGMA table_info(repositories)").all() as Row[]).find(
+    (entry) => String(entry.name) === "labeled_issue_observations_json",
+  );
+  const stored = inspect.prepare("SELECT labeled_issue_observations_json FROM repositories WHERE slug = 'frostyard/updex'").get() as Row;
+  inspect.close();
+  assert.ok(column, "rung 11 adds repositories.labeled_issue_observations_json");
+  assert.equal(Number(column!.notnull), 0);
+  assert.equal(stored.labeled_issue_observations_json, null);
+  assert.equal(migrated.repositoryLabeledIssueObservations("frostyard/updex"), undefined);
 });
 
 test("re-running the ladder from an unversioned database converges without changing the identity", async () => {
