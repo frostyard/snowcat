@@ -102,7 +102,7 @@ function progressRow(row: ProgressRow, asOf: string): SafeHtml {
           .join(" ");
         return html`<li class="${classes}"${enteredAt ? html` title="Entered at ${enteredAt}"` : ""}><span class="fl-stage-mark" aria-hidden="true"></span><b>${LABELS[stage]}</b>${
           isCurrent && row.waiting
-            ? html`<small class="fl-waiting-chip">${row.waiting}${enteredAt ? ` · in this stage for ${stageDuration(enteredAt, asOf)}` : ""}</small>`
+            ? html`<small class="fl-waiting-chip" title="${row.waiting}">${row.waiting}${enteredAt ? ` · in this stage for ${stageDuration(enteredAt, asOf)}` : ""}</small>`
             : ""
         }</li>`;
       })}
