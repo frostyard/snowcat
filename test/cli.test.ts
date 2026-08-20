@@ -432,7 +432,7 @@ test("operator CLI verify-artifacts validates its flags and reports an empty pas
     unavailable: [],
     rejected: [],
     cure: { inspected: 0, foreign: { listed: 0, inspected: 0 }, enqueued: [], healthy: [], skipped: [], unavailable: [], notes: [] },
-    review: { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: [], unavailable: [], unreported: [] },
+    review: { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: [], unavailable: [], unreported: [], unreportedPending: [] },
   });
 });
 
@@ -518,7 +518,7 @@ test("operator CLI review-gate is a repository-level setting: on|off for an opte
     updated: unknown[];
     unavailable: unknown[];
     rejected: unknown[];
-    review: { inspected: number; enqueued: unknown[]; markedReady: unknown[]; readyToMark: unknown[]; needsHuman: unknown[]; unreported: unknown[] };
+    review: { inspected: number; enqueued: unknown[]; markedReady: unknown[]; readyToMark: unknown[]; needsHuman: unknown[]; unreported: unknown[]; unreportedPending: unknown[] };
   };
   assert.deepEqual(
     { ...sweptOutput, review: { ...sweptOutput.review, skipped: undefined, unavailable: undefined, unreported: undefined } },
@@ -527,10 +527,11 @@ test("operator CLI review-gate is a repository-level setting: on|off for an opte
       updated: [],
       unavailable: [],
       rejected: [],
-      review: { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: undefined, unavailable: undefined, unreported: undefined },
+      review: { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: undefined, unavailable: undefined, unreported: undefined, unreportedPending: [] },
     },
   );
   assert.ok(Array.isArray(sweptOutput.review.unreported), "the review sweep always reports its unreported list");
+  assert.ok(Array.isArray(sweptOutput.review.unreportedPending), "the review sweep always reports its pending list");
   const noReview = run("verify-artifacts", "--no-cure", "--no-review");
   assert.equal(noReview.status, 0, noReview.stderr);
   assert.deepEqual(JSON.parse(noReview.stdout), { checked: 0, updated: [], unavailable: [], rejected: [] });

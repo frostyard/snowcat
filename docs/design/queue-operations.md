@@ -707,6 +707,9 @@ list included), so the board's pull-request section shows an **Unreported**
 sub-list and the inbox's *Review adjudication* group lists each one with the
 time it was observed, both without calling GitHub. Two remedies:
 
+A pull request younger than the longest possible lease is listed as
+`unreportedPending`, not unreported.
+
 - the pull request is a duplicate or unwanted → close it on GitHub; the next
   pass drops it from the list;
 - the work is real → `attach-artifact` it to the item that should have
