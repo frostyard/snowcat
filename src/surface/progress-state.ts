@@ -8,6 +8,7 @@ import {
   type LabeledIssueObservation,
   type ObservableWorkItem,
   type WorkArtifact,
+  type WorkEvent,
   type WorkStatus,
 } from "../queue/types.ts";
 import { deriveReviewState } from "./review-state.ts";
@@ -53,6 +54,7 @@ export interface ProgressRow {
   item?: ObservableWorkItem;
   observation?: LabeledIssueObservation;
   reviewRound?: number;
+  enteredAt: Partial<Record<ProgressStage, string>>;
 }
 
 export interface ProgressRepositoryGroup {
@@ -61,6 +63,7 @@ export interface ProgressRepositoryGroup {
 }
 
 export interface ProgressData {
+  asOf: string;
   attention: ProgressRow[];
   repositories: ProgressRepositoryGroup[];
   summary: Record<ProgressSummaryBucket, number>;
@@ -71,6 +74,7 @@ export interface ProgressData {
 
 const SATELLITE_KINDS = new Set([REVIEW_KIND, REVIEW_FIX_KIND, CURE_KIND]);
 const LIST_LIMIT = 100;
+const PROGRESS_EVENT_LIMIT = 100;
 const TERMINAL_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 /**
  * The statuses `isAgedOut` can retire. Read newest first in the store rather
@@ -110,9 +114,21 @@ export function readProgress(queue: QueueStore, now: Date = new Date()): Progres
     reviewsByOrigin.set(origin, rows);
   }
 
-  const rows = primaries.map((item) =>
-    deriveProgressRow(item, reviewsByOrigin.get(item.id) ?? [], queue.reviewGateEnabled(item.repository), now),
-  );
+  const eventsByItem = new Map<string, WorkEvent[]>();
+  const recentEvents = (id: string): WorkEvent[] => {
+    const cached = eventsByItem.get(id);
+    if (cached) return cached;
+    const events = queue.recentEvents(id, PROGRESS_EVENT_LIMIT);
+    eventsByItem.set(id, events);
+    return events;
+  };
+  const rows = primaries.map((item) => {
+    const reviews = reviewsByOrigin.get(item.id) ?? [];
+    return deriveProgressRow(item, reviews, queue.reviewGateEnabled(item.repository), now, {
+      itemEvents: recentEvents(item.id),
+      reviewEvents: reviews.flatMap((review) => recentEvents(review.id)),
+    });
+  });
   const sourceRefs = new Set(
     primaries.flatMap((item) => (item.sourceRef ? [`${item.repository.toLowerCase()}\0${item.sourceRef.toLowerCase()}`] : [])),
   );
@@ -135,6 +151,7 @@ export function readProgress(queue: QueueStore, now: Date = new Date()): Progres
   }
 
   return {
+    asOf: now.toISOString(),
     attention,
     repositories: [...byRepository.entries()]
       .sort(([left], [right]) => left.localeCompare(right))
@@ -173,6 +190,7 @@ export function deriveProgressRow(
   reviewItems: ObservableWorkItem[],
   reviewGate: boolean,
   now: Date,
+  history: { itemEvents?: readonly WorkEvent[]; reviewEvents?: readonly WorkEvent[] } = {},
 ): ProgressRow {
   const base = {
     key: `item:${item.id}`,
@@ -181,47 +199,51 @@ export function deriveProgressRow(
     updatedAt: item.updatedAt,
     item,
   };
+  const finish = (row: Omit<ProgressRow, "enteredAt">): ProgressRow => ({
+    ...row,
+    enteredAt: deriveStageEnteredAt(item, row.stage, reviewGate, history),
+  });
   const stopped = item.status === "blocked" ? blockedBadge() : item.status === "cancelled" ? cancelledBadge() : undefined;
 
   if (item.status === "proposed") {
-    return { ...base, stage: "proposed", active: false, waiting: stopped?.reason ?? "awaiting your admission", badge: stopped };
+    return finish({ ...base, stage: "proposed", active: false, waiting: stopped?.reason ?? "awaiting your admission", badge: stopped });
   }
   if (item.status === "queued") {
-    return { ...base, stage: "queued", active: false, waiting: stopped?.reason ?? "in queue", badge: stopped };
+    return finish({ ...base, stage: "queued", active: false, waiting: stopped?.reason ?? "in queue", badge: stopped });
   }
   if (item.status === "claimed") {
     const active = leaseIsActive(item, now);
-    return {
+    return finish({
       ...base,
       stage: "working",
       active,
       waiting: active ? "worker active" : "lease expired · awaiting reclaim",
       badge: stopped,
-    };
+    });
   }
 
   const pullRequest = pullRequestArtifact(item);
   if (!pullRequest) {
-    return {
+    return finish({
       ...base,
       stage: "working",
       active: false,
       waiting: stopped?.reason ?? (item.status === "completed" ? "completed · no pull request reported" : "work stopped"),
       badge: stopped,
-    };
+    });
   }
   const verification = pullRequest.verification;
   if (!verification || verification.status === "unverified") {
-    return {
+    return finish({
       ...base,
       stage: "pr-open",
       active: false,
       waiting: stopped?.reason ?? "waiting for validation",
       badge: stopped ?? { label: "unverified", reason: "GitHub unavailable", tone: "grey" },
-    };
+    });
   }
   if (verification.state === "merged") {
-    return { ...base, stage: "merged", active: false, waiting: stopped?.reason, badge: stopped };
+    return finish({ ...base, stage: "merged", active: false, waiting: stopped?.reason, badge: stopped });
   }
 
   const reviewState = reviewGate
@@ -239,36 +261,36 @@ export function deriveProgressRow(
           : undefined;
 
   if (verification.state === "closed") {
-    return {
+    return finish({
       ...base,
       stage: reviewGate && reviewItems.length > 0 ? "review" : "awaiting-merge",
       active: false,
       waiting: "PR closed without merge",
       badge: { label: "closed", reason: "PR closed without merge", tone: "red" },
       ...(reviewRound ? { reviewRound } : {}),
-    };
+    });
   }
   if (!reviewGate || reviewState?.decision === "pass") {
-    return {
+    return finish({
       ...base,
       stage: "awaiting-merge",
       active: false,
       waiting: stopped?.reason ?? "waiting for merge",
       badge: stopped,
       ...(reviewRound ? { reviewRound } : {}),
-    };
+    });
   }
 
   const round = reviewRound ?? 1;
   const active = satellite?.status === "claimed" && leaseIsActive(satellite, now);
-  return {
+  return finish({
     ...base,
     stage: "review",
     active,
     waiting: satelliteStopped?.reason ?? `round ${round}/${MAX_REVIEW_ROUNDS}`,
     badge: stopped ?? satelliteStopped,
     reviewRound: round,
-  };
+  });
 }
 
 function observationRow(repository: string, observation: LabeledIssueObservation): ProgressRow {
@@ -281,6 +303,7 @@ function observationRow(repository: string, observation: LabeledIssueObservation
     active: false,
     waiting: "waiting for import",
     observation,
+    enteredAt: { "awaiting-import": observation.seenAt },
   };
 }
 
@@ -303,6 +326,77 @@ function blockedBadge(): ProgressBadge {
 
 function cancelledBadge(): ProgressBadge {
   return { label: "cancelled", reason: "cancelled", tone: "red" };
+}
+
+function deriveStageEnteredAt(
+  item: ObservableWorkItem,
+  currentStage: ProgressStage,
+  reviewGate: boolean,
+  history: { itemEvents?: readonly WorkEvent[]; reviewEvents?: readonly WorkEvent[] },
+): Partial<Record<ProgressStage, string>> {
+  const itemEvents = history.itemEvents ?? [];
+  const reviewEvents = history.reviewEvents ?? [];
+  const pullRequest = pullRequestArtifact(item);
+  const verification = pullRequest?.verification;
+  const proposedAt = latestEventAt(itemEvents, ["work.proposed", "work.deferred"]);
+  const queuedAt = latestEventAt(itemEvents, ["work.queued", "work.approved", "work.requeued", "work.released"]);
+  const workingAt = latestEventAt(itemEvents, ["work.claimed"]);
+  const pullRequestAt = latestEventAt(itemEvents, ["work.completed", "artifact.attached"]);
+  const reviewAt = reviewGate ? latestEventAt(reviewEvents, ["work.proposed", "work.queued", "work.requeued"]) : undefined;
+  const reviewPassedAt = reviewGate
+    ? latestMatchingEventAt(reviewEvents, (event) => event.type === "work.reviewed" && event.payload.decision === "pass")
+    : undefined;
+  const awaitingMergeAt = latestIso(
+    latestEventAt(itemEvents, ["artifact.ready"]),
+    reviewPassedAt,
+    reviewGate ? undefined : pullRequestAt,
+  );
+  const mergedAt = latestIso(
+    latestMatchingEventAt(itemEvents, (event) => event.type === "artifact.verified" && event.payload.state === "merged"),
+    verification?.status === "verified" ? verification.mergedAt : undefined,
+  );
+  const candidates: Partial<Record<ProgressStage, string>> = {
+    "awaiting-import": item.createdAt,
+    proposed: proposedAt,
+    queued: queuedAt,
+    working: workingAt,
+    "pr-open": pullRequestAt,
+    review: reviewAt,
+    "awaiting-merge": awaitingMergeAt,
+    merged: mergedAt,
+  };
+
+  const result: Partial<Record<ProgressStage, string>> = {};
+  const currentIndex = progressStages.indexOf(currentStage);
+  let cursor = item.createdAt;
+  for (let index = 0; index <= currentIndex; index += 1) {
+    const stage = progressStages[index]!;
+    const candidate = candidates[stage];
+    if (candidate && Date.parse(candidate) >= Date.parse(cursor)) cursor = candidate;
+    result[stage] = cursor;
+  }
+  return result;
+}
+
+function latestEventAt(events: readonly WorkEvent[], types: readonly string[]): string | undefined {
+  const wanted = new Set(types);
+  return latestMatchingEventAt(events, (event) => wanted.has(event.type));
+}
+
+function latestMatchingEventAt(events: readonly WorkEvent[], matches: (event: WorkEvent) => boolean): string | undefined {
+  let latest: string | undefined;
+  for (const event of events) {
+    if (matches(event)) latest = latestIso(latest, event.occurredAt);
+  }
+  return latest;
+}
+
+function latestIso(...values: Array<string | undefined>): string | undefined {
+  return values.reduce<string | undefined>((latest, value) => {
+    if (!value) return latest;
+    if (!latest || Date.parse(value) >= Date.parse(latest)) return value;
+    return latest;
+  }, undefined);
 }
 
 function compareRows(left: ProgressRow, right: ProgressRow): number {

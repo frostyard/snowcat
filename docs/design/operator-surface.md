@@ -49,7 +49,7 @@ as well as on the item page.
 | --- | --- | --- | --- |
 | Inbox | `/` | `list({status:"proposed"})`, `list({status:"blocked"})`, `completedItemsWithPendingArtifacts({ unverifiedOnly: true })` — completed items with an `unverified` issue or pull-request artifact, newest first, selected in the store rather than filtered out of the first 100 completions | Everything waiting on the operator, grouped: proposals to admit (children under their parent's finding), blocked items to requeue or cancel, unverified artifacts to re-check |
 | Repository board | `/repositories/:owner/:name` | `counts(repository)`, `list({repository, status})` for `queued`/`claimed`/`completed`, `list({repository, kind:"pr-cure", status})` per status, `events(id)` for the completing worker; `ControlPlaneStore.repositoryStatuses()` and `activeCoreSnapshot()` for the enrollment badge (effective state, Core source commit, surface commit, repository id, hold) | Three columns: queued in claim order (priority tag, `note` tag when `operatorNotes` is non-empty), leased (worker identity, lease-time bar from `updatedAt` → `leaseExpiresAt`), completed newest first with the `delivery` tag; four stat tiles (queued, leased, completed today, merged / attempts — the attempts denominator counts only completed items whose `allowedActions` include `open-pr`, see below); under them the [pull requests](#pull-requests) section; the header's Verify artifacts / Import issues / Seed dogfood / Hold (or Clear hold) actions, each one same-origin `POST` (see [Mutations](#mutations) and the operational notes below; [spec rule 40](../specs/work-queue.md)) |
-| Progress | `/progress` | `list({status})` for the live statuses and `recentlyUpdatedItems({status})` — the same filters ordered newest first in the store — for `completed` and `cancelled`, so more than 100 old merged completions cannot hide today's work behind claim order; plus `repositoryLabeledIssueObservations(repository)` and each repository's review-gate setting | Read-only lifecycle strips grouped by repository, preceded by counts for awaiting import, proposed, queued, working, in review, awaiting merge, and needs attention. The eight fixed stages run from awaiting import through merged; review and fix satellites fold into their primary item. Amber and red stops are collected in a pinned needs-attention group, active leases pulse, and merged or cancelled rows age out after seven days |
+| Progress | `/progress` | `list({status})` for the live statuses and `recentlyUpdatedItems({status})` — the same filters ordered newest first in the store — for `completed` and `cancelled`, so more than 100 old merged completions cannot hide today's work behind claim order; `recentEvents(id, 100)` for each visible primary and folded review satellite; plus `repositoryLabeledIssueObservations(repository)` and each repository's review-gate setting | Read-only lifecycle strips grouped by repository, preceded by counts for awaiting import, proposed, queued, working, in review, awaiting merge, and needs attention. The eight fixed stages run from awaiting import through merged; review and fix satellites fold into their primary item. Completed and current stages expose their ledger-derived entered-at times on hover, while the current waiting chip shows its elapsed stage duration. Amber and red stops are collected in a pinned needs-attention group, active leases pulse, and merged or cancelled rows age out after seven days |
 | Item | `/items/:id` | `get(id)`, `events(id)`, `get(parentId)`, `get(rootId)`, `children(id)` | Exactly what `queue -- show` prints, rendered: header with status and delivery tags; Definition (objective, repository + enrollment, kind, lineage links to parent/root/children, priority, allowed/delegable tags, created/updated, instructions, acceptance criteria); Result (summary, evidence, artifacts table with verification tag, head SHA, merged/verified time and the re-verifying actor from `artifact.verified`); Operator notes; Previous results; the full event timeline |
 | Events | `/events` | `eventsSince(since, {repository, limit: 500})` — the store's own repository filter; the decision-type filter is applied over that read in [`src/surface/events.ts`](../../src/surface/events.ts), no new store method | The ledger as a page, newest first: time, sequence, event type, item link, repository link, actor, payload gist. `?repository=<owner/repo>` scopes it to one repository, `?since=<sequence>` moves the window (default: the last 100 events, the last 500 when filtering decisions), and `?decisions=1` keeps only the operator-decision event types (`work.approved`, `work.rejected`, `work.deferred`, `work.requeued`, `work.cancelled`, `work.prioritized`, `work.noted`, `artifact.attached`, `artifact.ready`). The filters are one `GET` form — the page has no `POST` — and when the read fills the 500-event cap short of the ledger cursor the page names the highest sequence it reached, says the newer events are the hidden ones, and links onward from it |
 
@@ -70,6 +70,10 @@ The summary counts are derived from those same projected rows without another
 store read; PR-open and review-stage rows share the in-review bucket, and
 merged rows remain visible in their strips but are outside the in-flight
 summary.
+Each visible item's newest 100 ledger events provide bounded transition
+timestamps; the projection carries the latest entry into every reached stage,
+including a folded review round, and uses the render's single as-of instant for
+the current-stage duration.
 
 A repositories index (`/repositories`) lists opted-in and declared
 repositories with per-status counts from `counts(repository)`, their
@@ -89,9 +93,9 @@ a pull request that failed to merge and is left out
 (`N open · N unverified · N blocked now`) is unchanged.
 
 Lease tokens are never read into a template; views use `withoutLeaseToken`
-like the CLI. `QueueStore.counts(repository?)` and `QueueStore.children(id)`
-are the two read-only additions the surface needed; neither is exposed
-through MCP.
+like the CLI. `QueueStore.counts(repository?)`, `QueueStore.children(id)`,
+and the bounded `QueueStore.recentEvents(id, limit)` are read-only additions
+the surface needed; none is exposed through MCP.
 
 ### Pull requests
 

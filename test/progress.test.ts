@@ -68,6 +68,100 @@ test("progress derivation marks closed, cancelled, and third-round review stops"
   });
 });
 
+test("progress renders ledger-derived stage entry times and the current-stage duration", async (t) => {
+  const at = (hours: number) => new Date(NOW.getTime() - hours * 60 * 60 * 1000);
+  let clock = at(6.5);
+  const queue = new QueueStore(":memory:", () => clock);
+  t.after(() => queue.close());
+  queue.setRepositoryEnabled(REPOSITORY, true);
+  queue.setRepositoryReviewGate(REPOSITORY, true);
+
+  const [origin] = queue.enqueueProposedRoots(REPOSITORY, [
+    {
+      ...definition("Known event history", "timeline-implementation"),
+      sourceRef: "https://github.com/frostyard/example/issues/139",
+    },
+  ]).created;
+  assert.ok(origin);
+  clock = at(5.5);
+  queue.approve(origin.id, "operator:test");
+  clock = at(4.5);
+  const lease = queue.claim({
+    worker: "worker:timeline",
+    repository: REPOSITORY,
+    kinds: [origin.kind],
+    leaseSeconds: 3600,
+  })!;
+  clock = at(4);
+  queue.heartbeat(origin.id, lease.leaseToken!, "worker:timeline", 3600);
+  clock = at(3.5);
+  queue.complete({
+    id: origin.id,
+    leaseToken: lease.leaseToken!,
+    worker: "worker:timeline",
+    result: {
+      summary: "Done.",
+      evidence: ["tests pass"],
+      artifacts: [
+        {
+          kind: "pull-request",
+          url: "https://github.com/frostyard/example/pull/139",
+          verification: {
+            status: "verified",
+            verifiedAt: clock.toISOString(),
+            number: 139,
+            state: "open",
+            headSha: "b".repeat(40),
+            draft: true,
+          },
+        },
+      ],
+    },
+    followUps: [],
+  });
+  clock = at(2.5);
+  queue.enqueueReviewRoot(REPOSITORY, {
+    kind: "pr-review",
+    objective: "Review known event history",
+    instructions: "Review.",
+    acceptanceCriteria: ["Verdict."],
+    allowedActions: ["read", "run-tests"],
+    delegableActions: [],
+    createdBy: "policy:review-gate",
+    sourceRef: `pr-review:https://github.com/frostyard/example/pull/139@${"b".repeat(40)}`,
+    review: {
+      pullRequestUrl: "https://github.com/frostyard/example/pull/139",
+      headSha: "b".repeat(40),
+      round: 1,
+      originItemId: origin.id,
+      priorBlockers: [],
+    },
+  });
+
+  const data = readProgress(queue, NOW);
+  const row = data.repositories.flatMap((group) => group.rows).find((candidate) => candidate.item?.id === origin.id);
+  assert.ok(row);
+  assert.deepEqual(row.enteredAt, {
+    "awaiting-import": at(6.5).toISOString(),
+    proposed: at(6.5).toISOString(),
+    queued: at(5.5).toISOString(),
+    working: at(4.5).toISOString(),
+    "pr-open": at(3.5).toISOString(),
+    review: at(2.5).toISOString(),
+  });
+
+  const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue }) });
+  const response = await app.request("/progress", {
+    headers: { Cookie: `snowcat_session=${sessionDigest(TOKEN)}` },
+  });
+  assert.equal(response.status, 200);
+  const body = await response.text();
+  for (const enteredAt of Object.values(row.enteredAt)) {
+    assert.match(body, new RegExp(`title="Entered at ${enteredAt}"`));
+  }
+  assert.match(body, /round 1\/3 · in this stage for 2 hours 30 minutes/);
+});
+
 test("the session-guarded progress page renders every stage, folds review satellites, pins attention, and ages out old terminals", async () => {
   let clock = LONG_AGO;
   const queue = new QueueStore(":memory:", () => clock);
