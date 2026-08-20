@@ -19,11 +19,13 @@ Use the canonical [Snowcat ubiquitous language](docs/domain/ubiquitous-language.
 for domain terms. Root `CONTEXT.md` is a compatibility symlink to that file;
 edit only the canonical path.
 
-This file (`AGENTS.md`) is the CANONICAL agent instructions — `CLAUDE.md`,
-`GEMINI.md`, and `.github/copilot-instructions.md` are symlinks to it, and
-`.claude/skills` symlinks to `.agents/skills/`
-([ADR-0002](docs/adr/0002-agent-portable-instruction-surface.md)). Edit only
-the canonical paths; keep content tool-agnostic.
+This file (`AGENTS.md`) is the CANONICAL agent instructions and contribution
+guide — `CLAUDE.md`, `GEMINI.md`, `CONTRIBUTING.md`, and
+`.github/copilot-instructions.md` are symlinks to it, and `.claude/skills`
+symlinks to `.agents/skills/`
+([ADR-0002](docs/adr/0002-agent-portable-instruction-surface.md),
+[ADR-0068](docs/adr/0068-alias-the-acmm-contributing-guide.md)). Edit only the
+canonical paths; keep content tool-agnostic.
 
 ## Skills (follow these for common tasks)
 

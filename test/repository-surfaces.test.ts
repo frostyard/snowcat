@@ -35,9 +35,10 @@ test(".github/prompts/ holds at least one task-shaped runbook", () => {
   assert.ok(statSync(join(root, ".github", "prompts", "README.md")).isFile(), ".github/prompts/README.md must exist");
 });
 
-// The ADR-0002 agent-portable instruction surface: one canonical AGENTS.md
-// with every vendor-specific entry point a relative symlink to it, and one
-// real .agents/skills/ directory that .claude/skills aliases. Pinned here so
+// The ADR-0002 agent-portable instruction surface and ADR-0068 ACMM
+// contributing-guide alias: one canonical AGENTS.md with every entry point a
+// relative symlink to it, and one real .agents/skills/ directory that
+// .claude/skills aliases. Pinned here so
 // `npm run check` fails when a sync, a rebase, or a tool that rewrites
 // symlinks as regular files turns an alias back into a copy — the failure
 // mode ADR-0002 exists to prevent, since a copy silently stops tracking the
@@ -45,6 +46,7 @@ test(".github/prompts/ holds at least one task-shaped runbook", () => {
 const INSTRUCTION_ALIASES: ReadonlyArray<readonly [string, string]> = [
   ["CLAUDE.md", "AGENTS.md"],
   ["GEMINI.md", "AGENTS.md"],
+  ["CONTRIBUTING.md", "AGENTS.md"],
   [".github/copilot-instructions.md", "../AGENTS.md"],
 ];
 
