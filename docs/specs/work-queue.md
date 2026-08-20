@@ -233,7 +233,10 @@ MCP (rule 41).
     every token that existed before it; rung 10 adds
     `repositories.unreported_pull_requests_json`, the unreported
     pull-request observation of rule 53, `NULL` for every repository that
-    existed before it. Processes running code from before
+    existed before it; rung 11 adds
+    `repositories.labeled_issue_observations_json`, the latest successful
+    labeled-issue import observation of rule 57, `NULL` for every repository
+    that existed before it. Processes running code from before
     the version guard existed are stopped by rule 20's database constraint,
     not by this check.
 22. Scheduling priority is operator-owned. Only operator-authored or
@@ -848,6 +851,21 @@ MCP (rule 41).
     command MUST be read-only — no write, no schema rung, no GitHub call —
     MUST refuse a window carrying more than 100,000 events instead of
     aggregating it, and MUST NOT be exposed as an MCP tool.
+57. **Labeled-issue observations.** At the end of every successful
+    `import-issues` listing, `QueueStore.recordLabeledIssueObservations` MUST
+    replace, in one write transaction, that opted-in repository's complete
+    latest-run observation. Each entry MUST carry the issue's canonical GitHub
+    HTML URL, title, one `seenAt` timestamp for the transaction, and outcome
+    `created` when this run proposed its sourceRef or `existing` when any item
+    already carried it. Storage MUST preserve listing order, retain at most the
+    first 500 entries, and set `truncated` when more were observed; an empty
+    successful listing MUST replace the prior observation with an empty list.
+    A missing, unavailable, non-200, or malformed listing MUST leave the prior
+    observation standing. `QueueStore.repositoryLabeledIssueObservations`
+    MUST return the last observation or `undefined` before the first successful
+    import, and CLI import output MUST include the full observed issue count.
+    This observation creates no work, event, artifact, MCP tool, or GitHub
+    write and does not change rules 30–31's admission semantics.
 
 ## Derived artifacts
 
@@ -855,7 +873,7 @@ MCP (rule 41).
 | --- | --- |
 | SQLite schema | Created and upgraded by `QueueStore`'s migration ladder from this work-item model; admission triggers and `user_version` per rules 20–21 |
 | Backup manifest | Derived by `backup` and re-derived by `verify-backup` per rules 28–29 |
-| Issue import | `import-issues` maps labeled open GitHub issues to proposed `issue-resolution` roots per rules 30–31 |
+| Issue import | `import-issues` maps labeled open GitHub issues to proposed `issue-resolution` roots per rules 30–31 and records the latest bounded labeled-issue observation per rule 57 |
 | Artifact verification | Completion-time, `attach-artifact`, and `verify-artifacts` observations per rules 33–35 and 41; `delivery` derived per rule 35 |
 | Pull-request cure | `verify-artifacts` enqueues `pr-cure` roots per decayed head per rules 42–43; `complete_work` enforces patch identity per rule 44 |
 | Review gate | `review-gate` flag and draft refusal per rule 52; `verify-artifacts` enqueues `pr-review` rounds and `pr-review-fix` roots and marks passed drafts ready per rules 53 and 55; `complete_work` accepts the bound verdict per rule 54 |

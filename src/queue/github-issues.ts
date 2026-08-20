@@ -115,6 +115,7 @@ export interface ImportLabeledIssuesResult {
   fetched: number;
   pages: number;
   truncated: boolean;
+  observed: number;
   created: WorkItem[];
   skippedSourceRefs: string[];
 }
@@ -134,12 +135,23 @@ export async function importLabeledIssues(
   }
   const candidates = result.issues.map((issue) => issueWorkCandidate(repository, issue, { priority: options.priority }));
   const { created, skippedSourceRefs } = queue.enqueueProposedRoots(repository, candidates);
+  const createdSourceRefs = new Set(created.map((item) => item.sourceRef));
+  queue.recordLabeledIssueObservations(
+    repository,
+    result.issues.map((issue) => ({
+      url: issue.htmlUrl,
+      title: issue.title,
+      outcome: createdSourceRefs.has(issue.htmlUrl) ? "created" : "existing",
+    })),
+    "operator:import-issues",
+  );
   return {
     repository,
     label,
     fetched: result.issues.length,
     pages: result.pages,
     truncated: result.truncated,
+    observed: result.issues.length,
     created,
     skippedSourceRefs,
   };

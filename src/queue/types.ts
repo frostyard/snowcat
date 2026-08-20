@@ -192,6 +192,22 @@ export interface UnreportedPullRequestObservation {
   pullRequests: UnreportedPullRequest[];
 }
 
+export type LabeledIssueObservationOutcome = "created" | "existing";
+
+/** One labeled open issue seen by the latest successful import for a repository. */
+export interface LabeledIssueObservation {
+  url: string;
+  title: string;
+  seenAt: string;
+  outcome: LabeledIssueObservationOutcome;
+}
+
+/** The bounded, whole-replacement finding from the latest successful issue import. */
+export interface LabeledIssueObservations {
+  issues: LabeledIssueObservation[];
+  truncated: boolean;
+}
+
 export interface WorkItem {
   id: string;
   rootId: string;

@@ -17,6 +17,8 @@ import {
   type ClaimInput,
   type CompletionInput,
   type FollowUpInput,
+  type LabeledIssueObservationOutcome,
+  type LabeledIssueObservations,
   type ObservedWorkEvent,
   type OperatorNote,
   type CureRootInput,
@@ -48,6 +50,7 @@ const MAX_SOURCE_REF_LENGTH = 512;
 const DEFAULT_EVENTS_SINCE_LIMIT = 100;
 const MAX_EVENTS_SINCE_LIMIT = 500;
 const MAX_OPERATOR_NOTE_LENGTH = 4000;
+const MAX_LABELED_ISSUE_OBSERVATIONS = 500;
 /** Ledger events the metrics window reads; no other event bears on the reported numbers. */
 const METRICS_EVENT_TYPES = ["work.claimed", "work.completed", "work.blocked", "work.cancelled"] as const;
 /** Events one metrics window may carry before it is refused instead of aggregated. */
@@ -60,7 +63,7 @@ export const MAX_METRICS_WINDOW_EVENTS = 100_000;
  * that newer code has already migrated; newer code upgrades an older database
  * in place, forward only, inside one write transaction.
  */
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 /**
  * Backup manifest emitted by `QueueStore.backup` and re-derived by
@@ -629,6 +632,52 @@ export class QueueStore {
     if (typeof raw !== "string") return undefined;
     const parsed = JSON.parse(raw) as UnreportedPullRequestObservation;
     return { observedAt: String(parsed.observedAt), pullRequests: parsed.pullRequests ?? [] };
+  }
+
+  /**
+   * Replaces the latest labeled-issue observations for one opted-in repository.
+   * The write is bounded to 500 entries and records one shared transaction time
+   * as each issue's `seenAt`; it creates no work or event.
+   */
+  recordLabeledIssueObservations(
+    repository: string,
+    issues: ReadonlyArray<{ url: string; title: string; outcome: LabeledIssueObservationOutcome }>,
+    actor: string,
+  ): LabeledIssueObservations {
+    validateOperatorActor(actor, "labeled issue observations");
+    const validated = issues.map((issue) => {
+      const match = /^https:\/\/github\.com\/([^\s/]+)\/([^\s/]+)\/issues\/[1-9][0-9]*$/.exec(issue.url);
+      if (!match || `${match[1]}/${match[2]}`.toLowerCase() !== repository.toLowerCase()) {
+        throw new Error(`labeled issue URL is not a GitHub issue URL: ${issue.url}`);
+      }
+      if (!issue.title.trim()) throw new Error("labeled issue title is required");
+      if (issue.outcome !== "created" && issue.outcome !== "existing") {
+        throw new Error(`invalid labeled issue outcome: ${String(issue.outcome)}`);
+      }
+      return { url: issue.url, title: issue.title.trim(), outcome: issue.outcome };
+    });
+    return this.transaction(() => {
+      this.assertRepositoryEnabled(repository);
+      const seenAt = this.now();
+      const observation: LabeledIssueObservations = {
+        issues: validated.slice(0, MAX_LABELED_ISSUE_OBSERVATIONS).map((issue) => ({ ...issue, seenAt })),
+        truncated: validated.length > MAX_LABELED_ISSUE_OBSERVATIONS,
+      };
+      this.db
+        .prepare("UPDATE repositories SET labeled_issue_observations_json = ?, updated_at = ? WHERE slug = ?")
+        .run(JSON.stringify(observation), seenAt, repository);
+      return observation;
+    });
+  }
+
+  /** The latest successful labeled-issue import observation, or `undefined` before the first one. */
+  repositoryLabeledIssueObservations(repository: string): LabeledIssueObservations | undefined {
+    validateRepository(repository);
+    const row = this.db.prepare("SELECT labeled_issue_observations_json FROM repositories WHERE slug = ?").get(repository) as Row | undefined;
+    const raw = row?.labeled_issue_observations_json;
+    if (typeof raw !== "string") return undefined;
+    const parsed = JSON.parse(raw) as LabeledIssueObservations;
+    return { issues: parsed.issues ?? [], truncated: parsed.truncated === true };
   }
 
   /**
@@ -2285,6 +2334,17 @@ const MIGRATIONS: readonly Migration[] = [
     );
     if (!columns.has("unreported_pull_requests_json")) {
       db.exec("ALTER TABLE repositories ADD COLUMN unreported_pull_requests_json TEXT");
+    }
+  },
+  // Rung 11: the labeled open issues seen by the latest successful import for
+  // each repository — a bounded JSON object, or NULL before the first import.
+  // Overwritten whole; it is an observation, never queue state.
+  (db) => {
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(repositories)").all() as Row[]).map((column) => String(column.name)),
+    );
+    if (!columns.has("labeled_issue_observations_json")) {
+      db.exec("ALTER TABLE repositories ADD COLUMN labeled_issue_observations_json TEXT");
     }
   },
 ];

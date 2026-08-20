@@ -377,6 +377,24 @@ test("operator CLI validates import-issues and seed-dogfood flags before touchin
   assert.notEqual(danglingValue.status, 0);
   assert.match(danglingValue.stderr, /--label requires a value/);
 
+  const fetchFixture = `data:text/javascript,${encodeURIComponent(`
+    globalThis.fetch = async () => new Response(JSON.stringify([{
+      number: 136,
+      title: "Record observations",
+      body: "",
+      html_url: "https://github.com/frostyard/updex/issues/136",
+      state: "open",
+      labels: [{ name: "snowcat" }]
+    }]), { status: 200, headers: { "content-type": "application/json" } });
+  `)}`;
+  const imported = spawnSync(
+    process.execPath,
+    ["--import", fetchFixture, "--import", "tsx", "src/queue/cli.ts", "import-issues", "frostyard/updex", "--label", "snowcat"],
+    { cwd: process.cwd(), encoding: "utf8", env },
+  );
+  assert.equal(imported.status, 0, imported.stderr);
+  assert.equal((JSON.parse(imported.stdout) as { observed: number }).observed, 1);
+
   // --enrolled: needs a label, and SNOWCAT_CONTROL_DB naming the control plane; both are refused before any GitHub read.
   const enrolledNoLabel = run("import-issues", "--enrolled");
   assert.notEqual(enrolledNoLabel.status, 0);
