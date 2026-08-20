@@ -24,6 +24,15 @@ export const progressStages = [
 ] as const;
 
 export type ProgressStage = (typeof progressStages)[number];
+export const progressSummaryBuckets = [
+  "awaiting-import",
+  "proposed",
+  "queued",
+  "working",
+  "in-review",
+  "awaiting-merge",
+] as const;
+export type ProgressSummaryBucket = (typeof progressSummaryBuckets)[number];
 export type ProgressBadgeTone = "amber" | "red" | "grey";
 
 export interface ProgressBadge {
@@ -54,6 +63,7 @@ export interface ProgressRepositoryGroup {
 export interface ProgressData {
   attention: ProgressRow[];
   repositories: ProgressRepositoryGroup[];
+  summary: Record<ProgressSummaryBucket, number>;
   total: number;
   active: number;
   truncated: string[];
@@ -129,10 +139,32 @@ export function readProgress(queue: QueueStore, now: Date = new Date()): Progres
     repositories: [...byRepository.entries()]
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([repository, group]) => ({ repository, rows: group })),
+    summary: summarizeProgress(rows),
     total: rows.length,
     active: rows.filter((row) => row.active).length,
     truncated,
   };
+}
+
+function summarizeProgress(rows: ProgressRow[]): Record<ProgressSummaryBucket, number> {
+  const summary: Record<ProgressSummaryBucket, number> = {
+    "awaiting-import": 0,
+    proposed: 0,
+    queued: 0,
+    working: 0,
+    "in-review": 0,
+    "awaiting-merge": 0,
+  };
+  for (const row of rows) {
+    const bucket =
+      row.stage === "pr-open" || row.stage === "review"
+        ? "in-review"
+        : row.stage === "merged"
+          ? undefined
+          : row.stage;
+    if (bucket !== undefined) summary[bucket] += 1;
+  }
+  return summary;
 }
 
 /** Derives one primary item's current stage and any off-path state. */

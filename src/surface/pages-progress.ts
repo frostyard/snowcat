@@ -1,6 +1,13 @@
 import { html, raw, type SafeHtml } from "./html.ts";
 import { clock, document, itemPath, shell, type PageContext } from "./pages.ts";
-import { progressStages, type ProgressData, type ProgressRow, type ProgressStage } from "./progress-state.ts";
+import {
+  progressStages,
+  progressSummaryBuckets,
+  type ProgressData,
+  type ProgressRow,
+  type ProgressStage,
+  type ProgressSummaryBucket,
+} from "./progress-state.ts";
 
 const LABELS: Record<ProgressStage, string> = {
   "awaiting-import": "Awaiting import",
@@ -13,6 +20,15 @@ const LABELS: Record<ProgressStage, string> = {
   merged: "Merged",
 };
 
+const SUMMARY_LABELS: Record<ProgressSummaryBucket, string> = {
+  "awaiting-import": "awaiting import",
+  proposed: "proposed",
+  queued: "queued",
+  working: "working",
+  "in-review": "in review",
+  "awaiting-merge": "awaiting merge",
+};
+
 export function progressPage(context: PageContext, data: ProgressData): string {
   const body = html`
     ${raw(`<!--
@@ -23,9 +39,11 @@ FIRST VIEWPORT: Attention is pinned below the header, followed by repository gro
 FORM: An operations timeline extended from the incumbent queue shell; no new visual world or external asset.
 -->`)}
     <div class="fl-progress-summary" aria-label="Progress summary">
-      <span><strong>${data.attention.length}</strong> need attention</span>
-      <span><strong>${data.active}</strong> active now</span>
-      <span><strong>${data.total}</strong> visible</span>
+      ${progressSummaryBuckets.map(
+        (bucket) =>
+          html`<span data-progress-summary-bucket="${bucket}"><strong>${data.summary[bucket]}</strong> ${SUMMARY_LABELS[bucket]}</span>`,
+      )}
+      <span data-progress-summary-bucket="attention"><strong>${data.attention.length}</strong> need attention</span>
     </div>
     ${
       data.truncated.length > 0
@@ -62,7 +80,7 @@ function progressRow(row: ProgressRow): SafeHtml {
   const title = row.item
     ? html`<a href="${itemPath(row.item.id)}">${row.title}</a>`
     : html`<a href="${row.observation!.url}">${row.title}</a>`;
-  return html`<article class="fl-progress-row" data-progress-key="${row.key}">
+  return html`<article class="fl-progress-row" data-progress-key="${row.key}" data-progress-stage="${row.stage}">
     <header>
       <div class="fl-progress-name"><strong>${title}</strong><small>${row.repository} · ${
         row.item ? `${row.item.kind} · updated ${clock(row.updatedAt, true)}` : `labeled issue · seen ${clock(row.updatedAt, true)}`

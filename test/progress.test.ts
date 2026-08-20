@@ -4,7 +4,12 @@ import test from "node:test";
 import { createApp } from "../src/app.ts";
 import { QueueStore } from "../src/queue/store.ts";
 import type { ObservableWorkItem, SeedWorkInput, WorkArtifact } from "../src/queue/types.ts";
-import { deriveProgressRow, readProgress } from "../src/surface/progress-state.ts";
+import {
+  deriveProgressRow,
+  progressSummaryBuckets,
+  readProgress,
+  type ProgressSummaryBucket,
+} from "../src/surface/progress-state.ts";
 import { sessionDigest } from "../src/surface/session.ts";
 
 const TOKEN = "progress-test-token";
@@ -143,6 +148,14 @@ test("the session-guarded progress page renders every stage, folds review satell
   const data = readProgress(queue, NOW);
   assert.equal(data.total, 9);
   assert.equal(data.active, 2);
+  assert.deepEqual(data.summary, {
+    "awaiting-import": 1,
+    proposed: 1,
+    queued: 1,
+    working: 2,
+    "in-review": 2,
+    "awaiting-merge": 1,
+  });
   assert.ok(data.attention.some((row) => row.item?.id === blocked.id));
   assert.equal(data.repositories.flatMap((group) => group.rows).some((row) => row.item?.id === review.id), false);
   assert.equal(data.repositories.flatMap((group) => group.rows).some((row) => row.title === "Old merged item"), false);
@@ -194,6 +207,13 @@ test("the session-guarded progress page renders every stage, folds review satell
   // script is present. /progress ships no partials, which makes `reload` its whole
   // refresh handler: pin this page's own config so flipping it to false fails here.
   assert.match(body, /"page":"\/progress","partials":\[\],"repository":null,"refresh":30,"reload":true/);
+
+  for (const bucket of progressSummaryBuckets) {
+    assert.equal(summaryCount(body, bucket), data.summary[bucket]);
+    assert.equal(summaryCount(body, bucket), renderedBucketCount(body, bucket));
+  }
+  assert.equal(summaryCount(body, "attention"), data.attention.length);
+  assert.ok(body.indexOf('aria-label="Progress summary"') < body.indexOf('id="attention"'));
 });
 
 test("the progress view selects terminal items newest first, so more than 100 aged-out completions cannot hide today's work", async () => {
@@ -326,4 +346,21 @@ function section(body: string, id: string): string {
   const match = new RegExp(`<section class="fl-group[^"]*" id="${id}">.*?</section>`, "s").exec(body);
   assert.ok(match, `section ${id} present`);
   return match[0];
+}
+
+function summaryCount(body: string, bucket: ProgressSummaryBucket | "attention"): number {
+  const match = new RegExp(`data-progress-summary-bucket="${bucket}"><strong>(\\d+)</strong>`).exec(body);
+  assert.ok(match, `summary bucket ${bucket} present`);
+  return Number(match[1]);
+}
+
+function renderedBucketCount(body: string, bucket: ProgressSummaryBucket): number {
+  const stages =
+    bucket === "in-review"
+      ? ["pr-open", "review"]
+      : [bucket];
+  return stages.reduce(
+    (count, stage) => count + (body.match(new RegExp(`data-progress-stage="${stage}"`, "g"))?.length ?? 0),
+    0,
+  );
 }
