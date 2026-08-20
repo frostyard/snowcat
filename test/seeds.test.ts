@@ -198,7 +198,7 @@ test("concurrent dogfood feeders create exactly one active root per specialty", 
   const runs = workers.map((worker) => {
     let ready!: () => void;
     let resolveResult!: (result: { createdKinds: string[]; skippedKinds: string[] }) => void;
-    let rejectRun!: (error: Error) => void;
+    let rejectRun!: (error: unknown) => void;
     const readyPromise = new Promise<void>((resolve) => {
       ready = resolve;
     });
