@@ -349,6 +349,18 @@ Eligibility may change without changing the work item's authorization.
 **Avoid:** admission; readiness; priority.
 ([ADR-0034](../adr/0034-schedule-a-bounded-ready-inventory.md))
 
+#### Predecessor
+
+A dependency one imported work item declares on another through the other
+item's source reference, satisfied only when that item is completed and its
+verified artifacts are observed delivered. A predecessor delays only the item
+declaring it; it grants nothing and is never satisfied by a worker's
+assertion.
+
+**Avoid:** blocker (the review term); parent; prerequisite issue link as
+mere documentation.
+([ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md))
+
 #### Ready inventory
 
 The bounded materialized candidate-selection projection used to find work for
