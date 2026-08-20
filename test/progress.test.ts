@@ -190,6 +190,10 @@ test("the session-guarded progress page renders every stage, folds review satell
   assert.match(body, /queueEventPrefix":"work\."/);
   assert.match(body, /queueEventTypes":\["artifact\.verified","artifact\.attached"\]/);
   assert.match(body, /if \(affectsQueueView\(ev\.type\)\) scheduleRefetch\(\)/);
+  // The assertions above hold for every live page, so they only prove the shared
+  // script is present. /progress ships no partials, which makes `reload` its whole
+  // refresh handler: pin this page's own config so flipping it to false fails here.
+  assert.match(body, /"page":"\/progress","partials":\[\],"repository":null,"refresh":30,"reload":true/);
 });
 
 test("the progress view selects terminal items newest first, so more than 100 aged-out completions cannot hide today's work", async () => {
