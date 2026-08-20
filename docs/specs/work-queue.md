@@ -24,6 +24,7 @@ claim, renew, and resolve it.
 | `status` | enum | yes | `proposed`, `queued`, `claimed`, `completed`, `blocked`, or `cancelled` |
 | `createdBy` | string | yes | Operator, policy, or worker provenance |
 | `sourceRef` | string | imported roots only | Stable external origin (for example the GitHub issue URL); unique per repository, at most 512 characters, never changes |
+| `predecessors` | string[] | optional | Source references this item waits for (rule 58); at most 20 GitHub issue URLs of at most 512 characters each, deduplicated and sorted. Declared only on an imported proposed root, absent when none |
 | `leaseOwner` | string | claimed only | Worker identity supplied at claim |
 | `leaseToken` | UUID | claim response only | Secret mutation capability; omitted by every other response |
 | `leaseExpiresAt` | timestamp | claimed only | UTC expiry |
@@ -236,7 +237,9 @@ MCP (rule 41).
     existed before it; rung 11 adds
     `repositories.labeled_issue_observations_json`, the latest successful
     labeled-issue import observation of rule 57, `NULL` for every repository
-    that existed before it. Processes running code from before
+    that existed before it; rung 12 adds `work_items.predecessors_json`, the
+    predecessor source references of rule 58, `NULL` for every item that
+    existed before it. Processes running code from before
     the version guard existed are stopped by rule 20's database constraint,
     not by this check.
 22. Scheduling priority is operator-owned. Only operator-authored or
@@ -390,7 +393,7 @@ MCP (rule 41).
     `unverified` if any lacks a verified state, otherwise `open` if any is
     open, otherwise `closed`; `none` when no pull request was reported. Issues,
     commits, and reports do not constitute delivery; release artifacts extend
-    this derivation under rule 59.
+    this derivation under rule 60.
 
 36. `QueueStore` MUST accept an optional claim-eligibility hook
     `(repository) => boolean` applied on top of repository opt-in. With a
@@ -867,7 +870,28 @@ MCP (rule 41).
     import, and CLI import output MUST include the full observed issue count.
     This observation creates no work, event, artifact, MCP tool, or GitHub
     write and does not change rules 30–31's admission semantics.
-58. **Release artifacts ([ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)).**
+58. **Predecessor references (ADR-0066).** A work item MAY carry
+    `predecessors`: the source references of the items it waits for, stored in
+    schema rung 12's nullable `work_items.predecessors_json`. Each entry MUST
+    be a verbatim absolute GitHub issue URL over HTTPS of at most 512
+    characters, an item MUST NOT declare more than 20 of them, and storage MUST
+    deduplicate and sort them; an item declaring none MUST store `NULL`.
+    Predecessors MUST be accepted only on the proposed-root creation path of
+    rule 30 — a seed, a `pr-cure`, `pr-review`, or `pr-review-fix` root, and a
+    worker follow-up MUST be refused when they carry the field — and MUST be
+    recorded in that root's `work.proposed` event.
+    `QueueStore.replaceProposedPredecessors` MUST replace them for one item
+    that is still
+    `proposed` (`admitted = 0` and status `queued`), in one write transaction
+    recording `work.predecessors-updated` with the new and previous lists,
+    under an operator or policy actor; it MUST refuse an admitted, claimed,
+    completed, blocked, or cancelled item, and MUST change nothing else.
+    A predecessor resolves nothing by itself: it names a source reference that
+    may have no imported item, grants no authority, and reorders no other item.
+    Until the claim gate lands, predecessors MUST NOT affect claim selection,
+    admission, or any MCP tool or schema — an admitted item with unsatisfied
+    predecessors MUST still be claimable.
+59. **Release artifacts ([ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)).**
     A reported `release` artifact URL MUST be
     `https://github.com/<owner>/<repository>/releases/tag/<tag>` on the item's
     own repository — rule 15's scope validation with one more path segment,
@@ -897,7 +921,7 @@ MCP (rule 41).
     verify-then-write rule, never fabricating a verification. This requires no
     schema rung: `result_json` already holds artifacts and their
     verifications.
-59. **Release delivery ([ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md); extends rule 35).**
+60. **Release delivery ([ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md); extends rule 35).**
     Where a completed item reported at least one `release` artifact, that
     artifact — not a pull request that merely prepared it — is the item's
     delivery boundary: `delivery` MUST be `published` if any release is
@@ -913,7 +937,7 @@ MCP (rule 41).
 | SQLite schema | Created and upgraded by `QueueStore`'s migration ladder from this work-item model; admission triggers and `user_version` per rules 20–21 |
 | Backup manifest | Derived by `backup` and re-derived by `verify-backup` per rules 28–29 |
 | Issue import | `import-issues` maps labeled open GitHub issues to proposed `issue-resolution` roots per rules 30–31 and records the latest bounded labeled-issue observation per rule 57 |
-| Artifact verification | Completion-time, `attach-artifact`, and `verify-artifacts` observations per rules 33–35, 41, and 58; `delivery` derived per rules 35 and 59 |
+| Artifact verification | Completion-time, `attach-artifact`, and `verify-artifacts` observations per rules 33–35, 41, and 59; `delivery` derived per rules 35 and 60 |
 | Pull-request cure | `verify-artifacts` enqueues `pr-cure` roots per decayed head per rules 42–43; `complete_work` enforces patch identity per rule 44 |
 | Review gate | `review-gate` flag and draft refusal per rule 52; `verify-artifacts` enqueues `pr-review` rounds and `pr-review-fix` roots and marks passed drafts ready per rules 53 and 55; `complete_work` accepts the bound verdict per rule 54 |
 | Internal dependency chain | `sweep-dependencies` maps tags, branch comparison, and `go.mod` to `release-needed` and `dependency-bump` proposals per rule 45 |
@@ -941,6 +965,9 @@ MCP (rule 41).
 - Delivery: [queue vertical spike](../plans/queue-vertical-spike.md)
 - Review gate: [ADR-0065](../adr/0065-gate-worker-pull-requests-behind-bounded-review.md)
   implementing [ADR-0029](../adr/0029-bound-adversarial-review.md)
+- Project sequencing:
+  [ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)
+  (rule 58 and schema rung 12 carry its predecessor references)
 - Promotion decision and plan:
   [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md) and
   [recovery plan](../plans/recover.md), superseding

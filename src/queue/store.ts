@@ -52,6 +52,8 @@ const DEFAULT_EVENTS_SINCE_LIMIT = 100;
 const MAX_EVENTS_SINCE_LIMIT = 500;
 const MAX_OPERATOR_NOTE_LENGTH = 4000;
 const MAX_LABELED_ISSUE_OBSERVATIONS = 500;
+/** Predecessor source references one work item may declare (ADR-0066). */
+const MAX_PREDECESSORS = 20;
 /** Ledger events the metrics window reads; no other event bears on the reported numbers. */
 const METRICS_EVENT_TYPES = ["work.claimed", "work.completed", "work.blocked", "work.cancelled"] as const;
 /** Events one metrics window may carry before it is refused instead of aggregated. */
@@ -64,7 +66,7 @@ export const MAX_METRICS_WINDOW_EVENTS = 100_000;
  * that newer code has already migrated; newer code upgrades an older database
  * in place, forward only, inside one write transaction.
  */
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 /**
  * Backup manifest emitted by `QueueStore.backup` and re-derived by
@@ -711,6 +713,7 @@ export class QueueStore {
 
   enqueueSeed(input: SeedWorkInput): WorkItem {
     validateWorkDefinition(input);
+    assertNoPredecessors(input, "a seed root");
     return this.transaction(() => {
       this.assertRepositoryEnabled(input.repository);
       const id = randomUUID();
@@ -756,6 +759,7 @@ export class QueueStore {
         const { cooldownSeconds: _cooldownSeconds, ...definition } = candidate;
         const input: SeedWorkInput = { ...definition, repository };
         validateWorkDefinition(input);
+        assertNoPredecessors(input, "a seed root");
         if (activeKinds.has(input.kind)) {
           skippedKinds.push(input.kind);
           return;
@@ -791,6 +795,7 @@ export class QueueStore {
     validateSourceRef(input.sourceRef);
     validateCure(input.cure);
     if (input.kind !== "pr-cure") throw new Error("a cure root must have kind pr-cure");
+    assertNoPredecessors(input, "a cure root");
     const definition: SeedWorkInput = { ...input, repository };
     validateWorkDefinition(definition);
     return this.transaction(() => {
@@ -834,6 +839,7 @@ export class QueueStore {
     if (input.kind !== "pr-review" && input.kind !== "pr-review-fix") {
       throw new Error("a review root must have kind pr-review or pr-review-fix");
     }
+    assertNoPredecessors(input, `a ${input.kind} root`);
     if (input.delegableActions.length > 0) throw new Error(`a ${input.kind} root delegates nothing`);
     if (input.kind === "pr-review") {
       assertSubset(input.allowedActions, ["read", "run-tests"], "pr-review allowedActions");
@@ -929,6 +935,11 @@ export class QueueStore {
    * present for the repository, in one transaction. Nothing here is claimable
    * until an operator approves it; repeated imports of the same source create
    * nothing new, whatever the earlier item's status became.
+   *
+   * A candidate may declare `predecessors` (ADR-0066): the source references it
+   * waits for, stored sorted and deduplicated. They are inert here — nothing
+   * resolves, gates, or reorders on them in this slice — and this is the only
+   * creation path that accepts them.
    */
   enqueueProposedRoots(
     repository: string,
@@ -941,10 +952,11 @@ export class QueueStore {
       const skippedSourceRefs: string[] = [];
       const seen = new Set<string>();
       for (const candidate of candidates) {
-        const { sourceRef, ...definition } = candidate;
+        const { sourceRef, predecessors: declared, ...definition } = candidate;
         const input: SeedWorkInput = { ...definition, repository };
         validateWorkDefinition(input);
         validateSourceRef(sourceRef);
+        const predecessors = normalizePredecessors(declared);
         if (seen.has(sourceRef) || this.sourceRefExists(repository, sourceRef)) {
           skippedSourceRefs.push(sourceRef);
           continue;
@@ -960,11 +972,44 @@ export class QueueStore {
           admitted: false,
           createdAt: now,
           sourceRef,
+          ...(predecessors ? { predecessors } : {}),
         });
-        this.addEvent(id, "work.proposed", input.createdBy, { root: true, sourceRef });
+        this.addEvent(id, "work.proposed", input.createdBy, {
+          root: true,
+          sourceRef,
+          ...(predecessors ? { predecessors } : {}),
+        });
         created.push(this.getRequired(id));
       }
       return { created, skippedSourceRefs };
+    });
+  }
+
+  /**
+   * Replaces the predecessors of one still-proposed item (ADR-0066), so a
+   * re-import can refresh edges an operator has not admitted yet. It refuses an
+   * item that is not queued-unadmitted — admitted, claimed, completed, blocked,
+   * or cancelled — because admission is the plan-review moment and nothing may
+   * move an edge under work the operator already approved. One write
+   * transaction, one `work.predecessors-updated` event, nothing else: no
+   * status, priority, admission, or lease change, and no claim effect (gating
+   * is slice 3, frostyard/snowcat#161). Operator or policy actors only.
+   */
+  replaceProposedPredecessors(id: string, predecessors: readonly string[], actor: string): WorkItem {
+    validateOperatorActor(actor, "predecessors");
+    const replacement = normalizePredecessors(predecessors);
+    return this.transaction(() => {
+      const item = this.getRequired(id);
+      const row = this.db.prepare("SELECT admitted FROM work_items WHERE id = ?").get(id) as Row;
+      if (Number(row.admitted) !== 0 || item.status !== "proposed") {
+        throw new Error(`work item is not proposed, so its predecessors cannot be replaced: ${id}`);
+      }
+      const previous = item.predecessors ?? [];
+      this.db
+        .prepare("UPDATE work_items SET predecessors_json = ?, updated_at = ? WHERE id = ?")
+        .run(replacement ? JSON.stringify(replacement) : null, this.now(), id);
+      this.addEvent(id, "work.predecessors-updated", actor, { predecessors: replacement ?? [], previous });
+      return this.getRequired(id);
     });
   }
 
@@ -1353,6 +1398,8 @@ export class QueueStore {
         if ("priority" in followUp) {
           throw new Error("follow-up items may not set priority; children inherit the parent's priority");
         }
+        // Sequencing edges belong to imported roots, not to lineage (ADR-0066).
+        assertNoPredecessors(followUp, "a follow-up item");
         validateWorkDefinition({ ...followUp, createdBy: input.worker });
         assertSubset(followUp.allowedActions, parent.delegableActions, "follow-up allowedActions");
         assertSubset(followUp.delegableActions, parent.delegableActions, "follow-up delegableActions");
@@ -1806,6 +1853,7 @@ export class QueueStore {
     admitted: boolean;
     createdAt: string;
     sourceRef?: string;
+    predecessors?: readonly string[];
     cure?: PullRequestCure;
     review?: PullRequestReview;
   }): void {
@@ -1814,8 +1862,9 @@ export class QueueStore {
         `INSERT INTO work_items (
           id, root_id, parent_id, repository, kind, objective, instructions,
           acceptance_criteria_json, allowed_actions_json, delegable_actions_json,
-          priority, status, admitted, created_by, created_at, updated_at, source_ref, cure_json, review_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)`,
+          priority, status, admitted, created_by, created_at, updated_at, source_ref,
+          predecessors_json, cure_json, review_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.id,
@@ -1834,6 +1883,7 @@ export class QueueStore {
         input.createdAt,
         input.createdAt,
         input.sourceRef ?? null,
+        input.predecessors && input.predecessors.length > 0 ? JSON.stringify(input.predecessors) : null,
         input.cure ? JSON.stringify(input.cure) : null,
         input.review ? JSON.stringify(input.review) : null,
       );
@@ -1955,6 +2005,7 @@ function decodeWorkItem(row: Row): WorkItem {
     status: row.status === "queued" && Number(row.admitted) === 0 ? "proposed" : (String(row.status) as WorkStatus),
     createdBy: String(row.created_by),
     sourceRef: row.source_ref == null ? undefined : String(row.source_ref),
+    ...(row.predecessors_json == null ? {} : { predecessors: parseJson<string[]>(row.predecessors_json, []) }),
     ...(row.cure_json == null ? {} : { cure: parseJson<PullRequestCure | undefined>(row.cure_json, undefined) }),
     ...(row.review_json == null ? {} : { review: parseJson<PullRequestReview | undefined>(row.review_json, undefined) }),
     createdAt: String(row.created_at),
@@ -2062,6 +2113,44 @@ function validateReview(review: PullRequestReview): void {
 function validateSourceRef(sourceRef: string): void {
   if (!sourceRef.trim() || sourceRef !== sourceRef.trim()) throw new Error("sourceRef must be a non-empty trimmed string");
   if (sourceRef.length > MAX_SOURCE_REF_LENGTH) throw new Error(`sourceRef exceeds ${MAX_SOURCE_REF_LENGTH} characters`);
+}
+
+/**
+ * Normalizes the source references an item waits for (ADR-0066): each entry is
+ * a verbatim absolute GitHub issue URL over HTTPS, at most
+ * `MAX_SOURCE_REF_LENGTH` characters, at most `MAX_PREDECESSORS` of them.
+ * Returns them deduplicated and sorted so storage is deterministic, or
+ * `undefined` when none are declared — which is what stores NULL. It resolves
+ * nothing: an unimported predecessor is a normal, visible state.
+ */
+function normalizePredecessors(values: readonly string[] | undefined): string[] | undefined {
+  if (values === undefined) return undefined;
+  if (!Array.isArray(values)) throw new Error("predecessors must be an array of GitHub issue URLs");
+  if (values.length > MAX_PREDECESSORS) {
+    throw new Error(`predecessors exceed the supported maximum of ${MAX_PREDECESSORS}`);
+  }
+  for (const value of values) {
+    if (typeof value !== "string") throw new Error("predecessors must be an array of GitHub issue URLs");
+    if (value.length > MAX_SOURCE_REF_LENGTH) {
+      throw new Error(`predecessor exceeds ${MAX_SOURCE_REF_LENGTH} characters`);
+    }
+    if (!/^https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/issues\/[1-9][0-9]*$/.test(value)) {
+      throw new Error(`predecessor is not a GitHub issue URL: ${value}`);
+    }
+  }
+  const unique = [...new Set(values)].sort();
+  return unique.length === 0 ? undefined : unique;
+}
+
+/**
+ * Refuses predecessors on every creation path but the proposed root
+ * (ADR-0066). The typed inputs already omit the field; this stops an untyped
+ * caller from smuggling it onto a seed, a cure or review root, or a follow-up.
+ */
+function assertNoPredecessors(input: object, what: string): void {
+  if ("predecessors" in input && (input as { predecessors?: unknown }).predecessors !== undefined) {
+    throw new Error(`${what} must not carry predecessors: only an imported proposed root declares them`);
+  }
 }
 
 function validateVerification(verification: ArtifactVerification): void {
@@ -2424,6 +2513,18 @@ const MIGRATIONS: readonly Migration[] = [
     );
     if (!columns.has("labeled_issue_observations_json")) {
       db.exec("ALTER TABLE repositories ADD COLUMN labeled_issue_observations_json TEXT");
+    }
+  },
+  // Rung 12: the source references an item waits for (ADR-0066) — a JSON array
+  // of GitHub issue URLs, or NULL for an item that declares none, which is what
+  // every existing row becomes. Inert data: no index, no trigger, no claim
+  // effect (gating arrives with slice 3, frostyard/snowcat#161).
+  (db) => {
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(work_items)").all() as Row[]).map((column) => String(column.name)),
+    );
+    if (!columns.has("predecessors_json")) {
+      db.exec("ALTER TABLE work_items ADD COLUMN predecessors_json TEXT");
     }
   },
 ];

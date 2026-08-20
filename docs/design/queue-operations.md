@@ -784,7 +784,7 @@ the item moved since you read it. The item page's *Decide* card offers the
 same form. Workers never attach: `complete_work` is their only way to report,
 and this command is not an MCP tool.
 
-**Releases are the same shape** ([spec rules 58–59](../specs/work-queue.md),
+**Releases are the same shape** ([spec rules 59–60](../specs/work-queue.md),
 [ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)):
 a release slice's worker prepares the release and reports
 `https://github.com/<owner>/<repo>/releases/tag/<tag>` as a `release`

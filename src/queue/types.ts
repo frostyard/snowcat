@@ -238,6 +238,13 @@ export interface WorkItem {
   createdBy: string;
   /** Stable external origin of an imported root (for example a GitHub issue URL); unique per repository. */
   sourceRef?: string;
+  /**
+   * Source references of the items this one waits for (ADR-0066), sorted and
+   * deduplicated; absent when the item declares none. Inert data in this
+   * slice: predecessors grant nothing, reorder nothing, and gate no claim yet
+   * (that is slice 3, frostyard/snowcat#161).
+   */
+  predecessors?: readonly string[];
   /** Present on `pr-cure` roots: the head and patch identity the cure is bound to. */
   cure?: PullRequestCure;
   /** Present on `pr-review` and `pr-review-fix` roots: the pull-request head and round the item is bound to (ADR-0065). */
@@ -306,6 +313,12 @@ export interface SeedWorkInput {
  */
 export interface ProposedRootInput extends Omit<SeedWorkInput, "repository"> {
   sourceRef: string;
+  /**
+   * Source references this root waits for (ADR-0066). Only a proposed root may
+   * declare them: seeds, cure roots, review roots, and follow-ups refuse the
+   * field. Stored sorted and deduplicated, or as NULL when empty or absent.
+   */
+  predecessors?: readonly string[];
 }
 
 /** An admitted `pr-cure` root: one per pull-request head, keyed by `sourceRef`. */
