@@ -49,6 +49,9 @@ the [operations runbook](docs/design/queue-operations.md) for how to run it.
 ```bash
 npm ci
 sudo deploy/install.sh --user "$USER"      # dirs, /etc/snowcat/env, timers
+app_token="$(node -e 'console.log(require("node:crypto").randomBytes(32).toString("hex"))')"
+sudo sed -i "s/^SNOWCAT_APP_TOKEN=.*/SNOWCAT_APP_TOKEN=$app_token/" /etc/snowcat/env
+unset app_token
 set -a; . /etc/snowcat/env; set +a
 npm run --silent queue -- opt-in frostyard/updex
 npm run --silent queue -- import-issues frostyard/updex --label snowcat --priority 10
@@ -57,9 +60,12 @@ npm run --silent queue -- approve <id>
 npm run build && node scripts/serve.mjs   # operator surface on http://127.0.0.1:3000
 ```
 
-Then configure an MCP server named `snowcat` running `npm run --silent mcp`
-in your client and say "work the Snowcat queue." Everything above is spelled
-out, with enrollment through `frostyard/core`, in the
+Open `http://127.0.0.1:3000` and enter the generated
+`SNOWCAT_APP_TOKEN` at `/login` (print it from the loaded environment with
+`printf '%s\n' "$SNOWCAT_APP_TOKEN"`). Then configure an MCP server named
+`snowcat` running `npm run --silent mcp` in your client and say "work the
+Snowcat queue." Everything above is spelled out, with enrollment through
+`frostyard/core`, in the
 [runbook](docs/design/queue-operations.md).
 
 ## Work engine
