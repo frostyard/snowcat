@@ -497,12 +497,29 @@ test("operator CLI cure-foreign is a repository-level setting: on|off for an opt
 test("operator CLI review-gate is a repository-level setting: on|off for an opted-in repository only, and verify-artifacts can skip the review step", async () => {
   const directory = await mkdtemp(join(tmpdir(), "snowcat-cli-review-gate-test-"));
   const path = join(directory, "queue.db");
+  const fixturePath = join(directory, "github.json");
+  const logPath = join(directory, "requests.log");
+  const unreportedCreatedAt = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  await writeFile(
+    fixturePath,
+    JSON.stringify({
+      "/repos/frostyard/updex/pulls": {
+        status: 200,
+        body: [{ number: 404, draft: true, created_at: unreportedCreatedAt }],
+      },
+    }),
+  );
   const seeded = new QueueStore(path);
   seeded.setRepositoryEnabled("frostyard/updex", true);
   seeded.close();
-  const env = childEnvironment({ SNOWCAT_QUEUE_DB: path });
+  const env = childEnvironment({
+    SNOWCAT_QUEUE_DB: path,
+    SNOWCAT_GITHUB_TOKEN: "test-token",
+    SNOWCAT_TEST_FAKE_GITHUB: fixturePath,
+    SNOWCAT_TEST_FAKE_GITHUB_LOG: logPath,
+  });
   const run = (...args: string[]) =>
-    spawnSync(process.execPath, ["--import", "tsx", "src/queue/cli.ts", ...args], {
+    spawnSync(process.execPath, ["--import", "tsx", "--import", "./test/helpers/fake-github-fetch.ts", "src/queue/cli.ts", ...args], {
       cwd: process.cwd(),
       encoding: "utf8",
       env,
@@ -525,10 +542,9 @@ test("operator CLI review-gate is a repository-level setting: on|off for an opte
 
   // With the gate on and no draft pull request reported, the review step
   // inspects nothing and creates nothing. Its unreported pass (ADR-0065) is
-  // the one step that reads GitHub without a candidate — one bounded open
-  // pull-request listing for the gated repository — so `unreported` and the
-  // sweep's `unavailable` depend on what GitHub answers here and are not
-  // pinned; nothing is created either way.
+  // the one step that reads GitHub without a candidate. The preload keeps
+  // this child hermetic and returns one newly opened pull request, which is
+  // still protected by the longest possible worker lease.
   const swept = run("verify-artifacts", "--no-cure");
   assert.equal(swept.status, 0, swept.stderr);
   const sweptOutput = JSON.parse(swept.stdout) as {
@@ -538,18 +554,34 @@ test("operator CLI review-gate is a repository-level setting: on|off for an opte
     rejected: unknown[];
     review: { inspected: number; enqueued: unknown[]; markedReady: unknown[]; readyToMark: unknown[]; needsHuman: unknown[]; unreported: unknown[]; unreportedPending: unknown[] };
   };
-  assert.deepEqual(
-    { ...sweptOutput, review: { ...sweptOutput.review, skipped: undefined, unavailable: undefined, unreported: undefined } },
-    {
-      checked: 0,
-      updated: [],
+  assert.deepEqual(sweptOutput, {
+    checked: 0,
+    updated: [],
+    unavailable: [],
+    rejected: [],
+    review: {
+      inspected: 0,
+      enqueued: [],
+      markedReady: [],
+      readyToMark: [],
+      needsHuman: [],
+      skipped: [],
       unavailable: [],
-      rejected: [],
-      review: { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: undefined, unavailable: undefined, unreported: undefined, unreportedPending: [] },
+      unreported: [],
+      unreportedPending: [
+        {
+          url: "https://github.com/frostyard/updex/pull/404",
+          number: 404,
+          createdAt: unreportedCreatedAt,
+        },
+      ],
     },
+  });
+  assert.deepEqual(
+    (await readFile(logPath, "utf8")).trim().split("\n"),
+    ["/repos/frostyard/updex/pulls"],
+    "the review pass makes exactly one request through the injected fake GitHub fetcher",
   );
-  assert.ok(Array.isArray(sweptOutput.review.unreported), "the review sweep always reports its unreported list");
-  assert.ok(Array.isArray(sweptOutput.review.unreportedPending), "the review sweep always reports its pending list");
   const noReview = run("verify-artifacts", "--no-cure", "--no-review");
   assert.equal(noReview.status, 0, noReview.stderr);
   assert.deepEqual(JSON.parse(noReview.stdout), { checked: 0, updated: [], unavailable: [], rejected: [] });
