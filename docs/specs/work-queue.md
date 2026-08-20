@@ -888,9 +888,9 @@ MCP (rule 41).
     completed, blocked, or cancelled item, and MUST change nothing else.
     A predecessor resolves nothing by itself: it names a source reference that
     may have no imported item, grants no authority, and reorders no other item.
-    Until the claim gate lands, predecessors MUST NOT affect claim selection,
-    admission, or any MCP tool or schema — an admitted item with unsatisfied
-    predecessors MUST still be claimable.
+    Predecessors MUST NOT affect admission, priority, lineage, or any schema
+    beyond rung 12; their only effect is rule 62's claim gate, which withholds
+    the item that declares them and nothing else.
 59. **Release artifacts ([ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)).**
     A reported `release` artifact URL MUST be
     `https://github.com/<owner>/<repository>/releases/tag/<tag>` on the item's
@@ -929,6 +929,46 @@ MCP (rule 41).
     verified state, otherwise `open` (every release observed as a draft). An
     item that reported no release artifact MUST derive exactly rule 35's
     pull-request result, value for value.
+62. **Predecessor gate ([ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)
+    decision 3; narrows rules 2–3 and 17).** Claim selection MUST exclude an
+    admitted item whose rule 58 `predecessors` are not all satisfied, and MUST
+    change nothing else about selection: an item declaring none MUST be
+    selected exactly as before, ordering stays priority then age, and a
+    withheld item is simply not a candidate — so the claim MUST take the next
+    eligible item, however much lower its priority. One predecessor is
+    satisfied only when a work item in the same database carries that source
+    reference as its `sourceRef`, is `completed`, and every pull-request
+    artifact it reported is stored `verification.state` `merged` and every
+    release artifact `published` (rules 33–35, 59–60); an item that reported
+    neither MUST satisfy on completion alone, and where several items carry
+    one source reference a single satisfying item MUST satisfy the edge.
+    Everything else MUST leave the successor ineligible: no item carrying the
+    reference, an item that is `proposed`, `queued`, `claimed`, `blocked`, or
+    `cancelled`, and an artifact whose verification is absent, `unverified`,
+    or observed `open`, `closed`, or `draft`. The check MUST run inside the
+    claim transaction beside admission (rules 20–21) and repository
+    eligibility, and MUST read stored state only: the claim path MUST perform
+    no GitHub read, because the observation that satisfies an edge is the one
+    `verify-artifacts` already wrote — never one taken at claim time, and
+    never a worker's assertion. Satisfaction MUST NOT propagate to any item
+    that did not declare the edge, and withholding MUST leave the item's
+    status, result, priority, notes, and event ledger untouched: the gate
+    withholds, it never blocks, cancels, or annotates, and a cancelled
+    predecessor therefore withholds its successors until an operator cancels
+    or refiles them (ADR-0066 decision 6). A cycle MUST NOT be rejected — the
+    gate evaluates one item's edges and never the graph — so its members
+    simply never become eligible and stay visibly queued.
+63. **Predecessor visibility ([ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)).**
+    Every read that returns a work item — `list`, `show`, `list_work`,
+    `get_work`, `claim_work` — MUST carry `predecessors` as read-only
+    bookkeeping, and no MCP tool may create, change, or satisfy one. For an
+    item that declares them, `show <id>` MUST additionally print one entry per
+    declared source reference, in stored order, naming the reference, whether
+    it is satisfied now, and — when it is not — the reason and the work item
+    that reason was read from; an item declaring none MUST print no such
+    block. `QueueStore.predecessorStatuses` MUST derive those entries by rule
+    62's evaluation, so what an operator reads is what the gate decides, and
+    MUST, like the gate, read stored state without a GitHub request.
 
 ## Derived artifacts
 
@@ -942,6 +982,7 @@ MCP (rule 41).
 | Review gate | `review-gate` flag and draft refusal per rule 52; `verify-artifacts` enqueues `pr-review` rounds and `pr-review-fix` roots and marks passed drafts ready per rules 53 and 55; `complete_work` accepts the bound verdict per rule 54 |
 | Internal dependency chain | `sweep-dependencies` maps tags, branch comparison, and `go.mod` to `release-needed` and `dependency-bump` proposals per rule 45 |
 | Repository settings drift | `sweep-repository-settings` diffs live GitHub settings against core's contract into `settings-drift` proposals per rule 46 |
+| Predecessor gate | Claim selection excludes items whose rule 58 predecessors are not observed delivered per rule 62; `show` prints each one's satisfaction per rule 63 |
 | MCP tokens | `token mint [--kinds …] | list | revoke` over the `mcp_tokens` table per rule 49; identities per rule 48; claim restriction per rule 50 |
 | PRD baseline metrics | `metrics` aggregates items created in a window with its `work.claimed`, `work.completed`, `work.blocked`, and `work.cancelled` events and the completed items' current `delivery` per rule 56 |
 | MCP worker behavior | Portable `work-snowcat-queue` skill constrained by this contract |
@@ -967,7 +1008,8 @@ MCP (rule 41).
   implementing [ADR-0029](../adr/0029-bound-adversarial-review.md)
 - Project sequencing:
   [ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)
-  (rule 58 and schema rung 12 carry its predecessor references)
+  (rule 58 and schema rung 12 carry its predecessor references; rules 62–63
+  gate claims on them and make each edge's satisfaction readable)
 - Promotion decision and plan:
   [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md) and
   [recovery plan](../plans/recover.md), superseding

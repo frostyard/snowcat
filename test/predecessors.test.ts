@@ -310,8 +310,8 @@ test("replaceProposedPredecessors rewrites a proposed item's edges, records the 
   );
 });
 
-test("claiming ignores predecessors entirely: an admitted item whose predecessors are unmet is still claimed", async () => {
-  const queue = await openQueue("predecessors-inert");
+test("an admitted item whose predecessors are unmet is not claimed, and stays visibly queued", async () => {
+  const queue = await openQueue("predecessors-gated");
   test.after(() => queue.close());
 
   // Both predecessors name issues no item in this queue carries as a
@@ -323,16 +323,17 @@ test("claiming ignores predecessors entirely: an admitted item whose predecessor
   assert.equal(queue.list({ repository: REPOSITORY, status: "proposed" }).length, 1);
   assert.deepEqual(queue.claim({ worker: "claude:test:author", repository: REPOSITORY }), undefined, "still proposed, so nothing to claim");
 
+  // This assertion was deliberately the opposite in slice 1
+  // (frostyard/snowcat#158), where predecessors were inert storage. The claim
+  // gate of slice 3 (frostyard/snowcat#161, ADR-0066 decision 3) is what
+  // flipped it; test/predecessor-gate.test.ts holds the whole behaviour.
   queue.approve(gated.id, "operator:test");
-  const claimed = queue.claim({ worker: "claude:test:author", repository: REPOSITORY });
-
-  // This assertion is deliberately the opposite of the eventual behaviour:
-  // predecessors are inert storage in slice 1 (frostyard/snowcat#158), and the
-  // claim gate that will refuse this item lands in slice 3
-  // (frostyard/snowcat#161, ADR-0066 decision 3). When that gate lands, this
-  // test is the one that must be flipped — an unmet predecessor must then
-  // leave the item unclaimed and visibly ineligible.
-  assert.ok(claimed, "slice 1 gates nothing; flip this in slice 3 (frostyard/snowcat#161)");
-  assert.equal(claimed!.id, gated.id);
-  assert.deepEqual(claimed!.predecessors, [SLICE_ONE, SLICE_TWO], "the claimed item still carries its edges");
+  assert.equal(queue.claim({ worker: "claude:test:author", repository: REPOSITORY }), undefined, "an unmet edge withholds the item");
+  const item = queue.get(gated.id)!;
+  assert.equal(item.status, "queued", "withheld, not blocked or hidden");
+  assert.deepEqual(item.predecessors, [SLICE_ONE, SLICE_TWO]);
+  assert.deepEqual(
+    queue.predecessorStatuses(gated.id).map((entry) => entry.satisfied),
+    [false, false],
+  );
 });
