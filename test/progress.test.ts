@@ -460,8 +460,10 @@ function section(body: string, id: string): string {
   return match[0];
 }
 
+// The row's opening tag carries more than data-progress-key (data-progress-stage
+// since #153), so match the key wherever it sits among the tag's attributes.
 function article(body: string, itemId: string): string {
-  const match = new RegExp(`<article class="fl-progress-row" data-progress-key="item:${itemId}">.*?</article>`, "s").exec(body);
+  const match = new RegExp(`<article class="fl-progress-row"[^>]*data-progress-key="item:${itemId}"[^>]*>.*?</article>`, "s").exec(body);
   assert.ok(match, `progress row for item ${itemId} present`);
   return match[0];
 }
