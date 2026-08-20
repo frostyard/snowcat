@@ -1,6 +1,6 @@
 import { githubApiJson, githubGraphql, type GitHubFetch } from "../repository/github-api.ts";
 import { asObject, listOpenPullRequests, MAX_LISTING_PAGES, parsePullRequestUrl, readPatchDigest } from "./pull-request-cure.ts";
-import type { QueueStore } from "./store.ts";
+import { MAX_LEASE_SECONDS, type QueueStore } from "./store.ts";
 import {
   MAX_REVIEW_ADVISORIES,
   MAX_REVIEW_BLOCKERS,
@@ -170,6 +170,8 @@ export interface ReviewSweepResult {
    * item that should have reported it. The sweep creates no work for them.
    */
   unreported: UnreportedPullRequest[];
+   /** Unaccounted-for pull requests still within the longest possible worker lease. */
+   unreportedPending: Array<{ url: string; number: number; createdAt: string }>;
 }
 
 /**
@@ -187,7 +189,7 @@ export async function reviewPullRequests(
   options: ReviewOptions & { repository?: string; limit?: number; actor?: string; writes?: boolean } = {},
 ): Promise<ReviewSweepResult> {
   const actor = options.actor ?? REVIEW_ACTOR;
-  const result: ReviewSweepResult = { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: [], unavailable: [], unreported: [] };
+  const result: ReviewSweepResult = { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: [], unavailable: [], unreported: [], unreportedPending: [] };
   const gatedRepositories = queue
     .repositoryReviewGateSettings()
     .filter((setting) => setting.reviewGate)
@@ -372,7 +374,8 @@ async function observeUnreportedPullRequests(
   actor: string,
   options: ReviewOptions,
 ): Promise<void> {
-  const observedAt = (options.clock?.() ?? new Date()).toISOString();
+  const observedAtDate = options.clock?.() ?? new Date();
+  const observedAt = observedAtDate.toISOString();
   for (const repository of repositories) {
     const listing = await listOpenPullRequests(repository, options.fetcher ?? fetch);
     if (listing.kind === "unavailable") {
@@ -387,6 +390,15 @@ async function observeUnreportedPullRequests(
     for (const pull of listing.pulls) {
       if (seen.has(pull.url.toLowerCase())) continue;
       seen.add(pull.url.toLowerCase());
+      const createdAtMillis = pull.createdAt === undefined ? Number.NaN : Date.parse(pull.createdAt);
+      if (
+        pull.createdAt !== undefined &&
+        Number.isFinite(createdAtMillis) &&
+        observedAtDate.getTime() - createdAtMillis < MAX_LEASE_SECONDS * 1000
+      ) {
+        result.unreportedPending.push({ url: pull.url, number: pull.number, createdAt: pull.createdAt });
+        continue;
+      }
       unreported.push({ url: pull.url, number: pull.number, draft: pull.draft, ...(pull.createdAt ? { createdAt: pull.createdAt } : {}) });
     }
     queue.recordUnreportedPullRequests(repository, { observedAt, pullRequests: unreported }, actor);

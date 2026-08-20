@@ -40,7 +40,7 @@ import {
 type Row = Record<string, SQLInputValue>;
 
 const DEFAULT_LEASE_SECONDS = 15 * 60;
-const MAX_LEASE_SECONDS = 60 * 60;
+export const MAX_LEASE_SECONDS = 60 * 60;
 const MAX_FOLLOW_UPS = 10;
 const MAX_LINEAGE_DEPTH = 4;
 const BUSY_TIMEOUT_MS = 5000;

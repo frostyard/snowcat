@@ -374,7 +374,7 @@ test("the sweep reads nothing without a gated repository and creates one admitte
   // Gate off: no GitHub read, nothing created.
   const quiet = apiFetcher(routesFor({}));
   const untouched = await reviewPullRequests(queue, { fetcher: quiet.fetcher, clock });
-  assert.deepEqual(untouched, { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: [], unavailable: [], unreported: [] });
+  assert.deepEqual(untouched, { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: [], unavailable: [], unreported: [], unreportedPending: [] });
   assert.deepEqual(quiet.requests, []);
 
   queue.setRepositoryReviewGate(REPOSITORY, true);
@@ -547,7 +547,7 @@ test("pass → ready to mark (writes off) or marked ready through GraphQL with a
   assert.deepEqual(ready.payload, { url: PR_URL, headSha: HEAD_A, reviewItemId: passed.id });
   // Nothing left to do: the pull request is no longer a draft candidate.
   const done = await reviewPullRequests(queue, { fetcher: apiFetcher(routesFor({ draft: false })).fetcher, clock, writes: true });
-  assert.deepEqual(done, { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: [], unavailable: [], unreported: [] });
+  assert.deepEqual(done, { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: [], unavailable: [], unreported: [], unreportedPending: [] });
   // A refused mutation is reported, not hidden, and the origin is untouched.
   const queue2 = await newQueue("review-pass-refused");
   const origin2 = completedWithDraftPr(queue2);
@@ -699,12 +699,21 @@ test("the sweep reports, persists, and clears open pull requests no item reporte
   });
   assert.ok(bound);
 
-  const listing = [listed(12, true, "2026-08-18T00:00:00.000Z"), listed(88, false), listed(77, true, "2026-08-19T09:00:00.000Z")];
+  const pendingUrl = "https://github.com/frostyard/updex/pull/78";
+  const listing = [
+    listed(12, true, "2026-08-18T00:00:00.000Z"),
+    listed(88, false),
+    listed(77, true, "2026-08-19T09:00:00.000Z"),
+    listed(78, true, "2026-08-19T14:30:00.000Z"),
+  ];
   const api = apiFetcher(routesFor({ listing }));
   const swept = await reviewPullRequests(queue, { fetcher: api.fetcher, clock });
 
   const orphan = "https://github.com/frostyard/updex/pull/77";
   assert.deepEqual(swept.unreported, [{ url: orphan, number: 77, draft: true, createdAt: "2026-08-19T09:00:00.000Z" }]);
+  assert.deepEqual(swept.unreportedPending, [
+    { url: pendingUrl, number: 78, createdAt: "2026-08-19T14:30:00.000Z" },
+  ]);
   assert.ok(api.requests.includes(LISTING_PATH), "the gated repository's open pull requests are listed");
   assert.equal(
     api.requests.some((path) => path.startsWith("/repos/frostyard/other")),
@@ -727,9 +736,27 @@ test("the sweep reports, persists, and clears open pull requests no item reporte
   });
   assert.equal(queue.repositoryUnreportedPullRequests("frostyard/other"), undefined, "a repository the sweep never observed has no observation");
 
+  assert.equal(
+    [...swept.unreported, ...swept.unreportedPending].some((pull) => pull.number === 12),
+    false,
+    "an item-reported pull request is in neither list",
+  );
+
+  // At 61 minutes the same pull request is no longer protected by the longest possible lease.
+  const expired = await reviewPullRequests(queue, {
+    fetcher: apiFetcher(routesFor({ listing: [listed(12, true), listed(88, false), listed(78, true, "2026-08-19T14:30:00.000Z")] })).fetcher,
+    clock: () => new Date("2026-08-19T15:31:00.000Z"),
+  });
+  assert.deepEqual(expired.unreportedPending, []);
+  assert.deepEqual(expired.unreported, [
+    { url: pendingUrl, number: 78, draft: true, createdAt: "2026-08-19T14:30:00.000Z" },
+  ]);
+  assert.deepEqual(queue.repositoryUnreportedPullRequests(REPOSITORY)?.pullRequests, expired.unreported);
+
   // The orphan is closed (or attached): the next pass overwrites the finding with an empty list.
   const cleared = await reviewPullRequests(queue, { fetcher: apiFetcher(routesFor({ listing: [listed(12, true), listed(88, false)] })).fetcher, clock });
   assert.deepEqual(cleared.unreported, []);
+  assert.deepEqual(cleared.unreportedPending, []);
   assert.deepEqual(queue.repositoryUnreportedPullRequests(REPOSITORY), { observedAt: clock().toISOString(), pullRequests: [] });
 
   assert.throws(
@@ -749,6 +776,7 @@ test("the unreported listing is bounded: more than three pages is reported trunc
   const swept = await reviewPullRequests(queue, { fetcher: apiFetcher(routesFor({ listing: page })).fetcher, clock });
   assert.deepEqual(swept.skipped, [{ url: `https://github.com/${REPOSITORY}/pulls`, reason: "more than 300 open pull requests; the rest were not listed" }]);
   assert.equal(swept.unreported.length, 100, "300 listed entries, 100 distinct pull requests");
+  assert.deepEqual(swept.unreportedPending, []);
   assert.equal(new Set(swept.unreported.map((pull) => pull.url)).size, 100);
   assert.equal(queue.repositoryUnreportedPullRequests(REPOSITORY)?.pullRequests.length, 100);
 });

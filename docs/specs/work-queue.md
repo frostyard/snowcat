@@ -745,9 +745,12 @@ MCP (rule 41).
     — one a completed item reported as a `pull-request` artifact, whatever its
     kind and whatever its verification state, and one a `pr-review`,
     `pr-review-fix`, or `pr-cure` item is bound to, whatever its status — and
-    MUST report each remaining pull request once, in listing order, as
-    `unreported: [{ url, number, draft, createdAt? }]` in the sweep result and
-    so in `verify-artifacts` output. Such a pull request is **unreported**:
+    MUST report each remaining pull request whose `createdAt` is younger than
+    `MAX_LEASE_SECONDS` once, in listing order, as `unreportedPending: [{ url,
+    number, createdAt }]` in the sweep result and so in `verify-artifacts`
+    output, without persisting it. Every other remaining pull request MUST be
+    reported once as `unreported: [{ url, number, draft, createdAt? }]`. Such a
+    pull request is **unreported**:
     the gate never saw it, so it was never reviewed and never marked ready.
     The sweep MUST NOT create any work item, event, or artifact for one — an
     unreported pull request is a human decision (close it, or
