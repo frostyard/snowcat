@@ -80,6 +80,7 @@ Docs are split by the question they answer:
 - [0063 — Authenticate people through Cloudflare Access; mint MCP tokens so the ledger says who](adr/0063-authenticate-people-through-cloudflare-access-and-mint-mcp-tokens.md)
 - [0064 — Adopt the name Snowcat](adr/0064-adopt-the-name-snowcat.md)
 - [0065 — Gate worker pull requests behind bounded review](adr/0065-gate-worker-pull-requests-behind-bounded-review.md)
+- [0066 — Sequence project slices on observed predecessor delivery](adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)
 
 ### Organization decisions
 

@@ -281,6 +281,15 @@ hands on the host. Status as of 2026-08-19:
   repository, host units, and environment variables are renamed, `FLUENT_*`
   is read for one release.
 - Tokens per accepted outcome, once a client can report them.
+- **Project sequencing — accepted 2026-08-19 as
+  [ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)**
+  (predecessor references on imported items, satisfied only by observed
+  delivery; planning via core's `frostyard-plan-project` skill; release
+  URLs as artifacts). Implementation still to schedule: one queue rung for
+  the predecessors column, `depends-on:` parsing in `import-issues`, the
+  claim-path gate, release-artifact verification, and surface visibility
+  for unmet predecessors. Until it lands, the skill's issue format works
+  today with hand-paced admission.
 
 ## Open questions
 
