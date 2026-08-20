@@ -69,11 +69,13 @@ async function githubJson(
     }
     if (!response.ok) return { kind: "response", status: response.status, value: null };
     const declaredLength = response.headers.get("content-length");
-    if (declaredLength !== null && Number(declaredLength) > MAX_RESPONSE_BYTES) {
-      return { kind: "unavailable" };
+    if (declaredLength !== null) {
+      if (!/^(?:0|[1-9][0-9]*)$/.test(declaredLength)) return { kind: "unavailable" };
+      const length = Number(declaredLength);
+      if (!Number.isSafeInteger(length) || length > MAX_RESPONSE_BYTES) return { kind: "unavailable" };
     }
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength > MAX_RESPONSE_BYTES) return { kind: "unavailable" };
+    const bytes = await boundedBody(response, MAX_RESPONSE_BYTES);
+    if (bytes === null) return { kind: "unavailable" };
     // A 204 (or any empty success body, e.g. `GET /vulnerability-alerts`) is an
     // answer, not an outage: the status carries the meaning.
     if (bytes.byteLength === 0) return { kind: "response", status: response.status, value: null };
@@ -86,6 +88,34 @@ async function githubJson(
   } catch {
     return { kind: "unavailable" };
   }
+}
+
+async function boundedBody(response: Response, maximumBytes: number): Promise<Uint8Array | null> {
+  if (response.body === null) return new Uint8Array();
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      if (chunk.value.byteLength > maximumBytes - size) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(chunk.value);
+      size += chunk.value.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const result = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
 }
 
 function isRedirect(status: number): boolean {
