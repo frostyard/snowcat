@@ -107,7 +107,7 @@ export function buildQueueMcpServer(
   const queue = sharedQueue ?? new QueueStore(path, undefined, storeOptions);
   const actor = (declared: string) => identity?.principal ?? declared;
   const server = new McpServer(
-    { name: "snowcat-queue", version: "0.1.0" },
+    { name: "snowcat", version: "0.1.0" },
     {
       instructions: [
         "Claim at most one work item unless the operator explicitly requests a loop.",
