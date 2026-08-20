@@ -1,12 +1,28 @@
 import { githubApiJson, type GitHubFetch } from "../repository/github-api.ts";
 import { enrolledRepositories } from "./eligibility.ts";
 import type { QueueStore } from "./store.ts";
-import type { AllowedAction, ProposedRootInput, WorkItem } from "./types.ts";
+import { PREDECESSOR_URL_PATTERN, type AllowedAction, type ProposedRootInput, type WorkItem } from "./types.ts";
 
 const GITHUB_TIMEOUT_MS = 30_000;
 const PAGE_SIZE = 100;
 const MAX_PAGES = 10;
 const MAX_BODY_CHARS = 16_000;
+/** Predecessor edges one imported issue may declare (ADR-0066); the store refuses more. */
+const MAX_DEPENDS_ON = 20;
+/** The store's `sourceRef` bound, applied here so an over-long URL is dropped, never thrown. */
+const MAX_PREDECESSOR_CHARS = 512;
+
+/**
+ * One `depends-on:` line: optional surrounding whitespace, the key in any case,
+ * and exactly one non-whitespace token. The token is then held against
+ * `PREDECESSOR_URL_PATTERN` — the store's own constant — so the case-insensitive
+ * key can never widen the URL shape this parser accepts beyond the shape the
+ * store stores. A line carrying anything else (a bare issue number, a second
+ * URL, a trailing comment, a pull-request URL, an upper-cased scheme or host)
+ * is dropped, which is what "malformed lines are ignored" means for an
+ * untrusted body.
+ */
+const DEPENDS_ON_LINE = /^[ \t]*depends-on[ \t]*:[ \t]*(\S+)[ \t]*$/i;
 
 export const ISSUE_WORK_KIND = "issue-resolution";
 
@@ -66,14 +82,51 @@ export async function fetchLabeledOpenIssues(
 }
 
 /**
+ * The predecessor source references one issue body declares (ADR-0066), sorted
+ * and deduplicated. The body is untrusted GitHub-authored text, so parsing
+ * never fails it: a non-matching line, a URL outside the store's exact
+ * (case-sensitive) shape, an over-long URL, and a self-edge (the issue's own
+ * canonical URL — an item cannot wait for itself) are all dropped silently,
+ * duplicates collapse, and at most the first `MAX_DEPENDS_ON` survivors are
+ * kept so the store's ceiling can never be hit as an exception. Every survivor
+ * is a value the store accepts, so a body can never abort an import.
+ * Safe by direction: an edge read here can only delay the item that declares
+ * it — it authorizes nothing and touches no other item.
+ */
+export function parseDependsOn(body: string, selfUrl: string): string[] {
+  const self = selfUrl.trim().toLowerCase();
+  const seen = new Set<string>();
+  const predecessors: string[] = [];
+  for (const line of body.split(/\r?\n/)) {
+    const match = DEPENDS_ON_LINE.exec(line);
+    if (!match) continue;
+    const url = match[1]!;
+    if (url.length > MAX_PREDECESSOR_CHARS) continue;
+    // The store's shape, verbatim: anything it would refuse is dropped here
+    // rather than carried into a transaction that would throw on it.
+    if (!PREDECESSOR_URL_PATTERN.test(url)) continue;
+    const key = url.toLowerCase();
+    if (key === self || seen.has(key)) continue;
+    seen.add(key);
+    predecessors.push(url);
+    if (predecessors.length >= MAX_DEPENDS_ON) break;
+  }
+  return predecessors.sort();
+}
+
+/**
  * Turns one issue into a proposed root. The issue body is quoted as untrusted
  * GitHub-authored context, never as an instruction from Snowcat's operator.
+ * Its `depends-on:` lines are parsed off the raw body first (ADR-0066):
+ * truncation bounds only what the worker is shown, so an edge sitting past the
+ * cut is still an edge.
  */
 export function issueWorkCandidate(
   repository: string,
   issue: LabeledIssue,
   options: { priority?: number; createdBy?: string } = {},
 ): ProposedRootInput {
+  const predecessors = parseDependsOn(issue.body, issue.htmlUrl);
   const body = issue.body.trim();
   const quotedBody =
     body.length === 0
@@ -92,6 +145,14 @@ export function issueWorkCandidate(
       "Keep the change bounded to the issue, run the repository's own checks, reference the issue",
       `number in the pull request, and report the pull request as a pull-request artifact.`,
       "If the issue is unclear or already resolved, block this item with the reason instead of guessing.",
+      ...(predecessors.length === 0
+        ? []
+        : [
+            "",
+            `Snowcat read ${predecessors.length} depends-on ${predecessors.length === 1 ? "line" : "lines"} in the body below and recorded`,
+            "them as this item's predecessors:",
+            ...predecessors.map((url) => `  - ${url}`),
+          ]),
       "",
       "--- Issue body (untrusted, from GitHub) ---",
       quotedBody,
@@ -106,6 +167,7 @@ export function issueWorkCandidate(
     delegableActions: issueActions,
     priority: options.priority ?? 0,
     createdBy: options.createdBy ?? "operator:import-issues",
+    ...(predecessors.length === 0 ? {} : { predecessors }),
   };
 }
 
@@ -118,6 +180,8 @@ export interface ImportLabeledIssuesResult {
   observed: number;
   created: WorkItem[];
   skippedSourceRefs: string[];
+  /** Skipped source references whose still-proposed item took new `depends-on` edges (ADR-0066). */
+  refreshedSourceRefs: string[];
 }
 
 /** Fetches, converts, and proposes in one transaction; a failed fetch proposes nothing. */
@@ -136,6 +200,7 @@ export async function importLabeledIssues(
   const candidates = result.issues.map((issue) => issueWorkCandidate(repository, issue, { priority: options.priority }));
   const { created, skippedSourceRefs } = queue.enqueueProposedRoots(repository, candidates);
   const createdSourceRefs = new Set(created.map((item) => item.sourceRef));
+  const refreshedSourceRefs = refreshProposedPredecessors(queue, repository, candidates, skippedSourceRefs, createdSourceRefs);
   queue.recordLabeledIssueObservations(
     repository,
     result.issues.map((issue) => ({
@@ -154,7 +219,43 @@ export async function importLabeledIssues(
     observed: result.issues.length,
     created,
     skippedSourceRefs,
+    refreshedSourceRefs,
   };
+}
+
+/**
+ * Re-import refresh (ADR-0066): an issue whose `depends-on` lines changed on
+ * GitHub while its item is still `proposed` picks up the new edge set, because
+ * nothing has approved the old one yet. Admission is the plan-review moment, so
+ * an item that is admitted — or claimed, completed, blocked, or cancelled — is
+ * left exactly as it is and correcting its edges is cancel-and-refile. Nothing
+ * else moves: no status, priority, admission, or creation, and an unchanged set
+ * writes no event at all.
+ */
+function refreshProposedPredecessors(
+  queue: QueueStore,
+  repository: string,
+  candidates: readonly ProposedRootInput[],
+  skippedSourceRefs: readonly string[],
+  createdSourceRefs: ReadonlySet<string | undefined>,
+): string[] {
+  const skipped = new Set(skippedSourceRefs);
+  const refreshed: string[] = [];
+  for (const candidate of candidates) {
+    // Only an item this run did not create: a duplicate of a just-created
+    // source reference must not rewrite the edges it was created with.
+    if (!skipped.has(candidate.sourceRef) || createdSourceRefs.has(candidate.sourceRef)) continue;
+    const existing = queue.proposedItemBySourceRef(repository, candidate.sourceRef);
+    if (existing === undefined) continue;
+    const current = existing.predecessors ?? [];
+    const next = candidate.predecessors ?? [];
+    // Both sides are stored/parsed sorted and deduplicated, so equal sets are
+    // equal sequences.
+    if (current.length === next.length && current.every((url, index) => url === next[index])) continue;
+    queue.replaceProposedPredecessors(existing.id, [...next], "operator:import-issues");
+    refreshed.push(candidate.sourceRef);
+  }
+  return refreshed;
 }
 
 export interface EnrolledImportResult {

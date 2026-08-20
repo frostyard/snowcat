@@ -183,6 +183,20 @@ imported once — even if its item was later rejected or completed — is never
 imported again. Higher `--priority` claims first (ties by creation time).
 Priority is operator-owned; workers cannot change it.
 
+**Sequenced slices** — a line of the form `depends-on: <GitHub issue URL>` in
+an issue body becomes a predecessor on the imported item
+([ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)):
+the import reads the raw body, keeps at most 20 of them, and silently ignores
+anything that is not exactly one issue URL on the line — including a link to
+the issue itself. The key may be written in any case; the URL may not — write
+it exactly as GitHub does (`https://github.com/<owner>/<repo>/issues/<n>`), or
+the line is ignored like any other malformed one. The item's instructions name the predecessors Snowcat read,
+and `import-issues` reports them under `refreshedSourceRefs` when a re-import
+changes them. Editing the `depends-on` lines on GitHub refreshes the edges only
+while the item is still `proposed`; **once you admit it, cancel the item and
+re-file the issue** (a new issue URL, since an old `sourceRef` never imports
+twice) to correct its sequencing.
+
 The label convention is **`snowcat`**: labeling an issue `snowcat` is the
 queue's claim on it, and the operator host imports it for you. `snowcat-import-issues.timer`
 runs `import-issues --enrolled --label snowcat` every 15 minutes for every
@@ -1358,7 +1372,8 @@ tokens and wall time per accepted outcome (from the client you ran).
   [ADR-0005](../adr/0005-admit-worker-created-work-before-claiming.md),
   [ADR-0018](../adr/0018-bind-worker-sessions-and-verify-github-artifacts.md),
   [ADR-0061](../adr/0061-cure-pull-requests-as-bounded-per-head-work.md),
-  [ADR-0065](../adr/0065-gate-worker-pull-requests-behind-bounded-review.md)
+  [ADR-0065](../adr/0065-gate-worker-pull-requests-behind-bounded-review.md),
+  [ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)
 - Contracts: [work queue](../specs/work-queue.md)
 - Architecture: [queue execution boundary](queue-execution-boundary.md),
   [repository enrollment](repository-enrollment.md)

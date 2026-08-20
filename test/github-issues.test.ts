@@ -4,8 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { fetchLabeledOpenIssues, importLabeledIssues, ISSUE_WORK_KIND, issueWorkCandidate } from "../src/queue/github-issues.ts";
+import { fetchLabeledOpenIssues, importLabeledIssues, ISSUE_WORK_KIND, issueWorkCandidate, parseDependsOn } from "../src/queue/github-issues.ts";
 import { QueueStore } from "../src/queue/store.ts";
+import { PREDECESSOR_URL_PATTERN } from "../src/queue/types.ts";
 
 const REPOSITORY = "frostyard/updex";
 
@@ -296,4 +297,210 @@ test("import-issues --enrolled imports only opted-in enrolled repositories, is i
   const before = requests.length;
   await assert.rejects(importLabeledIssuesForEnrolled(queue, controlPath, "a,b", { fetcher }), /label must be one non-empty GitHub label name/);
   assert.equal(requests.length, before);
+});
+
+test("depends-on lines become predecessors; malformed, self-referential, and surplus lines are dropped silently", () => {
+  const candidate = issueWorkCandidate(REPOSITORY, {
+    number: 20,
+    title: "Consume the new capability",
+    body: [
+      "Part of the plan.",
+      "depends-on: https://github.com/frostyard/updex/issues/9",
+      "\tDEPENDS-ON :  https://github.com/frostyard/core/issues/3   ",
+      "depends-on: https://github.com/frostyard/updex/issues/9",
+      "depends-on: https://github.com/frostyard/updex/issues/20",
+      "",
+      "Ignored, every one of them:",
+      "depends-on: 158",
+      "depends-on:",
+      "depends-on: https://github.com/frostyard/updex/pull/5",
+      "depends-on: http://github.com/frostyard/updex/issues/4",
+      "depends-on: https://github.com/frostyard/updex/issues/6 and also issues/7",
+      "dependson: https://github.com/frostyard/updex/issues/8",
+      "see depends-on: https://github.com/frostyard/updex/issues/11",
+      "depends-on: https://github.com/frostyard/updex/issues/0",
+    ].join("\n"),
+    htmlUrl: "https://github.com/frostyard/updex/issues/20",
+    labels: ["snowcat"],
+  });
+  assert.deepEqual(
+    candidate.predecessors,
+    ["https://github.com/frostyard/core/issues/3", "https://github.com/frostyard/updex/issues/9"],
+    "two edges, sorted and deduplicated; the self-edge on issue 20 and every malformed line are gone",
+  );
+  // The preamble Snowcat writes is not itself a source of edges: re-parsing the
+  // instructions finds only the three URLs the quoted body carries, never the
+  // bulleted list above it.
+  assert.deepEqual(parseDependsOn(candidate.instructions, "https://github.com/frostyard/nothing/issues/1"), [
+    "https://github.com/frostyard/core/issues/3",
+    "https://github.com/frostyard/updex/issues/20",
+    "https://github.com/frostyard/updex/issues/9",
+  ]);
+
+  // The preamble tells the worker what Snowcat read, above the untrusted body.
+  assert.match(candidate.instructions, /Snowcat read 2 depends-on lines in the body below/);
+  assert.ok(
+    candidate.instructions.indexOf("recorded") < candidate.instructions.indexOf("--- Issue body (untrusted, from GitHub) ---"),
+  );
+
+  // No lines at all: no predecessors, no preamble sentence.
+  const none = issueWorkCandidate(REPOSITORY, {
+    number: 21,
+    title: "Standalone",
+    body: "No edges here. Mentioning depends-on in prose is not a line.",
+    htmlUrl: "https://github.com/frostyard/updex/issues/21",
+    labels: [],
+  });
+  assert.equal(none.predecessors, undefined);
+  assert.doesNotMatch(none.instructions, /Snowcat read/);
+
+  // The store's 20-entry ceiling is enforced by dropping, never by throwing on an untrusted body.
+  const many = issueWorkCandidate(REPOSITORY, {
+    number: 22,
+    title: "Over the ceiling",
+    body: Array.from({ length: 25 }, (_, index) => `depends-on: https://github.com/frostyard/updex/issues/${index + 100}`).join("\n"),
+    htmlUrl: "https://github.com/frostyard/updex/issues/22",
+    labels: [],
+  });
+  assert.equal(many.predecessors?.length, 20);
+  assert.match(many.instructions, /Snowcat read 20 depends-on lines/);
+  const singular = issueWorkCandidate(REPOSITORY, {
+    number: 23,
+    title: "One edge",
+    body: "depends-on: https://github.com/frostyard/updex/issues/1",
+    htmlUrl: "https://github.com/frostyard/updex/issues/23",
+    labels: [],
+  });
+  assert.match(singular.instructions, /Snowcat read 1 depends-on line in/);
+});
+
+test("depends-on lines past the 16,000-character truncation slice are still read", () => {
+  const hiddenEdge = "https://github.com/frostyard/core/issues/42";
+  const candidate = issueWorkCandidate(REPOSITORY, {
+    number: 30,
+    title: "A very long issue",
+    body: `${"x".repeat(20_000)}\ndepends-on: ${hiddenEdge}`,
+    htmlUrl: "https://github.com/frostyard/updex/issues/30",
+    labels: [],
+  });
+  assert.match(candidate.instructions, /truncated at 16000 characters/, "the quoted body is still bounded");
+  assert.equal(candidate.instructions.includes(`x`.repeat(16_001)), false);
+  assert.deepEqual(candidate.predecessors, [hiddenEdge], "the edge sits past the cut and is still an edge");
+});
+
+test("re-import refreshes the predecessors of a still-proposed item and never those of an admitted one", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-depends-on-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled(REPOSITORY, true);
+
+  const first = "https://github.com/frostyard/core/issues/1";
+  const second = "https://github.com/frostyard/core/issues/2";
+  const pages = {
+    1: [
+      issue(40, { body: `Slice.\ndepends-on: ${first}` }),
+      issue(41, { body: `Slice.\ndepends-on: ${first}` }),
+    ],
+  };
+  const { fetcher } = pagedFetcher(pages);
+
+  const imported = await importLabeledIssues(queue, REPOSITORY, "snowcat", { fetcher });
+  assert.deepEqual(imported.refreshedSourceRefs, [], "nothing to refresh on the run that created them");
+  const [gated, admittedItem] = imported.created;
+  assert.deepEqual(gated?.predecessors, [first]);
+  assert.deepEqual(queue.events(gated!.id)[0]?.payload.predecessors, [first], "work.proposed names the edges");
+
+  // Admission is the plan-review moment: this one is past refreshing.
+  queue.approve(admittedItem!.id, "operator:test");
+
+  // Both issues gain a second edge on GitHub; only the proposed one moves.
+  pages[1] = [
+    issue(40, { body: `Slice.\ndepends-on: ${second}\ndepends-on: ${first}` }),
+    issue(41, { body: `Slice.\ndepends-on: ${second}\ndepends-on: ${first}` }),
+  ];
+  const refreshed = await importLabeledIssues(queue, REPOSITORY, "snowcat", { fetcher });
+  assert.deepEqual(refreshed.created, []);
+  assert.deepEqual(refreshed.refreshedSourceRefs, [gated!.sourceRef], "only the still-proposed item is reported");
+  assert.deepEqual(queue.get(gated!.id)?.predecessors, [first, second]);
+  const update = queue.events(gated!.id).find((event) => event.type === "work.predecessors-updated");
+  assert.equal(update?.actor, "operator:import-issues");
+  assert.deepEqual(update?.payload.predecessors, [first, second]);
+  assert.deepEqual(update?.payload.previous, [first]);
+  assert.deepEqual(queue.get(admittedItem!.id)?.predecessors, [first], "an admitted item keeps the edges it was admitted with");
+  assert.equal(
+    queue.events(admittedItem!.id).some((event) => event.type === "work.predecessors-updated"),
+    false,
+    "and takes no predecessors event at all",
+  );
+  assert.equal(queue.get(gated!.id)?.status, "proposed", "the refresh admits nothing");
+
+  // An unchanged set is not a write: no report, no second event.
+  const unchanged = await importLabeledIssues(queue, REPOSITORY, "snowcat", { fetcher });
+  assert.deepEqual(unchanged.refreshedSourceRefs, []);
+  assert.equal(queue.events(gated!.id).filter((event) => event.type === "work.predecessors-updated").length, 1);
+
+  // Dropping every line clears them, still only while proposed.
+  pages[1] = [issue(40, { body: "Slice." }), issue(41, { body: "Slice." })];
+  const cleared = await importLabeledIssues(queue, REPOSITORY, "snowcat", { fetcher });
+  assert.deepEqual(cleared.refreshedSourceRefs, [gated!.sourceRef]);
+  assert.equal(queue.get(gated!.id)?.predecessors, undefined);
+  assert.deepEqual(queue.get(admittedItem!.id)?.predecessors, [first]);
+});
+
+test("a depends-on URL outside the store's exact shape is dropped, never carried into a write that throws", async () => {
+  // The key is case-insensitive; the URL is not. An upper-cased scheme, host,
+  // or path segment is a value `normalizePredecessors` refuses, so the parser
+  // must refuse it too — otherwise one untrusted body aborts the transaction
+  // that imports every other labeled issue in the repository.
+  const shouted = "HTTPS://GITHUB.COM/frostyard/updex/ISSUES/9";
+  assert.equal(PREDECESSOR_URL_PATTERN.test(shouted), false, "the store's shape rejects it");
+  assert.deepEqual(
+    parseDependsOn(`depends-on: ${shouted}`, "https://github.com/frostyard/updex/issues/50"),
+    [],
+    "so the parser drops it silently, like any other malformed line",
+  );
+  assert.deepEqual(
+    parseDependsOn(
+      ["DEPENDS-ON: https://github.com/frostyard/updex/issues/9", "depends-on: https://GitHub.com/frostyard/updex/issues/10"].join("\n"),
+      "https://github.com/frostyard/updex/issues/50",
+    ),
+    ["https://github.com/frostyard/updex/issues/9"],
+    "the key may shout; the host may not",
+  );
+  // Everything the parser does return is a value the store accepts.
+  for (const url of parseDependsOn("depends-on: https://github.com/frostyard/core/issues/3", "https://github.com/frostyard/updex/issues/50")) {
+    assert.equal(PREDECESSOR_URL_PATTERN.test(url), true);
+  }
+
+  const crafted = issueWorkCandidate(REPOSITORY, {
+    number: 50,
+    title: "Crafted body",
+    body: `Please fix.\ndepends-on: ${shouted}`,
+    htmlUrl: "https://github.com/frostyard/updex/issues/50",
+    labels: ["snowcat"],
+  });
+  assert.equal(crafted.predecessors, undefined, "nothing survives, so no predecessors field at all");
+  assert.doesNotMatch(crafted.instructions, /Snowcat read/);
+
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-depends-on-case-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled(REPOSITORY, true);
+
+  // The whole batch: the crafted issue must not take the clean one down with it.
+  const pages: Record<number, unknown[]> = { 1: [issue(50, { body: `Please fix.\ndepends-on: ${shouted}` }), issue(51)] };
+  const { fetcher } = pagedFetcher(pages);
+  const imported = await importLabeledIssues(queue, REPOSITORY, "snowcat", { fetcher });
+  assert.equal(imported.created.length, 2, "both issues import; the untrusted body throws nothing");
+  assert.equal(imported.created.find((item) => item.sourceRef?.endsWith("/51"))?.status, "proposed");
+  assert.equal(imported.created.find((item) => item.sourceRef?.endsWith("/50"))?.predecessors, undefined);
+  assert.equal(imported.observed, 2, "and rule 57's observations are still recorded");
+
+  // The refresh path reaches `replaceProposedPredecessors` with the same parse:
+  // an edited body that shouts its URL leaves the proposed item alone instead
+  // of throwing after the enqueue.
+  pages[1] = [issue(50, { body: `Please fix.\ndepends-on: HTTPS://GITHUB.COM/frostyard/core/ISSUES/3` }), issue(51)];
+  const refreshed = await importLabeledIssues(queue, REPOSITORY, "snowcat", { fetcher });
+  assert.deepEqual(refreshed.refreshedSourceRefs, [], "an unparseable edge is not a changed edge set");
+  assert.equal(queue.proposedItemBySourceRef(REPOSITORY, "https://github.com/frostyard/updex/issues/50")?.predecessors, undefined);
 });
