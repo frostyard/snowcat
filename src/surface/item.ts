@@ -1,5 +1,6 @@
 import type { QueueStore } from "../queue/store.ts";
 import { withoutLeaseToken, type ObservableWorkItem, type WorkEvent } from "../queue/types.ts";
+import { readPredecessors, type PredecessorSummary } from "./predecessor-state.ts";
 import type { RepositoryEnrollment } from "./repositories.ts";
 
 export interface ArtifactProvenance {
@@ -17,12 +18,15 @@ export interface ItemData {
   /** Actor and time of the event that produced the current result (`work.completed` or `work.blocked`). */
   resultEvent?: { actor: string; at: string; type: string };
   provenance: Map<string, ArtifactProvenance>;
+  /** The claim gate's verdict on each declared predecessor; absent when the item declares none. */
+  predecessors?: PredecessorSummary;
 }
 
 /**
  * Exactly what `queue -- show` prints, plus lineage neighbours and the
  * enrollment badge: the item without its lease token, its parent and root,
- * its direct children, and its full event history.
+ * its direct children, its predecessors as the claim gate sees them, and its
+ * full event history.
  */
 export function readItem(queue: QueueStore, id: string, enrollments: Map<string, RepositoryEnrollment> | undefined): ItemData | undefined {
   const raw = queue.get(id);
@@ -46,6 +50,7 @@ export function readItem(queue: QueueStore, id: string, enrollments: Map<string,
     root: rootRaw ? withoutLeaseToken(rootRaw) : undefined,
     children: queue.children(id).map(withoutLeaseToken),
     enrollment: enrollments?.get(item.repository.toLowerCase()),
+    predecessors: readPredecessors(queue, item),
     events,
     resultEvent: resultEvent ? { actor: resultEvent.actor, at: resultEvent.occurredAt, type: resultEvent.type } : undefined,
     provenance,

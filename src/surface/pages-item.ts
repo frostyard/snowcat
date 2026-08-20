@@ -3,6 +3,7 @@ import { html, type SafeHtml } from "./html.ts";
 import type { ItemData } from "./item.ts";
 import { artifactLabel, clock, document, itemPath, payloadGist, repositoryPath, shell, type PageContext } from "./pages.ts";
 import { enrollmentBadge } from "./pages-repositories.ts";
+import { predecessorLabel, type PredecessorEntry, type PredecessorSummary } from "./predecessor-state.ts";
 import { admissionForm, attachArtifactForm, deferForm, exitForm, noteForm, prioritizeForm, verifyForm } from "./forms.ts";
 
 export function itemPage(context: PageContext, data: ItemData): string {
@@ -27,6 +28,7 @@ export function itemPage(context: PageContext, data: ItemData): string {
       },
       html`<div class="fl-item"><div class="fl-stack">
         ${definitionCard(data)}
+        ${data.predecessors ? predecessorsCard(data.predecessors) : ""}
         ${item.result ? resultCard(item.result, data) : ""}
         ${notesCard(item)}
         ${previousResultsCard(item)}
@@ -88,6 +90,34 @@ function definitionCard(data: ItemData): SafeHtml {
     <div class="fl-def-label">Acceptance criteria</div>
     <ol class="fl-criteria">${item.acceptanceCriteria.map((criterion) => html`<li>${criterion}</li>`)}</ol>
   </div></section>`;
+}
+
+/**
+ * Why this item is — or is not — claimable right now (ADR-0066): one row per
+ * declared predecessor, in stored order, carrying the claim gate's own verdict
+ * and, when it withholds, the reason the gate reports and the work item that
+ * reason was read from. The section is absent for an item declaring none.
+ */
+function predecessorsCard(summary: PredecessorSummary): SafeHtml {
+  const caption = summary.cycle
+    ? "predecessor cycle · never claimable until you cancel or refile one of them"
+    : summary.unmet.length === 0
+      ? "all met · does not withhold this item"
+      : `${summary.unmet.length} of ${summary.entries.length} unmet · withheld from claims`;
+  return html`<section class="fl-group" id="predecessors"><div class="fl-group-head"><h2>Predecessors</h2><span>${caption}</span></div><div class="fl-def fl-stack-sm">${summary.entries.map(
+    predecessorRow,
+  )}</div></section>`;
+}
+
+function predecessorRow(entry: PredecessorEntry): SafeHtml {
+  const tone = entry.satisfied ? "ok" : entry.cycle ? "warn" : entry.status === "cancelled" ? "danger" : "";
+  return html`<div class="fl-note-row"><span><a href="${entry.sourceRef}" rel="noreferrer noopener">${predecessorLabel(entry.sourceRef)} ↗</a><br><span class="ph-badge ${tone}">${entry.label}</span></span><span>${
+    entry.reason ?? "completed, and every artifact it reported is observed delivered"
+  }<small class="fl-sub">${entry.sourceRef}${
+    entry.itemId
+      ? html` · <a href="${itemPath(entry.itemId)}">work item ${entry.itemId.slice(0, 8)}</a> · ${entry.status}${entry.delivery ? ` · delivery ${entry.delivery}` : ""}`
+      : ""
+  }</small></span></div>`;
 }
 
 /** The review record (ADR-0065) on a pr-review or pr-review-fix item: binding, round, verdict, fingerprints. */

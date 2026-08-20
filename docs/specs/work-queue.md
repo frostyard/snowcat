@@ -996,6 +996,18 @@ MCP (rule 41).
     block. `QueueStore.predecessorStatuses` MUST derive those entries by rule
     62's evaluation, so what an operator reads is what the gate decides, and
     MUST, like the gate, read stored state without a GitHub request.
+    The operator surface ([operator surface](../design/operator-surface.md))
+    MUST read that same derivation rather than repeat it: the item page of an
+    item declaring predecessors MUST show one entry per declared reference in
+    stored order — the reference, whether it is satisfied, and when it is not
+    the reason and the work item that reason was read from — and the progress
+    strip of a *queued* item with an unmet predecessor MUST name the nearest
+    unmet one in place of the ordinary in-queue wait. Where an item's unmet
+    predecessor edges lead back to that item, both MUST name it a predecessor
+    cycle and the strip MUST raise it as a stop needing the operator, because
+    no delivery can ever satisfy it (ADR-0066 consequences). Detecting a cycle
+    is a read over rule 62's verdicts and MUST change no edge's satisfaction,
+    withhold or admit nothing further, and ask GitHub nothing.
 
 ## Derived artifacts
 
@@ -1009,7 +1021,7 @@ MCP (rule 41).
 | Review gate | `review-gate` flag and draft refusal per rule 52; `verify-artifacts` enqueues `pr-review` rounds and `pr-review-fix` roots and marks passed drafts ready per rules 53 and 55; `complete_work` accepts the bound verdict per rule 54 |
 | Internal dependency chain | `sweep-dependencies` maps tags, branch comparison, and `go.mod` to `release-needed` and `dependency-bump` proposals per rule 45 |
 | Repository settings drift | `sweep-repository-settings` diffs live GitHub settings against core's contract into `settings-drift` proposals per rule 46 |
-| Predecessor gate | Claim selection excludes items whose rule 58 predecessors are not observed delivered per rule 62; `show` prints each one's satisfaction per rule 63 |
+| Predecessor gate | Claim selection excludes items whose rule 58 predecessors are not observed delivered per rule 62; `show`, the item page, and a queued item's progress strip print each one's satisfaction — and name a cycle — per rule 63 |
 | MCP tokens | `token mint [--kinds …] | list | revoke` over the `mcp_tokens` table per rule 49; identities per rule 48; claim restriction per rule 50 |
 | PRD baseline metrics | `metrics` aggregates items created in a window with its `work.claimed`, `work.completed`, `work.blocked`, and `work.cancelled` events and the completed items' current `delivery` per rule 56 |
 | MCP worker behavior | Portable `work-snowcat-queue` skill constrained by this contract |

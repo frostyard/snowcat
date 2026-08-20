@@ -285,11 +285,15 @@ hands on the host. Status as of 2026-08-19:
   [ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)**
   (predecessor references on imported items, satisfied only by observed
   delivery; planning via core's `frostyard-plan-project` skill; release
-  URLs as artifacts). Implementation still to schedule: one queue rung for
-  the predecessors column, `depends-on:` parsing in `import-issues`, the
-  claim-path gate, release-artifact verification, and surface visibility
-  for unmet predecessors. Until it lands, the skill's issue format works
-  today with hand-paced admission.
+  URLs as artifacts). Implemented under
+  [snowcat#157](https://github.com/frostyard/snowcat/issues/157): schema
+  rung 12's predecessors column, release-artifact verification,
+  `depends-on:` parsing in `import-issues`, the claim-path gate
+  ([spec rules 58–62](../specs/work-queue.md)), and surface visibility for
+  unmet predecessors — the item page's Predecessors section and the
+  progress strips' waiting chip, cycles included
+  ([spec rule 63](../specs/work-queue.md),
+  [operator surface](../design/operator-surface.md)).
 - **Description blockers to humans — accepted 2026-08-20 as
   [ADR-0067](../adr/0067-adjudicate-description-blockers-by-a-human.md)**
   after the first gated fleet night raced a body-only cure against a

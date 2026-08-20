@@ -11,6 +11,7 @@ import {
   type WorkEvent,
   type WorkStatus,
 } from "../queue/types.ts";
+import { predecessorWait, readPredecessors, type PredecessorCache, type PredecessorSummary } from "./predecessor-state.ts";
 import { deriveReviewState } from "./review-state.ts";
 
 export const progressStages = [
@@ -122,11 +123,18 @@ export function readProgress(queue: QueueStore, now: Date = new Date()): Progres
     eventsByItem.set(id, events);
     return events;
   };
+  // One cache for the whole pass: two members of the same cycle, and every
+  // successor of one popular predecessor, share the reads the gate would make.
+  const predecessorCache: PredecessorCache = new Map();
   const rows = primaries.map((item) => {
     const reviews = reviewsByOrigin.get(item.id) ?? [];
+    // Only a queued item is waiting on its edges — a claimed or completed one
+    // is past the gate — so nothing else pays for the read.
+    const predecessors = item.status === "queued" ? readPredecessors(queue, item, predecessorCache) : undefined;
     return deriveProgressRow(item, reviews, queue.reviewGateEnabled(item.repository), now, {
       itemEvents: recentEvents(item.id),
       reviewEvents: reviews.flatMap((review) => recentEvents(review.id)),
+      ...(predecessors ? { predecessors } : {}),
     });
   });
   const sourceRefs = new Set(
@@ -184,13 +192,17 @@ function summarizeProgress(rows: ProgressRow[]): Record<ProgressSummaryBucket, n
   return summary;
 }
 
-/** Derives one primary item's current stage and any off-path state. */
+/**
+ * Derives one primary item's current stage and any off-path state.
+ * `context.predecessors` is the claim gate's own verdict on the item's
+ * declared edges (ADR-0066), read by the caller and never re-derived here.
+ */
 export function deriveProgressRow(
   item: ObservableWorkItem,
   reviewItems: ObservableWorkItem[],
   reviewGate: boolean,
   now: Date,
-  history: { itemEvents?: readonly WorkEvent[]; reviewEvents?: readonly WorkEvent[] } = {},
+  context: { itemEvents?: readonly WorkEvent[]; reviewEvents?: readonly WorkEvent[]; predecessors?: PredecessorSummary } = {},
 ): ProgressRow {
   const base = {
     key: `item:${item.id}`,
@@ -201,7 +213,7 @@ export function deriveProgressRow(
   };
   const finish = (row: Omit<ProgressRow, "enteredAt">): ProgressRow => ({
     ...row,
-    enteredAt: deriveStageEnteredAt(item, row.stage, reviewGate, history),
+    enteredAt: deriveStageEnteredAt(item, row.stage, reviewGate, context),
   });
   const stopped = item.status === "blocked" ? blockedBadge() : item.status === "cancelled" ? cancelledBadge() : undefined;
 
@@ -209,7 +221,18 @@ export function deriveProgressRow(
     return finish({ ...base, stage: "proposed", active: false, waiting: stopped?.reason ?? "awaiting your admission", badge: stopped });
   }
   if (item.status === "queued") {
-    return finish({ ...base, stage: "queued", active: false, waiting: stopped?.reason ?? "in queue", badge: stopped });
+    // A queued item with unmet predecessors is not "in queue": no worker can
+    // claim it until the gate's edges deliver, and a cycle means never
+    // (ADR-0066). The chip names the nearest unmet edge; a cycle is an amber
+    // stop, so the attention group collects it.
+    const gate = context.predecessors && context.predecessors.unmet.length > 0 ? predecessorWait(context.predecessors) : undefined;
+    return finish({
+      ...base,
+      stage: "queued",
+      active: false,
+      waiting: stopped?.reason ?? gate?.waiting ?? "in queue",
+      badge: stopped ?? gate?.badge,
+    });
   }
   if (item.status === "claimed") {
     const active = leaseIsActive(item, now);
@@ -336,6 +359,7 @@ function deriveStageEnteredAt(
   reviewGate: boolean,
   history: { itemEvents?: readonly WorkEvent[]; reviewEvents?: readonly WorkEvent[] },
 ): Partial<Record<ProgressStage, string>> {
+  // Stage entry is a ledger question; predecessors do not move an item's stage.
   const itemEvents = history.itemEvents ?? [];
   const reviewEvents = history.reviewEvents ?? [];
   const pullRequest = pullRequestArtifact(item);
