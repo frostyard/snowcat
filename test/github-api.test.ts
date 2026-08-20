@@ -43,9 +43,17 @@ test("GitHub JSON reads fail closed on malformed or oversized Content-Length", a
 
 test("GitHub GraphQL accepts valid JSON whose body is exactly at the byte limit", async () => {
   const prefix = '{"data":{"repository":null}}';
-  const body = prefix + " ".repeat(MAX_RESPONSE_BYTES - Buffer.byteLength(prefix));
+  const body = new TextEncoder().encode(prefix + " ".repeat(MAX_RESPONSE_BYTES - Buffer.byteLength(prefix)));
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const split = Math.floor(body.byteLength / 2);
+      controller.enqueue(body.subarray(0, split));
+      controller.enqueue(body.subarray(split));
+      controller.close();
+    },
+  });
   const fetcher = (async () =>
-    new Response(body, {
+    new Response(stream, {
       status: 200,
       headers: { "content-length": String(MAX_RESPONSE_BYTES) },
     })) as GitHubFetch;
