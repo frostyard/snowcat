@@ -1,4 +1,5 @@
 import { html, raw, type SafeHtml } from "./html.ts";
+import { admissionForm, exitForm } from "./forms.ts";
 import { clock, document, itemPath, shell, type PageContext } from "./pages.ts";
 import { progressStages, type ProgressData, type ProgressRow, type ProgressStage } from "./progress-state.ts";
 
@@ -85,5 +86,12 @@ function progressRow(row: ProgressRow): SafeHtml {
         }</li>`;
       })}
     </ol></div>
+    ${progressActions(row)}
   </article>`;
+}
+
+function progressActions(row: ProgressRow): SafeHtml | string {
+  if (row.item?.status === "proposed") return admissionForm(row.item, "/progress", { approveOnly: true });
+  if (row.item?.status === "blocked") return exitForm(row.item, "/progress");
+  return "";
 }
