@@ -202,7 +202,8 @@ test("the operator surface requires a session, sets the cookie on the right toke
   assert.match(firstEvent, /<b>work\.claimed<\/b><a href="\/items\/[0-9a-f-]+" title="[^"]+">security-implementation<\/a>/);
 
   // Sidebar without a control plane lists opted-in repositories; footer prints paths.
-  assert.match(body, /<a class="ph-nav-link" href="\/events"><span class="ph-nav-num">03<\/span>Events<\/a>/);
+  assert.match(body, /<a class="ph-nav-link" href="\/progress"><span class="ph-nav-num">03<\/span>Progress<\/a>/);
+  assert.match(body, /<a class="ph-nav-link" href="\/events"><span class="ph-nav-num">04<\/span>Events<\/a>/);
   assert.match(body, /<div class="ph-nav-group">Opted in<\/div>/);
   assert.match(body, /frostyard\/example/);
   assert.match(body, /frostyard\/updex/);
@@ -1421,7 +1422,7 @@ test("the events page filters by repository and by operator decision, 404s an un
   // Every repository, newest first, with the sidebar entry now active.
   const all = await read("/events");
   assert.equal(all.status, 200);
-  assert.match(all.body, /<a class="ph-nav-link active" href="\/events"><span class="ph-nav-num">03<\/span>Events<\/a>/);
+  assert.match(all.body, /<a class="ph-nav-link active" href="\/events"><span class="ph-nav-num">04<\/span>Events<\/a>/);
   assert.match(all.body, /<h1>Events<\/h1>/);
   const ledger = section(all.body, "events");
   const metadata = seeded.queue.metadata();

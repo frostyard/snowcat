@@ -979,6 +979,37 @@ export class QueueStore {
   }
 
   list(options: { status?: WorkStatus; repository?: string; kind?: string; limit?: number } = {}): WorkItem[] {
+    const { clauses, params } = this.filterClauses(options);
+    const limit = Math.max(1, Math.min(options.limit ?? 50, 100));
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const rows = this.db
+      .prepare(`SELECT * FROM work_items ${where} ORDER BY priority DESC, created_at ASC LIMIT ?`)
+      .all(...params, limit) as Row[];
+    return rows.map((row) => withDelivery(decodeWorkItem(row)));
+  }
+
+  /**
+   * The same filters as list(), ordered by `updated_at` DESC (ties by
+   * `created_at` DESC) instead of claim order, so the most recently touched
+   * items are the ones the limit keeps. list() selects in claim order
+   * (priority, then oldest first) and clamps to 100, which starves any reader
+   * that cares about recent activity once a status holds more than 100 rows:
+   * the progress view reads the terminal statuses this way so that hundreds of
+   * old merged completions cannot hide today's work behind the ceiling. Like
+   * completedItemsWithPendingArtifacts, the limit is the caller's own ceiling.
+   */
+  recentlyUpdatedItems(options: { status?: WorkStatus; repository?: string; kind?: string; limit?: number } = {}): WorkItem[] {
+    const { clauses, params } = this.filterClauses(options);
+    const limit = Math.max(1, Math.floor(options.limit ?? 100));
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const rows = this.db
+      .prepare(`SELECT * FROM work_items ${where} ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT ?`)
+      .all(...params, limit) as Row[];
+    return rows.map((row) => withDelivery(decodeWorkItem(row)));
+  }
+
+  /** The status/repository/kind filter list() and recentlyUpdatedItems() share. */
+  private filterClauses(options: { status?: WorkStatus; repository?: string; kind?: string }): { clauses: string[]; params: SQLInputValue[] } {
     const clauses: string[] = [];
     const params: SQLInputValue[] = [];
     if (options.status === "proposed") {
@@ -998,12 +1029,7 @@ export class QueueStore {
       clauses.push("kind = ?");
       params.push(options.kind);
     }
-    const limit = Math.max(1, Math.min(options.limit ?? 50, 100));
-    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
-    const rows = this.db
-      .prepare(`SELECT * FROM work_items ${where} ORDER BY priority DESC, created_at ASC LIMIT ?`)
-      .all(...params, limit) as Row[];
-    return rows.map((row) => withDelivery(decodeWorkItem(row)));
+    return { clauses, params };
   }
 
   /**

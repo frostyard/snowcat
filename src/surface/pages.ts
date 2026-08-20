@@ -23,7 +23,7 @@ interface View {
   title: string;
   eyebrow: string;
   heading: string;
-  active: "inbox" | "repositories" | "events" | "tokens" | "none";
+  active: "inbox" | "repositories" | "progress" | "events" | "tokens" | "none";
   /** Header-right content before Refresh / Sign out (badges, ghost buttons). */
   actions?: SafeHtml;
   refresh?: boolean;
@@ -269,8 +269,9 @@ export function shell(context: PageContext, view: View, main: SafeHtml): SafeHtm
         <div class="ph-nav-group">Queue</div>
         <a class="ph-nav-link${view.active === "inbox" ? " active" : ""}" href="/"><span class="ph-nav-num">01</span>Inbox</a>
         <a class="ph-nav-link${view.active === "repositories" ? " active" : ""}" href="/repositories"><span class="ph-nav-num">02</span>Repositories</a>
-        <a class="ph-nav-link${view.active === "events" ? " active" : ""}" href="/events"><span class="ph-nav-num">03</span>Events</a>
-        <a class="ph-nav-link${view.active === "tokens" ? " active" : ""}" href="/tokens"><span class="ph-nav-num">04</span>MCP tokens</a>
+        <a class="ph-nav-link${view.active === "progress" ? " active" : ""}" href="/progress"><span class="ph-nav-num">03</span>Progress</a>
+        <a class="ph-nav-link${view.active === "events" ? " active" : ""}" href="/events"><span class="ph-nav-num">04</span>Events</a>
+        <a class="ph-nav-link${view.active === "tokens" ? " active" : ""}" href="/tokens"><span class="ph-nav-num">05</span>MCP tokens</a>
         <div class="ph-nav-group">${context.controlPlanePath ? "Enrolled" : "Opted in"}</div>
         ${
           context.repositories.length === 0
