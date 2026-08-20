@@ -296,7 +296,7 @@ code{font-family:var(--font-mono);color:var(--text-mono-accent)}
 @media(max-width:1050px){.fl-board{grid-template-columns:1fr}.fl-item{grid-template-columns:1fr}.fl-column{min-height:0}}
 
 /* Progress — one lifecycle rail per primary item */
-.fl-progress-summary{border:1px solid var(--line);display:flex;gap:0;margin-bottom:10px;background:var(--surface-code)}
+.fl-progress-summary{border:1px solid var(--line);display:flex;flex-wrap:wrap;gap:0;margin-bottom:10px;background:var(--surface-code)}
 .fl-progress-summary span{color:#8fb0c2;font-size:10.5px;padding:9px 14px;border-right:1px solid var(--line)}
 .fl-progress-summary span:last-child{border-right:0}
 .fl-progress-summary strong{color:var(--text-body);font-size:13px;margin-right:4px}
