@@ -290,6 +290,15 @@ hands on the host. Status as of 2026-08-19:
   claim-path gate, release-artifact verification, and surface visibility
   for unmet predecessors. Until it lands, the skill's issue format works
   today with hand-paced admission.
+- **Description blockers to humans — accepted 2026-08-20 as
+  [ADR-0067](../adr/0067-adjudicate-description-blockers-by-a-human.md)**
+  after the first gated fleet night raced a body-only cure against a
+  head-bound round (snowcat#144). Implementation still to schedule: the
+  sweep partitions blockers by the `contract:pr-body:` fingerprint prefix
+  (no fix item for description blockers, mixed verdicts mint tree-only
+  fixes), reads the description's last-edited time into the adjudication
+  report, and the reviewer/fix instructions plus spec rules state the
+  convention.
 
 ## Open questions
 

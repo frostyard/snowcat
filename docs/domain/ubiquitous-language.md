@@ -1200,6 +1200,16 @@ dispositioned. A preference, advisory, or repeated rewording is not a blocker.
 **Avoid:** blocked work; nit; every review comment.
 ([ADR-0029](../adr/0029-bound-adversarial-review.md))
 
+#### Description blocker
+
+A review blocker whose only cure is a change to the pull-request description,
+named by the `contract:pr-body:` fingerprint prefix. A description blocker is
+adjudicated by a human and never mints automated fix work, because rounds key
+on heads and a description cure moves none.
+
+**Avoid:** tree blocker; template nit; body comment.
+([ADR-0067](../adr/0067-adjudicate-description-blockers-by-a-human.md))
+
 #### Review gate
 
 A per-repository setting under which worker pull requests stay drafts until
