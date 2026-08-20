@@ -52,13 +52,13 @@ FORM: An operations timeline extended from the incumbent queue shell; no new vis
     }
     ${
       data.attention.length > 0
-        ? progressGroup("Needs attention", "amber and red stops · newest first", data.attention, "attention")
+        ? progressGroup("Needs attention", "amber and red stops · newest first", data.attention, data.asOf, "attention")
         : ""
     }
     ${
       data.repositories.length === 0
         ? html`<section class="fl-group"><p class="fl-empty">No current progress to show. Labeled issues appear here after the next successful import.</p></section>`
-        : data.repositories.map((group) => progressGroup(group.repository, `${group.rows.length} current`, group.rows))
+        : data.repositories.map((group) => progressGroup(group.repository, `${group.rows.length} current`, group.rows, data.asOf))
     }
   `;
   return document(
@@ -68,14 +68,14 @@ FORM: An operations timeline extended from the incumbent queue shell; no new vis
   );
 }
 
-function progressGroup(title: string, caption: string, rows: ProgressRow[], id?: string): SafeHtml {
+function progressGroup(title: string, caption: string, rows: ProgressRow[], asOf: string, id?: string): SafeHtml {
   return html`<section class="fl-group fl-progress-group"${id ? html` id="${id}"` : ""}>
     <div class="fl-group-head"><h2>${title}</h2><span>${caption}</span></div>
-    <div class="fl-progress-rows">${rows.map(progressRow)}</div>
+    <div class="fl-progress-rows">${rows.map((row) => progressRow(row, asOf))}</div>
   </section>`;
 }
 
-function progressRow(row: ProgressRow): SafeHtml {
+function progressRow(row: ProgressRow, asOf: string): SafeHtml {
   const current = progressStages.indexOf(row.stage);
   const title = row.item
     ? html`<a href="${itemPath(row.item.id)}">${row.title}</a>`
@@ -90,6 +90,7 @@ function progressRow(row: ProgressRow): SafeHtml {
     <div class="fl-progress-scroll"><ol class="fl-stage-strip" aria-label="Progress for ${row.title}">
       ${progressStages.map((stage, index) => {
         const isCurrent = index === current;
+        const enteredAt = row.enteredAt[stage];
         const classes = [
           index < current ? "complete" : "",
           isCurrent ? "current" : "",
@@ -98,10 +99,24 @@ function progressRow(row: ProgressRow): SafeHtml {
         ]
           .filter(Boolean)
           .join(" ");
-        return html`<li class="${classes}"><span class="fl-stage-mark" aria-hidden="true"></span><b>${LABELS[stage]}</b>${
-          isCurrent && row.waiting ? html`<small class="fl-waiting-chip">${row.waiting}</small>` : ""
+        return html`<li class="${classes}"${enteredAt ? html` title="Entered at ${enteredAt}"` : ""}><span class="fl-stage-mark" aria-hidden="true"></span><b>${LABELS[stage]}</b>${
+          isCurrent && row.waiting
+            ? html`<small class="fl-waiting-chip">${row.waiting}${enteredAt ? ` · in this stage for ${stageDuration(enteredAt, asOf)}` : ""}</small>`
+            : ""
         }</li>`;
       })}
     </ol></div>
   </article>`;
+}
+
+function stageDuration(enteredAt: string, asOf: string): string {
+  const elapsed = Math.max(0, Date.parse(asOf) - Date.parse(enteredAt));
+  const totalMinutes = Math.floor(elapsed / 60_000);
+  if (totalMinutes < 1) return "less than a minute";
+  const days = Math.floor(totalMinutes / (24 * 60));
+  const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+  const minutes = totalMinutes % 60;
+  if (days > 0) return hours > 0 ? `${days} ${days === 1 ? "day" : "days"} ${hours} ${hours === 1 ? "hour" : "hours"}` : `${days} ${days === 1 ? "day" : "days"}`;
+  if (hours > 0) return minutes > 0 ? `${hours} ${hours === 1 ? "hour" : "hours"} ${minutes} ${minutes === 1 ? "minute" : "minutes"}` : `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
 }
