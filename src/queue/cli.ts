@@ -188,7 +188,15 @@ try {
     const id = required(args[0], "work item id");
     const item = queue.get(id);
     if (!item) throw new Error(`work item not found: ${id}`);
-    print({ item: withoutLeaseToken(item), events: queue.events(id) });
+    // A gated item reads as stuck unless the reason is on the page: for an
+    // item that declares predecessors, print each one's current satisfaction
+    // — the same evaluation the claim gate runs (ADR-0066 decision 3), so what
+    // is printed here is why the item is or is not claimable right now.
+    print({
+      item: withoutLeaseToken(item),
+      ...(item.predecessors ? { predecessors: queue.predecessorStatuses(id) } : {}),
+      events: queue.events(id),
+    });
   } else if (command === "events") {
     const flags = parseFlags(args, ["since", "repository", "limit"]);
     const since = flags.since === undefined ? 0 : parseNonNegativeInteger(flags.since, "since");
