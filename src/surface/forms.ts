@@ -12,10 +12,22 @@ export function preconditionFields(item: ObservableWorkItem, returnTo: string): 
 }
 
 /** Approve / Reject for a proposal; one form, two submit targets, one optional reason. */
-export function admissionForm(item: ObservableWorkItem, returnTo: string, options: { open?: boolean } = {}): SafeHtml {
-  return html`<form class="fl-decide" method="post" action="${itemPath(item.id)}/approve">${preconditionFields(item, returnTo)}<div class="fl-actions"><button class="ph-button" type="submit">Approve</button><button class="ph-button reject" type="submit" formaction="${itemPath(item.id)}/reject">Reject</button>${
+export function admissionForm(
+  item: ObservableWorkItem,
+  returnTo: string,
+  options: { open?: boolean; approveOnly?: boolean } = {},
+): SafeHtml {
+  return html`<form class="fl-decide" method="post" action="${itemPath(item.id)}/approve">${preconditionFields(item, returnTo)}<div class="fl-actions"><button class="ph-button" type="submit">Approve</button>${
+    options.approveOnly
+      ? ""
+      : html`<button class="ph-button reject" type="submit" formaction="${itemPath(item.id)}/reject">Reject</button>`
+  }${
     options.open ? html`<a class="ph-button secondary" href="${itemPath(item.id)}">Open</a>` : ""
-  }</div><input class="fl-input" name="reason" placeholder="Reason (required to reject)" maxlength="4000"><small class="fl-sub">Approve carries status=${item.status} · updatedAt ${item.updatedAt.slice(11, 19)} — refused if the item moved</small></form>`;
+  }</div>${
+    options.approveOnly
+      ? ""
+      : html`<input class="fl-input" name="reason" placeholder="Reason (required to reject)" maxlength="4000">`
+  }<small class="fl-sub">Approve carries status=${item.status} · updatedAt ${item.updatedAt.slice(11, 19)} — refused if the item moved</small></form>`;
 }
 
 /** Requeue-with-note / Cancel for a blocked item; the textarea is the reason for either. */

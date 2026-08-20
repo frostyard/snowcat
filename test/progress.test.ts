@@ -172,7 +172,7 @@ test("the session-guarded progress page renders every stage, folds review satell
 
   completeWithPullRequest(queue, REPOSITORY, "Old merged item", "merged", undefined, LONG_AGO);
   clock = NOW;
-  completeWithPullRequest(queue, REPOSITORY, "Fresh merged item", "merged");
+  const freshMerged = completeWithPullRequest(queue, REPOSITORY, "Fresh merged item", "merged");
   completeWithPullRequest(queue, REPOSITORY, "Waiting for GitHub", "unverified");
   completeWithPullRequest(queue, "frostyard/plain", "Ready for a human merge", "open");
 
@@ -188,13 +188,14 @@ test("the session-guarded progress page renders every stage, folds review satell
     leaseSeconds: 3600,
   })!;
 
-  queue.enqueueSeed(definition("Queued implementation", "queued-implementation"));
-  queue.enqueueProposedRoots(REPOSITORY, [
+  const queued = queue.enqueueSeed(definition("Queued implementation", "queued-implementation"));
+  const proposalBatch = queue.enqueueProposedRoots(REPOSITORY, [
     {
       ...definition("Proposed implementation", "proposed-implementation"),
       sourceRef: "https://github.com/frostyard/example/issues/20",
     },
   ]);
+  const proposed = proposalBatch.created[0]!;
 
   const origin = completeWithPullRequest(
     queue,
@@ -290,6 +291,23 @@ test("the session-guarded progress page renders every stage, folds review satell
   assert.equal(body.includes("Old merged item"), false);
   assert.equal(body.includes(workingLease.leaseToken!), false);
   assert.equal(body.includes(reviewLease.leaseToken!), false);
+
+  const proposedStrip = article(body, proposed.id);
+  assert.equal((proposedStrip.match(/<form\b/g) ?? []).length, 1);
+  assert.match(proposedStrip, new RegExp(`<form[^>]+action="/items/${proposed.id}/approve"`));
+  assert.match(proposedStrip, />Approve<\/button>/);
+  assert.equal(proposedStrip.includes(`/items/${proposed.id}/reject`), false);
+
+  const blockedRow = article(body, blocked.id);
+  assert.equal((blockedRow.match(/<form\b/g) ?? []).length, 1);
+  assert.match(blockedRow, new RegExp(`<form[^>]+action="/items/${blocked.id}/requeue"`));
+  assert.match(blockedRow, new RegExp(`formaction="/items/${blocked.id}/cancel"`));
+  assert.match(blockedRow, /<textarea[^>]+name="reason"/);
+
+  for (const itemWithoutActions of [queued, working, freshMerged]) {
+    assert.equal(article(body, itemWithoutActions.id).includes("<form"), false);
+  }
+
   assert.match(body, /new EventSource\(url\)/);
   assert.match(body, /var url = "\/events\/stream"/);
   assert.match(body, /if \(cfg\.reload\) \{ location\.reload\(\); return; \}/);
@@ -439,6 +457,14 @@ function item(overrides: Partial<ObservableWorkItem> = {}): ObservableWorkItem {
 function section(body: string, id: string): string {
   const match = new RegExp(`<section class="fl-group[^"]*" id="${id}">.*?</section>`, "s").exec(body);
   assert.ok(match, `section ${id} present`);
+  return match[0];
+}
+
+// The row's opening tag carries more than data-progress-key (data-progress-stage
+// since #153), so match the key wherever it sits among the tag's attributes.
+function article(body: string, itemId: string): string {
+  const match = new RegExp(`<article class="fl-progress-row"[^>]*data-progress-key="item:${itemId}"[^>]*>.*?</article>`, "s").exec(body);
+  assert.ok(match, `progress row for item ${itemId} present`);
   return match[0];
 }
 
