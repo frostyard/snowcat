@@ -355,6 +355,46 @@ export function withoutLeaseToken(item: WorkItem): ObservableWorkItem {
   return observable;
 }
 
+/** How an attempt ended; absent on the attempt that still holds the lease. */
+export const attemptOutcomes = ["completed", "blocked", "released", "expired"] as const;
+export type AttemptOutcome = (typeof attemptOutcomes)[number];
+
+/**
+ * One lease on an item as the ledger recorded it: who took it (the
+ * transport-established principal), the exact client label supplied at claim
+ * time, and — once the lease ended — how. Derived from the item's own
+ * `work.claimed`, `work.completed`, `work.blocked`, `work.released`, and
+ * `lease.expired` events, never stored separately, so it is exact after every
+ * terminal transition and bounded by the newest `MAX_ITEM_ATTEMPTS` leases.
+ * `sequence` is the claim event's ledger sequence: a stable, unique attempt
+ * id that needs no ordering or timestamp to correlate. It carries no lease
+ * token — the ledger never holds one — and no worker text beyond the label.
+ */
+export interface WorkAttempt {
+  /** The `work.claimed` event's sequence: the attempt's identity. */
+  sequence: number;
+  claimedAt: string;
+  /** The principal that holds or held the lease (`leaseOwner` while active). */
+  worker: string;
+  /** The client's self-declared name at claim time, verbatim (rule 48); absent when none was supplied. */
+  label?: string;
+  /** The credential's claim restriction that bounded this lease, when one applied. */
+  kindsRestriction?: string[];
+  /** Absent while this attempt holds the lease. */
+  outcome?: AttemptOutcome;
+  endedAt?: string;
+  /** The actor that ended the attempt: the worker principal, or `system` for an expiry observed at reclaim. */
+  endedBy?: string;
+}
+
+/** Attempts an observer can read per item: the newest leases, oldest first. */
+export const MAX_ITEM_ATTEMPTS = 10;
+
+/** The read-only MCP projection of an item: its bookkeeping plus its bounded attempt history. */
+export interface ObservableWorkItemWithAttempts extends ObservableWorkItem {
+  attempts: WorkAttempt[];
+}
+
 export interface SeedWorkInput {
   repository: string;
   kind: string;

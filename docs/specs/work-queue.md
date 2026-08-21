@@ -57,8 +57,8 @@ summary, an evidence string array, and an artifact array.
 
 | Tool | Purpose | Required authority |
 | --- | --- | --- |
-| `list_work` | Filter queue bookkeeping by status/repository | None; never returns lease token |
-| `get_work` | Read one item and its lineage fields | None; never returns lease token |
+| `list_work` | Filter queue bookkeeping by status/repository/kind, or exactly by `leaseOwner` and `label`; each item with its bounded `attempts` (rule 66) | None; never returns lease token |
+| `get_work` | Read one item, its lineage fields, and its bounded `attempts` (rule 66) | None; never returns lease token |
 | `claim_work` | Lease the highest-priority eligible item | Worker identity outside the reserved principal namespaces; optional repository/kind filters, intersected with the credential's own kind restriction (rule 50) |
 | `heartbeat_work` | Renew an active lease for 30–3600 seconds | Matching item, worker, and lease token |
 | `complete_work` | Verify reported issues and pull requests against GitHub, then atomically store a result and up to ten child items | Matching item, worker, and lease token |
@@ -1073,6 +1073,53 @@ MCP (rule 41).
     without a grant MUST behave exactly as before the rung; a grant is
     immutable — an operator narrows a client by minting a new token and
     revoking the old.
+66. **Attempt provenance (extends rules 4, 11, and 48).** `list_work` and
+    `get_work` MUST return each item with `attempts`: the item's newest
+    leases, at most `MAX_ITEM_ATTEMPTS` (10), oldest first, derived from the
+    item's own ledger and stored nowhere else. A `work.claimed` event opens
+    an attempt — `sequence` (that event's ledger sequence, the attempt's
+    identity), `claimedAt`, `worker` (the event's actor: the
+    transport-established principal over HTTP, the payload's worker on
+    stdio), `label` (the claim's `label` payload, verbatim, absent when none
+    was recorded), and `kindsRestriction` when one applied — and the next
+    `work.completed`, `work.blocked`, `work.released`, or `lease.expired`
+    event closes it with `outcome` (`completed`, `blocked`, `released`,
+    `expired`), `endedAt`, and `endedBy` (that event's actor; `system` for an
+    expiry). `endedAt` for an expiry MUST be the lease's expiry instant —
+    `claim_work` records it as `leaseExpiresAt` in the `lease.expired`
+    payload — not the reclaim that noticed it. A lease that has lapsed with
+    no reclaim yet (rule 4) MUST still read as `expired` at its
+    `leaseExpiresAt`, by the same clock claim selection uses, so an observer
+    never reads a dead lease as active; only the attempt whose lease is live
+    has no `outcome`.
+
+    A claim label MUST be one bounded line: 1–`MAX_CLAIM_LABEL_LENGTH` (120)
+    characters with no control characters, refused at the MCP `worker`
+    schema and again by the store; a label equal to the principal is not
+    recorded. The store MUST refuse, before selecting any work, a label that
+    contains any lease token a current lease holds (`claim label may not
+    contain a lease token`), so a label can never carry a live token into
+    the ledger and out through this projection; the projection MUST publish
+    only a label of that shape and read an older, off-shape one as absent.
+    An attempt MUST carry no lease token, no bearer material, and no
+    worker-supplied text beyond the label — a block or release reason stays
+    in `result.summary` and the event payload.
+
+    The derivation MUST read only those five event types and only the
+    newest `2 × limit + 1` of them, so an item's unbounded history is never
+    loaded; the store MUST refuse a limit outside `1..10`; an unknown id is
+    an empty list. `list_work` MUST accept, beside `status`, `repository`,
+    and `limit` (1–100, default 50), a `kind` filter (work-kind shape) and
+    two exact correlation filters: `leaseOwner` (a worker principal; the
+    lease's current holder) and `label` (label shape; the label the item's
+    newest `work.claimed` event recorded). Together they find one worker's
+    item however many the repository has in flight, so correlation MUST need
+    no paging, ordering, or timestamp: an observer matches an item by
+    `worker` plus the exact `label`, and an attempt across transitions by
+    its `sequence`. The label remains provenance under rule 48 — naming
+    another client's label grants no lease authority — and `claim_work`,
+    `heartbeat_work`, `complete_work`, `block_work`, and `release_work` keep
+    returning the bare item without `attempts`.
 
 ## Derived artifacts
 
@@ -1090,6 +1137,7 @@ MCP (rule 41).
 | Predecessor gate | Claim selection excludes items whose rule 58 predecessors are not observed delivered per rule 62; `show`, the item page, and a queued item's progress strip print each one's satisfaction — and name a cycle — per rule 63 |
 | MCP tokens | `token mint [--kinds …] [--tools … | --profile …] | list | revoke` over the `mcp_tokens` table per rule 49; identities per rule 48; claim restriction per rule 50; tool grant per rule 65 |
 | PRD baseline metrics | `metrics` aggregates items created in a window with its `work.claimed`, `work.completed`, `work.blocked`, and `work.cancelled` events and the completed items' current `delivery` per rule 56 |
+| Attempt provenance | `QueueStore.attempts` folds an item's newest `work.claimed` / `work.completed` / `work.blocked` / `work.released` / `lease.expired` events, plus the clock against a lapsed lease, into at most ten attempts per rule 66; `list_work` and `get_work` carry them and `list` filters exactly by `leaseOwner` and `label` |
 | MCP worker behavior | Portable `work-snowcat-queue` skill constrained by this contract |
 | Testing-gap seed | Deterministic CLI instance of this contract |
 
