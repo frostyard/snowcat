@@ -5,6 +5,7 @@ import { verifyCompletionArtifacts, type ArtifactVerifierOptions } from "../queu
 import { assertCureCompletion } from "../queue/pull-request-cure.ts";
 import { assertReviewCompletion, assertReviewGate } from "../queue/pull-request-review.ts";
 import { QueueStore, queueDatabasePath, validateMcpTools, validateWorkerIdentity, validateWorkKinds, type QueueStoreOptions } from "../queue/store.ts";
+import { QueueStore, queueDatabasePath, validateWorkerIdentity, validateWorkKinds, WORK_KIND_PATTERN, type QueueStoreOptions } from "../queue/store.ts";
 import {
   allowedActions,
   MAX_REVIEW_ADVISORIES,
@@ -16,6 +17,8 @@ import {
   reviewDecisions,
   withoutLeaseToken,
   workStatuses,
+  type ObservableWorkItemWithAttempts,
+  type WorkItem,
 } from "../queue/types.ts";
 
 const actionSchema = z.enum(allowedActions);
@@ -139,6 +142,11 @@ export function buildQueueMcpServer(
   // tool outside the grant is simply never registered for this client.
   const grant = identity?.tools === undefined ? undefined : new Set(validateMcpTools(identity.tools, "MCP identity tools"));
   const granted = (tool: McpToolName): boolean => grant === undefined || grant.has(tool);
+  // The read projection (rule 66): the item without its lease token, plus its
+  // bounded attempt history so an observer can match the principal and the
+  // exact claim label to an item, and tell how a past lease ended, without
+  // reading the ledger. Lifecycle tools keep returning the bare item.
+  const observe = (item: WorkItem): ObservableWorkItemWithAttempts => ({ ...withoutLeaseToken(item), attempts: queue.attempts(item.id) });
   const server = new McpServer(
     { name: "snowcat", version: "0.1.0" },
     {
@@ -157,26 +165,28 @@ export function buildQueueMcpServer(
   if (granted("list_work")) server.registerTool(
     "list_work",
     {
-      description: "List queue bookkeeping without exposing lease tokens. Use claim_work before doing an item.",
+      description:
+        "List queue bookkeeping without exposing lease tokens. Each item carries `attempts`: its newest leases (at most 10, oldest first) with the principal, the exact claim label, and how each ended. Use claim_work before doing an item.",
       inputSchema: z.object({
         status: z.enum(workStatuses).optional(),
         repository: z.string().optional(),
+        kind: z.string().regex(WORK_KIND_PATTERN).optional(),
         limit: z.number().int().min(1).max(100).optional(),
       }),
     },
-    async ({ status, repository, limit }) =>
-      toolResult(queue.list({ status, repository, limit }).map(withoutLeaseToken)),
+    async ({ status, repository, kind, limit }) => toolResult(queue.list({ status, repository, kind, limit }).map(observe)),
   );
 
   if (granted("get_work")) server.registerTool(
     "get_work",
     {
-      description: "Read one work item's bookkeeping and lineage metadata without exposing its lease token.",
+      description:
+        "Read one work item's bookkeeping, lineage metadata, and `attempts` (its newest leases with principal, claim label, and outcome) without exposing its lease token.",
       inputSchema: z.object({ id: z.string().uuid() }),
     },
     async ({ id }) => {
       const item = queue.get(id);
-      return toolResult(item ? withoutLeaseToken(item) : null);
+      return toolResult(item ? observe(item) : null);
     },
   );
 

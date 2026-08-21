@@ -7,6 +7,7 @@ import {
   allowedActions,
   deriveDelivery,
   MAX_REVIEW_ADVISORIES,
+  MAX_ITEM_ATTEMPTS,
   MAX_REVIEW_BLOCKERS,
   MODEL_NAME_PATTERN,
   mcpToolNames,
@@ -37,6 +38,7 @@ import {
   type UnreportedPullRequest,
   type UnreportedPullRequestObservation,
   type WorkArtifact,
+  type WorkAttempt,
   type WorkEvent,
   type WorkItem,
   type WorkResult,
@@ -1939,6 +1941,60 @@ export class QueueStore {
   }
 
   /**
+   * The item's newest leases, oldest first, derived from its own ledger: a
+   * `work.claimed` event opens an attempt and the next `work.completed`,
+   * `work.blocked`, `work.released`, or `lease.expired` event closes it. The
+   * read is bounded twice — only lifecycle events are selected, and only the
+   * newest `2 × limit + 1` of them, enough to close `limit` attempts — so an
+   * item with a long history costs the same as a fresh one. Nothing here
+   * reads `lease_token`: the ledger never holds one. An unknown id is an
+   * empty list.
+   */
+  attempts(id: string, limit = MAX_ITEM_ATTEMPTS): WorkAttempt[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_ITEM_ATTEMPTS) {
+      throw new Error(`limit must be between 1 and ${MAX_ITEM_ATTEMPTS}`);
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT *
+         FROM (
+           SELECT *
+           FROM work_events
+           WHERE work_item_id = ?
+             AND event_type IN ('work.claimed', 'work.completed', 'work.blocked', 'work.released', 'lease.expired')
+           ORDER BY sequence DESC
+           LIMIT ?
+         )
+         ORDER BY sequence`,
+      )
+      .all(id, 2 * limit + 1) as Row[];
+    const attempts: WorkAttempt[] = [];
+    for (const event of rows.map(decodeWorkEvent)) {
+      if (event.type === "work.claimed") {
+        const label = event.payload.label;
+        const kindsRestriction = event.payload.kindsRestriction;
+        attempts.push({
+          sequence: event.sequence,
+          claimedAt: event.occurredAt,
+          worker: event.actor,
+          ...(typeof label === "string" ? { label } : {}),
+          ...(Array.isArray(kindsRestriction) ? { kindsRestriction: kindsRestriction.map(String) } : {}),
+        });
+        continue;
+      }
+      // An end event before any claim in the window belongs to an attempt
+      // the window cut off; the window is sized so this loses at most the
+      // oldest, already-closed attempt, never the newest.
+      const open = attempts.at(-1);
+      if (!open || open.outcome !== undefined) continue;
+      open.outcome = ATTEMPT_OUTCOME_BY_EVENT[event.type]!;
+      open.endedAt = event.occurredAt;
+      open.endedBy = event.actor;
+    }
+    return attempts.slice(-limit);
+  }
+
+  /**
    * Reads the newest bounded slice of one item's ledger, returned oldest
    * first so callers can derive transitions without loading an item's
    * unbounded history.
@@ -2244,6 +2300,13 @@ export class QueueStore {
     }
   }
 }
+
+const ATTEMPT_OUTCOME_BY_EVENT: Record<string, WorkAttempt["outcome"]> = {
+  "work.completed": "completed",
+  "work.blocked": "blocked",
+  "work.released": "released",
+  "lease.expired": "expired",
+};
 
 function decodeWorkEvent(row: Row): WorkEvent {
   return {

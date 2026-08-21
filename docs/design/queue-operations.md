@@ -722,6 +722,44 @@ this reminder; nothing does it for you.
 
 ## Watch the work
 
+### Which item is this worker on?
+
+A client that starts several workers on one token (Snowcat Cockpit, the
+orchestrator loop) cannot tell them apart by `leaseOwner`: over HTTP every
+lease belongs to the token's `member:<owner>/<client>` principal, and the
+worker's own name is only the claim's label. `list_work` and `get_work`
+therefore carry each item's **attempts** ([spec rule 66](../specs/work-queue.md)):
+its newest leases (at most ten, oldest first) with the principal, the exact
+label the client supplied as `worker` at claim time, and — once the lease
+ended — whether it `completed`, `blocked`, `released`, or `expired`, derived
+from the item's own ledger. Nothing in an attempt is a lease token, a bearer,
+or worker prose; the block reason stays in `result.summary`.
+
+To find the item a worker labelled `cockpit:worker:aaaa1111` holds, read the
+repository's claimed items and match on the exact label of the attempt that
+has no `outcome`:
+
+```text
+list_work {"repository":"frostyard/example","status":"claimed"}
+→ [{ "id":"…", "leaseOwner":"member:you@frostyard.org/cockpit fleet",
+     "attempts":[{ "sequence":3612, "claimedAt":"…", "worker":"member:you@frostyard.org/cockpit fleet",
+                   "label":"cockpit:worker:aaaa1111" }] }]
+```
+
+Keep the item `id` and the attempt `sequence`. When the worker disappears
+from the active list, `get_work {"id":"…"}` tells you what became of that
+exact attempt — `"outcome":"completed"` (`blocked`, `released`, `expired`)
+with `endedAt` and `endedBy` — even after another worker has reclaimed the
+item, because the old attempt stays beside the new one. Match by `sequence`,
+never by position or time. Bounds: `list_work` returns at most 100 items
+(`limit`, default 50) filtered by `status`, `repository`, and `kind`; each
+item carries at most ten attempts, so a long-lived item's oldest leases fall
+out of the projection (the `events` command still has them). A label is
+provenance, not authority (rule 48): a client naming someone else's label
+gains nothing, and a token that cannot claim (a claim restriction to a
+kind the observer never needs, or a tool grant once one exists) is the right
+credential for this read.
+
 Tail the event ledger instead of looping over `show`. Every claim, lease
 renewal, completion, proposal, block, release, operator decision, and artifact
 verification is one event with a global, monotonic `sequence`:
