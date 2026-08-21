@@ -135,6 +135,11 @@ Docs are split by the question they answer:
 - [Recover a working engine](plans/recover.md)
 - [Maintenance programs](plans/maintenance-programs.md)
 
+### Agent implementation designs and plans
+
+- [No-review Snowcat queue skill design](superpowers/specs/2026-08-21-no-review-queue-skill-design.md)
+- [No-review Snowcat queue skill implementation plan](superpowers/plans/2026-08-21-no-review-queue-skill.md)
+
 ### Product requirements
 
 - [GitHub organization agent fleet](prd/agent-fleet.md)

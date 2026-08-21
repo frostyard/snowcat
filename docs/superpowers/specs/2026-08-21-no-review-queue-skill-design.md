@@ -20,9 +20,9 @@ skill for the rest of the lifecycle.
 
 The companion will:
 
-1. Call `list_work` for queued items.
+1. Call `list_work` for up to the maximum 100 queued items.
 2. Collect the distinct observed kinds except the exact kind `pr-review`.
-3. Stop cleanly when that set is empty.
+3. Stop cleanly when that bounded listing yields an empty set.
 4. Call `claim_work` once with the collected kinds.
 5. Follow `work-snowcat-queue` for inspection, duplicate detection, execution,
    evidence, completion, blocking, release, and explicit continuous-work loops.
