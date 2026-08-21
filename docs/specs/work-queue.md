@@ -66,7 +66,8 @@ summary, an evidence string array, and an artifact array.
 | `release_work` | Return unstarted or mismatched work to the queue | Matching item, worker, and lease token |
 
 All tool responses expose the value both as JSON text and under structured
-content key `value`.
+content key `value`. A credential with a tool grant (rule 65) is served only
+the granted subset of this table; the rest do not exist for it.
 
 ### Administrative CLI
 
@@ -241,7 +242,10 @@ MCP (rule 41).
     labeled-issue import observation of rule 57, `NULL` for every repository
     that existed before it; rung 12 adds `work_items.predecessors_json`, the
     predecessor source references of rule 58, `NULL` for every item that
-    existed before it. Processes running code from before
+    existed before it; rung 13 adds `work_items.required_artifact`, the
+    delivery contract of rule 64, `none` for every item that existed before
+    it; rung 14 adds `mcp_tokens.tools_json`, the tool grant of rule 65,
+    `NULL` for every token that existed before it. Processes running code from before
     the version guard existed are stopped by rule 20's database constraint,
     not by this check.
 22. Scheduling priority is operator-owned. Only operator-authored or
@@ -660,6 +664,13 @@ MCP (rule 41).
     still never a hash. The restriction narrows claiming only; `revoke` is
     unchanged.
 
+    A token MAY also carry a **tool grant** (rule 65): `token mint …
+    [--tools <tool>[,<tool>…] | --profile <name>]` stores the sorted,
+    de-duplicated list in `mcp_tokens.tools_json` (schema rung 14) — or
+    `NULL` for a token that may call every tool, which is what every token
+    minted before the rung is. `token list`, the mint output, and the
+    surface's `/tokens` page MUST show it (`unrestricted` when absent).
+
 50. **HTTP MCP endpoint (ADR-0063).** The app MUST serve the same MCP tools
     as stdio at `/mcp` over Streamable HTTP, and MUST require a Snowcat-minted
     token as a bearer header: absent, malformed, unknown, revoked, or
@@ -683,6 +694,10 @@ MCP (rule 41).
     restricted client still finishes what it already holds. A claim bounded by
     a restriction MUST record it as `kindsRestriction` in the `work.claimed`
     event payload. No MCP tool is added and no tool's schema changes.
+
+    When the credential carries a tool grant (rule 65), the endpoint MUST
+    serve only the granted tools, as that rule says; the grant and the claim
+    restriction compose by effect and neither widens the other.
 
 51. **Surface identity (ADR-0063).** With `SNOWCAT_ACCESS_TEAM_DOMAIN` and
     `SNOWCAT_ACCESS_AUD` set, the operator surface MUST treat a request as a
@@ -1035,6 +1050,29 @@ MCP (rule 41).
     problem code, and the operator command that clears it — oldest first,
     MUST exit non-zero when the list is non-empty, and MUST mutate nothing
     and read GitHub never.
+65. **Tool grant ([ADR-0070](../adr/0070-grant-mcp-tokens-a-server-enforced-tool-scope.md)).**
+    A minted token MAY carry the set of MCP tools it may call. The closed
+    vocabulary is `mcpToolNames` — exactly the tools of the MCP tools table,
+    which the server MUST register in full for an unrestricted identity —
+    and `token mint … --tools` MUST refuse a name outside it by naming the
+    name, MUST refuse an empty grant, and MUST store the grant sorted and
+    de-duplicated in `mcp_tokens.tools_json` (schema rung 14); `--profile
+    <name>` MUST expand one catalogued grant (`observer` = `get_work`,
+    `list_work`), MUST refuse an unknown profile by naming the known ones,
+    and MUST NOT be combined with `--tools`. For a credential with a grant —
+    a token's `tools` over HTTP, or `SNOWCAT_MCP_TOOLS` (a comma-separated
+    list, validated and refused the same way) on the stdio server — the
+    server MUST register only the granted tools: `tools/list` MUST advertise
+    only those, and a call to any other tool MUST fail as an unknown tool
+    before its handler runs, whatever its arguments, so queue state and the
+    ledger are untouched. The grant MUST NOT be settable or widenable from a
+    request payload, and a grant without `claim_work` MUST therefore never
+    reveal a lease token. A claim taken under a grant MUST record it as
+    `toolsGrant` in the `work.claimed` payload beside `kindsRestriction`
+    (rule 50); the grant changes nothing about which item is claimed. Tokens
+    without a grant MUST behave exactly as before the rung; a grant is
+    immutable — an operator narrows a client by minting a new token and
+    revoking the old.
 
 ## Derived artifacts
 
@@ -1050,7 +1088,7 @@ MCP (rule 41).
 | Repository settings drift | `sweep-repository-settings` diffs live GitHub settings against core's contract into `settings-drift` proposals per rule 46 |
 | Contract audit | `audit-contracts` applies rule 64's predicate to every in-flight item and exits non-zero when any fails; `approve` and every definition path apply the same predicate |
 | Predecessor gate | Claim selection excludes items whose rule 58 predecessors are not observed delivered per rule 62; `show`, the item page, and a queued item's progress strip print each one's satisfaction — and name a cycle — per rule 63 |
-| MCP tokens | `token mint [--kinds …] | list | revoke` over the `mcp_tokens` table per rule 49; identities per rule 48; claim restriction per rule 50 |
+| MCP tokens | `token mint [--kinds …] [--tools … | --profile …] | list | revoke` over the `mcp_tokens` table per rule 49; identities per rule 48; claim restriction per rule 50; tool grant per rule 65 |
 | PRD baseline metrics | `metrics` aggregates items created in a window with its `work.claimed`, `work.completed`, `work.blocked`, and `work.cancelled` events and the completed items' current `delivery` per rule 56 |
 | MCP worker behavior | Portable `work-snowcat-queue` skill constrained by this contract |
 | Testing-gap seed | Deterministic CLI instance of this contract |
@@ -1073,6 +1111,8 @@ MCP (rule 41).
 - Delivery: [queue vertical spike](../plans/queue-vertical-spike.md)
 - Review gate: [ADR-0065](../adr/0065-gate-worker-pull-requests-behind-bounded-review.md)
   implementing [ADR-0029](../adr/0029-bound-adversarial-review.md)
+- Tool grants: [ADR-0070](../adr/0070-grant-mcp-tokens-a-server-enforced-tool-scope.md)
+  (rule 65 and schema rung 14; rules 49–50 carry the minted shape)
 - Project sequencing:
   [ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)
   (rule 58 and schema rung 12 carry its predecessor references; rules 62–63

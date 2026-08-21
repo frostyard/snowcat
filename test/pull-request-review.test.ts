@@ -635,7 +635,7 @@ test("enqueueReviewRoot validates kind, action ceilings, and the review record; 
   const created = make({});
   assert.ok(created);
   assert.equal(make({}), undefined, "the same sourceRef is never enqueued twice");
-  assert.equal(queue.metadata().schemaVersion, 13);
+  assert.equal(queue.metadata().schemaVersion, 14);
   assert.throws(() => queue.enqueueReviewRoot("frostyard/lodge", { ...definition, allowedActions: [...definition.allowedActions], delegableActions: [], sourceRef: "pr-review:x@y", review }), /not opted in/);
 
   const originId = completedWithDraftPr(queue);

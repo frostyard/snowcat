@@ -191,9 +191,13 @@ tokens* page (`/tokens`) lets a member mint tokens owned by their principal
 (plaintext once), see last use, and revoke their own; the local mode lists
 and revokes all and mints from the CLI. Its **may claim** column shows each
 token's claim restriction — the work kinds a token minted with
-`token mint … --kinds pr-review` may lease, or `unrestricted` — never the
-hash; a restriction is set at mint time from the CLI (see
-[Operating the work queue](queue-operations.md#a-review-only-client)). `/mcp` — the Streamable HTTP MCP
+`token mint … --kinds pr-review` may lease, or `unrestricted` — and its
+**may call** column the token's tool grant
+([ADR-0070](../adr/0070-grant-mcp-tokens-a-server-enforced-tool-scope.md))
+— the MCP tools a token minted with `--profile observer` or `--tools …` may
+call, or `every tool` — never the hash; both are set at mint time from the
+CLI (see [Operating the work queue](queue-operations.md#a-review-only-client)
+and [an observation-only client](queue-operations.md#an-observation-only-client)). `/mcp` — the Streamable HTTP MCP
 endpoint behind minted tokens ([`src/mcp/http.ts`](../../src/mcp/http.ts))
 — lives in the same app and is expected to sit behind an Access *bypass*
 policy, since the token is its credential.
@@ -333,7 +337,9 @@ Phase 10 and later.
   [ADR-0060](../adr/0060-bring-the-operator-surface-forward-as-a-read-first-inbox.md),
   [ADR-0035](../adr/0035-route-human-authority-through-typed-decisions.md),
   [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md),
-  [ADR-0002](../adr/0002-agent-portable-instruction-surface.md)
+  [ADR-0002](../adr/0002-agent-portable-instruction-surface.md),
+  [ADR-0070](../adr/0070-grant-mcp-tokens-a-server-enforced-tool-scope.md)
+  (the `/tokens` page's tool-grant column)
 - Contracts: [work queue](../specs/work-queue.md)
 - Built in: [recovery plan](../plans/recover.md) Phase 6;
   long-range: [product foundation roadmap](../plans/product-foundation-roadmap.md) Phase 10

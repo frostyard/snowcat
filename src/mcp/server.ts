@@ -4,12 +4,14 @@ import * as z from "zod/v4";
 import { verifyCompletionArtifacts, type ArtifactVerifierOptions } from "../queue/artifact-verification.ts";
 import { assertCureCompletion } from "../queue/pull-request-cure.ts";
 import { assertReviewCompletion, assertReviewGate } from "../queue/pull-request-review.ts";
-import { QueueStore, queueDatabasePath, validateWorkerIdentity, validateWorkKinds, type QueueStoreOptions } from "../queue/store.ts";
+import { QueueStore, queueDatabasePath, validateMcpTools, validateWorkerIdentity, validateWorkKinds, type QueueStoreOptions } from "../queue/store.ts";
 import {
   allowedActions,
   MAX_REVIEW_ADVISORIES,
   MAX_REVIEW_BLOCKERS,
+  mcpToolNames,
   MODEL_NAME_PATTERN,
+  type McpToolName,
   requiredArtifacts,
   reviewDecisions,
   withoutLeaseToken,
@@ -88,6 +90,27 @@ export interface McpIdentity {
    * completes, blocks, and releases whatever it already holds.
    */
   kinds?: string[];
+  /**
+   * The MCP tools this credential may call: a minted token's `tools`
+   * (schema rung 14, ADR-0070) or stdio's `SNOWCAT_MCP_TOOLS`. Absent is
+   * every tool. The server registers only the granted tools, so an ungranted
+   * call is refused by the protocol layer — unknown tool — before any handler
+   * can touch the queue; an observation-only client cannot claim, renew,
+   * complete, block, or release whatever it sends.
+   */
+  tools?: string[];
+}
+
+/**
+ * The stdio equivalent of a token's tool grant (ADR-0070):
+ * `SNOWCAT_MCP_TOOLS=list_work,get_work` registers only those tools on the
+ * local server. Unset or blank is every tool; a name that is not an MCP tool
+ * is refused loudly at startup rather than silently widening.
+ */
+export function mcpToolsFromEnvironment(env: NodeJS.ProcessEnv = process.env): string[] | undefined {
+  const raw = env.SNOWCAT_MCP_TOOLS?.trim();
+  if (!raw) return undefined;
+  return validateMcpTools(raw.split(",").map((tool) => tool.trim()).filter((tool) => tool !== ""), "SNOWCAT_MCP_TOOLS");
 }
 
 /**
@@ -111,6 +134,11 @@ export function buildQueueMcpServer(
 ): McpServer {
   const queue = sharedQueue ?? new QueueStore(path, undefined, storeOptions);
   const actor = (declared: string) => identity?.principal ?? declared;
+  // The credential's tool grant (ADR-0070), validated again here so a grant
+  // that reached the identity by any route still names only real tools. A
+  // tool outside the grant is simply never registered for this client.
+  const grant = identity?.tools === undefined ? undefined : new Set(validateMcpTools(identity.tools, "MCP identity tools"));
+  const granted = (tool: McpToolName): boolean => grant === undefined || grant.has(tool);
   const server = new McpServer(
     { name: "snowcat", version: "0.1.0" },
     {
@@ -126,7 +154,7 @@ export function buildQueueMcpServer(
     },
   );
 
-  server.registerTool(
+  if (granted("list_work")) server.registerTool(
     "list_work",
     {
       description: "List queue bookkeeping without exposing lease tokens. Use claim_work before doing an item.",
@@ -140,7 +168,7 @@ export function buildQueueMcpServer(
       toolResult(queue.list({ status, repository, limit }).map(withoutLeaseToken)),
   );
 
-  server.registerTool(
+  if (granted("get_work")) server.registerTool(
     "get_work",
     {
       description: "Read one work item's bookkeeping and lineage metadata without exposing its lease token.",
@@ -152,7 +180,7 @@ export function buildQueueMcpServer(
     },
   );
 
-  server.registerTool(
+  if (granted("claim_work")) server.registerTool(
     "claim_work",
     {
       description:
@@ -174,11 +202,13 @@ export function buildQueueMcpServer(
           // The credential's own restriction, intersected by the store with
           // whatever `kinds` the caller asked for.
           ...(identity?.kinds ? { allowedKinds: identity.kinds } : {}),
+          // The grant the lease is taken under, for the ledger (ADR-0070).
+          ...(identity?.tools ? { allowedTools: identity.tools } : {}),
         }) ?? null,
       ),
   );
 
-  server.registerTool(
+  if (granted("heartbeat_work")) server.registerTool(
     "heartbeat_work",
     {
       description: "Renew an active lease before or after a long work step.",
@@ -193,7 +223,7 @@ export function buildQueueMcpServer(
       toolResult(withoutLeaseToken(queue.heartbeat(id, leaseToken, actor(worker), leaseSeconds))),
   );
 
-  server.registerTool(
+  if (granted("complete_work")) server.registerTool(
     "complete_work",
     {
       description:
@@ -235,7 +265,7 @@ export function buildQueueMcpServer(
     },
   );
 
-  server.registerTool(
+  if (granted("block_work")) server.registerTool(
     "block_work",
     {
       description: "Mark leased work blocked when operator input or an external state change is required.",
@@ -249,7 +279,7 @@ export function buildQueueMcpServer(
     async ({ id, leaseToken, worker, reason }) => toolResult(queue.block(id, leaseToken, actor(worker), reason)),
   );
 
-  server.registerTool(
+  if (granted("release_work")) server.registerTool(
     "release_work",
     {
       description: "Release a mismatched or unstarted item back to the queue without completing it.",
@@ -265,6 +295,9 @@ export function buildQueueMcpServer(
 
   return server;
 }
+
+/** Every tool the server registers for an unrestricted identity, in registration order; tests pin it to `mcpToolNames`. */
+export const registeredMcpToolNames: readonly McpToolName[] = mcpToolNames;
 
 function toolResult(value: unknown): {
   content: Array<{ type: "text"; text: string }>;

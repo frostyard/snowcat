@@ -96,6 +96,32 @@ export interface WorkResult {
 /** Shape of a worker-asserted model name: a short provider/model identifier, no whitespace. */
 export const MODEL_NAME_PATTERN = /^[a-z0-9][a-z0-9._:/@-]{1,120}$/i;
 
+/**
+ * The MCP tools the queue contract exposes (ADR-0063, ADR-0070). The server
+ * registers exactly these; a minted token's tool grant (rule 65) names a
+ * subset and the server registers only the granted ones for that client.
+ */
+export const mcpToolNames = [
+  "list_work",
+  "get_work",
+  "claim_work",
+  "heartbeat_work",
+  "complete_work",
+  "block_work",
+  "release_work",
+] as const;
+export type McpToolName = (typeof mcpToolNames)[number];
+
+/**
+ * Named tool grants an operator can mint by profile instead of listing tools
+ * (ADR-0070). `observer` is the observation-only profile: the two read tools
+ * and nothing that takes, renews, or ends a lease.
+ */
+export const mcpTokenProfiles = {
+  observer: ["get_work", "list_work"],
+} as const satisfies Record<string, readonly McpToolName[]>;
+export type McpTokenProfile = keyof typeof mcpTokenProfiles;
+
 export const operatorNoteActions = ["requeue", "defer", "prioritize", "note"] as const;
 export type OperatorNoteAction = (typeof operatorNoteActions)[number];
 
@@ -380,6 +406,13 @@ export interface ClaimInput {
    * `kinds`, and an empty intersection claims nothing.
    */
   allowedKinds?: string[];
+  /**
+   * The MCP tools the caller's credential may call — a minted token's
+   * `tools` (ADR-0070). Set by the transport, never by a request payload, and
+   * recorded in the `work.claimed` payload as `toolsGrant`; it changes
+   * nothing about which item is claimed.
+   */
+  allowedTools?: string[];
   leaseSeconds?: number;
   /** The client's self-declared name, recorded beside a transport-established `worker` as a label (ADR-0063). */
   label?: string;

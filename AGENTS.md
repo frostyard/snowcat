@@ -215,7 +215,11 @@ removed. -->
   mint member:<email> "<client>" --kinds pr-review` (schema rung 9) makes a
   review-only client a property of the credential: `claim_work` intersects the
   caller's `kinds` with the token's, an empty intersection claims nothing, and
-  no other tool is affected. When
+  no other tool is affected. A token may also carry a tool grant (ADR-0070,
+  schema rung 14): `--profile observer` (or `--tools list_work,get_work`)
+  makes the server register only those tools for that client, so an
+  observation-only credential cannot claim, renew, complete, block, or
+  release whatever it sends and never sees a lease token. When
   `SNOWCAT_CONTROL_DB` is set, `claim_work` also requires the repository to be
   `enrolled` in the control-plane store
   ([`src/queue/eligibility.ts`](src/queue/eligibility.ts)); the hook is the

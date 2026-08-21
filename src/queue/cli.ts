@@ -14,7 +14,7 @@ import {
   enqueueDogfoodBatchForEnrolled,
   enqueueTestingGap,
 } from "./seeds.ts";
-import { withoutLeaseToken, workStatuses, type WorkStatus } from "./types.ts";
+import { mcpTokenProfiles, withoutLeaseToken, workStatuses, type McpTokenProfile, type WorkStatus } from "./types.ts";
 import { adoptLegacyEnvironment } from "../env-compat.ts";
 
 // FLUENT_* is read for one release (Snowcat ADR-0064); every entry point adopts it first.
@@ -68,12 +68,23 @@ try {
       const client = required(args[2], "token client name");
       // --kinds narrows what the token may claim (schema rung 9); omitted, it
       // claims anything the queue offers, exactly as before.
-      const flags = parseFlags(args.slice(3), ["kinds"]);
+      const flags = parseFlags(args.slice(3), ["kinds", "tools", "profile"]);
       const kinds = flags.kinds === undefined ? undefined : flags.kinds.split(",").map((kind) => kind.trim()).filter((kind) => kind !== "");
-      const minted = queue.mintMcpToken({ owner, client, ...(kinds === undefined ? {} : { kinds }) });
-      print({ token: minted.token, id: minted.record.id, owner: minted.record.owner, client: minted.record.client, kinds: minted.record.kinds ?? "unrestricted", createdAt: minted.record.createdAt, note: "The token is shown once; store it in the client's MCP configuration as a bearer header." });
+      // --tools names the only MCP tools the token may call; --profile names
+      // a catalogued grant instead (ADR-0070, schema rung 14). One or the
+      // other: a profile is a grant, not a starting point to widen.
+      if (flags.tools !== undefined && flags.profile !== undefined) throw new Error("--tools and --profile are mutually exclusive");
+      let tools = flags.tools === undefined ? undefined : flags.tools.split(",").map((tool) => tool.trim()).filter((tool) => tool !== "");
+      if (flags.profile !== undefined) {
+        if (!Object.hasOwn(mcpTokenProfiles, flags.profile)) {
+          throw new Error(`unknown token profile: ${flags.profile} (expected ${Object.keys(mcpTokenProfiles).join(", ")})`);
+        }
+        tools = [...mcpTokenProfiles[flags.profile as McpTokenProfile]];
+      }
+      const minted = queue.mintMcpToken({ owner, client, ...(kinds === undefined ? {} : { kinds }), ...(tools === undefined ? {} : { tools }) });
+      print({ token: minted.token, id: minted.record.id, owner: minted.record.owner, client: minted.record.client, kinds: minted.record.kinds ?? "unrestricted", tools: minted.record.tools ?? "unrestricted", createdAt: minted.record.createdAt, note: "The token is shown once; store it in the client's MCP configuration as a bearer header." });
     } else if (action === "list") {
-      print(queue.listMcpTokens(args[1]).map(({ tokenHash: _hash, kinds, ...token }) => ({ ...token, kinds: kinds ?? "unrestricted" })));
+      print(queue.listMcpTokens(args[1]).map(({ tokenHash: _hash, kinds, tools, ...token }) => ({ ...token, kinds: kinds ?? "unrestricted", tools: tools ?? "unrestricted" })));
     } else if (action === "revoke") {
       const id = required(args[1], "token id");
       const { tokenHash: _hash, ...revoked } = queue.revokeMcpToken(id, "operator:cli");
@@ -290,7 +301,7 @@ try {
     console.error("Usage: npm run queue -- opt-in <owner/repo>");
     console.error("       npm run queue -- opt-out <owner/repo>");
     console.error("       npm run queue -- rename-repository <old owner/repo> <new owner/repo>   (after a GitHub rename; history keeps the old slug)");
-    console.error("       npm run queue -- token mint <member:email> <client name> | list [member:email] | revoke <id>   (MCP tokens; ADR-0063)");
+    console.error("       npm run queue -- token mint <member:email> <client name> [--kinds <kind,…>] [--tools <tool,…> | --profile observer] | list [member:email] | revoke <id>   (MCP tokens; ADR-0063, ADR-0070)");
     console.error("       npm run queue -- cure-foreign <owner/repo> on|off");
     console.error("       npm run queue -- review-gate <owner/repo> on|off   (workers open drafts; bounded pr-review rounds; ADR-0065)");
     console.error("       npm run queue -- seed-testing-gap <owner/repo>");
