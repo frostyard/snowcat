@@ -263,13 +263,21 @@ removed. -->
   otherwise; exposure is a deployment decision. Pages inline their
   stylesheet from [`src/surface/styles.ts`](src/surface/styles.ts) (copied
   from the `frostyard-design` skill) and load nothing from another host.
-- Run `npm run check` before calling any change done. It audits dependencies,
-  checks docs and deployment artifacts, typechecks, enforces the built-in Node
-  test coverage floors over every production `src/**/*.ts` module (51% lines,
-  71% branches, 45% functions; `test/**/*.ts` is excluded), and builds. A
-  production module that no test imports contributes zero coverage rather than
-  disappearing from the denominator. CI must run the same recipe, so a local
-  pass is a CI pass.
+ - Run `npm run check` before calling any change done. It audits dependencies,
+   checks docs and deployment artifacts, typechecks, enforces the built-in Node
+   test coverage floors over every production `src/**/*.ts` module (51% lines,
+   71% branches, 45% functions; `test/**/*.ts` is excluded), and builds. Node's
+   `--experimental-test-coverage` only measures a module a test actually loads,
+   so a production module that no test imports (directly, or in a spawned
+   subprocess whose coverage the runner merges) would silently drop out of the
+   denominator entirely rather than count as zero. `npm run check:coverage-denominator`
+   (`scripts/check-coverage-denominator.mjs`, part of `check`) fails when any
+   `src/**/*.ts` module is neither present in the coverage report nor listed in
+   its documented `EXCLUDED` set, so every production module is either loaded by
+   a test — a minimal import test for a side-effect-free module (see
+   `test/db.test.ts`), or a subprocess spawn for an executable entrypoint (see
+   `test/repository-cli.test.ts`) — or explicitly excluded with a reason. CI
+   must run the same recipe, so a local pass is a CI pass.
 - Tests are `*.test.ts` files anywhere under `test/`, discovered recursively by
   Node's test runner (the pattern in `package.json` is quoted so the shell
   never expands it). Use `npm test` for the ordinary unmeasured development

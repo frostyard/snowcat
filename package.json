@@ -8,9 +8,10 @@
   },
   "scripts": {
     "build": "vite build && node scripts/check-dist.mjs && node scripts/check-boot.mjs",
-    "check": "npm run check:audit && npm run check:docs && npm run check:deploy && npm run typecheck && npm run test:coverage && npm run check:coverage-floors && npm run build",
+    "check": "npm run check:audit && npm run check:docs && npm run check:deploy && npm run typecheck && npm run test:coverage && npm run check:coverage-floors && npm run check:coverage-denominator && npm run build",
     "check:audit": "npm audit --audit-level=high",
     "check:coverage-floors": "node scripts/check-coverage-floors.mjs",
+    "check:coverage-denominator": "node scripts/check-coverage-denominator.mjs",
     "check:deploy": "bash scripts/check-deploy.sh",
     "check:docs": "node scripts/check-docs.mjs",
     "control": "node --import tsx src/control/cli.ts",
