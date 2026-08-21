@@ -243,7 +243,7 @@ export function tokensPage(context: PageContext, view: TokensView): string {
         ${minted}
         ${mint}
         <div class="fl-table-wrap"><table class="fl-table"><thead><tr><th>id</th><th>client</th><th>owner</th><th>may claim</th><th>may call</th><th>minted</th><th>last used</th><th></th></tr></thead><tbody>${
-          rows.length === 0 ? html`<tr><td colspan="7" class="fl-empty">No tokens yet.</td></tr>` : rows
+          rows.length === 0 ? html`<tr><td colspan="8" class="fl-empty">No tokens yet.</td></tr>` : rows
         }</tbody></table></div>
       </section>`,
     ),

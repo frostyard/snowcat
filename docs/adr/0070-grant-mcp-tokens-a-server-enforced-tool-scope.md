@@ -1,6 +1,6 @@
 # 0070 — Grant MCP tokens a server-enforced tool scope
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-21
 
 ## Context

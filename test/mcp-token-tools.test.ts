@@ -3,13 +3,14 @@ import { spawnSync } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import { Client, InMemoryTransport, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 
 import { createApp } from "../src/app.ts";
 import { buildQueueMcpServer, mcpToolsFromEnvironment, registeredMcpToolNames } from "../src/mcp/server.ts";
-import { QueueStore, validateMcpTools } from "../src/queue/store.ts";
+import { QueueStore, SCHEMA_VERSION, validateMcpTools } from "../src/queue/store.ts";
 import { mcpTokenProfiles, mcpToolNames } from "../src/queue/types.ts";
 import { childEnvironment } from "./helpers/child-environment.ts";
 
@@ -169,6 +170,44 @@ test("an observation-only token lists and reads over HTTP but cannot call any mu
   assert.ok(inventory.every((token) => token.tokenHash === ""));
   assert.ok(!JSON.stringify(inventory).includes(observer.token.split("_")[2]!), "the secret is not in the inventory");
   assert.equal(queue.verifyMcpToken(observer.token)!.tools!.join(","), "get_work,list_work", "verification returns the grant with the record");
+});
+
+test("a token minted before rung 14 survives the migration unrestricted and still calls every tool", async () => {
+  // Built by the current store and walked back to version 13 — the column
+  // dropped, the version pinned — so the fixture cannot drift from the ladder.
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-token-tools-ladder-"));
+  const path = join(directory, "queue.db");
+  const before = new QueueStore(path);
+  const itemId = seedQueue(before);
+  const legacy = before.mintMcpToken({ owner: "member:author@frostyard.org", client: "laptop from before the rung", kinds: ["issue-resolution"] });
+  before.close();
+  const raw = new DatabaseSync(path);
+  raw.exec("ALTER TABLE mcp_tokens DROP COLUMN tools_json; PRAGMA user_version = 13;");
+  const columns = new Set((raw.prepare("PRAGMA table_info(mcp_tokens)").all() as Array<{ name: string }>).map((column) => column.name));
+  assert.ok(!columns.has("tools_json"));
+  assert.equal(raw.prepare("PRAGMA user_version").get()!.user_version, 13);
+  raw.close();
+
+  const queue = new QueueStore(path);
+  test.after(() => queue.close());
+  assert.equal(queue.schemaVersion(), SCHEMA_VERSION, "opening the store walks rung 14");
+  const record = queue.verifyMcpToken(legacy.token);
+  assert.ok(record, "the pre-rung token still verifies");
+  assert.equal(record.tools, undefined, "NULL grant: every tool, as before the rung");
+  assert.deepEqual(record.kinds, ["issue-resolution"], "its claim restriction is untouched");
+  assert.equal(queue.listMcpTokens("member:author@frostyard.org")[0]!.tools, undefined);
+
+  const app = createApp({ appToken: "surface-token", surfaceStores: () => ({ queue }), mcp: { queue: () => queue, queuePath: path, verifier: { clock } } });
+  const client = await connectHttp(app, legacy.token);
+  test.after(client.close);
+  assert.deepEqual((await client.client.listTools()).tools.map((tool) => tool.name).sort(), [...mcpToolNames].sort());
+  const claimed = parse(await client.client.callTool({ name: "claim_work", arguments: { worker: "claude:legacy:1" } }));
+  assert.equal(claimed.id, itemId);
+  const beat = parse(await client.client.callTool({ name: "heartbeat_work", arguments: { id: itemId, leaseToken: claimed.leaseToken, worker: "claude:legacy:1" } }));
+  assert.equal(beat.status, "claimed");
+  const released = parse(await client.client.callTool({ name: "release_work", arguments: { id: itemId, leaseToken: claimed.leaseToken, worker: "claude:legacy:1", reason: "done for now" } }));
+  assert.equal(released.status, "queued");
+  assert.equal(queue.events(itemId).find((event) => event.type === "work.claimed")!.payload.toolsGrant, undefined);
 });
 
 test("the store refuses an unknown tool, an empty grant, and stores a sorted unique grant", () => {
