@@ -1,0 +1,11 @@
+interface:
+  display_name: "Review Snowcat Queue"
+  short_description: "Claim and judge one queued pull-request review"
+  default_prompt: "Use $review-snowcat-queue to claim and complete one Snowcat pr-review item with a structured verdict."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "snowcat"
+      description: "Snowcat durable work queue"
+      transport: "stdio"

@@ -38,6 +38,8 @@ Start from .agents/skills/TEMPLATE/SKILL.md. -->
 
 - **Claim and resolve one queued repository work item** →
   [.agents/skills/work-snowcat-queue/SKILL.md](.agents/skills/work-snowcat-queue/SKILL.md).
+- **Claim and judge one queued `pr-review` item, review-only (no repository writes)** →
+  [.agents/skills/review-snowcat-queue/SKILL.md](.agents/skills/review-snowcat-queue/SKILL.md).
 - **Write or review a GitHub issue destined for the Snowcat queue** →
   [.agents/skills/write-snowcat-issues/SKILL.md](.agents/skills/write-snowcat-issues/SKILL.md).
 - **Resolve or review Snowcat domain terminology** →
