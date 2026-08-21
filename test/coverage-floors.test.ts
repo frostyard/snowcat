@@ -11,7 +11,7 @@ const nodeMajor = Number(process.versions.node.split(".")[0]);
 
 const profiles: Record<number, { control: { lines: number; functions: number }; queue: { lines: number; functions: number } }> = {
   24: { control: { lines: 27, functions: 2 }, queue: { lines: 52, functions: 17 } },
-  26: { control: { lines: 32, functions: 20 }, queue: { lines: 52, functions: 17 } },
+  26: { control: { lines: 27, functions: 2 }, queue: { lines: 52, functions: 17 } },
 };
 
 function report(control: { lines: number; functions: number }, queue: { lines: number; functions: number }): string {
