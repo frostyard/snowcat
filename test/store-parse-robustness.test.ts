@@ -76,6 +76,7 @@ test("store read paths tolerate malformed persisted JSON", async () => {
   assert.doesNotThrow(() => queue.listMcpTokens(owner));
   const tokens = queue.listMcpTokens(owner);
   assert.equal(tokens.length, 1);
+  assert.deepEqual(tokens[0]?.kinds, []);
 
   assert.doesNotThrow(() => queue.repositoryUnreportedPullRequests(repository));
   assert.equal(queue.repositoryUnreportedPullRequests(repository), undefined);
@@ -86,5 +87,8 @@ test("store read paths tolerate malformed persisted JSON", async () => {
   const now = Date.now();
   const since = new Date(now - 3_600_000).toISOString();
   const until = new Date(now + 3_600_000).toISOString();
-  assert.doesNotThrow(() => queue.metricsWindow({ since, until, repository }));
+  const metrics = queue.metricsWindow({ since, until, repository });
+  const itemEvents = metrics.events.filter((event) => event.workItemId === claimed.id);
+  assert.ok(itemEvents.length > 0, "expected metrics events for the completed item");
+  for (const event of itemEvents) assert.equal("result" in event, false);
 });
