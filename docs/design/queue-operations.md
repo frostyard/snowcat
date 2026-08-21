@@ -678,9 +678,10 @@ npm run --silent queue -- show <id>                             # one item in fu
 ```
 
 `watch [--repository <owner/repo>] [--interval <seconds>]` starts at the
-current last sequence, polls `eventsSince` every 10 seconds by default (values
-below 2 are raised to 2), and prints each new event as one JSON line on
-stdout; its startup line on stderr names the starting sequence. Stop it with
+current last sequence, polls `eventsSince` every 10 seconds by default (a value
+of 1 is raised to the 2-second minimum; 0 or a negative value is rejected with
+`interval must be at least 1 second`), and prints each new event as one JSON line
+on stdout; its startup line on stderr names the starting sequence. Stop it with
 Ctrl-C or SIGTERM. `events [--since <sequence>] [--repository <owner/repo>]
 [--limit <1-500>]` prints the events strictly after `--since` (default 0),
 oldest first, so `metadata`'s `lastEventSequence` or the last printed
