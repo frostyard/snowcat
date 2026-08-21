@@ -197,6 +197,16 @@ export const maintenancePrograms: readonly MaintenanceProgram[] = [
   },
 ];
 
+/**
+ * Every catalog entry's discovery kind. A discovery root completes by proposing
+ * children, never by opening a pull request, so a completed one with no
+ * pull-request artifact is delivered rather than stalled — the `/progress`
+ * projection reads this set rather than hard-coding kind strings.
+ */
+export const discoveryKinds: ReadonlySet<string> = new Set(
+  maintenancePrograms.map((program) => program.discovery.kind),
+);
+
 /** The catalog entry for a Core program id. */
 export function maintenanceProgram(id: RepositoryMaintenanceProgram): MaintenanceProgram {
   const program = maintenancePrograms.find((candidate) => candidate.id === id);
