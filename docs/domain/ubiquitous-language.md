@@ -456,6 +456,20 @@ reconciled without establishing correctness or acceptance.
 **Avoid:** outcome; evidence by itself; work item.
 ([ADR-0018](../adr/0018-bind-worker-sessions-and-verify-github-artifacts.md))
 
+#### Required artifact
+
+The artifact kind a work item's completion must report — a pull request, or
+none — declared on the item by whoever defined it and never inferred from its
+kind or actions. It is the item's delivery contract: an item that requires a
+pull request is admitted only with the authority to open one and completes
+only when one is reported. It says what must be delivered, not whether the
+delivery was merged (delivery state) or the outcome achieved.
+
+**Avoid:** expected artifact; deliverable (the initiative projection);
+implied by `write`; fix item.
+([ADR-0069](../adr/0069-declare-the-required-artifact-on-every-work-item.md),
+[ADR-0031](../adr/0031-separate-delivery-from-outcome-achievement.md))
+
 ### Assertions, evidence, and assurance
 
 #### Assertion

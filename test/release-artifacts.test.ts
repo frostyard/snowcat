@@ -181,7 +181,7 @@ async function seedClaimed(queue: QueueStore) {
     // so the release the worker reports is one a human published.
     instructions: "Prepare the release notes; a human publishes the tag.",
     acceptanceCriteria: ["Release prepared."],
-    allowedActions: ["read", "write", "run-tests"],
+    allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
     createdBy: "operator:test",
   });

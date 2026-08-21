@@ -16,16 +16,21 @@ const MERGED: ArtifactVerification = {
   mergedAt: "2026-08-18T11:30:00.000Z",
 };
 
-/** A local-only follow-up (no open-pr) completed with an empty artifact list, as the four updex items were. */
+/**
+ * An item that required no pull request (ADR-0069) and completed with an empty
+ * artifact list, as the four updex items did: the change was left on a branch
+ * and the operator carried the last mile by hand.
+ */
 function completedLocalOnly(queue: QueueStore, repository = "frostyard/updex") {
   const seed = queue.enqueueSeed({
     repository,
     kind: "quality-implementation",
     objective: "Make the merged-state signal instance-scoped.",
-    instructions: "Implement on a local branch; do not open a pull request.",
+    instructions: "Implement on a local branch; the operator opens the pull request.",
     acceptanceCriteria: ["Tests pass."],
-    allowedActions: ["read", "write", "run-tests"],
+    allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "none",
     createdBy: "operator:test",
   });
   const lease = queue.claim({ worker: "claude:updex:local", repository })!;
@@ -45,7 +50,7 @@ test("attachArtifact appends a verified pull request to a completed item so deli
   const queue = new QueueStore(join(directory, "queue.db"), () => now);
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/updex", true);
-  assert.equal(SCHEMA_VERSION, 12, "attaching needs no schema rung of its own: result_json already holds artifacts (rung 5 is the pull-request cure column, rung 6 the repository cure_foreign setting, rung 7 the mcp_tokens table, rung 8 the review gate, rung 9 the token claim restriction, rung 10 the unreported pull-request observation, rung 11 the labeled-issue observation, rung 12 the predecessor references)");
+  assert.equal(SCHEMA_VERSION, 13, "attaching needs no schema rung of its own: result_json already holds artifacts (rung 5 is the pull-request cure column, rung 6 the repository cure_foreign setting, rung 7 the mcp_tokens table, rung 8 the review gate, rung 9 the token claim restriction, rung 10 the unreported pull-request observation, rung 11 the labeled-issue observation, rung 12 the predecessor references, rung 13 the required-artifact contract)");
 
   const completed = completedLocalOnly(queue);
   assert.equal(completed.delivery, "none");
@@ -115,7 +120,7 @@ test("attachArtifact refuses non-completed items, other repositories, non-GitHub
     objective: "Still queued.",
     instructions: "Do it.",
     acceptanceCriteria: ["Done."],
-    allowedActions: ["read", "write"],
+    allowedActions: ["read", "write", "open-pr"],
     delegableActions: [],
     createdBy: "operator:test",
   });

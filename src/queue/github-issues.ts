@@ -165,6 +165,9 @@ export function issueWorkCandidate(
     ],
     allowedActions: issueActions,
     delegableActions: issueActions,
+    // An imported issue is a change request: it lands through one pull
+    // request (ADR-0069). A worker that finds no change warranted blocks.
+    requiredArtifact: "pull-request",
     priority: options.priority ?? 0,
     createdBy: options.createdBy ?? "operator:import-issues",
     ...(predecessors.length === 0 ? {} : { predecessors }),

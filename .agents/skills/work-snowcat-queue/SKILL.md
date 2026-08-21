@@ -150,6 +150,11 @@ most three per pull request; a third-round block goes to a human).
 
 - Call `complete_work` only when every acceptance criterion is satisfied or the
   result clearly explains why a criterion is inapplicable.
+- Honor the item's `requiredArtifact`: when it is `pull-request`, completion
+  is refused unless you report the pull request as a `pull-request` artifact
+  (a commit on a branch does not count). If you conclude no change is
+  warranted, `block_work` with the reason — cancelling is the operator's
+  call, not yours to make by completing without the deliverable.
 - Report the model you ran as `result.model` (for example `claude-opus-5`).
   It is provenance, never verified; it lets the review gate ask a different
   model to review your pull request.
@@ -158,12 +163,16 @@ most three per pull request; a third-round block goes to a human).
   acceptance criteria. Follow-ups become non-claimable proposals for operator
   or approved-policy review; never treat proposing work as approving it.
 - Keep every child action inside the parent's `delegableActions`. A follow-up is
-  not permission to escalate autonomy — but do not under-authorize either: a
-  follow-up whose objective is a change (a fix, a bump, a doc edit) needs
-  `open-pr` in its `allowedActions` whenever the parent's ceiling includes it,
-  because `complete_work` refuses a `pull-request` artifact on an item without
-  it and nothing widens an admitted item afterwards; a change nobody can
-  deliver is not a proposal. Discovery-only follow-ups stay `read`.
+  not permission to escalate autonomy — but do not under-authorize either.
+- Declare `requiredArtifact` on every follow-up; it is required, never
+  defaulted. A follow-up whose objective is a change (a fix, a bump, a doc
+  edit) is `requiredArtifact: "pull-request"` with `write` and `open-pr` in
+  its `allowedActions`; a discovery-only follow-up is `requiredArtifact:
+  "none"` with `read` (and `create-followup` if it may propose). Snowcat
+  refuses the whole completion — the root stays yours — for a change child
+  without `open-pr`, for a child that may `write` but declares `"none"`, and
+  for a missing or unknown value; nothing widens an admitted item afterwards,
+  and a change nobody can deliver is not a proposal.
 - Report created issues, pull requests, commits, and reports as artifacts.
   Snowcat checks each reported issue and pull request against GitHub when you
   call `complete_work`: report the exact URL in the item's repository. A

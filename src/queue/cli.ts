@@ -174,6 +174,14 @@ try {
       { precondition: currentStatusPrecondition(id, ifUpdatedAt) },
     );
     print({ item: withoutLeaseToken(item), verification: check.verification });
+  } else if (command === "audit-contracts") {
+    // Read-only (ADR-0069): lists in-flight items whose authority and delivery
+    // contract disagree, with the operator command that clears each. Exits
+    // non-zero when anything is listed so a cron or a shell loop notices.
+    const flags = parseFlags(args, ["repository"]);
+    const findings = queue.auditContracts({ repository: flags.repository });
+    print({ findings, count: findings.length });
+    if (findings.length > 0) process.exitCode = 1;
   } else if (command === "list") {
     const status = args[0] !== undefined && !args[0].startsWith("--") ? args[0] : undefined;
     const flags = parseFlags(status === undefined ? args : args.slice(1), ["repository", "kind", "limit"]);
@@ -298,6 +306,7 @@ try {
     console.error("       npm run queue -- prioritize <work-item-id> <priority> <reason> [--if-updated-at <iso>]");
     console.error("       npm run queue -- note <work-item-id> <text> [--if-updated-at <iso>]");
     console.error("       npm run queue -- attach-artifact <work-item-id> <url> [--kind pull-request|issue|release] [--description <text>] [--if-updated-at <iso>]");
+    console.error("       npm run queue -- audit-contracts [--repository <owner/repo>]   (read-only; lists in-flight items whose contract cannot be completed; exit 1 when any)");
     console.error("       npm run queue -- list [proposed|queued|claimed|completed|blocked|cancelled] [--repository <owner/repo>] [--kind <kind>] [--limit <1-100>]");
     console.error("       npm run queue -- show <work-item-id>");
     console.error("       npm run queue -- events [--since <sequence>] [--repository <owner/repo>] [--limit <1-500>]");

@@ -49,8 +49,9 @@ test("the dogfood feeder creates one bounded read-only root per specialty withou
         objective: "Correct the quality gap.",
         instructions: "Make the smallest change and run checks.",
         acceptanceCriteria: ["The project check passes."],
-        allowedActions: ["read", "write", "run-tests"],
+        allowedActions: ["read", "write", "run-tests", "open-pr"],
         delegableActions: [],
+        requiredArtifact: "pull-request",
       },
     ],
   });
@@ -97,8 +98,9 @@ test("the dogfood feeder detects active lineages beyond the 100-row listing cap"
         objective: "Correct the quality gap.",
         instructions: "Make the smallest change and run checks.",
         acceptanceCriteria: ["The project check passes."],
-        allowedActions: ["read", "write", "run-tests"],
+        allowedActions: ["read", "write", "run-tests", "open-pr"],
         delegableActions: [],
+        requiredArtifact: "pull-request",
       },
     ],
   });
@@ -283,8 +285,9 @@ test("a no-finding assessment cools its kind for the window, while a finding doe
         objective: "Close the CI gap.",
         instructions: "Smallest change; run checks.",
         acceptanceCriteria: ["The check passes."],
-        allowedActions: ["read", "write", "run-tests"],
+        allowedActions: ["read", "write", "run-tests", "open-pr"],
         delegableActions: [],
+        requiredArtifact: "pull-request",
       },
     ],
   });

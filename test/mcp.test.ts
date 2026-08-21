@@ -84,6 +84,7 @@ test("a manually started MCP client can claim, complete, and create child work",
             acceptanceCriteria: ["The new regression test passes in the full project check."],
             allowedActions: ["read", "write", "run-tests", "open-pr"],
             delegableActions: [],
+            requiredArtifact: "pull-request",
           },
         ],
       },
@@ -91,6 +92,7 @@ test("a manually started MCP client can claim, complete, and create child work",
   );
   assert.equal(completed.completed.status, "completed");
   assert.equal(completed.followUps[0].parentId, seed.id);
+  assert.equal(completed.followUps[0].requiredArtifact, "pull-request");
 
   await client.close();
   const verify = new QueueStore(path);
@@ -112,7 +114,7 @@ test("the MCP boundary rejects a follow-up that supplies priority", async () => 
     instructions: "Read only, report evidence, and create one bounded follow-up.",
     acceptanceCriteria: ["Exactly one testing gap is identified with file-level evidence."],
     allowedActions: ["read", "create-followup"],
-    delegableActions: ["read", "write", "run-tests"],
+    delegableActions: ["read", "write", "run-tests", "open-pr"],
     priority: 5,
     createdBy: "operator:test",
   });
@@ -141,8 +143,9 @@ test("the MCP boundary rejects a follow-up that supplies priority", async () => 
     objective: "Test retry exhaustion after repeated timeouts.",
     instructions: "Implement the smallest deterministic regression test and run checks.",
     acceptanceCriteria: ["The new regression test passes in the full project check."],
-    allowedActions: ["read", "write", "run-tests"],
+    allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
   };
   const completion = {
     id: seed.id,
@@ -156,6 +159,17 @@ test("the MCP boundary rejects a follow-up that supplies priority", async () => 
     followUps: [{ ...followUp, priority: 999 }],
   });
   assert.match(rejected, /priority|[Uu]nrecognized/);
+
+  // The contract is required at the boundary (ADR-0069): a follow-up that
+  // omits requiredArtifact is a schema error, never defaulted.
+  const { requiredArtifact: _omitted, ...undeclared } = followUp;
+  const missingContract = await callToolExpectingError(client, "complete_work", { ...completion, followUps: [undeclared] });
+  assert.match(missingContract, /requiredArtifact/);
+  const underAuthorized = await callToolExpectingError(client, "complete_work", {
+    ...completion,
+    followUps: [{ ...followUp, allowedActions: ["read", "write", "run-tests"] }],
+  });
+  assert.match(underAuthorized, /must deliver a pull request requires open-pr/);
 
   const verifyRejected = new QueueStore(path);
   assert.equal(verifyRejected.get(seed.id)?.status, "claimed");

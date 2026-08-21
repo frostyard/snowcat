@@ -39,6 +39,7 @@ test("seed work requires an opted-in repository and preserves child lineage", as
         acceptanceCriteria: ["The test fails without retry exhaustion handling and passes with current behavior."],
         allowedActions: ["read", "write", "run-tests", "open-pr"],
         delegableActions: [],
+        requiredArtifact: "pull-request",
       },
     ],
   });
@@ -175,8 +176,9 @@ test("a worker cannot grant follow-up actions above the delegation ceiling", asy
             objective: "Rewrite the documentation.",
             instructions: "Edit the ambiguous section.",
             acceptanceCriteria: ["The ambiguity is removed."],
-            allowedActions: ["read", "write"],
+            allowedActions: ["read", "write", "open-pr"],
             delegableActions: [],
+            requiredArtifact: "pull-request",
           },
         ],
       }),
@@ -334,6 +336,7 @@ test("GitHub artifact claims must match the work repository and declared kind", 
               acceptanceCriteria: ["The change is reviewed."],
               allowedActions: ["read"],
               delegableActions: [],
+              requiredArtifact: "none",
             },
           ],
         }),
@@ -420,6 +423,7 @@ test("rejected proposals remain auditable and cannot be claimed", async () => {
         acceptanceCriteria: ["A duplicate test exists."],
         allowedActions: ["read"],
         delegableActions: [],
+        requiredArtifact: "none",
       },
     ],
   });
@@ -489,6 +493,7 @@ test("follow-up count and lineage depth are hard bounded", async () => {
     acceptanceCriteria: ["One observation is recorded."],
     allowedActions: ["read" as const],
     delegableActions: ["read" as const, "create-followup" as const],
+    requiredArtifact: "none" as const,
   }));
   assert.throws(
     () =>
@@ -519,6 +524,7 @@ test("follow-up count and lineage depth are hard bounded", async () => {
           acceptanceCriteria: ["One observation is recorded."],
           allowedActions: ["read", "create-followup"],
           delegableActions: ["read", "create-followup"],
+          requiredArtifact: "none",
         },
       ],
     });
@@ -542,6 +548,7 @@ test("follow-up count and lineage depth are hard bounded", async () => {
             acceptanceCriteria: ["This must not be admitted."],
             allowedActions: ["read"],
             delegableActions: [],
+            requiredArtifact: "none",
           },
         ],
       }),
@@ -573,8 +580,9 @@ test("the database itself refuses to claim or create claimable proposals through
         objective: "Add the missing test.",
         instructions: "Add the test and run the check.",
         acceptanceCriteria: ["The test exists and passes."],
-        allowedActions: ["read", "write", "run-tests"],
+        allowedActions: ["read", "write", "run-tests", "open-pr"],
         delegableActions: [],
+        requiredArtifact: "pull-request",
       },
     ],
   });
@@ -792,7 +800,7 @@ test("scheduling priority is operator-owned: workers cannot set it and children 
     instructions: "Read only and propose one child.",
     acceptanceCriteria: ["Exactly one gap has file-level evidence."],
     allowedActions: ["read", "create-followup"],
-    delegableActions: ["read", "write", "run-tests", "create-followup"],
+    delegableActions: ["read", "write", "run-tests", "open-pr", "create-followup"],
     priority: 7,
     createdBy: "operator:test",
   });
@@ -803,8 +811,9 @@ test("scheduling priority is operator-owned: workers cannot set it and children 
     objective: "Add the missing test.",
     instructions: "Add the test and run the check.",
     acceptanceCriteria: ["The test passes."],
-    allowedActions: ["read", "write", "run-tests"] as const,
+    allowedActions: ["read", "write", "run-tests", "open-pr"] as const,
     delegableActions: [] as const,
+    requiredArtifact: "pull-request" as const,
   };
 
   // A worker-supplied priority (even a low one) rejects the whole completion.
@@ -955,6 +964,7 @@ test("an operator can prioritize proposed, queued, or blocked work, and only an 
         acceptanceCriteria: ["Regression test passes."],
         allowedActions: ["read", "write", "run-tests", "open-pr"],
         delegableActions: [],
+        requiredArtifact: "pull-request",
       },
     ],
   });
@@ -1065,8 +1075,9 @@ test("cancelling the final blocked descendant makes its specialty inactive", asy
         objective: "Add the missing test.",
         instructions: "Add one test and run the check.",
         acceptanceCriteria: ["The test passes."],
-        allowedActions: ["read", "write", "run-tests"],
+        allowedActions: ["read", "write", "run-tests", "open-pr"],
         delegableActions: [],
+        requiredArtifact: "pull-request",
       },
     ],
   });
@@ -1160,6 +1171,7 @@ test("worker identities cannot use reserved principal namespaces", async () => {
         acceptanceCriteria: ["Never created."],
         allowedActions: ["read" as const],
         delegableActions: [],
+        requiredArtifact: "none" as const,
       },
     ],
   });
