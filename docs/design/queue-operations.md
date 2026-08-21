@@ -502,8 +502,26 @@ the event recorded (`Recorded work.approved.`), and `queue -- show` and
 is no batch action, but the board's *Repository actions* strip is not
 CLI-only: it runs from the browser as `operator:web` too, as described below.
 
-Four more views sit behind the same session:
+Five more views sit behind the same session:
 
+- `/progress` — every live item as one lifecycle strip, grouped by repository
+  and preceded by the awaiting-import, proposed, queued, working, in-review,
+  awaiting-merge, and needs-attention counts. **Needs attention** is the pinned
+  group at the top and collects exactly the amber and red stops: a blocked
+  item, a claimed item whose lease expired without a reclaim, a queued item
+  whose predecessor chain loops back on itself (`predecessor cycle`), a pull
+  request closed without merge, a review stuck at round three needing a human
+  decision, and an artifact still `unverified` because GitHub was unavailable.
+  It is what someone has to act on, so two things are deliberately absent:
+  a **cancelled** item leaves the page entirely the moment it is cancelled —
+  it is a terminal decision nobody acts on again, and it stays readable on
+  `/events` and on its own item page — and a **completed discovery root**
+  (the catalog's `*-discovery` kinds, which deliver by proposing children
+  rather than by opening a pull request) reads `delivered · proposals filed`
+  at the merged stage with no badge, because its proposals are already their
+  own rows. Merged, published, and delivered rows age out after seven days.
+  The strips are read-only except for Approve on a proposal and Requeue with
+  note / Cancel on a blocked item ([design](operator-surface.md)).
 - `/repositories` — every opted-in (and, with `SNOWCAT_CONTROL_DB`, declared)
   repository with its enrollment badge, per-status counts, and its pull
   requests summarized as `open N · decayed N · merged today N` (the link jumps

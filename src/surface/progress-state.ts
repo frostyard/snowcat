@@ -1,3 +1,4 @@
+import { discoveryKinds } from "../queue/programs.ts";
 import { CURE_KIND } from "../queue/pull-request-cure.ts";
 import { REVIEW_FIX_KIND, REVIEW_KIND } from "../queue/pull-request-review.ts";
 import type { QueueStore } from "../queue/store.ts";
@@ -99,7 +100,12 @@ export function readProgress(queue: QueueStore, now: Date = new Date()): Progres
     if (items.length === LIST_LIMIT) truncated.push(status);
   }
 
-  const primaries = all.filter((item) => !SATELLITE_KINDS.has(item.kind) && !isAgedOut(item, now));
+  // A cancelled item is a terminal operator decision nobody acts on again, so
+  // it leaves the projection immediately rather than ranking as an attention
+  // stop for seven days. It stays on `/events` and on its own item page.
+  const primaries = all.filter(
+    (item) => !SATELLITE_KINDS.has(item.kind) && item.status !== "cancelled" && !isAgedOut(item, now),
+  );
   const primaryIds = new Set(primaries.map((item) => item.id));
   const satellites = all.filter(
     (item) =>
@@ -215,7 +221,7 @@ export function deriveProgressRow(
     ...row,
     enteredAt: deriveStageEnteredAt(item, row.stage, reviewGate, context),
   });
-  const stopped = item.status === "blocked" ? blockedBadge() : item.status === "cancelled" ? cancelledBadge() : undefined;
+  const stopped = item.status === "blocked" ? blockedBadge() : undefined;
 
   if (item.status === "proposed") {
     return finish({ ...base, stage: "proposed", active: false, waiting: stopped?.reason ?? "awaiting your admission", badge: stopped });
@@ -236,17 +242,24 @@ export function deriveProgressRow(
   }
   if (item.status === "claimed") {
     const active = leaseIsActive(item, now);
+    // An expired lease is the one working-lane state that needs an operator:
+    // nothing reclaims the item until someone requeues or a worker claims it.
     return finish({
       ...base,
       stage: "working",
       active,
       waiting: active ? "worker active" : "lease expired · awaiting reclaim",
-      badge: stopped,
+      badge: active ? stopped : { label: "lease expired", reason: "awaiting reclaim", tone: "amber" },
     });
   }
 
   const pullRequest = pullRequestArtifact(item);
   if (!pullRequest) {
+    // A discovery root delivers by proposing children, never by opening a pull
+    // request; its proposals are their own rows. Completed is done, not stalled.
+    if (isDeliveredDiscovery(item)) {
+      return finish({ ...base, stage: "merged", active: false, waiting: "delivered · proposals filed" });
+    }
     return finish({
       ...base,
       stage: "working",
@@ -278,7 +291,7 @@ export function deriveProgressRow(
     satellite?.status === "blocked"
       ? blockedBadge()
       : satellite?.status === "cancelled"
-        ? cancelledBadge()
+        ? { label: "cancelled", reason: "cancelled", tone: "red" as const }
         : reviewState?.needsHuman && reviewState.round >= MAX_REVIEW_ROUNDS
           ? { label: "human decision", reason: "needs human review decision", tone: "amber" as const }
           : undefined;
@@ -341,17 +354,20 @@ function leaseIsActive(item: ObservableWorkItem, now: Date): boolean {
 function isAgedOut(item: ObservableWorkItem, now: Date): boolean {
   const terminal =
     item.status === "cancelled" ||
-    (item.status === "completed" && (item.delivery === "merged" || item.delivery === "published"));
+    (item.status === "completed" && (item.delivery === "merged" || item.delivery === "published")) ||
+    isDeliveredDiscovery(item);
   return terminal && now.getTime() - Date.parse(item.updatedAt) > TERMINAL_AGE_MS;
+}
+
+/** A completed discovery root with no pull request: delivered, and terminal. */
+function isDeliveredDiscovery(item: ObservableWorkItem): boolean {
+  return item.status === "completed" && discoveryKinds.has(item.kind) && pullRequestArtifact(item) === undefined;
 }
 
 function blockedBadge(): ProgressBadge {
   return { label: "blocked", reason: "waiting on operator", tone: "amber" };
 }
 
-function cancelledBadge(): ProgressBadge {
-  return { label: "cancelled", reason: "cancelled", tone: "red" };
-}
 
 function deriveStageEnteredAt(
   item: ObservableWorkItem,

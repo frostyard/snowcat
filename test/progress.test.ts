@@ -23,7 +23,7 @@ const REPOSITORY = "frostyard/example";
 const NOW = new Date();
 const LONG_AGO = new Date(NOW.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-test("progress derivation marks closed, cancelled, and third-round review stops", () => {
+test("progress derivation marks closed and third-round review stops, and no longer badges a cancelled primary", () => {
   const closed = item({
     status: "completed",
     delivery: "closed",
@@ -33,9 +33,10 @@ test("progress derivation marks closed, cancelled, and third-round review stops"
   assert.equal(closedRow.stage, "awaiting-merge");
   assert.deepEqual(closedRow.badge, { label: "closed", reason: "PR closed without merge", tone: "red" });
 
+  // A cancelled primary is a terminal operator decision: no badge pins it into
+  // the attention group (and `readProgress` drops it from the page outright).
   const cancelledRow = deriveProgressRow(item({ status: "cancelled" }), [], false, NOW);
-  assert.equal(cancelledRow.stage, "working");
-  assert.deepEqual(cancelledRow.badge, { label: "cancelled", reason: "cancelled", tone: "red" });
+  assert.equal(cancelledRow.badge, undefined);
 
   const origin = item({
     status: "completed",
@@ -360,6 +361,131 @@ test("the progress view selects terminal items newest first, so more than 100 ag
   assert.equal(body.includes("Aged out merged item"), false);
   assert.equal(body.includes("No current progress to show."), false);
 });
+
+test("a cancelled primary item appears in neither attention nor any repository group", () => {
+  const queue = new QueueStore(":memory:", () => NOW);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled(REPOSITORY, true);
+
+  const cancelled = cancelledItem(queue, "Cancelled implementation");
+  const data = readProgress(queue, NOW);
+
+  assert.equal(data.attention.some((row) => row.item?.id === cancelled.id), false);
+  assert.equal(
+    data.repositories.flatMap((group) => group.rows).some((row) => row.item?.id === cancelled.id),
+    false,
+  );
+  assert.equal(data.total, 0);
+});
+
+test("a cancelled review satellite still stops its origin row with a red cancelled badge", () => {
+  const origin = item({ status: "completed", delivery: "open", result: resultWithPullRequest("open") });
+  const satellite = item({
+    id: "cancelled-review",
+    kind: "pr-review",
+    status: "cancelled",
+    review: {
+      pullRequestUrl: "https://github.com/frostyard/example/pull/7",
+      headSha: "a".repeat(40),
+      round: 1,
+      originItemId: origin.id,
+      priorBlockers: [],
+    },
+  });
+
+  const row = deriveProgressRow(origin, [satellite], true, NOW);
+  assert.equal(row.stage, "review");
+  assert.deepEqual(row.badge, { label: "cancelled", reason: "cancelled", tone: "red" });
+  assert.equal(row.waiting, "cancelled");
+});
+
+test("a completed discovery root with no pull request is delivered, not stalled, and ages out after seven days", () => {
+  const delivered = deriveProgressRow(item({ status: "completed", kind: "quality-gap-discovery" }), [], false, NOW);
+  assert.equal(delivered.stage, "merged");
+  assert.equal(delivered.active, false);
+  assert.equal(delivered.badge, undefined);
+  assert.equal(delivered.waiting, "delivered · proposals filed");
+
+  let clock = NOW;
+  const queue = new QueueStore(":memory:", () => clock);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled(REPOSITORY, true);
+
+  const fresh = completeDiscovery(queue, "Fresh discovery");
+  const freshRow = readProgress(queue, NOW).repositories.flatMap((group) => group.rows).find((row) => row.item?.id === fresh.id);
+  assert.ok(freshRow, "a completed discovery inside the seven days is still shown");
+  assert.equal(freshRow.stage, "merged");
+
+  clock = LONG_AGO;
+  const old = completeDiscovery(queue, "Old discovery");
+  const data = readProgress(queue, NOW);
+  assert.equal(data.repositories.flatMap((group) => group.rows).some((row) => row.item?.id === old.id), false);
+  assert.equal(data.attention.some((row) => row.item?.id === old.id), false);
+});
+
+test("a claimed item whose lease expired is an amber stop in the attention group", () => {
+  let clock = new Date(NOW.getTime() - 4 * 60 * 60 * 1000);
+  const queue = new QueueStore(":memory:", () => clock);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled(REPOSITORY, true);
+
+  const stale = queue.enqueueSeed(definition("Abandoned implementation", "stale-implementation"));
+  queue.claim({ worker: "worker:stale", repository: REPOSITORY, kinds: [stale.kind], leaseSeconds: 3600 });
+  clock = NOW;
+
+  const data = readProgress(queue, NOW);
+  const row = data.attention.find((candidate) => candidate.item?.id === stale.id);
+  assert.ok(row, "the expired lease lands in the attention group");
+  assert.equal(row.stage, "working");
+  assert.equal(row.active, false);
+  assert.deepEqual(row.badge, { label: "lease expired", reason: "awaiting reclaim", tone: "amber" });
+  assert.equal(
+    data.repositories.flatMap((group) => group.rows).some((candidate) => candidate.item?.id === stale.id),
+    false,
+    "an attention row is not repeated in its repository group",
+  );
+});
+
+test("only a live-lease working row counts toward summary.working beside a completed discovery and a cancellation", () => {
+  const queue = new QueueStore(":memory:", () => NOW);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled(REPOSITORY, true);
+
+  const working = queue.enqueueSeed(definition("Active implementation", "active-implementation"));
+  queue.claim({ worker: "worker:active", repository: REPOSITORY, kinds: [working.kind], leaseSeconds: 3600 });
+  completeDiscovery(queue, "Delivered discovery");
+  cancelledItem(queue, "Cancelled implementation");
+
+  const data = readProgress(queue, NOW);
+  assert.equal(data.summary.working, 1);
+  const workingRows = data.repositories.flatMap((group) => group.rows).filter((row) => row.stage === "working");
+  assert.deepEqual(workingRows.map((row) => row.item?.id), [working.id]);
+  assert.equal(data.total, 2, "the delivered discovery is still a row; the cancellation is not");
+});
+
+/** A completed discovery root with no artifacts: delivered by its proposals. */
+function completeDiscovery(queue: QueueStore, objective: string, repository = REPOSITORY): ObservableWorkItem {
+  const seed = queue.enqueueSeed({
+    ...definition(objective, "quality-gap-discovery", repository),
+    allowedActions: ["read", "create-followup"],
+  });
+  const lease = queue.claim({ worker: `worker:${seed.id}`, repository, kinds: [seed.kind] })!;
+  return queue.complete({
+    id: seed.id,
+    leaseToken: lease.leaseToken!,
+    worker: `worker:${seed.id}`,
+    result: { summary: "Nothing to propose.", evidence: ["read the repository"], artifacts: [] },
+    followUps: [],
+  }).completed;
+}
+
+/** Claim, block, then cancel: the only path a queue item reaches `cancelled` by. */
+function cancelledItem(queue: QueueStore, objective: string, repository = REPOSITORY): ObservableWorkItem {
+  const seed = queue.enqueueSeed(definition(objective, "cancelled-implementation", repository));
+  const lease = queue.claim({ worker: `worker:${seed.id}`, repository, kinds: [seed.kind] })!;
+  queue.block(seed.id, lease.leaseToken!, `worker:${seed.id}`, "Needs an operator decision.");
+  return queue.cancel(seed.id, "operator:test", "No longer needed.");
+}
 
 function completeWithPullRequest(
   queue: QueueStore,
