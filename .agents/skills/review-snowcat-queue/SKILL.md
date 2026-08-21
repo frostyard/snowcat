@@ -53,11 +53,9 @@ maximizing comments.
   check the head out and run the repository's own checks locally when you can
   (`run-tests` is allowed; nothing on GitHub is).
 - **Cognitive diversity.** If you completed the origin item yourself in this
-  session, `release_work` so another worker reviews it. Prefer a different model
-  or provider from `review.authorModel` when your client can choose. If you are
-  the author and cannot get a different reviewer, complete with decision
-  `unable-to-review` explaining that, rather than passing or blocking your own
-  work.
+  session or otherwise authored the pull request, `release_work` before judging
+  so an independent worker reviews it. Prefer a different model or provider
+  from `review.authorModel` when your client can choose.
 - A **blocker** is only a concrete correctness or security defect, an unmet
   acceptance criterion of the origin item, unauthorized or out-of-scope
   behaviour, false or materially insufficient evidence, missing required
@@ -84,9 +82,10 @@ maximizing comments.
   the model you ran in `result.model` (provenance, never verified). Do **not**
   report the pull request as an artifact — it is not yours — and pass no
   `followUps` (a `pr-review` creates none).
-- Call `block_work` when operator input or an external state change is required
-  (for example the head moved, or you are the sole author and no different-model
-  reviewer exists). Call `release_work` when you have not begun judging and
-  another worker can safely retry (for example a self-authored item, or a kind
-  that is not `pr-review`).
+- Call `release_work` when you have not begun judging and another worker can
+  safely retry, including every self-authored item and any kind other than
+  `pr-review`. Reserve `unable-to-review` for an independent reviewer who began
+  judging but lacks a required input or capability to produce a verdict. Call
+  `block_work` only when operator input or an external state change is required,
+  such as a moved head.
 - Stop after this one review unless the operator explicitly requested another.
