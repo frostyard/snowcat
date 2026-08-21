@@ -120,7 +120,7 @@ runs code.
 5. **Verification is Snowcat's.** On completion, Snowcat checks every reported
    issue and pull request against GitHub — wrong repository or missing means
    the completion is refused and the item stays with the worker; a GitHub
-   outage records `unverified` and a later pass fixes it up. Every fifteen
+   outage records `unverified` and a later pass fixes it up. Every two
    minutes the verify pass re-reads open pull requests, records merges, and
    derives each item's *delivery* state.
 
