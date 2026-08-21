@@ -735,30 +735,39 @@ ended — whether it `completed`, `blocked`, `released`, or `expired`, derived
 from the item's own ledger. Nothing in an attempt is a lease token, a bearer,
 or worker prose; the block reason stays in `result.summary`.
 
-To find the item a worker labelled `cockpit:worker:aaaa1111` holds, read the
-repository's claimed items and match on the exact label of the attempt that
-has no `outcome`:
+To find the item a worker labelled `cockpit:worker:aaaa1111` holds, ask for
+it exactly — the token's principal as `leaseOwner` and the worker's name as
+`label` — and read the attempt that has no `outcome`:
 
 ```text
-list_work {"repository":"frostyard/example","status":"claimed"}
+list_work {"status":"claimed","leaseOwner":"member:you@frostyard.org/cockpit fleet","label":"cockpit:worker:aaaa1111"}
 → [{ "id":"…", "leaseOwner":"member:you@frostyard.org/cockpit fleet",
      "attempts":[{ "sequence":3612, "claimedAt":"…", "worker":"member:you@frostyard.org/cockpit fleet",
                    "label":"cockpit:worker:aaaa1111" }] }]
 ```
 
-Keep the item `id` and the attempt `sequence`. When the worker disappears
-from the active list, `get_work {"id":"…"}` tells you what became of that
-exact attempt — `"outcome":"completed"` (`blocked`, `released`, `expired`)
-with `endedAt` and `endedBy` — even after another worker has reclaimed the
-item, because the old attempt stays beside the new one. Match by `sequence`,
-never by position or time. Bounds: `list_work` returns at most 100 items
-(`limit`, default 50) filtered by `status`, `repository`, and `kind`; each
-item carries at most ten attempts, so a long-lived item's oldest leases fall
-out of the projection (the `events` command still has them). A label is
-provenance, not authority (rule 48): a client naming someone else's label
-gains nothing, and a token that cannot claim (a claim restriction to a
-kind the observer never needs, or a tool grant once one exists) is the right
-credential for this read.
+The two filters are exact matches on the lease's current holder and on the
+label the item's newest claim recorded, so the answer is the same however
+many items the repository has in flight; without them, `list_work` returns
+at most 100 items (`limit`, default 50) by `status`, `repository`, and
+`kind`. Keep the item `id` and the attempt `sequence`. When the worker
+disappears from the active list, `get_work {"id":"…"}` tells you what became
+of that exact attempt — `"outcome":"completed"` (`blocked`, `released`,
+`expired`) with `endedAt` and `endedBy` — even after another worker has
+reclaimed the item, because the old attempt stays beside the new one. Match
+by `sequence`, never by position or time. A lease that lapsed reads as
+`expired` at its own `leaseExpiresAt` the moment it lapses, whether or not
+anyone has reclaimed the item yet; a live lease is the only attempt without
+an outcome. Each item carries at most ten attempts, so a long-lived item's
+oldest leases fall out of the projection (the `events` command still has
+them).
+
+A label is one printable line of at most 120 characters — it is published
+here, so it is bounded like one — and a claim whose label contains a live
+lease token is refused outright. A label is provenance, not authority (rule
+48): a client naming someone else's label gains nothing, and an
+observation-only token ([an observation-only client](#an-observation-only-client))
+is the right credential for this read.
 
 Tail the event ledger instead of looping over `show`. Every claim, lease
 renewal, completion, proposal, block, release, operator decision, and artifact

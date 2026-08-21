@@ -244,6 +244,22 @@ export function validateWorkerIdentity(worker: string): string {
  * and system namespaces. `member:` is admitted here because only code that
  * verified a token or a session can construct it.
  */
+/**
+ * The shape of a claim label (rule 48): one bounded line of printable text —
+ * at most `MAX_CLAIM_LABEL_LENGTH` characters, no control characters — so a
+ * client's self-declared name can be carried into the attempt projection
+ * (rule 66) without carrying a prompt, a path listing, or a credential dump
+ * with it. The same function gates a `label` filter on `list`.
+ */
+export const MAX_CLAIM_LABEL_LENGTH = 120;
+const CLAIM_LABEL_PATTERN = /^[^\p{Cc}]{1,120}$/u;
+export function validateClaimLabel(label: string, purpose = "claim label"): string {
+  if (!CLAIM_LABEL_PATTERN.test(label)) {
+    throw new Error(`${purpose} must be 1-${MAX_CLAIM_LABEL_LENGTH} characters with no control characters`);
+  }
+  return label;
+}
+
 export function validateWorkerPrincipal(worker: string): string {
   const identity = worker.trim();
   if (!identity) throw new Error("worker is required");
@@ -1185,7 +1201,7 @@ export class QueueStore {
     return rows.map((row) => withDelivery(decodeWorkItem(row)));
   }
 
-  list(options: { status?: WorkStatus; repository?: string; kind?: string; limit?: number } = {}): WorkItem[] {
+  list(options: { status?: WorkStatus; repository?: string; kind?: string; leaseOwner?: string; label?: string; limit?: number } = {}): WorkItem[] {
     const { clauses, params } = this.filterClauses(options);
     const limit = Math.max(1, Math.min(options.limit ?? 50, 100));
     const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
@@ -1216,7 +1232,7 @@ export class QueueStore {
   }
 
   /** The status/repository/kind filter list() and recentlyUpdatedItems() share. */
-  private filterClauses(options: { status?: WorkStatus; repository?: string; kind?: string }): { clauses: string[]; params: SQLInputValue[] } {
+  private filterClauses(options: { status?: WorkStatus; repository?: string; kind?: string; leaseOwner?: string; label?: string }): { clauses: string[]; params: SQLInputValue[] } {
     const clauses: string[] = [];
     const params: SQLInputValue[] = [];
     if (options.status === "proposed") {
@@ -1235,6 +1251,21 @@ export class QueueStore {
     if (options.kind) {
       clauses.push("kind = ?");
       params.push(options.kind);
+    }
+    // Exact correlation filters (rule 66): the principal that holds the lease,
+    // and the label its newest claim recorded. Together they find one
+    // worker's item however many others the repository has in flight.
+    if (options.leaseOwner !== undefined) {
+      clauses.push("lease_owner = ?");
+      params.push(validateWorkerPrincipal(options.leaseOwner));
+    }
+    if (options.label !== undefined) {
+      clauses.push(
+        `json_extract((SELECT e.payload_json FROM work_events e
+                       WHERE e.work_item_id = work_items.id AND e.event_type = 'work.claimed'
+                       ORDER BY e.sequence DESC LIMIT 1), '$.label') = ?`,
+      );
+      params.push(validateClaimLabel(options.label, "label filter"));
     }
     return { clauses, params };
   }
@@ -1423,6 +1454,10 @@ export class QueueStore {
     const worker = validateWorkerPrincipal(input.worker);
     if (input.repository) validateRepository(input.repository);
     const leaseSeconds = boundedLease(input.leaseSeconds);
+    // A label equal to the principal says nothing and is not recorded; any
+    // other label is bounded here, and checked against live lease tokens
+    // inside the transaction, because the projection of rule 66 publishes it.
+    const label = input.label === undefined || input.label === worker ? undefined : validateClaimLabel(input.label);
     // A credential-carried restriction (a minted token's kinds, or the stdio
     // server's `SNOWCAT_MCP_KINDS`) narrows the caller's own filter and can
     // never widen it: the effective filter is the intersection, and an empty
@@ -1444,6 +1479,16 @@ export class QueueStore {
 
     return this.transaction(() => {
       const now = this.now();
+      // A label may not smuggle a live lease token into the ledger and out
+      // through the read projection: refuse one that contains any token a
+      // current lease holds, before looking for work at all. Tokens minted
+      // later are random and cannot appear in a label recorded earlier.
+      if (label !== undefined) {
+        const live = this.db.prepare("SELECT lease_token FROM work_items WHERE lease_token IS NOT NULL").all() as Row[];
+        if (live.some((holder) => label.includes(String(holder.lease_token)))) {
+          throw new Error("claim label may not contain a lease token");
+        }
+      }
       const clauses = [
         "r.enabled = 1",
         "((w.status = 'queued' AND w.admitted = 1) OR (w.status = 'claimed' AND w.lease_expires_at <= ?))",
@@ -1511,7 +1556,9 @@ export class QueueStore {
 
       const id = String(row.id);
       if (row.status === "claimed") {
-        this.addEvent(id, "lease.expired", "system", { previousOwner: row.lease_owner });
+        // The expiry instant rides the event so the attempt projection can
+        // name when authority actually ended, not only when it was noticed.
+        this.addEvent(id, "lease.expired", "system", { previousOwner: row.lease_owner, leaseExpiresAt: row.lease_expires_at });
       }
       const token = randomUUID();
       const expiresAt = new Date(this.clock().getTime() + leaseSeconds * 1000).toISOString();
@@ -1526,7 +1573,7 @@ export class QueueStore {
         leaseExpiresAt: expiresAt,
         // A transport-established identity may carry the client's own name as
         // a label beside it (ADR-0063); it is provenance, never authority.
-        ...(input.label !== undefined && input.label !== worker ? { label: input.label } : {}),
+        ...(label !== undefined ? { label } : {}),
         // The credential's own claim restriction, when one applied: the ledger
         // says the lease was bounded by the token, not only by the request.
         ...(restriction === undefined ? {} : { kindsRestriction: restriction }),
@@ -1954,6 +2001,8 @@ export class QueueStore {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_ITEM_ATTEMPTS) {
       throw new Error(`limit must be between 1 and ${MAX_ITEM_ATTEMPTS}`);
     }
+    const item = this.db.prepare("SELECT status, lease_expires_at FROM work_items WHERE id = ?").get(id) as Row | undefined;
+    if (!item) return [];
     const rows = this.db
       .prepare(
         `SELECT *
@@ -1977,7 +2026,9 @@ export class QueueStore {
           sequence: event.sequence,
           claimedAt: event.occurredAt,
           worker: event.actor,
-          ...(typeof label === "string" ? { label } : {}),
+          // Only a label of the bounded shape is published; a row from before
+          // the bound that fails it is read as unlabeled rather than copied.
+          ...(typeof label === "string" && CLAIM_LABEL_PATTERN.test(label) ? { label } : {}),
           ...(Array.isArray(kindsRestriction) ? { kindsRestriction: kindsRestriction.map(String) } : {}),
         });
         continue;
@@ -1988,8 +2039,23 @@ export class QueueStore {
       const open = attempts.at(-1);
       if (!open || open.outcome !== undefined) continue;
       open.outcome = ATTEMPT_OUTCOME_BY_EVENT[event.type]!;
-      open.endedAt = event.occurredAt;
+      // An expiry ended at the lease's expiry instant, not when the reclaim
+      // that recorded it happened; older events without it fall back.
+      open.endedAt = event.type === "lease.expired" && typeof event.payload.leaseExpiresAt === "string" ? event.payload.leaseExpiresAt : event.occurredAt;
       open.endedBy = event.actor;
+    }
+    // A lease that lapsed with nobody reclaiming it yet has no ledger event,
+    // but its authority is already gone (rule 4): the projection says so from
+    // the clock, the same way claim selection does, so an observer never
+    // reads a dead lease as active. The reclaim's event later agrees.
+    const newest = attempts.at(-1);
+    if (newest && newest.outcome === undefined) {
+      const expiresAt = item.lease_expires_at == null ? undefined : String(item.lease_expires_at);
+      if (item.status !== "claimed" || (expiresAt !== undefined && expiresAt <= this.now())) {
+        newest.outcome = "expired";
+        newest.endedAt = expiresAt ?? this.now();
+        newest.endedBy = "system";
+      }
     }
     return attempts.slice(-limit);
   }

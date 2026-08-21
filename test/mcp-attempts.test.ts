@@ -8,7 +8,9 @@ import { Client, InMemoryTransport, StreamableHTTPClientTransport } from "@model
 
 import { createApp } from "../src/app.ts";
 import { buildQueueMcpServer } from "../src/mcp/server.ts";
-import { QueueStore } from "../src/queue/store.ts";
+import { DatabaseSync } from "node:sqlite";
+
+import { QueueStore, validateClaimLabel } from "../src/queue/store.ts";
 import { MAX_ITEM_ATTEMPTS } from "../src/queue/types.ts";
 
 /**
@@ -104,6 +106,28 @@ test("over HTTP, concurrent claims with distinct labels are correlated by princi
   const filteredByKind = parse(await observer.client.callTool({ name: "list_work", arguments: { repository: "frostyard/example", kind: "pr-review" } }));
   assert.deepEqual(filteredByKind, [], "the kind filter bounds the read too");
 
+  // Exact correlation filters: the principal plus the label of the newest
+  // claim find one worker's item without paging through the repository.
+  const mine = parse(await observer.client.callTool({ name: "list_work", arguments: { repository: "frostyard/example", leaseOwner: "member:operator@frostyard.org/cockpit fleet", label: "cockpit:worker:bbbb2222" } }));
+  assert.equal(mine.length, 1);
+  assert.equal(mine[0].id, claimedB.id);
+  assert.deepEqual(parse(await observer.client.callTool({ name: "list_work", arguments: { label: "cockpit:worker:nobody" } })), []);
+  assert.deepEqual(parse(await observer.client.callTool({ name: "list_work", arguments: { leaseOwner: "member:someone-else@frostyard.org/other laptop", label: "cockpit:worker:bbbb2222" } })), [], "the right label under the wrong principal finds nothing");
+  assert.equal((await observer.client.callTool({ name: "list_work", arguments: { label: "x".repeat(121) } })).isError, true, "a label filter is bounded like a label");
+  assert.equal((await observer.client.callTool({ name: "list_work", arguments: { leaseOwner: "operator:cli" } })).isError, true, "a reserved principal is not a lease owner");
+
+  // A label cannot carry a live lease token into the projection, whole or
+  // embedded, and cannot exceed one bounded line.
+  const stolen = await b.client.callTool({ name: "claim_work", arguments: { worker: claimedA.leaseToken, repository: "frostyard/example" } });
+  assert.equal(stolen.isError, true, "a label that is a live lease token is refused");
+  const embedded = await b.client.callTool({ name: "claim_work", arguments: { worker: `cockpit:${claimedA.leaseToken}:1`, repository: "frostyard/example" } });
+  assert.equal(embedded.isError, true, "a label that contains a live lease token is refused");
+  assert.match(JSON.stringify(embedded.content), /claim label may not contain a lease token/);
+  assert.equal((await b.client.callTool({ name: "claim_work", arguments: { worker: "w".repeat(121) } })).isError, true, "a label over 120 characters is refused at the schema");
+  assert.equal((await b.client.callTool({ name: "claim_work", arguments: { worker: "cockpit:\nworker" } })).isError, true, "a label with a control character is refused");
+  assert.equal(queue.list({ status: "claimed" }).length, 2, "none of the refused claims took a lease");
+  assert.ok(!JSON.stringify(queue.events(ids[2]!)).includes(claimedA.leaseToken) && !JSON.stringify(queue.events(ids[3]!)).includes(claimedA.leaseToken), "the refusals left no trace of the token in any ledger");
+
   // A label grants nothing: beta cannot act on alpha's lease by naming alpha's
   // label, with a wrong token or with alpha's own token — the principal and
   // the lease token decide, and here only the token differs between clients.
@@ -158,6 +182,15 @@ test("over HTTP, concurrent claims with distinct labels are correlated by princi
   // observed it, attributed to `system`, and the new attempt is active.
   const claimedD = parse(await a.client.callTool({ name: "claim_work", arguments: { worker: "cockpit:worker:eeee5555", repository: "frostyard/example", leaseSeconds: 30 } }));
   now = new Date(now.getTime() + 120_000);
+  // Before anyone reclaims, the lapsed lease already reads as expired — from
+  // the clock, at the lease's own expiry instant — never as active.
+  const lapsed = parse(await observer.client.callTool({ name: "get_work", arguments: { id: claimedD.id } }));
+  assert.equal(lapsed.status, "claimed");
+  assert.deepEqual(lapsed.attempts, [
+    { sequence: lapsed.attempts[0].sequence, claimedAt: lapsed.attempts[0].claimedAt, worker: "member:operator@frostyard.org/cockpit fleet", label: "cockpit:worker:eeee5555", outcome: "expired", endedAt: claimedD.leaseExpiresAt, endedBy: "system" },
+  ]);
+  const lapsedList = parse(await observer.client.callTool({ name: "list_work", arguments: { status: "claimed", label: "cockpit:worker:eeee5555" } }));
+  assert.equal(lapsedList[0].attempts[0].outcome, "expired", "list_work agrees");
   const overTaken = parse(await b.client.callTool({ name: "claim_work", arguments: { worker: "cockpit:worker:ffff6666", repository: "frostyard/example" } }));
   assert.equal(overTaken.id, claimedD.id);
   const afterD = parse(await observer.client.callTool({ name: "get_work", arguments: { id: claimedD.id } }));
@@ -165,6 +198,8 @@ test("over HTTP, concurrent claims with distinct labels are correlated by princi
   assert.equal(afterD.attempts[0].label, "cockpit:worker:eeee5555");
   assert.equal(afterD.attempts[0].outcome, "expired");
   assert.equal(afterD.attempts[0].endedBy, "system");
+  assert.equal(afterD.attempts[0].endedAt, claimedD.leaseExpiresAt, "the reclaim's lease.expired event names the same expiry instant");
+  assert.equal(queue.events(claimedD.id).find((event) => event.type === "lease.expired")!.payload.leaseExpiresAt, claimedD.leaseExpiresAt);
   assert.equal(afterD.attempts[1].label, "cockpit:worker:ffff6666");
   assert.equal(afterD.attempts[1].outcome, undefined);
 
@@ -212,6 +247,33 @@ test("the store bounds the projection to the newest attempts, oldest first, and 
   queue.release(bare.id, bare.leaseToken!, "claude:stdio:1", "done");
   queue.claim({ worker: "claude:reviewer", allowedKinds: ["issue-resolution"] });
   assert.deepEqual(queue.attempts(id).at(-1)!.kindsRestriction, ["issue-resolution"]);
+});
+
+test("the label bound is one printable line, and a ledger label outside it is read as unlabeled rather than published", () => {
+  assert.equal(validateClaimLabel("cockpit:worker:aaaa1111"), "cockpit:worker:aaaa1111");
+  assert.equal(validateClaimLabel("w".repeat(120)).length, 120);
+  assert.throws(() => validateClaimLabel(""), /claim label must be 1-120 characters with no control characters/);
+  assert.throws(() => validateClaimLabel("w".repeat(121)), /claim label must be 1-120 characters/);
+  assert.throws(() => validateClaimLabel("a\tb"), /no control characters/);
+  assert.throws(() => validateClaimLabel("a\u0000b", "label filter"), /label filter must be/);
+
+  const queue = new QueueStore(":memory:", clock);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/example", true);
+  const id = seed(queue, "Resolve old.");
+  assert.throws(() => queue.claim({ worker: "member:x@frostyard.org/fleet", label: "x".repeat(121) }), /claim label must be 1-120 characters/);
+  const claimed = queue.claim({ worker: "member:x@frostyard.org/fleet", label: "fine" })!;
+  assert.throws(() => queue.claim({ worker: "member:y@frostyard.org/fleet", label: `prefix ${claimed.leaseToken}` }), /claim label may not contain a lease token/);
+  assert.equal(queue.attempts(id)[0]!.label, "fine");
+  // A row written before the bound existed: the projection drops the label instead of copying it.
+  const legacyEvent = queue.events(id).find((entry) => entry.type === "work.claimed")!;
+  (queue as unknown as { db: DatabaseSync }).db
+    .prepare("UPDATE work_events SET payload_json = ? WHERE sequence = ?")
+    .run(JSON.stringify({ ...legacyEvent.payload, label: "line one\nline two with a prompt in it" }), legacyEvent.sequence);
+  const projected = queue.attempts(id)[0]!;
+  assert.equal(projected.label, undefined);
+  assert.equal(projected.worker, "member:x@frostyard.org/fleet");
+  assert.equal(projected.outcome, undefined, "the lease is live, so the attempt is active");
 });
 
 test("the stdio server carries the same projection and the lifecycle tools never do", async () => {

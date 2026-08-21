@@ -4,8 +4,7 @@ import * as z from "zod/v4";
 import { verifyCompletionArtifacts, type ArtifactVerifierOptions } from "../queue/artifact-verification.ts";
 import { assertCureCompletion } from "../queue/pull-request-cure.ts";
 import { assertReviewCompletion, assertReviewGate } from "../queue/pull-request-review.ts";
-import { QueueStore, queueDatabasePath, validateMcpTools, validateWorkerIdentity, validateWorkKinds, type QueueStoreOptions } from "../queue/store.ts";
-import { QueueStore, queueDatabasePath, validateWorkerIdentity, validateWorkKinds, WORK_KIND_PATTERN, type QueueStoreOptions } from "../queue/store.ts";
+import { MAX_CLAIM_LABEL_LENGTH, QueueStore, queueDatabasePath, validateMcpTools, validateWorkerIdentity, validateWorkKinds, WORK_KIND_PATTERN, type QueueStoreOptions } from "../queue/store.ts";
 import {
   allowedActions,
   MAX_REVIEW_ADVISORIES,
@@ -23,8 +22,10 @@ import {
 
 const actionSchema = z.enum(allowedActions);
 // Worker identities may not borrow Snowcat's reserved principal namespaces
-// (operator:, policy:, system:), so provenance cannot be spoofed at the boundary.
-const workerSchema = z.string().min(1).refine(
+// (operator:, policy:, system:), so provenance cannot be spoofed at the
+// boundary; over HTTP the value is the claim's label and is published by the
+// attempt projection, so it is bounded to one line (rule 66).
+const workerSchema = z.string().min(1).max(MAX_CLAIM_LABEL_LENGTH).refine(
   (worker) => {
     try {
       validateWorkerIdentity(worker);
@@ -166,15 +167,18 @@ export function buildQueueMcpServer(
     "list_work",
     {
       description:
-        "List queue bookkeeping without exposing lease tokens. Each item carries `attempts`: its newest leases (at most 10, oldest first) with the principal, the exact claim label, and how each ended. Use claim_work before doing an item.",
+        "List queue bookkeeping without exposing lease tokens. Each item carries `attempts`: its newest leases (at most 10, oldest first) with the principal, the exact claim label, and how each ended. `leaseOwner` and `label` are exact correlation filters (the principal holding the lease; the label its newest claim recorded). Use claim_work before doing an item.",
       inputSchema: z.object({
         status: z.enum(workStatuses).optional(),
         repository: z.string().optional(),
         kind: z.string().regex(WORK_KIND_PATTERN).optional(),
+        leaseOwner: z.string().min(1).max(200).optional(),
+        label: z.string().min(1).max(MAX_CLAIM_LABEL_LENGTH).optional(),
         limit: z.number().int().min(1).max(100).optional(),
       }),
     },
-    async ({ status, repository, kind, limit }) => toolResult(queue.list({ status, repository, kind, limit }).map(observe)),
+    async ({ status, repository, kind, leaseOwner, label, limit }) =>
+      toolResult(queue.list({ status, repository, kind, leaseOwner, label, limit }).map(observe)),
   );
 
   if (granted("get_work")) server.registerTool(
