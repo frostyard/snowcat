@@ -189,17 +189,17 @@ test("a queued item the gate withholds shows a predecessor chip instead of “in
   const successor = admit(harness, { sourceRef: issue(21), kind: "issue-resolution", predecessors: [issue(20)] });
   const plain = admit(harness, { sourceRef: issue(22), kind: "issue-resolution" });
 
-  const waitingRow = (data: ReturnType<typeof readProgress>, id: string) => {
+  const waitingRow = (data: NonNullable<ReturnType<typeof readProgress>>, id: string) => {
     const row = [...data.attention, ...data.repositories.flatMap((group) => group.rows)].find((candidate) => candidate.key === `item:${id}`);
     assert.ok(row, `no progress row for ${id}`);
     return row;
   };
 
-  const gated = waitingRow(readProgress(queue), successor.id);
+  const gated = waitingRow(readProgress(queue)!, successor.id);
   assert.equal(gated.stage, "queued");
   assert.equal(gated.waiting, "waiting for predecessor issue #20 · not completed");
   assert.equal(gated.badge, undefined, "an ordinary wait is not a stop, so it stays out of the attention group");
-  assert.equal(waitingRow(readProgress(queue), plain.id).waiting, "in queue", "an item declaring nothing is untouched");
+  assert.equal(waitingRow(readProgress(queue)!, plain.id).waiting, "in queue", "an item declaring nothing is untouched");
 
   // The chip is on the page, and the plain one is not claimed to be waiting for anything.
   const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue }) });
@@ -222,7 +222,7 @@ test("a queued item the gate withholds shows a predecessor chip instead of “in
   });
   queue.recordArtifactVerification(predecessor.id, merged, verified({ number: 20, state: "merged", mergedAt: "2026-08-20T12:30:00.000Z" }), "policy:verify-artifacts");
 
-  const released = waitingRow(readProgress(queue), successor.id);
+  const released = waitingRow(readProgress(queue)!, successor.id);
   assert.equal(released.waiting, "in queue");
   assert.equal(released.badge, undefined);
   assert.equal(readPredecessors(queue, successor)!.unmet.length, 0);
@@ -238,7 +238,7 @@ test("two items waiting on each other are named a predecessor cycle and collecte
   const second = admit(harness, { sourceRef: issue(31), kind: "issue-resolution", predecessors: [issue(30)] });
   assert.equal(queue.claim({ worker: "claude:test:cycle", repository: REPOSITORY }), undefined, "the gate withholds both");
 
-  const data = readProgress(queue);
+  const data = readProgress(queue)!;
   const attention = new Map(data.attention.map((row) => [row.key, row]));
   for (const [item, waitedOn] of [
     [first, 31],

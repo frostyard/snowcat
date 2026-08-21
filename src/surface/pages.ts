@@ -3,6 +3,7 @@ import { html, raw, type SafeHtml } from "./html.ts";
 import type { AdjudicationRow, BlockedRow, InboxData, ProposalRow, SidebarRepository, UnverifiedRow } from "./inbox.ts";
 import { admissionForm, exitForm, verifyForm } from "./forms.ts";
 import { DEFAULT_STREAM_POLL_MS, QUEUE_VIEW_EVENT_PREFIX, QUEUE_VIEW_EVENT_TYPES } from "./stream.ts";
+import { progressPath } from "./progress-state.ts";
 import { surfaceStylesheet } from "./styles.ts";
 
 const REFRESH_SECONDS = 30;
@@ -322,7 +323,7 @@ export function shell(context: PageContext, view: View, main: SafeHtml): SafeHtm
             ? html`<span class="fl-repo"><span></span>none</span>`
             : context.repositories.map(
                 (repository) =>
-                  html`<a class="fl-repo${view.repository?.toLowerCase() === repository.slug.toLowerCase() ? " active" : ""}" href="${repositoryPath(repository.slug)}" title="${repository.state}"><span class="${repository.enrolled ? "ok" : ""}"></span>${repository.slug}${
+                  html`<a class="fl-repo${view.repository?.toLowerCase() === repository.slug.toLowerCase() ? " active" : ""}" href="${view.active === "progress" ? progressPath({ repository: repository.slug }) : repositoryPath(repository.slug)}" title="${repository.state}"><span class="${repository.enrolled ? "ok" : ""}"></span>${repository.slug}${
                     repository.enrolled || repository.state === "opted-in" ? "" : html`<em>${repository.state}</em>`
                   }</a>`,
               )

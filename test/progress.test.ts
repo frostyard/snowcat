@@ -139,7 +139,7 @@ test("progress renders ledger-derived stage entry times and the current-stage du
     },
   });
 
-  const data = readProgress(queue, NOW);
+  const data = readProgress(queue, NOW)!;
   const row = data.repositories.flatMap((group) => group.rows).find((candidate) => candidate.item?.id === origin.id);
   assert.ok(row);
   assert.deepEqual(row.enteredAt, {
@@ -241,7 +241,7 @@ test("the session-guarded progress page renders every stage, folds review satell
     "operator:test",
   );
 
-  const data = readProgress(queue, NOW);
+  const data = readProgress(queue, NOW)!;
   assert.equal(data.total, 9);
   assert.equal(data.active, 2);
   assert.deepEqual(data.summary, {
@@ -345,7 +345,7 @@ test("the progress view selects terminal items newest first, so more than 100 ag
   clock = NOW;
   const fresh = completeWithPullRequest(queue, REPOSITORY, "Fresh item awaiting merge", "open");
 
-  const data = readProgress(queue, NOW);
+  const data = readProgress(queue, NOW)!;
   assert.deepEqual(
     data.repositories.flatMap((group) => group.rows).map((row) => row.item?.id),
     [fresh.id],
@@ -368,7 +368,7 @@ test("a cancelled primary item appears in neither attention nor any repository g
   queue.setRepositoryEnabled(REPOSITORY, true);
 
   const cancelled = cancelledItem(queue, "Cancelled implementation");
-  const data = readProgress(queue, NOW);
+  const data = readProgress(queue, NOW)!;
 
   assert.equal(data.attention.some((row) => row.item?.id === cancelled.id), false);
   assert.equal(
@@ -412,13 +412,13 @@ test("a completed discovery root with no pull request is delivered, not stalled,
   queue.setRepositoryEnabled(REPOSITORY, true);
 
   const fresh = completeDiscovery(queue, "Fresh discovery");
-  const freshRow = readProgress(queue, NOW).repositories.flatMap((group) => group.rows).find((row) => row.item?.id === fresh.id);
+  const freshRow = readProgress(queue, NOW)!.repositories.flatMap((group) => group.rows).find((row) => row.item?.id === fresh.id);
   assert.ok(freshRow, "a completed discovery inside the seven days is still shown");
   assert.equal(freshRow.stage, "merged");
 
   clock = LONG_AGO;
   const old = completeDiscovery(queue, "Old discovery");
-  const data = readProgress(queue, NOW);
+  const data = readProgress(queue, NOW)!;
   assert.equal(data.repositories.flatMap((group) => group.rows).some((row) => row.item?.id === old.id), false);
   assert.equal(data.attention.some((row) => row.item?.id === old.id), false);
 });
@@ -433,7 +433,7 @@ test("a claimed item whose lease expired is an amber stop in the attention group
   queue.claim({ worker: "worker:stale", repository: REPOSITORY, kinds: [stale.kind], leaseSeconds: 3600 });
   clock = NOW;
 
-  const data = readProgress(queue, NOW);
+  const data = readProgress(queue, NOW)!;
   const row = data.attention.find((candidate) => candidate.item?.id === stale.id);
   assert.ok(row, "the expired lease lands in the attention group");
   assert.equal(row.stage, "working");
@@ -453,7 +453,7 @@ test("a completed item whose pull request GitHub could not verify is a grey stop
 
   const unverified = completeWithPullRequest(queue, REPOSITORY, "Waiting for GitHub", "unverified");
 
-  const data = readProgress(queue, NOW);
+  const data = readProgress(queue, NOW)!;
   const row = data.attention.find((candidate) => candidate.item?.id === unverified.id);
   assert.ok(row, "the unverified artifact lands in the attention group the docs promise collects it");
   assert.equal(row.stage, "pr-open");
@@ -486,7 +486,7 @@ test("only a live-lease working row counts toward summary.working beside a compl
   completeDiscovery(queue, "Delivered discovery");
   cancelledItem(queue, "Cancelled implementation");
 
-  const data = readProgress(queue, NOW);
+  const data = readProgress(queue, NOW)!;
   assert.equal(data.summary.working, 1);
   const workingRows = data.repositories.flatMap((group) => group.rows).filter((row) => row.stage === "working");
   assert.deepEqual(workingRows.map((row) => row.item?.id), [working.id]);
@@ -625,7 +625,7 @@ function article(body: string, itemId: string): string {
 }
 
 function summaryCount(body: string, bucket: ProgressSummaryBucket | "attention"): number {
-  const match = new RegExp(`data-progress-summary-bucket="${bucket}"><strong>(\\d+)</strong>`).exec(body);
+  const match = new RegExp(`data-progress-summary-bucket="${bucket}"[^>]*><strong>(\\d+)</strong>`).exec(body);
   assert.ok(match, `summary bucket ${bucket} present`);
   return Number(match[1]);
 }
@@ -640,3 +640,157 @@ function renderedBucketCount(body: string, bucket: ProgressSummaryBucket): numbe
     0,
   );
 }
+
+// --- Issue #180: repository filter, Working now, and Up next ----------------
+
+/** One proposed root keyed by an issue URL; approve it to admit (queue) it. */
+function proposeRoot(
+  queue: QueueStore,
+  options: { objective: string; kind: string; sourceRef: string; predecessors?: string[]; repository?: string },
+) {
+  const repository = options.repository ?? REPOSITORY;
+  const { created } = queue.enqueueProposedRoots(repository, [
+    {
+      objective: options.objective,
+      instructions: "Read the issue, then open one pull request.",
+      acceptanceCriteria: ["A pull request is open."],
+      allowedActions: ["read", "write", "run-tests", "open-pr"],
+      delegableActions: [],
+      createdBy: "operator:import-issues",
+      sourceRef: options.sourceRef,
+      kind: options.kind,
+      ...(options.predecessors ? { predecessors: options.predecessors } : {}),
+    },
+  ]);
+  return created[0]!;
+}
+
+test("readProgress filters primaries and observations by repository and 404s an unknown slug", () => {
+  const clock = new Date(NOW);
+  const queue = new QueueStore(":memory:", () => clock);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/updex", true);
+  queue.setRepositoryEnabled("frostyard/other", true);
+  queue.enqueueSeed(definition("Updex work", "quality-implementation", "frostyard/updex"));
+  queue.enqueueSeed(definition("Other work", "quality-implementation", "frostyard/other"));
+  queue.recordLabeledIssueObservations(
+    "frostyard/updex",
+    [{ url: "https://github.com/frostyard/updex/issues/1", title: "Updex issue", outcome: "existing" }],
+    "operator:test",
+  );
+  queue.recordLabeledIssueObservations(
+    "frostyard/other",
+    [{ url: "https://github.com/frostyard/other/issues/1", title: "Other issue", outcome: "existing" }],
+    "operator:test",
+  );
+
+  const data = readProgress(queue, NOW, { repository: "Frostyard/UpDex" });
+  assert.ok(data, "a case-insensitive opted-in slug resolves");
+  assert.equal(data.filter.repository, "frostyard/updex");
+  assert.deepEqual(
+    data.repositories.map((group) => group.repository),
+    ["frostyard/updex"],
+    "only the filtered repository has a lane",
+  );
+  const rows = data.repositories.flatMap((group) => group.rows);
+  assert.ok(
+    rows.every((row) => row.repository === "frostyard/updex"),
+    "every row belongs to the filtered repository",
+  );
+  assert.ok(rows.some((row) => row.observation?.url === "https://github.com/frostyard/updex/issues/1"), "the updex observation is present");
+  assert.ok(!rows.some((row) => row.observation?.url.includes("/other/")), "no other repository's observation leaks in");
+
+  assert.equal(readProgress(queue, NOW, { repository: "nobody/nothing" }), undefined, "an unknown slug is a 404 (undefined)");
+});
+
+test("workingNow holds exactly the live-lease rows, each with its lease owner and no lease token", () => {
+  let clock = new Date(NOW.getTime() - 4 * 60 * 60 * 1000);
+  const queue = new QueueStore(":memory:", () => clock);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled(REPOSITORY, true);
+
+  // An active worker: claimed at NOW with a live one-hour lease.
+  clock = NOW;
+  const active = queue.enqueueSeed(definition("Active worker", "active-implementation"));
+  queue.claim({ worker: "worker:live", repository: REPOSITORY, kinds: [active.kind], leaseSeconds: 3600 });
+
+  // An expired lease: claimed four hours ago for one hour, read at NOW.
+  clock = new Date(NOW.getTime() - 4 * 60 * 60 * 1000);
+  const stale = queue.enqueueSeed(definition("Abandoned worker", "stale-implementation"));
+  queue.claim({ worker: "worker:stale", repository: REPOSITORY, kinds: [stale.kind], leaseSeconds: 3600 });
+
+  // A plain queued item and a completed discovery: neither is active.
+  clock = NOW;
+  queue.enqueueSeed(definition("Waiting in queue", "queued-implementation"));
+  completeDiscovery(queue, "Delivered discovery");
+
+  const data = readProgress(queue, NOW)!;
+  assert.deepEqual(
+    data.workingNow.map((row) => row.item?.id),
+    [active.id],
+    "only the live-lease worker is in Working now",
+  );
+  assert.equal(data.workingNow[0]!.leaseOwner, "worker:live");
+  assert.equal(data.workingNow[0]!.active, true);
+  assert.ok(!JSON.stringify(data).includes("leaseToken"), "no lease token reaches the projection");
+});
+
+test("upNext lists only claimable queued primaries, ordered by priority then createdAt", () => {
+  let clock = new Date(NOW);
+  const queue = new QueueStore(":memory:", () => clock);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled(REPOSITORY, true);
+
+  const advance = () => (clock = new Date(clock.getTime() + 60_000));
+
+  // A high-priority item created latest still leads.
+  const midEarly = queue.enqueueSeed({ ...definition("Mid priority, earliest", "queued-implementation"), priority: 1 });
+  advance();
+  const midLate = queue.enqueueSeed({ ...definition("Mid priority, later", "queued-implementation"), priority: 1 });
+  advance();
+  const top = queue.enqueueSeed({ ...definition("Top priority, latest", "queued-implementation"), priority: 5 });
+  advance();
+
+  // A queued item withheld by an unmet predecessor: not claimable.
+  const gated = queue.approve(
+    proposeRoot(queue, {
+      objective: "Blocked on a predecessor",
+      kind: "issue-resolution",
+      sourceRef: "https://github.com/frostyard/example/issues/500",
+      predecessors: ["https://github.com/frostyard/example/issues/499"],
+    }).id,
+    "operator:test",
+  );
+  advance();
+  // A still-proposed root: admitted work only.
+  const proposed = proposeRoot(queue, {
+    objective: "Not yet admitted",
+    kind: "issue-resolution",
+    sourceRef: "https://github.com/frostyard/example/issues/501",
+  });
+
+  const data = readProgress(queue, NOW)!;
+  assert.deepEqual(
+    data.upNext.map((row) => row.item?.id),
+    [top.id, midEarly.id, midLate.id],
+    "priority descending, then createdAt ascending",
+  );
+  const ids = new Set(data.upNext.map((row) => row.item?.id));
+  assert.ok(!ids.has(gated.id), "a queued item with an unmet predecessor is not up next");
+  assert.ok(!ids.has(proposed.id), "a proposed item is not up next");
+});
+
+test("upNext caps at 20 claimable items and records the drop in truncated", () => {
+  const clock = new Date(NOW);
+  const queue = new QueueStore(":memory:", () => clock);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled(REPOSITORY, true);
+
+  for (let index = 0; index < 21; index += 1) {
+    queue.enqueueSeed(definition(`Claimable ${index}`, "queued-implementation"));
+  }
+
+  const data = readProgress(queue, NOW)!;
+  assert.equal(data.upNext.length, 20, "the 21st claimable item is dropped");
+  assert.ok(data.truncated.includes("up-next"), "the cap is recorded in truncated");
+});

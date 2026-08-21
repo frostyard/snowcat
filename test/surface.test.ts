@@ -1562,3 +1562,32 @@ test("the events page names the highest sequence a capped read reached, calls th
   assert.match(decisionLedger, /<b>work\.noted<\/b>/);
   assert.equal(decisionsOnly.body.includes("-event cap"), false, "the whole window was read, so it is not capped");
 });
+
+test("the progress page filters by repository and offers a Working now view (issue #180)", async () => {
+  const seeded = await seededQueue();
+  test.after(() => seeded.queue.close());
+  const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue: seeded.queue }) });
+  const cookie = `snowcat_session=${sessionDigest(TOKEN)}`;
+
+  // A repository filter shows only that repository's lane and marks its tab current.
+  const filtered = await app.request("/progress?repository=frostyard/updex", { headers: { Cookie: cookie } });
+  assert.equal(filtered.status, 200);
+  const filteredBody = await filtered.text();
+  assert.match(filteredBody, /aria-current="page" href="\/progress\?repository=frostyard%2Fupdex">frostyard\/updex<\/a>/);
+  assert.equal(filteredBody.includes("<h2>frostyard/example</h2>"), false, "no other repository's lane is rendered under the filter");
+
+  // The active view renders Working now and Up next, no repository lanes, no lease token.
+  const active = await app.request("/progress?view=active", { headers: { Cookie: cookie } });
+  assert.equal(active.status, 200);
+  const activeBody = await active.text();
+  assert.match(activeBody, /Working now/);
+  assert.match(activeBody, /Up next/);
+  assert.equal(activeBody.includes('class="fl-group fl-progress-group"'), false, "the active view has no repository lane");
+  assert.equal(activeBody.includes(seeded.leaseToken), false, "the live lease token never reaches the page");
+  assert.equal(activeBody.includes("leaseToken"), false);
+  assert.match(activeBody, /copilot-cli:example:four/, "the live worker is named in Working now");
+
+  // An unknown repository slug is a 404-in-shell, like /events.
+  const missing = await app.request("/progress?repository=nobody/nothing", { headers: { Cookie: cookie } });
+  assert.equal(missing.status, 404);
+});

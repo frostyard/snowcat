@@ -520,8 +520,24 @@ Five more views sit behind the same session:
   rather than by opening a pull request) reads `delivered · proposals filed`
   at the merged stage with no badge, because its proposals are already their
   own rows. Merged, published, and delivered rows age out after seven days.
-  The strips are read-only except for Approve on a proposal and Requeue with
-  note / Cancel on a blocked item ([design](operator-surface.md)).
+   The strips are read-only except for Approve on a proposal and Requeue with
+   note / Cancel on a blocked item ([design](operator-surface.md)).
+   Two query parameters narrow it, both carried in the URL so the live full-page
+   refresh preserves them: `?repository=<owner/repo>` filters the lanes and the
+   labeled-issue observations to one repository (case-insensitive; a slug that is
+   neither opted in nor declared is a 404, the same as `/events`), and `?view=active`
+   swaps the repository lanes for two flat groups. **Working now** lists every
+   row a worker holds a live lease on — a claimed primary or a review satellite —
+   oldest first by the moment it entered that working (or review) stage, naming
+   the lease owner (never the lease token), the repository, the kind, and the
+   in-stage duration; with no repository filter it spans every repository.
+   **Up next** lists the admitted `queued` primaries the claim gate would offer
+   next — those with no unmet predecessor edge — in `claim_work`'s own order
+   (priority descending, then `createdAt` ascending), capped at 20 rows with the
+   cap recorded alongside the status-truncation notice. A repository tab row and
+   a Lanes / Working now switch sit under the summary counts; the summary counts
+   link back to the lanes view of the current repository filter.
+
 - `/repositories` — every opted-in (and, with `SNOWCAT_CONTROL_DB`, declared)
   repository with its enrollment badge, per-status counts, and its pull
   requests summarized as `open N · decayed N · merged today N` (the link jumps

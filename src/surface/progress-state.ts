@@ -13,6 +13,7 @@ import {
   type WorkStatus,
 } from "../queue/types.ts";
 import { predecessorWait, readPredecessors, type PredecessorCache, type PredecessorSummary } from "./predecessor-state.ts";
+import type { RepositoryEnrollment } from "./repositories.ts";
 import { deriveReviewState } from "./review-state.ts";
 
 export const progressStages = [
@@ -51,6 +52,7 @@ export interface ProgressRow {
   updatedAt: string;
   stage: ProgressStage;
   active: boolean;
+  leaseOwner?: string;
   waiting?: string;
   badge?: ProgressBadge;
   item?: ObservableWorkItem;
@@ -64,10 +66,24 @@ export interface ProgressRepositoryGroup {
   rows: ProgressRow[];
 }
 
+/** The view the operator asked for: the full lifecycle lanes, or only what is in motion and next. */
+export type ProgressView = "all" | "active";
+
+/** `readProgress` options: an optional case-insensitive repository filter and the view. */
+export interface ProgressOptions {
+  repository?: string;
+  view?: ProgressView;
+}
+
 export interface ProgressData {
   asOf: string;
+  filter: { repository?: string; view: ProgressView };
   attention: ProgressRow[];
   repositories: ProgressRepositoryGroup[];
+  /** Every active row (a live-lease worker), oldest first — across all repositories unless a repository filter is set. */
+  workingNow: ProgressRow[];
+  /** The claimable queued primaries `claim_work` would offer next: priority desc, then createdAt asc; capped at 20. */
+  upNext: ProgressRow[];
   summary: Record<ProgressSummaryBucket, number>;
   total: number;
   active: number;
@@ -77,6 +93,12 @@ export interface ProgressData {
 const SATELLITE_KINDS = new Set([REVIEW_KIND, REVIEW_FIX_KIND, CURE_KIND]);
 const LIST_LIMIT = 100;
 const PROGRESS_EVENT_LIMIT = 100;
+/** `upNext` shows at most this many claimable primaries; a fuller queue records the cap in `truncated`. */
+const UP_NEXT_LIMIT = 20;
+/** The `truncated` marker for an `upNext` list the cap shortened, alongside the status markers. */
+const UP_NEXT_TRUNCATION = "up-next";
+/** Same shape the store validates, so an unknown slug is a 404 rather than a thrown read (mirrors readEvents). */
+const REPOSITORY_SLUG = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const TERMINAL_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 /**
  * The statuses `isAgedOut` can retire. Read newest first in the store rather
@@ -87,8 +109,33 @@ const TERMINAL_AGE_MS = 7 * 24 * 60 * 60 * 1000;
  */
 const RECENT_FIRST_STATUSES = new Set<WorkStatus>(["completed", "cancelled"]);
 
-/** The queue-only progress projection. Rendering never asks GitHub or changes queue state. */
-export function readProgress(queue: QueueStore, now: Date = new Date()): ProgressData {
+/**
+ * The queue-only progress projection. Rendering never asks GitHub or changes queue state.
+ *
+ * `options.repository` filters `primaries` and labeled-issue observations by
+ * case-insensitive slug before grouping; like `readEvents`, it returns
+ * `undefined` for a slug that is neither opted in nor declared so the route can
+ * render the 404-in-shell page. `enrollments` supplies the declared (control-
+ * plane) repositories; without it only opted-in repositories resolve.
+ */
+export function readProgress(
+  queue: QueueStore,
+  now: Date = new Date(),
+  options: ProgressOptions = {},
+  enrollments?: Map<string, RepositoryEnrollment>,
+): ProgressData | undefined {
+  const view: ProgressView = options.view === "active" ? "active" : "all";
+
+  let repository: string | undefined;
+  if (options.repository !== undefined && options.repository !== "") {
+    if (!REPOSITORY_SLUG.test(options.repository)) return undefined;
+    const wanted = options.repository.toLowerCase();
+    // Use the canonical casing the store keeps, since its filter is exact.
+    repository = queue.enabledRepositories().find((slug) => slug.toLowerCase() === wanted) ?? enrollments?.get(wanted)?.slug;
+    if (!repository) return undefined;
+  }
+  const inRepository = (slug: string): boolean => repository === undefined || slug.toLowerCase() === repository.toLowerCase();
+
   const all: ObservableWorkItem[] = [];
   const truncated: string[] = [];
   for (const status of workStatuses) {
@@ -104,7 +151,7 @@ export function readProgress(queue: QueueStore, now: Date = new Date()): Progres
   // it leaves the projection immediately rather than ranking as an attention
   // stop for seven days. It stays on `/events` and on its own item page.
   const primaries = all.filter(
-    (item) => !SATELLITE_KINDS.has(item.kind) && item.status !== "cancelled" && !isAgedOut(item, now),
+    (item) => !SATELLITE_KINDS.has(item.kind) && item.status !== "cancelled" && !isAgedOut(item, now) && inRepository(item.repository),
   );
   const primaryIds = new Set(primaries.map((item) => item.id));
   const satellites = all.filter(
@@ -132,28 +179,50 @@ export function readProgress(queue: QueueStore, now: Date = new Date()): Progres
   // One cache for the whole pass: two members of the same cycle, and every
   // successor of one popular predecessor, share the reads the gate would make.
   const predecessorCache: PredecessorCache = new Map();
+  // The claimable queued primaries `claim_work` would offer next, with their
+  // scheduling keys, so `upNext` orders exactly the way the queue does without
+  // re-deriving the gate's verdict.
+  const claimable: Array<{ row: ProgressRow; priority: number; createdAt: string }> = [];
   const rows = primaries.map((item) => {
     const reviews = reviewsByOrigin.get(item.id) ?? [];
     // Only a queued item is waiting on its edges — a claimed or completed one
     // is past the gate — so nothing else pays for the read.
     const predecessors = item.status === "queued" ? readPredecessors(queue, item, predecessorCache) : undefined;
-    return deriveProgressRow(item, reviews, queue.reviewGateEnabled(item.repository), now, {
+    const row = deriveProgressRow(item, reviews, queue.reviewGateEnabled(item.repository), now, {
       itemEvents: recentEvents(item.id),
       reviewEvents: reviews.flatMap((review) => recentEvents(review.id)),
       ...(predecessors ? { predecessors } : {}),
     });
+    if (item.status === "queued" && (!predecessors || predecessors.unmet.length === 0)) {
+      claimable.push({ row, priority: item.priority, createdAt: item.createdAt });
+    }
+    return row;
   });
   const sourceRefs = new Set(
     primaries.flatMap((item) => (item.sourceRef ? [`${item.repository.toLowerCase()}\0${item.sourceRef.toLowerCase()}`] : [])),
   );
-  for (const repository of queue.enabledRepositories()) {
-    for (const observation of queue.repositoryLabeledIssueObservations(repository)?.issues ?? []) {
-      if (sourceRefs.has(`${repository.toLowerCase()}\0${observation.url.toLowerCase()}`)) continue;
-      rows.push(observationRow(repository, observation));
+  for (const observationRepository of queue.enabledRepositories()) {
+    if (!inRepository(observationRepository)) continue;
+    for (const observation of queue.repositoryLabeledIssueObservations(observationRepository)?.issues ?? []) {
+      if (sourceRefs.has(`${observationRepository.toLowerCase()}\0${observation.url.toLowerCase()}`)) continue;
+      rows.push(observationRow(observationRepository, observation));
     }
   }
 
   rows.sort(compareRows);
+
+  // Working now: every active (live-lease) row, oldest first by the moment it
+  // entered its working (or review) stage.
+  const workingNow = rows
+    .filter((row) => row.active)
+    .sort((left, right) => activeSince(left).localeCompare(activeSince(right)));
+
+  // Up next: `claim_work`'s own order — priority descending, then createdAt
+  // ascending — capped, with the cap recorded in `truncated`.
+  claimable.sort((left, right) => right.priority - left.priority || left.createdAt.localeCompare(right.createdAt));
+  const upNext = claimable.slice(0, UP_NEXT_LIMIT).map((entry) => entry.row);
+  if (claimable.length > UP_NEXT_LIMIT) truncated.push(UP_NEXT_TRUNCATION);
+
   // A badge is a stop, in every tone: amber and red need a decision, and the
   // grey `unverified` stop is the artifact GitHub could not confirm, which the
   // operator has to re-check. Selecting on the badge itself keeps this group
@@ -170,15 +239,23 @@ export function readProgress(queue: QueueStore, now: Date = new Date()): Progres
 
   return {
     asOf: now.toISOString(),
+    filter: { ...(repository ? { repository } : {}), view },
     attention,
     repositories: [...byRepository.entries()]
       .sort(([left], [right]) => left.localeCompare(right))
-      .map(([repository, group]) => ({ repository, rows: group })),
+      .map(([groupRepository, group]) => ({ repository: groupRepository, rows: group })),
+    workingNow,
+    upNext,
     summary: summarizeProgress(rows),
     total: rows.length,
     active: rows.filter((row) => row.active).length,
     truncated,
   };
+}
+
+/** The instant an active row entered the stage that holds its live lease — its review round if it has one, else its working stage. */
+function activeSince(row: ProgressRow): string {
+  return row.enteredAt.review ?? row.enteredAt.working ?? row.updatedAt;
 }
 
 function summarizeProgress(rows: ProgressRow[]): Record<ProgressSummaryBucket, number> {
@@ -252,6 +329,7 @@ export function deriveProgressRow(
       ...base,
       stage: "working",
       active,
+      ...(item.leaseOwner ? { leaseOwner: item.leaseOwner } : {}),
       waiting: active ? "worker active" : "lease expired · awaiting reclaim",
       badge: active ? stopped : { label: "lease expired", reason: "awaiting reclaim", tone: "amber" },
     });
@@ -327,6 +405,7 @@ export function deriveProgressRow(
     ...base,
     stage: "review",
     active,
+    ...(satellite?.leaseOwner ? { leaseOwner: satellite.leaseOwner } : {}),
     waiting: satelliteStopped?.reason ?? `round ${round}/${MAX_REVIEW_ROUNDS}`,
     badge: stopped ?? satelliteStopped,
     reviewRound: round,
@@ -447,4 +526,13 @@ function latestIso(...values: Array<string | undefined>): string | undefined {
 
 function compareRows(left: ProgressRow, right: ProgressRow): number {
   return right.updatedAt.localeCompare(left.updatedAt) || left.title.localeCompare(right.title);
+}
+
+/** `/progress` with the repository filter and view the page currently shows, for tabs, the view switch, and the rail. */
+export function progressPath(query: { repository?: string; view?: ProgressView } = {}): string {
+  const search = new URLSearchParams();
+  if (query.repository) search.set("repository", query.repository);
+  if (query.view === "active") search.set("view", "active");
+  const suffix = search.toString();
+  return suffix ? `/progress?${suffix}` : "/progress";
 }
