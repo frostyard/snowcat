@@ -9,6 +9,7 @@ import {
   MAX_REVIEW_ADVISORIES,
   MAX_REVIEW_BLOCKERS,
   MODEL_NAME_PATTERN,
+  mcpToolNames,
   PREDECESSOR_URL_PATTERN,
   pullRequestDecays,
   RELEASE_TAG_PATTERN,
@@ -70,7 +71,7 @@ export const MAX_METRICS_WINDOW_EVENTS = 100_000;
  * that newer code has already migrated; newer code upgrades an older database
  * in place, forward only, inside one write transaction.
  */
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 14;
 
 /**
  * Backup manifest emitted by `QueueStore.backup` and re-derived by
@@ -150,6 +151,13 @@ export interface McpTokenRecord {
    * completes, blocks, and releases whatever it already holds.
    */
   kinds?: string[];
+  /**
+   * The MCP tools this token may call (ADR-0070, schema rung 14). Absent
+   * means every tool — exactly how every token minted before the rung
+   * behaves. The server registers only the granted tools for the client, so
+   * an ungranted call fails at the protocol layer before any handler runs.
+   */
+  tools?: string[];
   lastUsedAt?: string;
   revokedAt?: string;
   revokedBy?: string;
@@ -174,6 +182,25 @@ export function validateWorkKinds(kinds: readonly string[], purpose: string): st
   return unique;
 }
 
+/**
+ * Validates a tool grant (ADR-0070): every entry must be one of the MCP
+ * tools the contract exposes, and the result is sorted and de-duplicated so
+ * a grant has one stored shape. An empty list is refused rather than read as
+ * "every tool": a token that may call nothing is a mistake, and `NULL`
+ * already means unrestricted.
+ */
+export function validateMcpTools(tools: readonly string[], purpose: string): string[] {
+  const trimmed = tools.map((tool) => tool.trim());
+  for (const tool of trimmed) {
+    if (!(mcpToolNames as readonly string[]).includes(tool)) {
+      throw new Error(`${purpose}: unknown MCP tool: ${tool} (expected ${mcpToolNames.join(", ")})`);
+    }
+  }
+  const unique = [...new Set(trimmed)].sort();
+  if (unique.length === 0) throw new Error(`${purpose}: at least one MCP tool is required`);
+  return unique;
+}
+
 function decodeMcpToken(row: Row): McpTokenRecord {
   return {
     id: String(row.id),
@@ -182,6 +209,7 @@ function decodeMcpToken(row: Row): McpTokenRecord {
     tokenHash: String(row.token_hash),
     createdAt: String(row.created_at),
     ...(row.kinds_json == null ? {} : { kinds: parseJson<string[]>(row.kinds_json, []) }),
+    ...(row.tools_json == null ? {} : { tools: parseJson<string[]>(row.tools_json, []) }),
     ...(row.last_used_at == null ? {} : { lastUsedAt: String(row.last_used_at) }),
     ...(row.revoked_at == null ? {} : { revokedAt: String(row.revoked_at) }),
     ...(row.revoked_by == null ? {} : { revokedBy: String(row.revoked_by) }),
@@ -525,7 +553,7 @@ export class QueueStore {
    * person gave the process that will hold it. Token format:
    * `snowcat_<id>_<secret>`.
    */
-  mintMcpToken(input: { owner: string; client: string; kinds?: string[] }): { token: string; record: McpTokenRecord } {
+  mintMcpToken(input: { owner: string; client: string; kinds?: string[]; tools?: string[] }): { token: string; record: McpTokenRecord } {
     const owner = validateMemberPrincipal(input.owner, "token owner");
     const client = input.client.trim();
     if (!client || client.length > 100 || !/^[A-Za-z0-9][A-Za-z0-9 ._:@/-]*$/.test(client)) {
@@ -535,13 +563,16 @@ export class QueueStore {
     // NULL for an unrestricted token. It narrows what the token may claim and
     // can never widen it.
     const kinds = input.kinds === undefined ? undefined : validateWorkKinds(input.kinds, "token kinds");
+    // Rung 14: an optional tool grant (ADR-0070), stored the same way. It
+    // names the only MCP tools the credential may call; NULL is every tool.
+    const tools = input.tools === undefined ? undefined : validateMcpTools(input.tools, "token tools");
     const id = randomBytes(8).toString("hex");
     const secret = randomBytes(24).toString("base64url");
     const token = `snowcat_${id}_${secret}`;
     const now = this.now();
     this.db
-      .prepare("INSERT INTO mcp_tokens (id, owner, client, token_hash, created_at, kinds_json) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(id, owner, client, sha256Hex(secret), now, kinds === undefined ? null : JSON.stringify(kinds));
+      .prepare("INSERT INTO mcp_tokens (id, owner, client, token_hash, created_at, kinds_json, tools_json) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(id, owner, client, sha256Hex(secret), now, kinds === undefined ? null : JSON.stringify(kinds), tools === undefined ? null : JSON.stringify(tools));
     return { token, record: this.mcpToken(id)! };
   }
 
@@ -1396,6 +1427,10 @@ export class QueueStore {
     // intersection claims nothing rather than raising. The guard lives here so
     // no caller — MCP or not — can bypass it by going straight to the store.
     const restriction = input.allowedKinds === undefined ? undefined : validateWorkKinds(input.allowedKinds, "claim allowedKinds");
+    // A tool grant never changes what is claimable — a credential without
+    // claim_work never reaches here — it is recorded so the ledger names the
+    // grant the lease was taken under (ADR-0070).
+    const grant = input.allowedTools === undefined ? undefined : validateMcpTools(input.allowedTools, "claim allowedTools");
     const requested = input.kinds && input.kinds.length > 0 ? input.kinds : undefined;
     const kinds =
       restriction === undefined
@@ -1493,6 +1528,7 @@ export class QueueStore {
         // The credential's own claim restriction, when one applied: the ledger
         // says the lease was bounded by the token, not only by the request.
         ...(restriction === undefined ? {} : { kindsRestriction: restriction }),
+        ...(grant === undefined ? {} : { toolsGrant: grant }),
       });
       return this.getRequired(id);
     });
@@ -2866,6 +2902,18 @@ const MIGRATIONS: readonly Migration[] = [
       db.exec(
         "ALTER TABLE work_items ADD COLUMN required_artifact TEXT NOT NULL DEFAULT 'none' CHECK (required_artifact IN ('none', 'pull-request'))",
       );
+    }
+  },
+  // Rung 14: the MCP tools a minted token may call (ADR-0070) — a JSON array,
+  // or NULL for a token that may call every tool, which is what every
+  // existing row becomes. Narrowing only: a grant can never add a tool the
+  // contract does not expose, and an operator gives one explicitly at mint.
+  (db) => {
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(mcp_tokens)").all() as Row[]).map((column) => String(column.name)),
+    );
+    if (!columns.has("tools_json")) {
+      db.exec("ALTER TABLE mcp_tokens ADD COLUMN tools_json TEXT");
     }
   },
 ];

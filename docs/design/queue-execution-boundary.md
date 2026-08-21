@@ -105,7 +105,11 @@ endpoint is later protected.
 The MCP server exposes list, inspect, claim, heartbeat, complete, block, and
 release operations. A portable skill tells Codex, Claude, Copilot, and other
 clients how to use that contract. The lease token is returned only by a
-successful claim and must be treated as a secret capability.
+successful claim and must be treated as a secret capability. A credential may
+carry a tool grant
+([ADR-0070](../adr/0070-grant-mcp-tokens-a-server-enforced-tool-scope.md)):
+the server then registers only the granted operations for that client, so an
+observation-only client can list and inspect and can do nothing else.
 
 The capable client is started by the operator. Snowcat neither knows nor needs
 its provider credentials. The client selects its own tools and isolation. It
@@ -302,3 +306,5 @@ operator step the guard cannot perform.
   cutover
 - Source repository ownership:
   [ADR-0045](../adr/0045-host-fluent-under-frostyard.md)
+- Credential tool grants:
+  [ADR-0070](../adr/0070-grant-mcp-tokens-a-server-enforced-tool-scope.md)

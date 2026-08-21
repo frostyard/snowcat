@@ -11,7 +11,8 @@ import { buildQueueMcpServer } from "./server.ts";
  * queue store on every request; the member and client it names become the
  * transport identity every tool acts as (`member:<owner>/<client>`), and the
  * payload's `worker` is demoted to the claim's label; a token minted with
- * `kinds` may claim only those. No token → 401 with a
+ * `kinds` may claim only those, and one minted with `tools` may call only
+ * those (ADR-0070). No token → 401 with a
  * `WWW-Authenticate` challenge; a malformed, unknown, or revoked token is
  * indistinguishable from none. Cloudflare Access is expected to bypass this
  * path (the token is the credential); the surface routes stay behind Access.
@@ -34,11 +35,19 @@ export function mountMcpHttp(app: Hono, options: McpHttpOptions): McpHttpHandler
       // A token minted with kinds (schema rung 9) may claim only those; the
       // restriction rides the identity and narrows claim_work in the store.
       const kinds = context.authInfo?.extra?.kinds;
+      // A token minted with a tool grant (schema rung 14, ADR-0070) gets a
+      // server with only those tools registered: the boundary is the
+      // credential, not the client's promise about which tools it calls.
+      const tools = context.authInfo?.extra?.tools;
       return buildQueueMcpServer(
         options.queuePath,
         options.verifier ?? {},
         options.storeOptions ?? {},
-        { principal, ...(Array.isArray(kinds) ? { kinds: kinds as string[] } : {}) },
+        {
+          principal,
+          ...(Array.isArray(kinds) ? { kinds: kinds as string[] } : {}),
+          ...(Array.isArray(tools) ? { tools: tools as string[] } : {}),
+        },
         options.queue(),
       );
     },
@@ -64,6 +73,7 @@ export function mountMcpHttp(app: Hono, options: McpHttpOptions): McpHttpHandler
         client: record.client,
         tokenId: record.id,
         ...(record.kinds ? { kinds: record.kinds } : {}),
+        ...(record.tools ? { tools: record.tools } : {}),
       },
     };
     return handler.fetch(context.req.raw, { authInfo });

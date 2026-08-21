@@ -1128,6 +1128,49 @@ What the client then sees:
 | `claim_work {"worker":"…","kinds":["issue-resolution"]}` | `null` — the intersection is empty. Never an error, never widened |
 | `heartbeat_work`, `complete_work`, `block_work`, `release_work` | unaffected: a restricted client still finishes whatever it already holds |
 
+#### An observation-only client
+
+A client that may only *look* — a dashboard, Snowcat Cockpit taking a
+snapshot to plan a fleet — is also a property of its credential
+([ADR-0070](../adr/0070-grant-mcp-tokens-a-server-enforced-tool-scope.md)).
+Mint the token with a **tool grant** and the server registers only those
+tools for it: nothing it sends can claim, renew, complete, block, or
+release, and it never receives a lease token. Do not rely on a claim
+restriction to a never-seeded kind for this — that guards one tool by
+accident and fails open the day someone seeds the kind.
+
+```bash
+# Mint (the observer profile is get_work + list_work; --tools lists an explicit grant instead):
+npm run --silent queue -- token mint member:you@frostyard.org "cockpit observer" --profile observer
+# {"token":"snowcat_…","id":"1566fd…","owner":"member:you@frostyard.org","client":"cockpit observer",
+#  "kinds":"unrestricted","tools":["get_work","list_work"],"createdAt":"…","note":"The token is shown once; …"}
+
+# Inspect: the grant is in the inventory, the hash and the bearer never are.
+npm run --silent queue -- token list member:you@frostyard.org
+# [{"id":"1566fd…","owner":"member:you@frostyard.org","client":"cockpit observer",
+#   "createdAt":"…","kinds":"unrestricted","tools":["get_work","list_work"]}]
+
+# Revoke when the client is retired; the token verifies as absent at once.
+npm run --silent queue -- token revoke 1566fd…
+```
+
+The client's MCP configuration is the same bearer header as any other token.
+What it then sees:
+
+| It calls | It gets |
+| --- | --- |
+| `tools/list` | `get_work` and `list_work` only |
+| `list_work {"repository":"frostyard/example","status":"claimed"}` | the bookkeeping, `leaseOwner` included, never a `leaseToken` |
+| `get_work {"id":"…"}` | the item, never a `leaseToken` |
+| `claim_work`, `heartbeat_work`, `complete_work`, `block_work`, `release_work` — any arguments | a protocol error (`unknown tool`); no handler ran, no item changed, no event was written |
+
+A grant that does include `claim_work` (say a worker that claims, works, and
+releases but must never complete on its own) is recorded on each lease as
+`toolsGrant` in the `work.claimed` payload, beside `kindsRestriction`, so
+`events` says what authority the lease was taken under. The same grant shape
+works locally: `SNOWCAT_MCP_TOOLS=list_work,get_work npm run mcp` serves a
+stdio server with only those tools.
+
 The ledger says so too: a claim bounded this way carries
 `kindsRestriction: ["pr-review"]` in its `work.claimed` payload, so
 `show <id>` and `events` show that the token, not only the request, chose the
@@ -1515,7 +1558,8 @@ tokens and wall time per accepted outcome (from the client you ran).
   [ADR-0018](../adr/0018-bind-worker-sessions-and-verify-github-artifacts.md),
   [ADR-0061](../adr/0061-cure-pull-requests-as-bounded-per-head-work.md),
   [ADR-0065](../adr/0065-gate-worker-pull-requests-behind-bounded-review.md),
-  [ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)
+  [ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md),
+  [ADR-0070](../adr/0070-grant-mcp-tokens-a-server-enforced-tool-scope.md)
 - Contracts: [work queue](../specs/work-queue.md)
 - Architecture: [queue execution boundary](queue-execution-boundary.md),
   [repository enrollment](repository-enrollment.md)
