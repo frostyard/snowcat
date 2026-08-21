@@ -10,6 +10,7 @@ import {
   MAX_REVIEW_ADVISORIES,
   MAX_REVIEW_BLOCKERS,
   MODEL_NAME_PATTERN,
+  requiredArtifacts,
   reviewDecisions,
   withoutLeaseToken,
   workStatuses,
@@ -60,6 +61,10 @@ const followUpSchema = z.strictObject({
   acceptanceCriteria: z.array(z.string().min(1)).min(1),
   allowedActions: z.array(actionSchema),
   delegableActions: z.array(actionSchema),
+  // Required, never defaulted (ADR-0069): the proposer states whether the
+  // child is a change that lands through a pull request. The store refuses a
+  // `write` child without `pull-request`, and `pull-request` without `open-pr`.
+  requiredArtifact: z.enum(requiredArtifacts),
 });
 
 /**
@@ -114,6 +119,7 @@ export function buildQueueMcpServer(
         "Perform only the allowedActions listed on the claimed item.",
         "Before changing anything, check whether the work already exists: read operatorNotes when present and look for pull requests that reference the item's sourceRef issue; re-report or block rather than opening a duplicate.",
         "Never broaden child permissions beyond delegableActions.",
+        "Every follow-up declares requiredArtifact: \"pull-request\" for a change (it then needs open-pr in allowedActions) or \"none\" for discovery-only work. An item whose requiredArtifact is pull-request completes only with a pull-request artifact; block_work instead when no change is warranted.",
         "Complete work with concrete evidence and bounded follow-up items, and report the model you ran as result.model.",
         "In a review-gated repository open pull requests as drafts; a pr-review item completes with a structured review verdict and touches nothing on GitHub.",
       ].join(" "),

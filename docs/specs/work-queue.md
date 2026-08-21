@@ -20,6 +20,7 @@ claim, renew, and resolve it.
 | `acceptanceCriteria` | string[] | yes | At least one verifiable criterion |
 | `allowedActions` | action[] | yes | Authority for this item |
 | `delegableActions` | action[] | yes | Maximum authority for direct children |
+| `requiredArtifact` | enum | yes | The item's delivery contract ([ADR-0069](../adr/0069-declare-the-required-artifact-on-every-work-item.md)): `none` or `pull-request`. Declared by the definer — required on every follow-up, `none` when an operator seed omits it — never inferred from kind or actions, never changed afterwards. `pull-request` requires `open-pr` in `allowedActions` (rule 64) |
 | `priority` | integer | yes | Safe integer; higher values claim first, creation time breaks ties. Chosen only by operator or policy seeds; worker-created children inherit the parent's value; changed afterwards only by the operator `prioritize` command (rule 38) |
 | `status` | enum | yes | `proposed`, `queued`, `claimed`, `completed`, `blocked`, or `cancelled` |
 | `createdBy` | string | yes | Operator, policy, or worker provenance |
@@ -81,6 +82,7 @@ npm run queue -- requeue <work-item-id> <reason>
 npm run queue -- cancel <work-item-id> <reason>
 npm run queue -- prioritize <work-item-id> <priority> <reason>
 npm run queue -- note <work-item-id> <text>
+npm run queue -- audit-contracts [--repository <owner/repo>]
 npm run queue -- attach-artifact <work-item-id> <url> [--kind pull-request|issue] [--description <text>]
 npm run queue -- list [proposed|queued|claimed|completed|blocked|cancelled]
 npm run queue -- show <work-item-id>
@@ -1009,6 +1011,31 @@ MCP (rule 41).
     is a read over rule 62's verdicts and MUST change no edge's satisfaction,
     withhold or admit nothing further, and ask GitHub nothing.
 
+64. **Required artifact ([ADR-0069](../adr/0069-declare-the-required-artifact-on-every-work-item.md)).**
+    Every work item MUST carry `requiredArtifact`, `none` or `pull-request`,
+    stored in one column added by schema rung 13 (default `none`; the rung
+    MUST backfill nothing). A follow-up MUST declare it — `complete_work`
+    MUST reject a follow-up that omits it at the schema, and the store MUST
+    refuse one whose value is missing or unknown — and a seeded or proposed
+    root takes the value its feeder, import, or sweep declares (`none` when
+    an operator seed omits it). On every definition path, and again in
+    `approve`, the store MUST refuse a contract the item's authority cannot
+    honor: `pull-request` without `open-pr`; `write` without `open-pr`; and,
+    for a follow-up, `write` without `pull-request`. A refused follow-up
+    MUST roll back the whole completion and leave the parent claimed (rule
+    18); a refused admission MUST change nothing and name `reject`. After
+    rule 33, `complete_work` on an item whose `requiredArtifact` is
+    `pull-request` MUST refuse the completion — leaving the item claimed —
+    unless the reported artifacts include a `pull-request`; `block_work`
+    remains the worker's way out when no change is warranted. No inference
+    from `kind` or from actions MAY set or change the value.
+    `audit-contracts [--repository <owner/repo>]` MUST list every
+    `proposed`, `queued`, `claimed`, or `blocked` item the same predicate
+    rejects — id, repository, kind, status, parent, actions, contract, the
+    problem code, and the operator command that clears it — oldest first,
+    MUST exit non-zero when the list is non-empty, and MUST mutate nothing
+    and read GitHub never.
+
 ## Derived artifacts
 
 | Artifact | Derivation |
@@ -1021,6 +1048,7 @@ MCP (rule 41).
 | Review gate | `review-gate` flag and draft refusal per rule 52; `verify-artifacts` enqueues `pr-review` rounds and `pr-review-fix` roots and marks passed drafts ready per rules 53 and 55; `complete_work` accepts the bound verdict per rule 54 |
 | Internal dependency chain | `sweep-dependencies` maps tags, branch comparison, and `go.mod` to `release-needed` and `dependency-bump` proposals per rule 45 |
 | Repository settings drift | `sweep-repository-settings` diffs live GitHub settings against core's contract into `settings-drift` proposals per rule 46 |
+| Contract audit | `audit-contracts` applies rule 64's predicate to every in-flight item and exits non-zero when any fails; `approve` and every definition path apply the same predicate |
 | Predecessor gate | Claim selection excludes items whose rule 58 predecessors are not observed delivered per rule 62; `show`, the item page, and a queued item's progress strip print each one's satisfaction — and name a cycle — per rule 63 |
 | MCP tokens | `token mint [--kinds …] | list | revoke` over the `mcp_tokens` table per rule 49; identities per rule 48; claim restriction per rule 50 |
 | PRD baseline metrics | `metrics` aggregates items created in a window with its `work.claimed`, `work.completed`, `work.blocked`, and `work.cancelled` events and the completed items' current `delivery` per rule 56 |

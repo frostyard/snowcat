@@ -92,7 +92,7 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
   const directory = await mkdtemp(join(tmpdir(), "snowcat-ladder-test-"));
   const path = join(directory, "queue.db");
   const { itemId } = createVersionOneDatabase(path);
-  assert.equal(SCHEMA_VERSION, 12, "this test pins the ladder at rung 12; extend it when a rung is added");
+  assert.equal(SCHEMA_VERSION, 13, "this test pins the ladder at rung 13; extend it when a rung is added");
 
   const queue = new QueueStore(path);
   test.after(() => queue.close());
@@ -134,6 +134,12 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
     cure: { pullRequestUrl: "https://github.com/frostyard/updex/pull/9", headSha: "c".repeat(40), patchDigest: `sha256:${"1".repeat(64)}`, decay: ["behind"] },
   });
   assert.deepEqual(queue.get(cured!.id)?.cure?.decay, ["behind"]);
+
+  // Rung 13 arrived too: the legacy item reads as requiring no artifact (the
+  // contract is declared, never inferred from its actions), and a new root
+  // stores the contract it declares.
+  assert.equal(queue.get(itemId)?.requiredArtifact, "none");
+  assert.equal(queue.get(cured!.id)?.requiredArtifact, "none");
 
   // Rung 8 arrived too: a pr-review root carries its typed review record and the repository has a review-gate setting.
   const reviewed = queue.enqueueReviewRoot("frostyard/updex", {

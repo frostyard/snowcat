@@ -313,6 +313,9 @@ function releaseNeededProposal(repository: string, release: RepositoryRelease, s
     ],
     allowedActions: IMPLEMENTATION_ACTIONS,
     delegableActions: [],
+    // Explicitly none (ADR-0069): the instructions allow completing with
+    // evidence and no pull request when nothing needs to change before the tag.
+    requiredArtifact: "none",
     createdBy: "operator:dependency-sweep",
   };
 }
@@ -333,6 +336,8 @@ function dependencyBumpProposal(repository: string, module: string, from: string
     ],
     allowedActions: IMPLEMENTATION_ACTIONS,
     delegableActions: [],
+    // One bump is one pull request (ADR-0069).
+    requiredArtifact: "pull-request",
     createdBy: "operator:dependency-sweep",
   };
 }

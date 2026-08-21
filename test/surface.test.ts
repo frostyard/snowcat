@@ -51,6 +51,7 @@ async function seededQueue() {
         acceptanceCriteria: ["make ci exists."],
         allowedActions: ["read", "write", "run-tests", "open-pr"],
         delegableActions: [],
+        requiredArtifact: "pull-request",
       },
     ],
   });
@@ -106,7 +107,7 @@ async function seededQueue() {
     objective: "Harden the thing.",
     instructions: "Do it.",
     acceptanceCriteria: ["Done."],
-    allowedActions: ["read", "write"],
+    allowedActions: ["read", "write", "open-pr"],
     delegableActions: [],
     createdBy: "operator:test",
   });
@@ -666,6 +667,7 @@ test("the item page renders the definition, artifacts with verification, operato
         acceptanceCriteria: ["The directory is supplied by the caller.", "Coverage of GetActiveVersionAt is at least 90%."],
         allowedActions: ["read", "write", "run-tests", "open-pr"],
         delegableActions: [],
+        requiredArtifact: "pull-request",
       },
     ],
   });

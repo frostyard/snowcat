@@ -72,7 +72,7 @@ async function createVersionElevenDatabase(prefix: string): Promise<{ path: stri
 test("a version-11 database gains rung 12's work_items.predecessors_json column, NULL for every existing item", async () => {
   // Importing the store module already throws unless SCHEMA_VERSION equals the
   // ladder length; this pins the value the rung was appended for.
-  assert.equal(SCHEMA_VERSION, 12, "this test pins the ladder at rung 12; extend it when a rung is added");
+  assert.equal(SCHEMA_VERSION, 13, "this test pins the ladder at rung 13; extend it when a rung is added");
   const { path, itemId } = await createVersionElevenDatabase("predecessors-ladder");
 
   const migrated = new QueueStore(path);
@@ -183,7 +183,7 @@ test("only the proposed-root path accepts predecessors: seeds, cure and review r
     instructions: "Read only.",
     acceptanceCriteria: ["One gap."],
     allowedActions: ["read", "create-followup"],
-    delegableActions: ["read", "write", "run-tests"],
+    delegableActions: ["read", "write", "run-tests", "open-pr"],
     createdBy: "operator:test",
   };
   assert.throws(() => queue.enqueueSeed({ ...seed, ...smuggled } as SeedWorkInput), /a seed root must not carry predecessors/);
@@ -199,7 +199,7 @@ test("only the proposed-root path accepts predecessors: seeds, cure and review r
     objective: "Cure the head.",
     instructions: "Rebase only.",
     acceptanceCriteria: ["The head is current."],
-    allowedActions: ["read", "write", "run-tests"],
+    allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
     createdBy: "policy:pull-request-cure",
     cure: {
@@ -243,8 +243,9 @@ test("only the proposed-root path accepts predecessors: seeds, cure and review r
             objective: "Add the missing test.",
             instructions: "Add one test.",
             acceptanceCriteria: ["The test passes."],
-            allowedActions: ["read", "write", "run-tests"],
+            allowedActions: ["read", "write", "run-tests", "open-pr"],
             delegableActions: [],
+            requiredArtifact: "pull-request",
             ...smuggled,
           } as never,
         ],

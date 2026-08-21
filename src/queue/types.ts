@@ -12,6 +12,18 @@ export const allowedActions = [
 export type AllowedAction = (typeof allowedActions)[number];
 
 /**
+ * The artifact kind a completion of this item must report (ADR-0069): the
+ * item's explicit delivery contract. `pull-request` means the item is a
+ * change that lands through one pull request and `complete_work` refuses a
+ * completion that reports none; `none` means completion is judged on the
+ * result alone. Declared by whoever defines the item — a feeder, an import,
+ * a sweep, or the worker proposing a follow-up — and never inferred from the
+ * item's kind or actions; nothing changes it afterwards.
+ */
+export const requiredArtifacts = ["none", "pull-request"] as const;
+export type RequiredArtifact = (typeof requiredArtifacts)[number];
+
+/**
  * Snowcat's own observation of a reported issue, pull request, or release,
  * taken through the GitHub API at completion time and refreshed by
  * `verify-artifacts`. Workers never supply it; the MCP boundary rejects it as
@@ -112,6 +124,14 @@ export interface FollowUpInput {
   acceptanceCriteria: string[];
   allowedActions: AllowedAction[];
   delegableActions: AllowedAction[];
+  /**
+   * The proposer's explicit delivery contract for the child (ADR-0069):
+   * required, never defaulted, so a worker states whether the child is a
+   * change that lands through a pull request. A child granting `write` must
+   * declare `pull-request`, and `pull-request` needs `open-pr` in
+   * `allowedActions`; the store refuses the whole completion otherwise.
+   */
+  requiredArtifact: RequiredArtifact;
 }
 
 /** The pull-request cure a `pr-cure` root was created for (ADR-0061). */
@@ -244,6 +264,8 @@ export interface WorkItem {
   acceptanceCriteria: string[];
   allowedActions: AllowedAction[];
   delegableActions: AllowedAction[];
+  /** The item's delivery contract (ADR-0069): what a completion must report. */
+  requiredArtifact: RequiredArtifact;
   priority: number;
   status: WorkStatus;
   createdBy: string;
@@ -315,6 +337,8 @@ export interface SeedWorkInput {
   acceptanceCriteria: string[];
   allowedActions: AllowedAction[];
   delegableActions: AllowedAction[];
+  /** Delivery contract (ADR-0069); `none` when omitted. `pull-request` requires `open-pr` in `allowedActions`. */
+  requiredArtifact?: RequiredArtifact;
   priority?: number;
   createdBy: string;
 }

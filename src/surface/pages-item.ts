@@ -79,6 +79,7 @@ function definitionCard(data: ItemData): SafeHtml {
     ${row("priority", `${item.priority}${item.parentId ? " (inherited)" : ""}`)}
     ${row("allowed", badges(item.allowedActions))}
     ${row("delegable", item.delegableActions.length > 0 ? badges(item.delegableActions) : html`<em class="fl-muted">none</em>`)}
+    ${row("delivers", item.requiredArtifact === "pull-request" ? "one pull request" : html`<em class="fl-muted">none required</em>`)}
     ${row("created", `${clock(item.createdAt, true)} by ${item.createdBy}`)}
     ${row("updated", clock(item.updatedAt, true))}
     ${item.status === "claimed" ? row("lease", `${item.leaseOwner ?? "unknown worker"} · expires ${item.leaseExpiresAt ? clock(item.leaseExpiresAt, true) : "?"}`) : ""}

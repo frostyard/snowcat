@@ -456,6 +456,8 @@ export function reviewRootDefinition(
     ],
     allowedActions: REVIEW_ACTIONS,
     delegableActions: [],
+    // A review delivers a verdict, not an artifact (ADR-0069).
+    requiredArtifact: "none",
     createdBy,
   };
 }
@@ -487,6 +489,8 @@ export function reviewFixRootDefinition(
     ],
     allowedActions: REVIEW_FIX_ACTIONS,
     delegableActions: [],
+    // The fix lands on the reviewed pull request (ADR-0069).
+    requiredArtifact: "pull-request",
     createdBy,
   };
 }

@@ -420,6 +420,29 @@ listing is never applied ([spec rule 39](../specs/work-queue.md)).
 Worker follow-ups land as `proposed` children with `parentId`; approve them the
 same way. Their permissions can never exceed the parent's `delegableActions`.
 
+**Every item says what it must deliver** ([spec rule 64](../specs/work-queue.md),
+[ADR-0069](../adr/0069-declare-the-required-artifact-on-every-work-item.md)).
+`requiredArtifact` is `pull-request` or `none`, shown as `delivers` on the
+item page and in `show`. The worker that proposes a follow-up declares it;
+imports, sweeps, and the cure and review gates declare it on the roots they
+create. The store refuses — at proposal and again at `approve` — any item
+whose actions cannot honor its contract: `pull-request` without `open-pr`,
+`write` without `open-pr`, or a follow-up that may `write` but promises no
+pull request. An item that must deliver a pull request completes only when
+one is reported; its worker blocks instead when no change turns out to be
+warranted, and cancelling is yours. Items created before the rule read as
+`none` and keep behaving as they did; find the ones that can never complete
+with
+
+```bash
+npm run --silent queue -- audit-contracts [--repository <owner/repo>]   # read-only; exit 1 when anything is listed
+```
+
+and clear each with the command the finding names (`reject` a proposal,
+`cancel` a queued or blocked item, `note` a claimed one and cancel when the
+lease ends). Nothing widens an item after the fact: re-propose or re-import
+with the right contract.
+
 Every `defer` and `requeue` reason, and every `note`, is appended to the item's
 `operatorNotes` (`{ at, actor, action, reason }`) and travels with the item:
 `claim_work`, `get_work`, `list_work`, `list`, and `show` all return it, so
@@ -1433,6 +1456,18 @@ tokens and wall time per accepted outcome (from the client you ran).
   artifact: wrong repository, wrong number, an issue reported as a pull
   request, or a URL that does not exist. The item is still leased to that
   worker; it should fix the report and complete again.
+- **`complete_work` says "must report a pull-request artifact"** — the item's
+  `requiredArtifact` is `pull-request` and the worker reported none (a
+  commit on a branch does not count). It should open the pull request and
+  complete again, or `block_work` with the reason if no change is warranted;
+  then you `cancel` or leave it for the next lease.
+- **`complete_work` refuses a follow-up "cannot deliver"/"requires open-pr"**
+  — the worker proposed a change child without `open-pr`, or without
+  `requiredArtifact: "pull-request"`. The whole completion was rolled back
+  and the root is still leased; the worker corrects the follow-up and
+  completes again. `approve` refuses the same shape with the same message
+  for a proposal that predates the rule: `reject` it, and run
+  `audit-contracts` to find the rest.
 - **A completion on a private repository comes back `unverified` with
   "without SNOWCAT_GITHUB_TOKEN"** — the MCP server was started without the
   token, so GitHub answered 404 for a repository it could not see. Over

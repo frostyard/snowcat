@@ -40,6 +40,8 @@ import {
   type WorkItem,
   type WorkResult,
   type WorkStatus,
+  type RequiredArtifact,
+  requiredArtifacts,
 } from "./types.ts";
 
 type Row = Record<string, SQLInputValue>;
@@ -68,7 +70,7 @@ export const MAX_METRICS_WINDOW_EVENTS = 100_000;
  * that newer code has already migrated; newer code upgrades an older database
  * in place, forward only, inside one write transaction.
  */
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 /**
  * Backup manifest emitted by `QueueStore.backup` and re-derived by
@@ -324,6 +326,21 @@ export function queueDatabasePath(): string {
   const configured = process.env.SNOWCAT_QUEUE_DB;
   if (configured === ":memory:") return configured;
   return resolve(configured ?? "./data/queue.db");
+}
+
+/** One `audit-contracts` finding (ADR-0069): an in-flight item whose contract is not deliverable. */
+export interface ContractFinding {
+  id: string;
+  repository: string;
+  kind: string;
+  status: WorkStatus;
+  parentId?: string;
+  allowedActions: AllowedAction[];
+  requiredArtifact: RequiredArtifact;
+  problem: ContractProblemCode;
+  message: string;
+  /** The operator command that clears it; an audit only reads. */
+  suggestedCommand: string;
 }
 
 export class QueueStore {
@@ -1510,6 +1527,7 @@ export class QueueStore {
         throw new Error(`work lineage may be at most ${MAX_LINEAGE_DEPTH} edges deep`);
       }
       this.assertArtifactsAllowed(parent, input.result.artifacts);
+      this.assertRequiredArtifactReported(parent, input.result.artifacts);
       // A pr-review completes with a structured verdict and nothing else does
       // (ADR-0065); the verdict is merged into the item's review record.
       let reviewJson: string | undefined;
@@ -1533,6 +1551,17 @@ export class QueueStore {
         }
         // Sequencing edges belong to imported roots, not to lineage (ADR-0066).
         assertNoPredecessors(followUp, "a follow-up item");
+        // The proposer states the child's delivery contract (ADR-0069); the
+        // store only checks it is one the child can honor. A child that may
+        // write is a change, and a change nobody can deliver is not a proposal.
+        // Checked before the general definition rules so the refusal names
+        // the follow-up, not just the shape.
+        if (!(requiredArtifacts as readonly string[]).includes(followUp.requiredArtifact as string)) {
+          throw new Error(`follow-up requiredArtifact must be one of ${requiredArtifacts.join(", ")}`);
+        }
+        assertKnownActions(followUp.allowedActions);
+        const problem = contractProblem({ ...followUp, parentId: parent.id });
+        if (problem) throw new Error(`follow-up "${followUp.kind}": ${problem.message}`);
         validateWorkDefinition({ ...followUp, createdBy: input.worker });
         assertSubset(followUp.allowedActions, parent.delegableActions, "follow-up allowedActions");
         assertSubset(followUp.delegableActions, parent.delegableActions, "follow-up delegableActions");
@@ -1621,6 +1650,13 @@ export class QueueStore {
       const item = this.getRequired(id);
       this.assertPrecondition(item, precondition);
       if (item.status !== "proposed") throw new Error(`work item is not proposed: ${id}`);
+      // Admission re-checks the delivery contract (ADR-0069): a proposal that
+      // reached the store before the rule, or through a path that skipped it,
+      // must not become claimable work nobody can complete. Reject it instead.
+      const problem = contractProblem(item);
+      if (problem) {
+        throw new Error(`work item ${id} cannot be admitted: ${problem.message} (${problem.code}); reject it and re-propose`);
+      }
       const now = this.now();
       this.db.prepare("UPDATE work_items SET admitted = 1, updated_at = ? WHERE id = ?").run(now, id);
       this.addEvent(id, "work.approved", actor, {});
@@ -1976,12 +2012,13 @@ export class QueueStore {
     }
   }
 
-  private insertWork(input: FollowUpInput & {
+  private insertWork(input: Omit<FollowUpInput, "requiredArtifact"> & {
     id: string;
     rootId: string;
     parentId?: string;
     repository: string;
     priority: number;
+    requiredArtifact?: RequiredArtifact;
     createdBy: string;
     admitted: boolean;
     createdAt: string;
@@ -1994,10 +2031,10 @@ export class QueueStore {
       .prepare(
         `INSERT INTO work_items (
           id, root_id, parent_id, repository, kind, objective, instructions,
-          acceptance_criteria_json, allowed_actions_json, delegable_actions_json,
+          acceptance_criteria_json, allowed_actions_json, delegable_actions_json, required_artifact,
           priority, status, admitted, created_by, created_at, updated_at, source_ref,
           predecessors_json, cure_json, review_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.id,
@@ -2010,6 +2047,7 @@ export class QueueStore {
         JSON.stringify(input.acceptanceCriteria),
         JSON.stringify(input.allowedActions),
         JSON.stringify(input.delegableActions),
+        input.requiredArtifact ?? "none",
         input.priority,
         input.admitted ? 1 : 0,
         input.createdBy,
@@ -2034,6 +2072,66 @@ export class QueueStore {
     if (item.leaseToken !== leaseToken || item.leaseOwner !== worker) throw new Error("lease owner or token does not match");
     if (!item.leaseExpiresAt || item.leaseExpiresAt <= this.now()) throw new Error("lease has expired");
     return item;
+  }
+
+  /**
+   * The completion must honor the item's delivery contract (ADR-0069): an
+   * item whose `requiredArtifact` is `pull-request` completes only with a
+   * `pull-request` artifact reported. Refusal leaves the item claimed, like
+   * rule 33, so the worker can report the pull request it opened — or block
+   * when the change turned out not to be warranted, which is the operator's
+   * call to cancel, not the worker's to complete around.
+   */
+  private assertRequiredArtifactReported(item: WorkItem, artifacts: WorkArtifact[]): void {
+    if (item.requiredArtifact !== "pull-request") return;
+    if (artifacts.some((artifact) => artifact.kind === "pull-request")) return;
+    throw new Error(
+      "completion must report a pull-request artifact: this item is delivered through one pull request; " +
+        "report the pull request you opened, or block_work with the reason if no change is warranted",
+    );
+  }
+
+  /**
+   * Read-only contract audit (ADR-0069): every non-terminal item — proposed,
+   * queued, claimed, or blocked — whose authority and delivery contract
+   * disagree, with the reason, oldest first. Terminal items are history. The
+   * predicate is the same `contractProblem` the definition paths and
+   * admission enforce, so a clean audit means no item in flight can fail for
+   * the shape that prompted it. Mutates nothing and never reads GitHub.
+   */
+  auditContracts(options: { repository?: string } = {}): ContractFinding[] {
+    if (options.repository !== undefined) validateRepository(options.repository);
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM work_items
+         WHERE status IN ('queued', 'claimed', 'blocked')${options.repository !== undefined ? " AND repository = ?" : ""}
+         ORDER BY created_at ASC, id ASC`,
+      )
+      .all(...(options.repository !== undefined ? [options.repository] : [])) as Row[];
+    const findings: ContractFinding[] = [];
+    for (const row of rows) {
+      const item = decodeWorkItem(row);
+      const problem = contractProblem(item);
+      if (!problem) continue;
+      findings.push({
+        id: item.id,
+        repository: item.repository,
+        kind: item.kind,
+        status: item.status,
+        parentId: item.parentId,
+        allowedActions: item.allowedActions,
+        requiredArtifact: item.requiredArtifact,
+        problem: problem.code,
+        message: problem.message,
+        suggestedCommand:
+          item.status === "proposed"
+            ? `reject ${item.id} "<reason>"`
+            : item.status === "claimed"
+              ? `note ${item.id} "<text>" (cancel once the lease ends; the worker can only block or release)`
+              : `cancel ${item.id} "<reason>"`,
+      });
+    }
+    return findings;
   }
 
   private assertArtifactsAllowed(item: WorkItem, artifacts: WorkArtifact[]): void {
@@ -2134,6 +2232,7 @@ function decodeWorkItem(row: Row): WorkItem {
     acceptanceCriteria: parseJson<string[]>(row.acceptance_criteria_json, []),
     allowedActions: parseJson<AllowedAction[]>(row.allowed_actions_json, []),
     delegableActions: parseJson<AllowedAction[]>(row.delegable_actions_json, []),
+    requiredArtifact: decodeRequiredArtifact(row.required_artifact),
     priority: Number(row.priority),
     status: row.status === "queued" && Number(row.admitted) === 0 ? "proposed" : (String(row.status) as WorkStatus),
     createdBy: String(row.created_by),
@@ -2150,6 +2249,11 @@ function decodeWorkItem(row: Row): WorkItem {
     operatorNotes: parseJson<OperatorNote[]>(row.operator_notes_json, []),
     previousResults: parseJson<WorkResult[]>(row.previous_results_json, []),
   };
+}
+
+/** The column is CHECK-constrained, so anything else is a foreign or damaged row; read it as the pre-rung default. */
+function decodeRequiredArtifact(value: unknown): RequiredArtifact {
+  return value === "pull-request" ? "pull-request" : "none";
 }
 
 function appendOperatorNote(item: WorkItem, note: OperatorNote): string {
@@ -2366,6 +2470,7 @@ function validateWorkDefinition(input: {
   acceptanceCriteria: string[];
   allowedActions: AllowedAction[];
   delegableActions: AllowedAction[];
+  requiredArtifact?: RequiredArtifact;
   priority?: number;
   createdBy: string;
 }): void {
@@ -2381,7 +2486,58 @@ function validateWorkDefinition(input: {
   if (!input.createdBy.trim()) throw new Error("createdBy is required");
   assertKnownActions(input.allowedActions);
   assertKnownActions(input.delegableActions);
+  assertDeliverable(input);
 }
+
+/**
+ * The delivery contract must be one the item's own authority can honor
+ * (ADR-0069): an item that must report a pull request needs `open-pr`,
+ * because rule 10 refuses a `pull-request` artifact without it and nothing
+ * widens an item afterwards. Checked on every definition path and again at
+ * admission; the same predicate drives `audit-contracts`.
+ */
+function assertDeliverable(input: { allowedActions: AllowedAction[]; requiredArtifact?: RequiredArtifact }): void {
+  const requiredArtifact = input.requiredArtifact ?? "none";
+  if (!(requiredArtifacts as readonly string[]).includes(requiredArtifact)) {
+    throw new Error(`unknown required artifact: ${String(requiredArtifact)}`);
+  }
+  const problem = contractProblem({ allowedActions: input.allowedActions, requiredArtifact });
+  if (problem) throw new Error(problem.message);
+}
+
+/** The ways a stored or proposed contract can fail to be deliverable; `undefined` when it is consistent. */
+export function contractProblem(item: {
+  allowedActions: AllowedAction[];
+  requiredArtifact: RequiredArtifact;
+  parentId?: string;
+}): { code: ContractProblemCode; message: string } | undefined {
+  if (item.requiredArtifact === "pull-request" && !item.allowedActions.includes("open-pr")) {
+    return {
+      code: "required-pull-request-without-open-pr",
+      message: "an item that must deliver a pull request requires open-pr in allowedActions",
+    };
+  }
+  if (item.allowedActions.includes("write") && !item.allowedActions.includes("open-pr")) {
+    return {
+      code: "write-without-open-pr",
+      message: "an item granted write has no way to land its change: it requires open-pr in allowedActions",
+    };
+  }
+  if (item.parentId !== undefined && item.allowedActions.includes("write") && item.requiredArtifact !== "pull-request") {
+    return {
+      code: "child-write-without-required-pull-request",
+      message: 'a follow-up granting write is a change and must declare requiredArtifact "pull-request"',
+    };
+  }
+  return undefined;
+}
+
+export const contractProblemCodes = [
+  "required-pull-request-without-open-pr",
+  "write-without-open-pr",
+  "child-write-without-required-pull-request",
+] as const;
+export type ContractProblemCode = (typeof contractProblemCodes)[number];
 
 function validateResult(result: WorkResult): void {
   if (!result.summary.trim()) throw new Error("result summary is required");
@@ -2695,6 +2851,21 @@ const MIGRATIONS: readonly Migration[] = [
     );
     if (!columns.has("predecessors_json")) {
       db.exec("ALTER TABLE work_items ADD COLUMN predecessors_json TEXT");
+    }
+  },
+  // Rung 13: the item's explicit delivery contract (ADR-0069) — the artifact
+  // kind a completion must report, `none` or `pull-request`. Every existing
+  // row becomes `none`: the contract is declared, never inferred, so nothing
+  // here reads the row's actions or kind to guess one; `audit-contracts`
+  // lists the rows an operator should look at instead.
+  (db) => {
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(work_items)").all() as Row[]).map((column) => String(column.name)),
+    );
+    if (!columns.has("required_artifact")) {
+      db.exec(
+        "ALTER TABLE work_items ADD COLUMN required_artifact TEXT NOT NULL DEFAULT 'none' CHECK (required_artifact IN ('none', 'pull-request'))",
+      );
     }
   },
 ];

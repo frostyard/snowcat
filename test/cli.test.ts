@@ -603,15 +603,16 @@ test("operator CLI attach-artifact verifies against GitHub first: refuses anothe
   const path = join(directory, "queue.db");
   const queue = new QueueStore(path);
   queue.setRepositoryEnabled("frostyard/updex", true);
-  // A local-only follow-up (no open-pr) completed with no artifacts; the operator opened the PR by hand.
+  // An item that required no pull request (ADR-0069) completed with no artifacts; the operator opened the PR by hand.
   const seed = queue.enqueueSeed({
     repository: "frostyard/updex",
     kind: "quality-implementation",
     objective: "Make the merged-state signal instance-scoped.",
-    instructions: "Implement on a local branch; do not open a pull request.",
+    instructions: "Implement on a local branch; the operator opens the pull request.",
     acceptanceCriteria: ["Tests pass."],
-    allowedActions: ["read", "write", "run-tests"],
+    allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "none",
     createdBy: "operator:test",
   });
   const lease = queue.claim({ worker: "claude:updex:local", repository: "frostyard/updex" })!;

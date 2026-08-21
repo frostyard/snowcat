@@ -599,6 +599,7 @@ function item(overrides: Partial<ObservableWorkItem> = {}): ObservableWorkItem {
     acceptanceCriteria: ["Done."],
     allowedActions: ["read", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "none",
     priority: 0,
     status: "queued",
     createdBy: "operator:test",

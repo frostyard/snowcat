@@ -83,6 +83,7 @@ Docs are split by the question they answer:
 - [0066 — Sequence project slices on observed predecessor delivery](adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)
 - [0067 — Adjudicate description blockers by a human](adr/0067-adjudicate-description-blockers-by-a-human.md)
 - [0068 — Alias the ACMM contributing guide](adr/0068-alias-the-acmm-contributing-guide.md)
+- [0069 — Declare the required artifact on every work item](adr/0069-declare-the-required-artifact-on-every-work-item.md)
 
 ### Organization decisions
 

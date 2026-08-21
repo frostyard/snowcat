@@ -9,7 +9,12 @@ Produce an issue that `npm run queue -- import-issues <owner/repo> --label
 <label>` turns into one `issue-resolution` item a worker can claim, finish in
 one lease, and complete with evidence Snowcat can verify. Done looks like: a
 worker reads only the issue, does exactly one thing, opens one conventional
-pull request, and `complete_work` is accepted on the first try.
+pull request, and `complete_work` is accepted on the first try. An imported
+issue's item requires that pull request
+([ADR-0069](../../../docs/adr/0069-declare-the-required-artifact-on-every-work-item.md)):
+completion without one is refused, so an issue that is really a question or
+an investigation does not belong on the queue label — file it for discovery
+or answer it in the thread.
 
 The worker sees the title as the objective and the body as instructions,
 quoted as untrusted context ([work queue spec](../../../docs/specs/work-queue.md)

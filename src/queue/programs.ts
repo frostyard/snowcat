@@ -35,7 +35,9 @@ const WEEK = 7 * DAY;
  * value Snowcat implements (Core's enum may be wider; ADR-0039). A program is a read-only discovery root that finds exactly one
  * evidence-backed thing and proposes at most one bounded child; the operator
  * admits; a worker lands it through one pull request; Snowcat verifies the
- * artifact. Entries differ in what they look at (`discovery`), how often a
+ * artifact. The child says so itself: a proposing worker declares
+ * `requiredArtifact: "pull-request"` on it (ADR-0069), and the store refuses
+ * a change child that cannot deliver one. Entries differ in what they look at (`discovery`), how often a
  * no-finding answer suppresses re-asking (`cooldownSeconds`), how wide a child
  * may be (`childCeiling`), and how children enter the queue (`childAdmission`,
  * always `proposed` today). Adding a program is one entry here plus its Core
