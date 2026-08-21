@@ -2,6 +2,7 @@ import { html, raw, type SafeHtml } from "./html.ts";
 import { admissionForm, exitForm } from "./forms.ts";
 import { clock, document, itemPath, shell, type PageContext } from "./pages.ts";
 import {
+  progressPath,
   progressStages,
   progressSummaryBuckets,
   type ProgressData,
@@ -31,6 +32,9 @@ const SUMMARY_LABELS: Record<ProgressSummaryBucket, string> = {
 };
 
 export function progressPage(context: PageContext, data: ProgressData): string {
+  const filterRepository = data.filter.repository;
+  const view = data.filter.view;
+  const chipTarget = progressPath({ ...(filterRepository ? { repository: filterRepository } : {}), view: "all" });
   const body = html`
     ${raw(`<!--
 THESIS: One horizontal lifecycle makes every item’s present state and next wait legible; it refuses a status-card dashboard.
@@ -42,15 +46,40 @@ FORM: An operations timeline extended from the incumbent queue shell; no new vis
     <div class="fl-progress-summary" aria-label="Progress summary">
       ${progressSummaryBuckets.map(
         (bucket) =>
-          html`<span data-progress-summary-bucket="${bucket}"><strong>${data.summary[bucket]}</strong> ${SUMMARY_LABELS[bucket]}</span>`,
+          html`<a data-progress-summary-bucket="${bucket}" href="${chipTarget}"><strong>${data.summary[bucket]}</strong> ${SUMMARY_LABELS[bucket]}</a>`,
       )}
-      <span data-progress-summary-bucket="attention"><strong>${data.attention.length}</strong> need attention</span>
+      <a data-progress-summary-bucket="attention" href="${chipTarget}"><strong>${data.attention.length}</strong> need attention</a>
+    </div>
+    <div class="fl-progress-filters">
+      <nav class="fl-progress-tabs" aria-label="Filter by repository">
+        <a class="ph-nav-link${filterRepository === undefined ? " active" : ""}"${filterRepository === undefined ? html` aria-current="page"` : ""} href="${progressPath({ view })}">All</a>
+        ${context.repositories.map((repository) => {
+          const current = filterRepository !== undefined && repository.slug.toLowerCase() === filterRepository.toLowerCase();
+          return html`<a class="ph-nav-link${current ? " active" : ""}"${current ? html` aria-current="page"` : ""} href="${progressPath({ repository: repository.slug, view })}">${repository.slug}</a>`;
+        })}
+      </nav>
+      <nav class="fl-progress-views" aria-label="Choose a view">
+        <a class="ph-nav-link${view === "all" ? " active" : ""}"${view === "all" ? html` aria-current="page"` : ""} href="${progressPath({ ...(filterRepository ? { repository: filterRepository } : {}), view: "all" })}">Lanes</a>
+        <a class="ph-nav-link${view === "active" ? " active" : ""}"${view === "active" ? html` aria-current="page"` : ""} href="${progressPath({ ...(filterRepository ? { repository: filterRepository } : {}), view: "active" })}">Working now</a>
+      </nav>
     </div>
     ${
       data.truncated.length > 0
-        ? html`<div class="fl-error">Showing at most 100 ${data.truncated.join(", ")} items — the most recently updated ones for completed and cancelled. Use the CLI for the full history.</div>`
+        ? html`<div class="fl-error">Showing at most 100 ${data.truncated.join(", ")} items — the most recently updated ones for completed and cancelled, and the first 20 claimable for up next. Use the CLI for the full history.</div>`
         : ""
     }
+    ${view === "active" ? activeView(data) : lanesView(data)}
+  `;
+  return document(
+    "Progress · Snowcat",
+    shell(context, { title: "Progress", eyebrow: "snowcat · delivery progress", heading: "Progress", active: "progress", refresh: true, ...(filterRepository ? { repository: filterRepository } : {}) }, body),
+    { refresh: true, live: { page: "/progress", partials: [], reload: true } },
+  );
+}
+
+/** The full lifecycle: the attention group, then a lane per repository. */
+function lanesView(data: ProgressData): SafeHtml {
+  return html`
     ${
       data.attention.length > 0
         ? progressGroup("Needs attention", "amber, red, and grey stops · newest first", data.attention, data.asOf, "attention")
@@ -62,11 +91,49 @@ FORM: An operations timeline extended from the incumbent queue shell; no new vis
         : data.repositories.map((group) => progressGroup(group.repository, `${group.rows.length} current`, group.rows, data.asOf))
     }
   `;
-  return document(
-    "Progress · Snowcat",
-    shell(context, { title: "Progress", eyebrow: "snowcat · delivery progress", heading: "Progress", active: "progress", refresh: true }, body),
-    { refresh: true, live: { page: "/progress", partials: [], reload: true } },
-  );
+}
+
+/** What is in motion and what is next: two flat groups, no repository lanes. */
+function activeView(data: ProgressData): SafeHtml {
+  const repositories = new Set(data.workingNow.map((row) => row.repository)).size;
+  return html`
+    <section class="fl-group fl-active-group" id="working-now">
+      <div class="fl-group-head"><h2>Working now</h2><span>${data.workingNow.length} ${data.workingNow.length === 1 ? "worker" : "workers"} active across ${repositories} ${repositories === 1 ? "repository" : "repositories"}</span></div>
+      ${
+        data.workingNow.length === 0
+          ? html`<p class="fl-empty">No workers hold a live lease right now.</p>`
+          : html`<div class="fl-active-rows">${data.workingNow.map((row) => activeRow(row, data.asOf))}</div>`
+      }
+    </section>
+    <section class="fl-group fl-active-group" id="up-next">
+      <div class="fl-group-head"><h2>Up next</h2><span>next ${data.upNext.length} claimable</span></div>
+      ${
+        data.upNext.length === 0
+          ? html`<p class="fl-empty">Nothing is waiting to be claimed.</p>`
+          : html`<div class="fl-active-rows">${data.upNext.map((row) => upNextRow(row))}</div>`
+      }
+    </section>
+  `;
+}
+
+/** A flat active row: who holds the lease, where, what kind, which stage, and how long it has been in it. */
+function activeRow(row: ProgressRow, asOf: string): SafeHtml {
+  const title = row.item ? html`<a href="${itemPath(row.item.id)}">${row.title}</a>` : html`<span>${row.title}</span>`;
+  const enteredAt = row.enteredAt[row.stage];
+  return html`<article class="fl-active-row" data-progress-key="${row.key}" data-progress-stage="${row.stage}">
+    <div class="fl-active-name"><strong>${title}</strong><small>${row.leaseOwner ?? "unknown worker"} · ${row.repository} · ${
+      row.item ? row.item.kind : "labeled issue"
+    } · ${LABELS[row.stage]}</small></div>
+    ${enteredAt ? html`<small class="fl-waiting-chip" title="Entered at ${enteredAt}">in this stage for ${stageDuration(enteredAt, asOf)}</small>` : ""}
+  </article>`;
+}
+
+/** A flat up-next row: the claimable item, where, and what kind. */
+function upNextRow(row: ProgressRow): SafeHtml {
+  const title = row.item ? html`<a href="${itemPath(row.item.id)}">${row.title}</a>` : html`<span>${row.title}</span>`;
+  return html`<article class="fl-active-row" data-progress-key="${row.key}" data-progress-stage="${row.stage}">
+    <div class="fl-active-name"><strong>${title}</strong><small>${row.repository} · ${row.item ? row.item.kind : "labeled issue"}</small></div>
+  </article>`;
 }
 
 function progressGroup(title: string, caption: string, rows: ProgressRow[], asOf: string, id?: string): SafeHtml {

@@ -198,11 +198,24 @@ export function createSurfaceApp(options: SurfaceOptions): Hono<SurfaceEnv> {
     page((stores, enrollments, chrome) => new Response(repositoriesPage(chrome, readRepositoryIndex(stores.queue, enrollments)), htmlHeaders())),
   );
 
-  app.get(
-    "/progress",
-    requireConfigured,
-    requireSession,
-    page((stores, _enrollments, chrome) => new Response(progressPage(chrome, readProgress(stores.queue)), htmlHeaders())),
+  app.get("/progress", requireConfigured, requireSession, (context) =>
+    page((stores, enrollments, chrome) => {
+      const repository = context.req.query("repository");
+      const view = context.req.query("view") === "active" ? "active" : "all";
+      const data = readProgress(
+        stores.queue,
+        new Date(),
+        {
+          ...(repository !== undefined && repository !== "" ? { repository } : {}),
+          view,
+        },
+        enrollments,
+      );
+      if (!data) {
+        return new Response(notFoundPage(chrome, `No repository ${repository}: it is neither opted in to the queue nor declared in the control plane.`), htmlHeaders(404));
+      }
+      return new Response(progressPage(chrome, data), htmlHeaders());
+    })(context),
   );
 
   // MCP tokens (ADR-0063): a member sees and manages their own; the local
