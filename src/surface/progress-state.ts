@@ -154,7 +154,11 @@ export function readProgress(queue: QueueStore, now: Date = new Date()): Progres
   }
 
   rows.sort(compareRows);
-  const attention = rows.filter((row) => row.badge?.tone === "amber" || row.badge?.tone === "red");
+  // A badge is a stop, in every tone: amber and red need a decision, and the
+  // grey `unverified` stop is the artifact GitHub could not confirm, which the
+  // operator has to re-check. Selecting on the badge itself keeps this group
+  // exactly what the docs promise it is.
+  const attention = rows.filter((row) => row.badge !== undefined);
   const attentionKeys = new Set(attention.map((row) => row.key));
   const byRepository = new Map<string, ProgressRow[]>();
   for (const row of rows) {

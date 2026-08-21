@@ -53,7 +53,7 @@ FORM: An operations timeline extended from the incumbent queue shell; no new vis
     }
     ${
       data.attention.length > 0
-        ? progressGroup("Needs attention", "amber and red stops · newest first", data.attention, data.asOf, "attention")
+        ? progressGroup("Needs attention", "amber, red, and grey stops · newest first", data.attention, data.asOf, "attention")
         : ""
     }
     ${

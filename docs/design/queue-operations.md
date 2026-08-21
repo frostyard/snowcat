@@ -507,7 +507,7 @@ Five more views sit behind the same session:
 - `/progress` — every live item as one lifecycle strip, grouped by repository
   and preceded by the awaiting-import, proposed, queued, working, in-review,
   awaiting-merge, and needs-attention counts. **Needs attention** is the pinned
-  group at the top and collects exactly the amber and red stops: a blocked
+  group at the top and collects every stop, in all three tones: a blocked
   item, a claimed item whose lease expired without a reclaim, a queued item
   whose predecessor chain loops back on itself (`predecessor cycle`), a pull
   request closed without merge, a review stuck at round three needing a human

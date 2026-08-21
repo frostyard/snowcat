@@ -446,6 +446,36 @@ test("a claimed item whose lease expired is an amber stop in the attention group
   );
 });
 
+test("a completed item whose pull request GitHub could not verify is a grey stop in the attention group", async () => {
+  const queue = new QueueStore(":memory:", () => NOW);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled(REPOSITORY, true);
+
+  const unverified = completeWithPullRequest(queue, REPOSITORY, "Waiting for GitHub", "unverified");
+
+  const data = readProgress(queue, NOW);
+  const row = data.attention.find((candidate) => candidate.item?.id === unverified.id);
+  assert.ok(row, "the unverified artifact lands in the attention group the docs promise collects it");
+  assert.equal(row.stage, "pr-open");
+  assert.equal(row.waiting, "waiting for validation");
+  assert.deepEqual(row.badge, { label: "unverified", reason: "GitHub unavailable", tone: "grey" });
+  assert.equal(
+    data.repositories.flatMap((group) => group.rows).some((candidate) => candidate.item?.id === unverified.id),
+    false,
+    "an attention row is not repeated in its repository group",
+  );
+
+  const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue }) });
+  const response = await app.request("/progress", { headers: { Cookie: `snowcat_session=${sessionDigest(TOKEN)}` } });
+  assert.equal(response.status, 200);
+  const body = await response.text();
+  const attention = section(body, "attention");
+  assert.match(attention, /Waiting for GitHub/);
+  assert.match(attention, /class="fl-progress-badge grey"[^>]*>unverified<\/span>/);
+  assert.match(attention, /amber, red, and grey stops/);
+  assert.equal(summaryCount(body, "attention"), 1);
+});
+
 test("only a live-lease working row counts toward summary.working beside a completed discovery and a cancellation", () => {
   const queue = new QueueStore(":memory:", () => NOW);
   test.after(() => queue.close());
