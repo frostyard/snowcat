@@ -179,7 +179,7 @@ function decodeMcpToken(row: Row): McpTokenRecord {
     client: String(row.client),
     tokenHash: String(row.token_hash),
     createdAt: String(row.created_at),
-    ...(row.kinds_json == null ? {} : { kinds: JSON.parse(String(row.kinds_json)) as string[] }),
+    ...(row.kinds_json == null ? {} : { kinds: parseJson<string[]>(row.kinds_json, []) }),
     ...(row.last_used_at == null ? {} : { lastUsedAt: String(row.last_used_at) }),
     ...(row.revoked_at == null ? {} : { revokedAt: String(row.revoked_at) }),
     ...(row.revoked_by == null ? {} : { revokedBy: String(row.revoked_by) }),
@@ -657,8 +657,8 @@ export class QueueStore {
     validateRepository(repository);
     const row = this.db.prepare("SELECT unreported_pull_requests_json FROM repositories WHERE slug = ?").get(repository) as Row | undefined;
     const raw = row?.unreported_pull_requests_json;
-    if (typeof raw !== "string") return undefined;
-    const parsed = JSON.parse(raw) as UnreportedPullRequestObservation;
+    const parsed = parseJson<UnreportedPullRequestObservation | undefined>(raw, undefined);
+    if (parsed === undefined) return undefined;
     return { observedAt: String(parsed.observedAt), pullRequests: parsed.pullRequests ?? [] };
   }
 
@@ -703,8 +703,8 @@ export class QueueStore {
     validateRepository(repository);
     const row = this.db.prepare("SELECT labeled_issue_observations_json FROM repositories WHERE slug = ?").get(repository) as Row | undefined;
     const raw = row?.labeled_issue_observations_json;
-    if (typeof raw !== "string") return undefined;
-    const parsed = JSON.parse(raw) as LabeledIssueObservations;
+    const parsed = parseJson<LabeledIssueObservations | undefined>(raw, undefined);
+    if (parsed === undefined) return undefined;
     return { issues: parsed.issues ?? [], truncated: parsed.truncated === true };
   }
 
@@ -1357,7 +1357,7 @@ export class QueueStore {
         count: Number(row.count),
       })),
       events: eventRows.map((row) => {
-        const result = row.result_json == null ? undefined : (JSON.parse(String(row.result_json)) as WorkResult);
+        const result = parseJson<WorkResult | undefined>(row.result_json, undefined);
         return {
           type: String(row.event_type),
           repository: String(row.repository),
