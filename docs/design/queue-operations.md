@@ -1329,7 +1329,7 @@ token becomes per-operator auth at the same time. Until then, do not expose
 The recommended v1 host is a small, dedicated Incus **container** — not the
 operator's daily driver — so a laptop reboot never stalls the feeder, the
 tunnel has a stable place to live, and the whole thing can be snapshotted,
-moved, or rebuilt from three files in [`deploy/incus/`](../../deploy/incus/).
+moved, or rebuilt from the files in [`deploy/incus/`](../../deploy/incus/).
 Anything else with systemd, Node 24, and `cloudflared` works the same way;
 the instance is only the reproducible shape.
 
