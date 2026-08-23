@@ -853,6 +853,40 @@ one out of the pass. It
 records `artifact.verified` events and leaves anything alone while GitHub is
 unavailable.
 
+**Undelivered work waits on a human** ([spec rule 68](../specs/work-queue.md),
+[reality report finding 17](reality.md)). The review gate's last automated
+act is marking a draft ready; nothing merges. A completed item whose
+`delivery` still reads `open` is work somebody finished that nobody
+delivered. See what is sitting, ready rows first:
+
+```bash
+npm run --silent queue -- deliveries [--repository <owner/repo>]
+```
+
+`ready: true` rows are waiting on you: an open non-draft pull request (the
+gate passed it, or the repository is not gated) or a draft release whose tag
+is unpublished. Draft pull requests in a gated repository are still the
+gate's, not yours.
+
+Every frostyard repository merges through a **merge queue** (core ADR-0042;
+CI re-runs on `merge_group` against the queue tip). `gh pr merge` does NOT
+work — it calls the auto-merge API, which the contract disables. Enqueue
+with GraphQL instead:
+
+```bash
+n=<pull request number>
+id=$(gh api graphql -f query="{repository(owner:\"frostyard\",name:\"<repo>\"){pullRequest(number:$n){id}}}" --jq .data.repository.pullRequest.id)
+gh api graphql -f query="mutation{enqueuePullRequest(input:{pullRequestId:\"$id\"}){mergeQueueEntry{position state}}}"
+```
+
+GitHub rebuilds the entry on the queue tip, runs the required checks, and
+merges; no update-branch is needed. The merge lands back in the queue's
+`delivery` on `snowcat-verify.timer`'s next pass (at most 2 minutes), which
+is also what releases any successor slice waiting on it. Publishing a draft
+release (`gh release edit <tag> --draft=false`) is the same shape for
+`release-needed` work. Snowcat itself never merges or publishes — this is
+deliberately the operator's last mile.
+
 **Pull-request cure** ([ADR-0061](../adr/0061-cure-pull-requests-as-bounded-per-head-work.md)).
 The same pass then looks at every open pull request a completed item reported
 — its `mergeable_state`, the check runs on its head, its reviews, its review
