@@ -25,13 +25,18 @@ const REPORT = "coverage/report.txt";
 // or weakening the stronger runtime's floor.
 const NODE_MAJOR = Number(process.versions.node.split(".")[0]);
 const FLOOR_PROFILES = {
-  // Node 24: control 27.15%/2.37%, queue 52.66%/17.14%.
+  // Node 24: control now observed at 32.50%-33.43% lines / 20.71%-20.81%
+  // functions across repeated runs (up from the original 27.15%/2.37%
+  // baseline as more tests came to exercise it); ratchet to the lower
+  // unchanged-code baseline. Queue is stable at 52.66%/17.14%.
   24: {
-    "src/control/store.ts": { lines: 27, functions: 2 },
+    "src/control/store.ts": { lines: 30, functions: 18 },
     "src/queue/store.ts": { lines: 52, functions: 17 },
   },
   // Node 26: control varies by environment from 27.15%/2.37% to
-  // 32.50%/20.81%; ratchet to the lower unchanged-code baseline. Queue is
+  // 32.50%/20.81% — unlike Node 24, CI has reproduced the low end
+  // non-flakily on this runtime, so the floor stays ratcheted to it rather
+  // than to the newer tests' typical (but not guaranteed) result. Queue is
   // stable at 52.66%/17.14%.
   26: {
     "src/control/store.ts": { lines: 27, functions: 2 },
