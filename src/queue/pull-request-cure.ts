@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { githubApiJson, githubGraphql, type GitHubFetch } from "../repository/github-api.ts";
+import { lintPullRequestTitle } from "./pr-title-lint.ts";
 import type { QueueStore } from "./store.ts";
 import type { AllowedAction, PullRequestCure, PullRequestDecay, SeedWorkInput, WorkArtifact, WorkItem } from "./types.ts";
 
@@ -166,6 +167,7 @@ export async function inspectPullRequestHealth(repository: string, url: string, 
     if (health.failingChecks.length > 0) health.decay.push("failing-checks");
     if (health.changesRequested) health.decay.push("changes-requested");
     if (health.unresolvedThreads !== undefined && health.unresolvedThreads > 0) health.decay.push("unresolved-threads");
+    if (!lintPullRequestTitle(title).ok) health.decay.push("bad-title");
   }
   return { kind: "health", health };
 }
@@ -484,6 +486,8 @@ function describeDecay(reason: PullRequestDecay, health: Pick<PullRequestHealth,
       return "a reviewer's latest review requests changes";
     case "unresolved-threads":
       return `${health.unresolvedThreads ?? 0} review threads have no reply and are not outdated`;
+    case "bad-title":
+      return "the title fails the repository's Conventional Commits title lint";
   }
 }
 

@@ -216,6 +216,25 @@ test("patch identity ignores hunk headers and context but sees a changed line; d
   assert.equal(down.kind, "unavailable");
 });
 
+test("a title that fails the Conventional Commits lint is bad-title decay; a conforming title is not, and a draft's bad title is not decay", async () => {
+  const badTitle = await inspectPullRequestHealth(REPOSITORY, PR_URL, { fetcher: apiFetcher(routesFor({ pull: pullRequest({ title: "add title lint" }) })).fetcher });
+  assert.equal(badTitle.kind, "health");
+  if (badTitle.kind !== "health") return;
+  assert.deepEqual(badTitle.health.decay, ["bad-title"]);
+  const description = cureRootDefinition(REPOSITORY, badTitle.health, "operator:test");
+  assert.match(description.instructions, /Conventional Commits title lint/);
+
+  const conforming = await inspectPullRequestHealth(REPOSITORY, PR_URL, { fetcher: apiFetcher(routesFor({})).fetcher });
+  assert.equal(conforming.kind, "health");
+  if (conforming.kind === "health") assert.deepEqual(conforming.health.decay, []);
+
+  const draftBadTitle = await inspectPullRequestHealth(REPOSITORY, PR_URL, {
+    fetcher: apiFetcher(routesFor({ pull: pullRequest({ title: "add title lint", draft: true }) })).fetcher,
+  });
+  assert.equal(draftBadTitle.kind, "health");
+  if (draftBadTitle.kind === "health") assert.deepEqual(draftBadTitle.health.decay, []);
+});
+
 test("unresolved, non-outdated review threads are decay read through GraphQL; the signal fails open when GraphQL cannot answer", async () => {
   // Two unresolved, non-outdated threads on an otherwise clean pull request: the one decay.
   const unanswered = apiFetcher(routesFor({ threads: [{ resolved: false, outdated: false }, { resolved: false, outdated: false, author: "bob" }] }));

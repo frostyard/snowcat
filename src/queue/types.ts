@@ -174,7 +174,7 @@ export interface PullRequestCure {
   originItemId?: string;
 }
 
-export const pullRequestDecays = ["behind", "dirty", "failing-checks", "changes-requested", "unresolved-threads"] as const;
+export const pullRequestDecays = ["behind", "dirty", "failing-checks", "changes-requested", "unresolved-threads", "bad-title"] as const;
 export type PullRequestDecay = (typeof pullRequestDecays)[number];
 
 /** The decision of one bounded pull-request review round (ADR-0029, ADR-0065). */
