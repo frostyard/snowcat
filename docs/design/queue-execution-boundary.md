@@ -288,6 +288,7 @@ operator step the guard cannot perform.
 ## References
 
 - Overview for the team: [how Snowcat works](how-snowcat-works.md)
+- Cross-layer discovery: [policy-to-execution reality](reality.md)
 - Rationale:
   [ADR-0003](../adr/0003-separate-work-coordination-from-execution.md) and
   [ADR-0004](../adr/0004-keep-models-outside-the-control-path.md), plus
