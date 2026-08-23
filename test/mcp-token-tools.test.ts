@@ -168,7 +168,8 @@ test("an observation-only token lists and reads over HTTP but cannot call any mu
     { "cockpit observer": ["get_work", "list_work"], "claim only": ["claim_work", "list_work", "release_work"] },
   );
   assert.ok(inventory.every((token) => token.tokenHash === ""));
-  assert.ok(!JSON.stringify(inventory).includes(observer.token.split("_")[2]!), "the secret is not in the inventory");
+  const observerSecret = observer.token.split("_").slice(2).join("_");
+  assert.ok(!JSON.stringify(inventory).includes(observerSecret), "the secret is not in the inventory");
   assert.equal(queue.verifyMcpToken(observer.token)!.tools!.join(","), "get_work,list_work", "verification returns the grant with the record");
 });
 
