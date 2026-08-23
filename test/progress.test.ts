@@ -248,7 +248,7 @@ test("the session-guarded progress page renders every stage, folds review satell
     "awaiting-import": 1,
     proposed: 1,
     queued: 1,
-    working: 2,
+    working: 1,
     "in-review": 2,
     "awaiting-merge": 1,
   });
@@ -438,6 +438,7 @@ test("a claimed item whose lease expired is an amber stop in the attention group
   assert.ok(row, "the expired lease lands in the attention group");
   assert.equal(row.stage, "working");
   assert.equal(row.active, false);
+  assert.equal(data.summary.working, 0, "an expired lease is attention, not live work");
   assert.deepEqual(row.badge, { label: "lease expired", reason: "awaiting reclaim", tone: "amber" });
   assert.equal(
     data.repositories.flatMap((group) => group.rows).some((candidate) => candidate.item?.id === stale.id),
@@ -477,7 +478,8 @@ test("a completed item whose pull request GitHub could not verify is a grey stop
 });
 
 test("only a live-lease working row counts toward summary.working beside a completed discovery and a cancellation", () => {
-  const queue = new QueueStore(":memory:", () => NOW);
+  let clock = NOW;
+  const queue = new QueueStore(":memory:", () => clock);
   test.after(() => queue.close());
   queue.setRepositoryEnabled(REPOSITORY, true);
 
@@ -486,11 +488,17 @@ test("only a live-lease working row counts toward summary.working beside a compl
   completeDiscovery(queue, "Delivered discovery");
   cancelledItem(queue, "Cancelled implementation");
 
+  clock = new Date(NOW.getTime() - 4 * 60 * 60 * 1000);
+  const expired = queue.enqueueSeed(definition("Expired implementation", "expired-implementation"));
+  queue.claim({ worker: "worker:expired", repository: REPOSITORY, kinds: [expired.kind], leaseSeconds: 3600 });
+  clock = NOW;
+
   const data = readProgress(queue, NOW)!;
   assert.equal(data.summary.working, 1);
   const workingRows = data.repositories.flatMap((group) => group.rows).filter((row) => row.stage === "working");
   assert.deepEqual(workingRows.map((row) => row.item?.id), [working.id]);
-  assert.equal(data.total, 2, "the delivered discovery is still a row; the cancellation is not");
+  assert.ok(data.attention.some((row) => row.item?.id === expired.id), "the expired row is retained in attention");
+  assert.equal(data.total, 3, "active, delivered, and expired rows remain; cancellation does not");
 });
 
 /** A completed discovery root with no artifacts: delivered by its proposals. */
@@ -632,6 +640,9 @@ function summaryCount(body: string, bucket: ProgressSummaryBucket | "attention")
 }
 
 function renderedBucketCount(body: string, bucket: ProgressSummaryBucket): number {
+  if (bucket === "working") {
+    return body.match(/<li class="current active"[^>]*><span class="fl-stage-mark"[^>]*><\/span><b>Working<\/b>/g)?.length ?? 0;
+  }
   const stages =
     bucket === "in-review"
       ? ["pr-open", "review"]

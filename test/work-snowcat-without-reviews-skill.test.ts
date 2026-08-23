@@ -10,7 +10,9 @@ test("the no-review queue skill filters before one claim and delegates the lifec
   const skill = readFileSync(skillPath, "utf8");
   const normalized = skill.replace(/\s+/g, " ");
   assert.match(skill, /^---\nname: work-snowcat-without-reviews\ndescription: Use when /);
-  assert.match(normalized, /`list_work` with `status: "queued"`, `limit: 100`/);
+  assert.match(normalized, /`list_work` exactly once with `status: "queued"`, `limit: 100`/);
+  assert.match(normalized, /status: "claimed"/);
+  assert.match(normalized, /newest attempt outcome is exactly `expired`/);
   assert.match(normalized, /excluding only the exact kind `pr-review`/);
   assert.match(normalized, /Do not use a fixed kind whitelist/);
   assert.match(normalized, /Call `claim_work` exactly once with `kinds` set to that array/);

@@ -80,9 +80,11 @@ root delivers by proposing children whose own rows are already on the page.
 Completed merged, published, and delivered-discovery items remain visible for
 seven days.
 The summary counts are derived from those same projected rows without another
-store read; PR-open and review-stage rows share the in-review bucket, and
-merged rows remain visible in their strips but are outside the in-flight
-summary.
+store read; PR-open and review-stage rows share the in-review bucket, only a
+working-stage row with a live lease enters the working count, and merged rows
+remain visible in their strips but are outside the in-flight summary. Expired,
+blocked, and completed-without-delivery working-stage stops contribute only to
+needs attention, never to the working count.
 Each visible item's newest 100 ledger events provide bounded transition
 timestamps; the projection carries the latest entry into every reached stage,
 including a folded review round, and uses the render's single as-of instant for

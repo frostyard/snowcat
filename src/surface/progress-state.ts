@@ -274,7 +274,7 @@ function summarizeProgress(rows: ProgressRow[]): Record<ProgressSummaryBucket, n
         : row.stage === "merged"
           ? undefined
           : row.stage;
-    if (bucket !== undefined) summary[bucket] += 1;
+    if (bucket !== undefined && (bucket !== "working" || row.active)) summary[bucket] += 1;
   }
   return summary;
 }
