@@ -1172,7 +1172,8 @@ MCP (rule 41).
 - Product: [maintenance fleet PRD](../prd/agent-fleet.md)
 - Context: [queue execution boundary](../design/queue-execution-boundary.md),
   the [operations runbook](../design/queue-operations.md), and the planned
-  [operator surface](../design/operator-surface.md)
+  [operator surface](../design/operator-surface.md); known cross-layer gaps are
+  recorded in [policy-to-execution reality](../design/reality.md)
 - Delivery: [queue vertical spike](../plans/queue-vertical-spike.md)
 - Review gate: [ADR-0065](../adr/0065-gate-worker-pull-requests-behind-bounded-review.md)
   implementing [ADR-0029](../adr/0029-bound-adversarial-review.md)

@@ -316,6 +316,7 @@ hands on the host. Status as of 2026-08-19:
 
 - Implements: [work queue](../specs/work-queue.md) and
   [queue execution boundary](../design/queue-execution-boundary.md)
+- Post-recovery discovery: [policy-to-execution reality](../design/reality.md)
 - Decision: [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md)
 - Re-sequences: [product foundation roadmap](product-foundation-roadmap.md)
 - Eligibility source: [repository enrollment](../design/repository-enrollment.md)

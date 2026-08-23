@@ -101,6 +101,7 @@ Docs are split by the question they answer:
 ### Design
 
 - [How Snowcat works](design/how-snowcat-works.md) — start here: the team-facing map of core, Snowcat, repositories, and workers
+- [Reality: policy-to-execution alignment](design/reality.md) — discovery report on cross-repository contract seams that obstruct correct workers
 - [Queue execution boundary](design/queue-execution-boundary.md)
 - [Control-plane kernel](design/control-plane-kernel.md)
 - [Core snapshot ingestion](design/core-snapshot-ingestion.md)

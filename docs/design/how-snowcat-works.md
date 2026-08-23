@@ -225,7 +225,8 @@ verification in between that neither decision has to be re-litigated.
 - Where it fits: [queue execution boundary](queue-execution-boundary.md),
   [repository enrollment](repository-enrollment.md),
   [core snapshot ingestion](core-snapshot-ingestion.md),
-  [operator surface](operator-surface.md)
+  [operator surface](operator-surface.md), and the cross-layer
+  [policy-to-execution reality audit](reality.md)
 - Runbook: [queue operations](queue-operations.md)
 - Built in: [recovery plan](../plans/recover.md) and the
   [maintenance programs plan](../plans/maintenance-programs.md)
