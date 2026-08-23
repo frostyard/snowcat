@@ -953,3 +953,80 @@ test("the unreported listing is bounded: more than three pages is reported trunc
   assert.equal(new Set(swept.unreported.map((pull) => pull.url)).size, 100);
   assert.equal(queue.repositoryUnreportedPullRequests(REPOSITORY)?.pullRequests.length, 100);
 });
+
+test("ADR-0071: a block on only already-adjudicated description blockers takes the pass consequence, round three included", async () => {
+  const queue = await newQueue("review-outstanding-description");
+  completedWithDraftPr(queue);
+  queue.setRepositoryReviewGate(REPOSITORY, true);
+  const sweep = (head: string) => reviewPullRequests(queue, { fetcher: apiFetcher(routesFor({ head })).fetcher, clock });
+  const description = blocker(`${DESCRIPTION_BLOCKER_PREFIX}missing-risk-classification`, { location: "pull request description" });
+
+  await sweep(HEAD_A);
+  await completeReview(queue, { decision: "block", blockers: [blocker("defect:catalog/repo.go:import"), description], advisories: [] });
+  const fix1 = await sweep(HEAD_A);
+  assert.equal(fix1.enqueued[0]?.kind, REVIEW_FIX_KIND);
+  completeFix(queue);
+
+  await sweep(HEAD_B);
+  await completeReview(queue, { decision: "block", blockers: [blocker("defect:catalog/repo.go:nil-check"), description], advisories: [] });
+  const fix2 = await sweep(HEAD_B);
+  assert.equal(fix2.enqueued[0]?.kind, REVIEW_FIX_KIND);
+  completeFix(queue);
+
+  await sweep(HEAD_C);
+  const round3 = await completeReview(queue, { decision: "block", blockers: [description], advisories: [] });
+  const swept = await sweep(HEAD_C);
+  // Tree clean and the one blocker already with a human since round 1:
+  // the pass consequence, evaluated before the round budget — never
+  // "blocked at round 3" over a clean tree.
+  assert.deepEqual(swept.enqueued, []);
+  assert.deepEqual(swept.readyToMark, [{ url: PR_URL, headSha: HEAD_C, reviewItemId: round3.id }]);
+  assert.equal(swept.needsHuman.length, 1, "the description blocker still rides to adjudication");
+  assert.match(swept.needsHuman[0]!.reason, /description blocker/);
+  assert.doesNotMatch(swept.needsHuman[0]!.reason, /blocked at round 3/);
+
+  // The board mirrors the sweep: ready to mark, the adjudication note alongside.
+  const state = deriveReviewState(queue.pullRequestReviewItems(REPOSITORY, PR_URL), HEAD_C, true);
+  assert.equal(state?.readyToMark, true);
+  assert.equal(state?.needsHuman, true, "the outstanding description blocker stays visible");
+  assert.match(state?.reason ?? "", /description blocker/);
+
+  // Idempotent while the head stays a draft.
+  const again = await sweep(HEAD_C);
+  assert.deepEqual(again.enqueued, []);
+  assert.equal(again.readyToMark.length, 1);
+});
+
+test("ADR-0071: a description blocker raised for the first time still blocks — only prior-round fingerprints pass", async () => {
+  const queue = await newQueue("review-new-description");
+  completedWithDraftPr(queue);
+  queue.setRepositoryReviewGate(REPOSITORY, true);
+  const sweep = (head: string) => reviewPullRequests(queue, { fetcher: apiFetcher(routesFor({ head })).fetcher, clock });
+
+  await sweep(HEAD_A);
+  await completeReview(queue, {
+    decision: "block",
+    blockers: [blocker("defect:catalog/repo.go:import"), blocker(`${DESCRIPTION_BLOCKER_PREFIX}risk-tier`, { location: "pull request description" })],
+    advisories: [],
+  });
+  const fix1 = await sweep(HEAD_A);
+  assert.equal(fix1.enqueued[0]?.kind, REVIEW_FIX_KIND);
+  completeFix(queue);
+
+  await sweep(HEAD_B);
+  // Round 2 blocks on a DIFFERENT description defect: a new finding, not an
+  // outstanding one — no pass, no fix, straight to adjudication.
+  await completeReview(queue, {
+    decision: "block",
+    blockers: [blocker(`${DESCRIPTION_BLOCKER_PREFIX}evidence-missing`, { location: "pull request description" })],
+    advisories: [],
+  });
+  const swept = await sweep(HEAD_B);
+  assert.deepEqual(swept.readyToMark, []);
+  assert.deepEqual(swept.markedReady, []);
+  assert.deepEqual(swept.enqueued, [], "a description-only verdict still mints no fix");
+  assert.equal(swept.needsHuman.length, 1);
+  const state = deriveReviewState(queue.pullRequestReviewItems(REPOSITORY, PR_URL), HEAD_B, true);
+  assert.equal(state?.readyToMark, false);
+  assert.equal(state?.needsHuman, true);
+});

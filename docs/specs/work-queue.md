@@ -840,7 +840,14 @@ MCP (rule 41).
     fingerprint prefix (ADR-0067): a blocker fingerprinted `contract:pr-body:`
     is a description blocker, named because its only cure is an edit to the
     pull request's description, not the diff; every other blocker is a tree
-    blocker. A `block` at a round below three whose tree blockers are
+    blocker. A description blocker whose fingerprint appears among the
+    previous round's description blockers (the verdict record's
+    `priorBlockers`) is *outstanding* — already routed to a human — not a
+    new finding; a `block` whose blockers are exclusively outstanding
+    description blockers MUST take the pass consequence above, evaluated
+    before the round-three rule, while its blockers are still reported as
+    `needsHuman` exactly as below ([ADR-0071](../adr/0071-pass-the-tree-when-only-adjudicated-description-blockers-remain.md);
+    the round completed and counts). A `block` at a round below three whose tree blockers are
     nonempty MUST create exactly one admitted root of kind `pr-review-fix`
     with `sourceRef = pr-review-fix:<url>@<head SHA>`, exactly `read, write,
     run-tests, open-pr`, nothing delegable, the origin's priority, and a
@@ -860,10 +867,13 @@ MCP (rule 41).
     when it is after the verdict's `reviewedAt`, MUST append "description
     changed after review" to the reason so a blocker that raced a human's
     edit reads as possibly-cured rather than re-litigated; a GitHub read
-    failure MUST NOT block the report. A `block` at round three, an
+    failure MUST NOT block the report. A `block` at round three (unless the
+    outstanding-description rule above took the pass consequence), an
     `unable-to-review`, and a `pr-review-fix` that completed without a new
     head MUST create nothing and be reported as `needsHuman` with the
-    reason; the operator inbox MUST list those pull requests, the ones with
+    reason — description blockers are reported at every round, round three
+    included, so one pull request MAY carry two `needsHuman` entries in one
+    pass; the operator inbox MUST list those pull requests, the ones with
     outstanding description blockers, and the `readyToMark` ones in one
     "Review adjudication" group. The sweep MUST never merge, approve, or
     dismiss, and no automated actor ever edits a pull request's description

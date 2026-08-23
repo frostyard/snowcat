@@ -399,7 +399,11 @@ already-adjudicated description fingerprint without counting it toward
 block/pass. Relatedly, the minted fix item's objective names the
 `contract:pr-body:` fingerprint that ADR-0067 excludes from the fix's
 scope — item `552c67f0` read "Fix … missing-risk-classification" while the
-ADR forbids the fixer from touching it.
+ADR forbids the fixer from touching it. (Addressed 2026-08-23:
+[ADR-0071](../adr/0071-pass-the-tree-when-only-adjudicated-description-blockers-remain.md)
+takes the pass consequence when only already-adjudicated description
+blockers remain; the fix-objective half was already correct in ADR-0067's
+implementation and read wrong that day only because the host predated it.)
 
 ### 15. Identity and independence are asserted, not enforced
 

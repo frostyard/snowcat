@@ -87,6 +87,15 @@ export function deriveReviewState(items: ObservableWorkItem[], currentHeadSha: s
     if (latest.review.decision === "unable-to-review") {
       return withNote({ ...base, needsHuman: true, readyToMark: false, reason: "the reviewer was unable to review" });
     }
+    // ADR-0071 (mirrors the sweep): a block whose blockers are exclusively
+    // description blockers the previous round already routed to a human is
+    // the pass consequence — tree done, defect with the human — and the
+    // description note above still rides on the row.
+    const { descriptionBlockers, treeBlockers } = partitionReviewBlockers(latest.review.blockers ?? []);
+    const priorDescriptionFingerprints = new Set(partitionReviewBlockers(latest.review.priorBlockers ?? []).descriptionBlockers.map((blocker) => blocker.fingerprint));
+    if (treeBlockers.length === 0 && descriptionBlockers.length > 0 && descriptionBlockers.every((blocker) => priorDescriptionFingerprints.has(blocker.fingerprint))) {
+      return withNote({ ...base, needsHuman: false, readyToMark: draft });
+    }
     const fixDone = bound.some((item) => item.kind === REVIEW_FIX_KIND && item.status === "completed" && item.review.headSha.toLowerCase() === head);
     if (fixDone) return withNote({ ...base, needsHuman: true, readyToMark: false, reason: "a fix completed without a new head" });
     if (latest.review.round >= MAX_REVIEW_ROUNDS) {
