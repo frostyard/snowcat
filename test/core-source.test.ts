@@ -1095,6 +1095,38 @@ test("an attributed operator rollback creates a new snapshot and preserves later
   assert.throws(() => new ControlPlaneStore(path), /Core snapshot rollback receipt shape is invalid/);
 });
 
+test("activeCoreRepositoryCatalog and activeCoreSurfaceContract read the retained candidate behind the active snapshot", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-core-active-catalog-test-"));
+  const path = join(directory, "control-plane.db");
+  const store = new ControlPlaneStore(path, () => new Date("2026-08-16T10:00:00.000Z"));
+  context.after(() => store.close());
+
+  assert.equal(store.activeCoreRepositoryCatalog(), undefined);
+  assert.equal(store.activeCoreSurfaceContract(), undefined);
+
+  const candidate = await activationCandidate("e".repeat(40), "f".repeat(40));
+  const activation = store.activateCoreSnapshot({ candidate, expectedLastTransactionSequence: 1 });
+
+  const catalog = store.activeCoreRepositoryCatalog();
+  assert.equal(catalog?.snapshot.snapshotId, activation.snapshotId);
+  assert.equal(catalog?.snapshot.sourceCommitId, candidate.commitId);
+  assert.deepEqual(
+    catalog?.repositories.map((repository) => repository.path),
+    candidate.repositories.map((repository) => repository.path),
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(catalog?.repositories[0]?.declaration)),
+    JSON.parse(JSON.stringify(candidate.repositories[0]?.declaration)),
+  );
+
+  const contract = store.activeCoreSurfaceContract();
+  assert.equal(contract?.coreSnapshotId, activation.snapshotId);
+  assert.equal(contract?.coreSourceCommitId, candidate.commitId);
+  assert.equal(contract?.contract.contract.id, "repository-surfaces");
+  assert.equal(contract?.contract.surfaces.length, 4);
+  assert.throws(() => store.activeCoreSurfaceContract(2), /unsupported repository surface contract version/);
+});
+
 test("Core snapshot failure rolls back retained bytes and byte tampering fails closed", async () => {
   const directory = await mkdtemp(join(tmpdir(), "snowcat-core-rollback-test-"));
   const failedPath = join(directory, "failed.db");
