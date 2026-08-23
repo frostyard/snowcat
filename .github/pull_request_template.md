@@ -14,6 +14,8 @@ closes. -->
       `check:deploy`, `typecheck`, built-in Node test coverage (51% lines,
       71% branches, 45% functions), and `build` (`vite build` plus
       `check-dist.mjs` and `check-boot.mjs`)
+- [ ] This PR's title matches Conventional Commits (`type(scope): summary`) —
+      check it with `node scripts/check-pr-title.mjs "$TITLE"`
 - [ ] `src/queue/**` or `src/mcp/**` changed: the
       [work-queue spec](../docs/specs/work-queue.md) rule touched (added or
       renumbered) is named here:

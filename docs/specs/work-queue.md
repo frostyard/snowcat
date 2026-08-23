@@ -522,13 +522,16 @@ MCP (rule 41).
     34 refresh and unless `--no-cure` is given, inspect every pull request
     that a completed item reported and that is verified `open`
     (deduplicated by URL), reading its `mergeable_state`, the check runs on
-    its head, its reviews, its review threads, and the identity of its patch.
+    its head, its reviews, its review threads, its title, and the identity of
+    its patch.
     A head is *decayed* when `mergeable_state` is `dirty` or `behind`, a
     completed check run's conclusion is `failure`, `timed_out`,
     `startup_failure`, or `action_required`, a reviewer's latest non-comment
-    review is `CHANGES_REQUESTED`, or at least one review thread is neither
-    resolved nor outdated (`unresolved-threads`); a draft or non-open pull
-    request is never decayed. Review threads are read only through GraphQL
+    review is `CHANGES_REQUESTED`, at least one review thread is neither
+    resolved nor outdated (`unresolved-threads`), or the title fails the
+    repository's Conventional Commits title lint (`bad-title`,
+    `scripts/check-pr-title.mjs`); a draft or non-open pull request is never
+    decayed. Review threads are read only through GraphQL
     (`POST /graphql`, `pullRequest.reviewThreads(first: 100) { isResolved
     isOutdated }`, same token, headers, and size cap as the REST reads); that
     one signal fails open — a GraphQL failure or unavailability leaves the

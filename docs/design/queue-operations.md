@@ -830,11 +830,13 @@ unavailable.
 **Pull-request cure** ([ADR-0061](../adr/0061-cure-pull-requests-as-bounded-per-head-work.md)).
 The same pass then looks at every open pull request a completed item reported
 — its `mergeable_state`, the check runs on its head, its reviews, its review
-threads (read through GraphQL, so `SNOWCAT_GITHUB_TOKEN` must be set), and the
-identity of its patch — and, for each head that has *decayed* (`dirty` or
-`behind`, a failing check, a reviewer's latest review requesting changes, a
-review thread that is neither resolved nor outdated — decay
-`unresolved-threads`), enqueues one **admitted** root of kind `pr-cure` keyed
+threads (read through GraphQL, so `SNOWCAT_GITHUB_TOKEN` must be set), its
+title, and the identity of its patch — and, for each head that has *decayed*
+(`dirty` or `behind`, a failing check, a reviewer's latest review requesting
+changes, a review thread that is neither resolved nor outdated — decay
+`unresolved-threads`, or a title that fails the repository's Conventional
+Commits title lint — decay `bad-title`, `scripts/check-pr-title.mjs`),
+enqueues one **admitted** root of kind `pr-cure` keyed
 by `<pull-request URL>@<head SHA>`. The output's `cure` section lists
 `enqueued`, `healthy`, `skipped` (same head already known, draft, closed,
 patch identity uncomputable), `unavailable`, and `notes` — when GraphQL could
