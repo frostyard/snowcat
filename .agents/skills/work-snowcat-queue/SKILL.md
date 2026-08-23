@@ -146,6 +146,17 @@ evidence naming each fingerprint as addressed or disputed, and the model you
 ran as `result.model`. Your push is a new head and Snowcat's next round (at
 most three per pull request; a third-round block goes to a human).
 
+**Never touch the description (ADR-0067).** `review.blockers` on a
+`pr-review-fix` never includes a description blocker (fingerprinted
+`contract:pr-body:`) — the gate routes those straight to a human instead of a
+fix, because a description edit moves no head for the gate to observe. Do not
+edit the pull request's description to satisfy this item, even if it looks
+related. If you believe one of *this* item's blockers was mis-partitioned —
+fingerprinted as a tree defect but really only curable by a description edit,
+or the reverse — say so in the evidence with the reason and still address (or
+dispute) it as given; do not silently reclassify it or edit the description
+yourself.
+
 ## Finish
 
 - Call `complete_work` only when every acceptance criterion is satisfied or the
