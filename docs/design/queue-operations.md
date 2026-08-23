@@ -80,7 +80,9 @@ the loaded environment with `printf '%s\n' "$SNOWCAT_APP_TOKEN"`. Access mode
 uses its two Access variables instead and ignores this token.
 
 [`deploy/install.sh`](../../deploy/install.sh) creates `/var/lib/snowcat` and
-`/var/backups/snowcat` (0750, owned by `--user`, default the sudo caller);
+`/var/backups/snowcat` (0750, owned by `--user`, default the sudo caller —
+`snowcat-backup.timer` narrows the backup directory to 0700 on its first
+daily run; see below);
 writes `/etc/snowcat/env` (0600, same owner) from
 [`deploy/env.example`](../../deploy/env.example) with `SNOWCAT_HOME` set to
 the checkout and the database paths under `/var/lib/snowcat` — **only if the
@@ -1470,7 +1472,9 @@ retention prune is skipped whenever either failed, so a run that could not
 write today's copy never deletes older ones (it exits non-zero and names the
 failed backups on stderr). Start the service by hand before an upgrade or a
 risky operator action. Backups contain lease tokens and are created mode
-`0600` in a `0750` directory; keep them as private as the live files. Do not
+`0600` in a directory that [`deploy/bin/snowcat-backup`](../../deploy/bin/snowcat-backup)
+`chmod`s to `0700` on every run (install.sh creates it 0750, but the timer
+narrows it to 0700 within a day); keep them as private as the live files. Do not
 open a backup with a queue command before verifying it — opening migrates it
 to WAL and changes its digest.
 
