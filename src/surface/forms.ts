@@ -37,6 +37,15 @@ export function exitForm(item: ObservableWorkItem, returnTo: string, options: { 
   }</div><textarea class="fl-note" name="reason" placeholder="Note for the next lease (carried on the item)" maxlength="4000"></textarea></form>`;
 }
 
+/**
+ * Release a claimed item's lease when its holder is gone (`queue --
+ * release-lease`, spec rule 67). The outstanding token is fenced; the reason
+ * travels to the next lease as a `release-lease` note.
+ */
+export function releaseLeaseForm(item: ObservableWorkItem, returnTo: string): SafeHtml {
+  return html`<form class="fl-decide" method="post" action="${itemPath(item.id)}/release-lease">${preconditionFields(item, returnTo)}<div class="fl-actions"><button class="ph-button reject" type="submit">Release lease</button></div><input class="fl-input" name="reason" placeholder="Why the holder is gone (carried to the next lease)" maxlength="4000" required><small class="fl-sub">Returns the item to queued without waiting for expiry; the worker's token stops working immediately.</small></form>`;
+}
+
 /** Defer an admitted, unclaimed item back to proposed. */
 export function deferForm(item: ObservableWorkItem, returnTo: string): SafeHtml {
   return html`<form class="fl-decide" method="post" action="${itemPath(item.id)}/defer">${preconditionFields(item, returnTo)}<div class="fl-actions"><button class="ph-button secondary" type="submit">Defer</button></div><input class="fl-input" name="reason" placeholder="Deferral reason" maxlength="4000" required></form>`;

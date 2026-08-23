@@ -456,6 +456,32 @@ notes override nothing in the objective, instructions, or acceptance criteria
 (change those by cancelling and re-importing or re-seeding). Only the operator
 CLI and approved policy can write notes; workers cannot, and no MCP tool does.
 
+**A lease whose holder is gone** ([spec rule 67](../specs/work-queue.md),
+[reality report finding 11](reality.md)). A worker can die — or report
+success without ever calling `complete_work` — and leave its item `claimed`
+until the lease lapses and someone reclaims it. Nothing releases it on its
+own before then. See every current lease, lapsed first:
+
+```bash
+npm run --silent queue -- claims [--repository <owner/repo>]
+```
+
+Cross-reference the `leaseOwner` and `label` against what is actually
+running (the campaign's worker records, your own sessions). When the holder
+is provably gone, release the lease with an attributed reason:
+
+```bash
+npm run --silent queue -- release-lease <work-item-id> "<why the holder is gone>" [--if-updated-at <iso>]
+```
+
+The item returns to claimable `queued` immediately, the dead worker's token
+is fenced (every later mutation with it fails, exactly as after an expiry
+reclaim), the reason travels to the next lease as a `release-lease` note,
+and the attempt closes as `released`, ended by the operator. A worker that
+is merely slow is not gone: prefer waiting for the heartbeat window over
+cutting a live lease, and never release an item a worker is visibly still
+driving — the claim is its authorization to keep pushing.
+
 **A project's slices wait for each other** ([spec rules 58, 62–63](../specs/work-queue.md),
 [ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)).
 An imported slice may carry `predecessors` — the issue URLs of the slices it

@@ -31,7 +31,7 @@ claim, renew, and resolve it.
 | `leaseExpiresAt` | timestamp | claimed only | UTC expiry |
 | `delivery` | enum | completed only | Derived from pull-request artifact verifications: `none` (no pull request reported), `unverified`, `open`, `closed`, or `merged`. Delivery is the merge of the reported pull request, not outcome achievement |
 | `result` | result | completed, blocked, or cancelled with a reason only | Completed: worker summary, evidence, and artifacts. Blocked: `summary` is the block reason with empty `evidence` and `artifacts`. Cancelled by proposal rejection or blocked-work cancellation: `summary` is the operator reason with empty `evidence` and `artifacts`. Absent on `proposed`, `queued`, and `claimed` items |
-| `operatorNotes` | note[] | yes | Operator and policy annotations carried on the item, oldest first, each `{ at, actor, action, reason }` with `action` one of `requeue`, `defer`, `prioritize`, or `note`. Appended by `requeue`, `defer`, `prioritize`, and `note`; empty on creation; never written by a worker or through MCP |
+| `operatorNotes` | note[] | yes | Operator and policy annotations carried on the item, oldest first, each `{ at, actor, action, reason }` with `action` one of `requeue`, `defer`, `prioritize`, `note`, or `release-lease`. Appended by `requeue`, `defer`, `prioritize`, `note`, and `release-lease`; empty on creation; never written by a worker or through MCP |
 | `previousResults` | result[] | yes | Results superseded by an operator requeue, oldest first: each is the block `result` that requeue cleared. Empty until the first requeue; never trimmed |
 
 The action vocabulary is `read`, `write`, `run-tests`, `open-issue`,
@@ -80,6 +80,8 @@ npm run queue -- approve <work-item-id>
 npm run queue -- reject <work-item-id> <reason>
 npm run queue -- defer <work-item-id> <reason>
 npm run queue -- requeue <work-item-id> <reason>
+npm run queue -- release-lease <work-item-id> <reason>
+npm run queue -- claims [--repository <owner/repo>]
 npm run queue -- cancel <work-item-id> <reason>
 npm run queue -- prioritize <work-item-id> <priority> <reason>
 npm run queue -- note <work-item-id> <text>
@@ -419,9 +421,9 @@ MCP (rule 41).
     and MUST be appended, never edited, reordered, or removed. Only an actor in
     the `operator:` or `policy:` namespace MAY decide about work: `QueueStore`
     MUST reject every other actor (worker namespaces and `system:` alike) for
-    all seven operator mutations — `approve`, `reject`, `defer`, `requeue`,
-    `cancel`, `prioritize`, and `note` — leaving the item unchanged with no
-    event, and no MCP tool MAY perform any of them or write a note. `note <id> <text>` MUST append an `action = "note"`
+    all eight operator mutations — `approve`, `reject`, `defer`, `requeue`,
+    `cancel`, `prioritize`, `note`, and `release-lease` (rule 67) — leaving
+    the item unchanged with no event, and no MCP tool MAY perform any of them or write a note. `note <id> <text>` MUST append an `action = "note"`
     entry and record `work.noted` without changing status, admission, lease,
     or result. `claim_work`, `get_work`, `list_work`, `list`, and `show` MUST
     return both arrays (empty on a fresh item) and MUST NOT reveal a lease
@@ -439,8 +441,8 @@ MCP (rule 41).
     admission, lease, or result, MUST NOT be exposed through MCP, and MUST
     NOT alter rule 22: children inherit at creation and workers never supply
     a priority.
-39. `approve`, `reject`, `defer`, `requeue`, `cancel`, `prioritize`, and
-    `note` MUST accept an optional precondition `{ status, updatedAt }`
+39. `approve`, `reject`, `defer`, `requeue`, `cancel`, `prioritize`, `note`,
+    and `release-lease` MUST accept an optional precondition `{ status, updatedAt }`
     naming the item as the operator observed it. Inside the mutation's
     transaction, before any write, `QueueStore` MUST compare the item's
     logical `status` (rule 25's `proposed` view included) and `updatedAt`
@@ -452,9 +454,10 @@ MCP (rule 41).
     mutation's own state check (rules 24, 25, 37, 38) so a stale operator
     learns that the item moved rather than which rule it now breaks. Without
     a precondition every mutation MUST behave exactly as before. The CLI
-    MUST accept `--if-updated-at <iso>` on those seven commands, off by
+    MUST accept `--if-updated-at <iso>` on those eight commands, off by
     default, deriving `status` from the command's required state (`approve`,
-    `reject`: `proposed`; `defer`: `queued`; `requeue`, `cancel`: `blocked`)
+    `reject`: `proposed`; `defer`: `queued`; `requeue`, `cancel`: `blocked`;
+    `release-lease`: `claimed`)
     and, for `prioritize` and `note`, from the item's current status so
     `updatedAt` alone carries the check; a mismatch MUST exit non-zero with
     the store's message. No MCP tool MAY carry a precondition and no schema
@@ -463,7 +466,8 @@ MCP (rule 41).
     commands, invoked through the same functions and attributed to the
     session's actor (`operator:web`, or `member:<email>` per rule 51). The
     item-scoped mutations MUST be exactly `approve`, `reject`, `defer`,
-    `requeue`, `cancel`, `prioritize`, `note`, and `attach-artifact` (`POST
+    `requeue`, `cancel`, `prioritize`, `note`, `release-lease` (rule 67, on
+    a `claimed` item), and `attach-artifact` (`POST
     /items/:id/:mutation`; the `QueueStore` methods and
     `attachVerifiedArtifact`), and MUST NOT introduce a state transition or
     a batch action — a decision applied to more than one existing item in
@@ -1112,6 +1116,29 @@ MCP (rule 41).
     `leaseExpiresAt`, by the same clock claim selection uses, so an observer
     never reads a dead lease as active; only the attempt whose lease is live
     has no `outcome`.
+67. **Operator lease release (extends rules 4, 24, and 37).** `release-lease
+    <id> <reason>` MUST return one `claimed` item to claimable `queued`
+    without waiting for its lease to lapse: an operator- or policy-attributed
+    exit for a lease whose holder is gone — a dead worker, an interrupted
+    session — observed before `leaseExpiresAt`
+    ([reality report finding 11](../design/reality.md)). It MUST accept the
+    item whether the lease is live or lapsed-but-unreclaimed, clear all three
+    lease fields in one transaction — fencing the outstanding token exactly
+    as rule 4 fences a reclaimed one, from the moment of release — preserve
+    definition, admission, result, and priority, append a `release-lease`
+    note carrying the operator reason to `operatorNotes` (rule 37), and
+    record `work.released` with the operator actor and a payload naming the
+    reason, the released `previousOwner`, and the lease's `leaseExpiresAt`,
+    so rule 66 closes the attempt as `released`, `endedBy` that operator. It
+    MUST refuse every other status, leaving the item unchanged with no
+    event. It is an operator mutation only — the CLI, and the surface per
+    rule 40 — never an MCP tool, and MUST accept the rule 39 precondition.
+    The read-only `claims` listing (`queue -- claims [--repository
+    <owner/repo>]`) MUST list every currently `claimed` item — id,
+    repository, kind, objective, `leaseOwner`, the newest attempt's `label`
+    and `claimedAt`, `leaseExpiresAt`, whether the lease has lapsed by the
+    same clock claim selection uses, and the seconds remaining — lapsed
+    leases first, and MUST NOT reveal a lease token (rule 11).
 
     A claim label MUST be one bounded line: 1–`MAX_CLAIM_LABEL_LENGTH` (120)
     characters with no control characters, refused at the MCP `worker`
@@ -1158,6 +1185,7 @@ MCP (rule 41).
 | MCP tokens | `token mint [--kinds …] [--tools … | --profile …] | list | revoke` over the `mcp_tokens` table per rule 49; identities per rule 48; claim restriction per rule 50; tool grant per rule 65 |
 | PRD baseline metrics | `metrics` aggregates items created in a window with its `work.claimed`, `work.completed`, `work.blocked`, and `work.cancelled` events and the completed items' current `delivery` per rule 56 |
 | Attempt provenance | `QueueStore.attempts` folds an item's newest `work.claimed` / `work.completed` / `work.blocked` / `work.released` / `lease.expired` events, plus the clock against a lapsed lease, into at most ten attempts per rule 66; `list_work` and `get_work` carry them and `list` filters exactly by `leaseOwner` and `label` |
+| Operator lease release | `QueueStore.releaseLease` returns one claimed item to queued and fences the outstanding token per rule 67; `claims` lists every current lease, lapsed first, without tokens |
 | MCP worker behavior | Portable `work-snowcat-queue` skill constrained by this contract |
 | Testing-gap seed | Deterministic CLI instance of this contract |
 

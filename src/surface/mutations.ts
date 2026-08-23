@@ -13,7 +13,7 @@ import { workStatuses, type WorkStatus } from "../queue/types.ts";
 export const WEB_ACTOR = "operator:web";
 
 /** The item mutations the surface offers: exactly the CLI's operator commands. */
-export const itemMutations = ["approve", "reject", "defer", "requeue", "cancel", "prioritize", "note"] as const;
+export const itemMutations = ["approve", "reject", "defer", "requeue", "cancel", "prioritize", "note", "release-lease"] as const;
 export type ItemMutation = (typeof itemMutations)[number];
 
 /** The one item action that also asks GitHub before writing: `queue -- attach-artifact`. */
@@ -92,6 +92,9 @@ export function applyItemMutation(queue: QueueStore, mutation: ItemMutation, id:
     case "note":
       queue.note(id, actor, reason(body, "note text"), precondition);
       return { eventType: "work.noted" };
+    case "release-lease":
+      queue.releaseLease(id, actor, reason(body, "a lease release reason"), precondition);
+      return { eventType: "work.released" };
   }
 }
 
