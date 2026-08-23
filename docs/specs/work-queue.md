@@ -82,6 +82,7 @@ npm run queue -- defer <work-item-id> <reason>
 npm run queue -- requeue <work-item-id> <reason>
 npm run queue -- release-lease <work-item-id> <reason>
 npm run queue -- claims [--repository <owner/repo>]
+npm run queue -- deliveries [--repository <owner/repo>]
 npm run queue -- cancel <work-item-id> <reason>
 npm run queue -- prioritize <work-item-id> <priority> <reason>
 npm run queue -- note <work-item-id> <text>
@@ -1139,6 +1140,22 @@ MCP (rule 41).
     and `claimedAt`, `leaseExpiresAt`, whether the lease has lapsed by the
     same clock claim selection uses, and the seconds remaining — lapsed
     leases first, and MUST NOT reveal a lease token (rule 11).
+68. **Undelivered-work listing (extends rules 35 and 60).** The read-only
+    `deliveries` listing (`queue -- deliveries [--repository <owner/repo>]`)
+    MUST list completed items whose `delivery` is `open` — work whose merge
+    or publication a human still owes
+    ([reality report finding 17](../design/reality.md)) — selecting through
+    the same pending-artifact query the artifact sweeps use so old terminal
+    completions never starve it. Each row MUST carry the item's id,
+    repository, kind, objective, `createdAt`, its verified still-open
+    `pull-request` and `release` artifacts (url, observed state, and draft
+    flag), and a derived `ready` flag: true when any verified pull request is
+    open and not a draft, or any verified release is an unpublished draft —
+    the rows waiting on a human's merge queue entry or publish, as opposed to
+    a draft pull request still inside the review gate. Ready rows MUST sort
+    first, oldest item first. The listing MUST NOT reveal a lease token
+    (rule 11) and MUST NOT mutate anything: freshness comes from
+    `verify-artifacts`' own timer, not from this read.
 
     A claim label MUST be one bounded line: 1–`MAX_CLAIM_LABEL_LENGTH` (120)
     characters with no control characters, refused at the MCP `worker`
@@ -1186,6 +1203,7 @@ MCP (rule 41).
 | PRD baseline metrics | `metrics` aggregates items created in a window with its `work.claimed`, `work.completed`, `work.blocked`, and `work.cancelled` events and the completed items' current `delivery` per rule 56 |
 | Attempt provenance | `QueueStore.attempts` folds an item's newest `work.claimed` / `work.completed` / `work.blocked` / `work.released` / `lease.expired` events, plus the clock against a lapsed lease, into at most ten attempts per rule 66; `list_work` and `get_work` carry them and `list` filters exactly by `leaseOwner` and `label` |
 | Operator lease release | `QueueStore.releaseLease` returns one claimed item to queued and fences the outstanding token per rule 67; `claims` lists every current lease, lapsed first, without tokens |
+| Undelivered work | `deliveries` lists completed items whose `delivery` is `open`, ready-to-merge or ready-to-publish rows first, per rule 68 |
 | MCP worker behavior | Portable `work-snowcat-queue` skill constrained by this contract |
 | Testing-gap seed | Deterministic CLI instance of this contract |
 
