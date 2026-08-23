@@ -170,7 +170,7 @@ export interface ReviewSweepResult {
    * item that should have reported it. The sweep creates no work for them.
    */
   unreported: UnreportedPullRequest[];
-   /** Unaccounted-for pull requests still within the longest possible worker lease. */
+   /** Unaccounted-for pull requests still within the longest possible worker lease, or belonging to a repository with a still-claimed, live-leased item. */
    unreportedPending: Array<{ url: string; number: number; createdAt: string }>;
 }
 
@@ -366,6 +366,14 @@ export async function reviewPullRequests(
  * gate, after which the next pass reviews it) — but the finding is persisted
  * per repository so the surface can show it without calling GitHub. A listing
  * GitHub could not serve leaves the previous observation standing.
+ *
+ * A pull request younger than the longest possible lease is `unreportedPending`
+ * rather than `unreported`: the item that opened it may still be claimed and
+ * has not completed yet, so it cannot appear in `knownPullRequestUrls`. The
+ * same is true, regardless of the pull request's age, whenever the repository
+ * still has a claimed item with a live (non-expired) lease — a heartbeat-renewed
+ * lease can keep an item in progress, and its own pull request unreportable,
+ * well past that age cutoff.
  */
 async function observeUnreportedPullRequests(
   queue: QueueStore,
@@ -386,16 +394,19 @@ async function observeUnreportedPullRequests(
       result.skipped.push({ url: `https://github.com/${repository}/pulls`, reason: `more than ${MAX_LISTING_PAGES * 100} open pull requests; the rest were not listed` });
     }
     const seen = new Set(queue.knownPullRequestUrls(repository));
+    const hasLiveClaimedItem = queue
+      .list({ status: "claimed", repository, limit: 100 })
+      .some((item) => item.leaseExpiresAt !== undefined && Date.parse(item.leaseExpiresAt) > observedAtDate.getTime());
     const unreported: UnreportedPullRequest[] = [];
     for (const pull of listing.pulls) {
       if (seen.has(pull.url.toLowerCase())) continue;
       seen.add(pull.url.toLowerCase());
       const createdAtMillis = pull.createdAt === undefined ? Number.NaN : Date.parse(pull.createdAt);
-      if (
+      const withinAgeGracePeriod =
         pull.createdAt !== undefined &&
         Number.isFinite(createdAtMillis) &&
-        observedAtDate.getTime() - createdAtMillis < MAX_LEASE_SECONDS * 1000
-      ) {
+        observedAtDate.getTime() - createdAtMillis < MAX_LEASE_SECONDS * 1000;
+      if (pull.createdAt !== undefined && (withinAgeGracePeriod || hasLiveClaimedItem)) {
         result.unreportedPending.push({ url: pull.url, number: pull.number, createdAt: pull.createdAt });
         continue;
       }
