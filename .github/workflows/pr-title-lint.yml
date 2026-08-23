@@ -1,0 +1,37 @@
+# Enforces the Conventional Commits PR-title convention documented in
+# .github/pull_request_template.md with the same lint `inspectPullRequestHealth`
+# uses for the `bad-title` decay (ADR-0061), so the gate and the cure never
+# drift apart. It lives outside check.yml because that workflow's header
+# reserves it for the local `npm run check` recipe and forbids other check
+# commands or event-gated `if`s. The title is an untrusted string from the
+# pull request: it reaches the script only through an environment variable,
+# never by interpolation into the shell line, and the job has no write
+# permission and a `pull_request` (not `pull_request_target`) trigger, so a
+# forked title cannot run with repository credentials.
+name: pr-title-lint
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+# Least privilege (core ADR-0021): nothing at the workflow level, and the one
+# job reads the repository only. Actions are pinned to full commit SHAs with
+# the release tag as a comment, the same pins as check.yml.
+permissions: {}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: node scripts/check-pr-title.mjs

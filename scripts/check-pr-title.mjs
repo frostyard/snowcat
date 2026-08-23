@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Enforces the Conventional Commits PR-title format documented in
 // .github/pull_request_template.md against one title: the argument, or
-// PR_TITLE when no argument is given (for a future CI workflow to pass the
-// pull request's title this way). Same lint pull-request-cure.ts's
+// PR_TITLE when no argument is given (.github/workflows/pr-title-lint.yml
+// passes the pull request's title this way). Same lint pull-request-cure.ts's
 // inspectPullRequestHealth uses for the `bad-title` decay (ADR-0061).
 import { lintPullRequestTitle } from "../src/queue/pr-title-lint.ts";
 
