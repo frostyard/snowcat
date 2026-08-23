@@ -64,6 +64,15 @@ maximizing comments.
   most — never blockers. On round 2 or 3, examine `review.priorBlockers` and the
   diff since the previous head: reuse a fingerprint for a blocker still open, and
   name a new one only when the diff introduced it or made it newly assessable.
+- **Description blockers (ADR-0067).** A blocker whose only cure is an edit to
+  the pull request's *description* — not the diff — for example a missing or
+  wrong required template section, risk tier, or evidence claim, MUST carry the
+  fingerprint prefix `contract:pr-body:` and name the description, not a file,
+  as its `location`. Use this prefix only when a description edit alone would
+  cure the defect; a defect in the diff is a normal blocker even if the
+  description also needs updating. Snowcat routes `contract:pr-body:` blockers
+  straight to a human instead of a `pr-review-fix` — never mis-fingerprint a
+  tree defect this way just because it is also documented in the description.
 - You are **read-only on GitHub**: no comment, review, approval, push, edit, or
   ready-for-review change, and no follow-ups. Snowcat acts on your verdict — a
   `pass` marks the draft ready for a human, a `block` schedules one bounded

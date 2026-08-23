@@ -12,6 +12,7 @@ import {
   assertReviewCompletion,
   assertReviewGate,
   convertPullRequestToDraft,
+  DESCRIPTION_BLOCKER_PREFIX,
   markPullRequestReady,
   readPullRequestHead,
   reviewFixRootDefinition,
@@ -523,6 +524,101 @@ test("block → one admitted fix root; a new head → the next round with prior 
   assert.equal(queue.pullRequestReviewItems(REPOSITORY, PR_URL.toUpperCase()).length, 5, "URL match is case-insensitive");
 });
 
+test("ADR-0067: a verdict of only description blockers mints no fix and goes to human adjudication instead", async () => {
+  const queue = await newQueue("review-description-only");
+  completedWithDraftPr(queue);
+  queue.setRepositoryReviewGate(REPOSITORY, true);
+  const sweep = (head: string) => reviewPullRequests(queue, { fetcher: apiFetcher(routesFor({ head })).fetcher, clock });
+
+  await sweep(HEAD_A);
+  const descriptionBlocker = blocker(`${DESCRIPTION_BLOCKER_PREFIX}credential-risk-tier`, {
+    location: "pull request description",
+    contract: "the risk-tier section names the tier the diff belongs to",
+  });
+  await completeReview(queue, { decision: "block", blockers: [descriptionBlocker], advisories: [] });
+
+  const swept = await sweep(HEAD_A);
+  assert.deepEqual(swept.enqueued, [], "no pr-review-fix is minted for an all-description verdict");
+  assert.equal(swept.needsHuman.length, 1);
+  assert.deepEqual(
+    { url: swept.needsHuman[0]!.url, headSha: swept.needsHuman[0]!.headSha, round: swept.needsHuman[0]!.round },
+    { url: PR_URL, headSha: HEAD_A, round: 1 },
+  );
+  assert.match(swept.needsHuman[0]!.reason, /round 1 blocked on 1 description blocker/);
+  assert.match(swept.needsHuman[0]!.reason, new RegExp(`\\[${DESCRIPTION_BLOCKER_PREFIX}credential-risk-tier\\] at pull request description`));
+  assert.equal(queue.pullRequestReviewItems(REPOSITORY, PR_URL).some((item) => item.kind === REVIEW_FIX_KIND), false, "no fix item exists at all, not just none enqueued this pass");
+
+  // The pull request surfaces through the same adjudication read the board and inbox use (ADR-0065 decision point 5).
+  const state = deriveReviewState(queue.pullRequestReviewItems(REPOSITORY, PR_URL), HEAD_A, true);
+  assert.equal(state?.needsHuman, true);
+  assert.equal(state?.readyToMark, false);
+  assert.match(state?.reason ?? "", /description blocker/);
+
+  // Idempotent: sweeping the same unmoved head again reports the same thing, still no fix.
+  const again = await sweep(HEAD_A);
+  assert.deepEqual(again.enqueued, []);
+  assert.equal(again.needsHuman.length, 1);
+});
+
+test("ADR-0067: a mixed verdict mints a fix for the tree blockers only; the description blockers still reach adjudication", async () => {
+  const queue = await newQueue("review-description-mixed");
+  completedWithDraftPr(queue);
+  queue.setRepositoryReviewGate(REPOSITORY, true);
+  const sweep = (head: string) => reviewPullRequests(queue, { fetcher: apiFetcher(routesFor({ head })).fetcher, clock });
+
+  await sweep(HEAD_A);
+  const treeBlocker = blocker("defect:catalog/repo.go:import");
+  const descriptionBlocker = blocker(`${DESCRIPTION_BLOCKER_PREFIX}evidence-missing`, { location: "pull request description" });
+  await completeReview(queue, { decision: "block", blockers: [treeBlocker, descriptionBlocker], advisories: [] });
+
+  const swept = await sweep(HEAD_A);
+  assert.equal(swept.enqueued.length, 1);
+  assert.equal(swept.enqueued[0]!.kind, REVIEW_FIX_KIND);
+  const fix = queue.get(swept.enqueued[0]!.id)!;
+  assert.deepEqual(fix.review?.blockers, [treeBlocker], "the fix carries only the tree blocker, never the description one");
+  assert.doesNotMatch(fix.instructions, /evidence-missing/, "the description blocker's own fingerprint never appears in the fix instructions");
+
+  assert.equal(swept.needsHuman.length, 1, "the description blocker still rides to adjudication");
+  assert.deepEqual(
+    { url: swept.needsHuman[0]!.url, headSha: swept.needsHuman[0]!.headSha, round: swept.needsHuman[0]!.round },
+    { url: PR_URL, headSha: HEAD_A, round: 1 },
+  );
+  assert.match(swept.needsHuman[0]!.reason, /1 description blocker/);
+
+  // Board: while the fix is queued for the tree portion, the description blocker still needs a human.
+  const state = deriveReviewState(queue.pullRequestReviewItems(REPOSITORY, PR_URL), HEAD_A, true);
+  assert.equal(state?.active, true, "the tree fix is in flight");
+  assert.equal(state?.needsHuman, true, "but the description blocker still needs a human, right alongside it");
+  assert.match(state?.reason ?? "", /description blocker/);
+});
+
+test("ADR-0067: a description blocker's adjudication reason notes when the description changed after the verdict", async () => {
+  const queue = await newQueue("review-description-stale");
+  completedWithDraftPr(queue);
+  queue.setRepositoryReviewGate(REPOSITORY, true);
+  await reviewPullRequests(queue, { fetcher: apiFetcher(routesFor({ head: HEAD_A })).fetcher, clock });
+  await completeReview(queue, { decision: "block", blockers: [blocker(`${DESCRIPTION_BLOCKER_PREFIX}risk-tier`, { location: "pull request description" })], advisories: [] });
+
+  const editedAfter = apiFetcher({
+    ...routesFor({ head: HEAD_A }),
+    "graphql:SnowcatPullRequestLastEdited": { data: { repository: { pullRequest: { lastEditedAt: "2026-08-19T15:30:00.000Z" } } } },
+  });
+  const stale = await reviewPullRequests(queue, { fetcher: editedAfter.fetcher, clock });
+  assert.match(stale.needsHuman[0]!.reason, /description changed after review/);
+
+  const queue2 = await newQueue("review-description-not-stale");
+  completedWithDraftPr(queue2);
+  queue2.setRepositoryReviewGate(REPOSITORY, true);
+  await reviewPullRequests(queue2, { fetcher: apiFetcher(routesFor({ head: HEAD_A })).fetcher, clock });
+  await completeReview(queue2, { decision: "block", blockers: [blocker(`${DESCRIPTION_BLOCKER_PREFIX}risk-tier`, { location: "pull request description" })], advisories: [] });
+  const editedBefore = apiFetcher({
+    ...routesFor({ head: HEAD_A }),
+    "graphql:SnowcatPullRequestLastEdited": { data: { repository: { pullRequest: { lastEditedAt: "2026-08-19T14:00:00.000Z" } } } },
+  });
+  const notStale = await reviewPullRequests(queue2, { fetcher: editedBefore.fetcher, clock });
+  assert.doesNotMatch(notStale.needsHuman[0]!.reason, /description changed after review/);
+});
+
 test("pass → ready to mark (writes off) or marked ready through GraphQL with artifact.ready (writes on); unable-to-review and a fix without a new head need a human", async () => {
   const queue = await newQueue("review-pass");
   const originId = completedWithDraftPr(queue);
@@ -675,6 +771,29 @@ test("deriveReviewState mirrors the sweep for the board and inbox", () => {
   assert.equal(unable?.needsHuman, true);
   const movedBlocked = deriveReviewState([item({ id: "r1", status: "blocked", review: record(HEAD_A, 1) })], HEAD_B, true);
   assert.equal(movedBlocked?.needsHuman, true);
+
+  // ADR-0067: a completed block verdict bound to the current head with only
+  // description blockers needs a human even though no fix item exists at all.
+  const descriptionOnly = deriveReviewState(
+    [item({ id: "r1", review: { ...record(HEAD_A, 1, "block"), blockers: [blocker(`${DESCRIPTION_BLOCKER_PREFIX}risk-tier`)] } })],
+    HEAD_A,
+    true,
+  );
+  assert.equal(descriptionOnly?.needsHuman, true);
+  assert.match(descriptionOnly?.reason ?? "", /description blocker/);
+  // A mixed verdict's tree fix can be actively in flight while the
+  // description blocker still needs a human alongside it.
+  const mixedInFlight = deriveReviewState(
+    [
+      item({ id: "r1", review: { ...record(HEAD_A, 1, "block"), blockers: [blocker("defect:x"), blocker(`${DESCRIPTION_BLOCKER_PREFIX}risk-tier`)] } }),
+      item({ id: "f1", kind: REVIEW_FIX_KIND, status: "queued", review: { ...record(HEAD_A, 1), reviewItemId: "r1" } }),
+    ],
+    HEAD_A,
+    true,
+  );
+  assert.equal(mixedInFlight?.active, true, "the tree fix is in flight");
+  assert.equal(mixedInFlight?.needsHuman, true, "the description blocker still needs a human");
+  assert.match(mixedInFlight?.reason ?? "", /description blocker/);
 });
 
 test("the sweep reports, persists, and clears open pull requests no item reported in a gated repository (ADR-0065)", async () => {

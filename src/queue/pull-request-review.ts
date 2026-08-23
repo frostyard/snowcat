@@ -40,6 +40,37 @@ const CONVERT_TO_DRAFT_MUTATION = `mutation SnowcatConvertToDraft($id: ID!) {
     pullRequest { isDraft }
   }
 }`;
+const PULL_REQUEST_LAST_EDITED_QUERY = `query SnowcatPullRequestLastEdited($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) { lastEditedAt }
+  }
+}`;
+
+/**
+ * The fingerprint prefix naming a description blocker (ADR-0067 decision
+ * point 1): a defect whose only cure is an edit to the pull request's
+ * description, not the diff. The reviewer instructions state the
+ * convention; the sweep partitions every verdict's blockers on it.
+ */
+export const DESCRIPTION_BLOCKER_PREFIX = "contract:pr-body:";
+
+/**
+ * Splits a verdict's blockers into description blockers (fingerprinted
+ * `contract:pr-body:`) and everything else — the "tree" blockers a fix item
+ * can act on (ADR-0067 decision point 1). A description blocker has no head
+ * to move, so the gate never mints a fix for one; only tree blockers reach
+ * `reviewFixRootDefinition`.
+ */
+export function partitionReviewBlockers(blockers: ReviewBlocker[]): { descriptionBlockers: ReviewBlocker[]; treeBlockers: ReviewBlocker[] } {
+  const descriptionBlockers = blockers.filter((blocker) => blocker.fingerprint.startsWith(DESCRIPTION_BLOCKER_PREFIX));
+  const treeBlockers = blockers.filter((blocker) => !blocker.fingerprint.startsWith(DESCRIPTION_BLOCKER_PREFIX));
+  return { descriptionBlockers, treeBlockers };
+}
+
+/** The lead sentence naming a round's description blockers for a human (ADR-0067 decision point 2), shared by the sweep and the board projection. */
+export function describeDescriptionBlockersLead(round: number, blockers: ReviewBlocker[]): string {
+  return `round ${round} blocked on ${blockers.length} description blocker${blockers.length === 1 ? "" : "s"} for a human to adjudicate: ${describeBlockers(blockers)}`;
+}
 
 export const REVIEW_KIND = "pr-review";
 export const REVIEW_FIX_KIND = "pr-review-fix";
@@ -293,6 +324,18 @@ export async function reviewPullRequests(
         result.needsHuman.push({ url, headSha: head.headSha, round: verdict.round, reason: `blocked at round ${verdict.round} of ${MAX_REVIEW_ROUNDS}` });
         continue;
       }
+      // ADR-0067: description blockers never go into a fix item — a fix has
+      // no head to move the description, so the gate could never observe a
+      // cure. They go to human adjudication instead; a verdict with only
+      // description blockers mints no fix at all, and a mixed verdict mints
+      // the fix for the tree blockers only. The round still counts against
+      // the budget either way — it completed.
+      const { descriptionBlockers, treeBlockers } = partitionReviewBlockers(verdict.blockers ?? []);
+      if (descriptionBlockers.length > 0) {
+        const reason = await describeDescriptionAdjudication(origin.repository, url, descriptionBlockers, verdict, options);
+        result.needsHuman.push({ url, headSha: head.headSha, round: verdict.round, reason });
+      }
+      if (treeBlockers.length === 0) continue;
       const fixReview: PullRequestReview = {
         pullRequestUrl: url,
         headSha: head.headSha,
@@ -303,7 +346,7 @@ export async function reviewPullRequests(
         priorBlockers: [],
         reviewItemId: latest.id,
         ...(latest.result?.model ? { reviewerModel: latest.result.model } : {}),
-        blockers: verdict.blockers ?? [],
+        blockers: treeBlockers,
         advisories: verdict.advisories ?? [],
       };
       const created = queue.enqueueReviewRoot(origin.repository, {
@@ -417,13 +460,65 @@ async function observeUnreportedPullRequests(
   }
 }
 
-function describeBlockers(blockers: ReviewBlocker[]): string {
+export function describeBlockers(blockers: ReviewBlocker[]): string {
   return blockers
     .map(
       (blocker) =>
         `[${blocker.fingerprint}] at ${blocker.location}: ${blocker.contract} — impact: ${blocker.impact}; resolution: ${blocker.resolution}; verify: ${blocker.verification}`,
     )
     .join(" | ");
+}
+
+/**
+ * One GraphQL read of `PullRequest.lastEditedAt` (ADR-0067 decision point
+ * 4) — the simplest signal GitHub serves for "the description changed since
+ * it was opened," used to tell an operator a description blocker may
+ * already be cured by an edit that raced the verdict. `undefined` when
+ * GitHub never recorded an edit.
+ */
+async function readPullRequestLastEditedAt(
+  locator: { owner: string; name: string; number: number },
+  fetcher: GitHubFetch,
+): Promise<{ kind: "read"; lastEditedAt: string | undefined } | { kind: "unavailable"; reason: string }> {
+  const response = await githubGraphql(PULL_REQUEST_LAST_EDITED_QUERY, locator, AbortSignal.timeout(GITHUB_TIMEOUT_MS), fetcher);
+  if (response.kind === "unavailable") return { kind: "unavailable", reason: "GitHub GraphQL unavailable" };
+  if (response.status !== 200) return { kind: "unavailable", reason: `GitHub GraphQL returned HTTP ${response.status}` };
+  const envelope = asObject(response.value);
+  const pull = asObject(asObject(asObject(envelope?.data)?.repository)?.pullRequest);
+  if (!pull) {
+    const errors = Array.isArray(envelope?.errors)
+      ? envelope.errors.map((error) => asObject(error)?.message).filter((message): message is string => typeof message === "string")
+      : [];
+    return { kind: "unavailable", reason: errors.length > 0 ? `GitHub GraphQL errors: ${errors.join("; ")}` : "GitHub GraphQL response has no pullRequest" };
+  }
+  return { kind: "read", lastEditedAt: typeof pull.lastEditedAt === "string" ? pull.lastEditedAt : undefined };
+}
+
+/**
+ * The human-adjudication reason for a verdict's description blockers
+ * (ADR-0067 decision points 2 and 4): the blockers themselves, plus —
+ * when GitHub answers — whether the description changed after the verdict's
+ * `reviewedAt`, so a blocker that raced a human's (or an earlier round's)
+ * edit reads as possibly-cured rather than re-litigated. A GitHub read
+ * failure is omitted rather than failing the sweep: the blockers alone are
+ * still a complete report.
+ */
+async function describeDescriptionAdjudication(
+  repository: string,
+  url: string,
+  descriptionBlockers: ReviewBlocker[],
+  verdict: PullRequestReview,
+  options: ReviewOptions,
+): Promise<string> {
+  const lead = describeDescriptionBlockersLead(verdict.round, descriptionBlockers);
+  const locator = parsePullRequestUrl(repository, url);
+  if (!locator || !verdict.reviewedAt) return lead;
+  const edited = await readPullRequestLastEditedAt(locator, options.fetcher ?? fetch);
+  if (edited.kind !== "read" || !edited.lastEditedAt) return lead;
+  const editedAtMillis = Date.parse(edited.lastEditedAt);
+  const reviewedAtMillis = Date.parse(verdict.reviewedAt);
+  if (!Number.isFinite(editedAtMillis) || !Number.isFinite(reviewedAtMillis) || editedAtMillis <= reviewedAtMillis) return lead;
+  return `${lead} — description changed after review`;
 }
 
 /** The `pr-review` root definition for one draft head: read-only, bounded, structured verdict. */
@@ -446,6 +541,7 @@ export function reviewRootDefinition(
         : []),
       `Read the pull request's description and its diff at exactly head ${short} (for example \`gh pr diff ${head.number}\` or \`gh api repos/${repository}/pulls/${head.number}/files\`); check the head out and run the repository's own checks locally when you can.`,
       "Apply ADR-0029's pull-request profile. A blocker is ONLY a concrete correctness or security defect, an unmet acceptance criterion of the origin item, unauthorized or out-of-scope behaviour, false or materially insufficient evidence in the pull request, missing required validation, or a compatibility or contract break. Style preferences, optional improvements, alternative valid designs, speculative future concerns, and 'while you are here' work are advisories at most — never blockers.",
+      `A blocker whose only cure is an edit to the pull request's description — not the diff — for example a missing or wrong required section, risk tier, or evidence claim in the repository's template, carries the fingerprint prefix \`${DESCRIPTION_BLOCKER_PREFIX}\` and names the description, not a file, as its location (ADR-0067). Snowcat routes these straight to a human instead of a fix; use the prefix only for a defect a description edit alone would cure.`,
       ...(review.round > 1
         ? [
             `This is round ${review.round}: examine the prior round's blockers and the diff since head ${(previousHeadSha ?? "").slice(0, 7) || "the previous round"}, not a fresh unrestricted audit. Reuse a prior fingerprint for a blocker that is still open; name a new blocker only when this diff introduced it or made it newly assessable, and say why. Prior blockers: ${review.priorBlockers.length > 0 ? describeBlockers(review.priorBlockers) : "none"}.`,
@@ -488,7 +584,8 @@ export function reviewFixRootDefinition(
     instructions: [
       `Pull request ${head.url} ("${head.title}") at head ${head.headSha} was blocked in review round ${review.round} of ${MAX_REVIEW_ROUNDS}${review.reviewItemId ? ` (review item ${review.reviewItemId})` : ""} for these blockers: ${describeBlockers(blockers)}.`,
       ...(review.originItemId ? [`The origin item is ${review.originItemId} (get_work shows its acceptance criteria).`] : []),
-      "Address EXACTLY these blockers on the pull request's branch and push; keep the pull request a DRAFT, do not widen scope, do not mark it ready, and never merge, approve, or dismiss a review. If a blocker is wrong, say so in the evidence (and in the pull request description if useful) with the reason rather than silently skipping it, and still complete — the next review round judges.",
+      "Address EXACTLY these blockers on the pull request's branch and push; keep the pull request a DRAFT, do not widen scope, do not mark it ready, and never merge, approve, or dismiss a review. If a blocker is wrong, say so in the evidence with the reason rather than silently skipping it, and still complete — the next review round judges.",
+      `Do not edit the pull request's description — none of these blockers are on it, and no automated actor edits a description to satisfy a review (ADR-0067). If you believe a blocker was mis-fingerprinted \`${DESCRIPTION_BLOCKER_PREFIX}\` and belongs here on the tree instead, say so in evidence; do not touch the description either way.`,
       "After your push the head changes and Snowcat schedules the next review round automatically. Run the repository's own checks locally on the new head before completing.",
       "Complete reporting the pull request as a pull-request artifact, with evidence naming each fingerprint as addressed (what changed) or disputed (why), the checks run, and the model you ran as result.model. Snowcat refuses a completion whose pull request is open and not a draft.",
     ].join(" "),
