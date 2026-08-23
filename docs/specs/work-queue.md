@@ -828,24 +828,41 @@ MCP (rule 41).
     the pull request as `needsHuman`; a failed conversion MUST be reported as
     `unavailable` naming the unreviewed ready head. Without the variable the
     pass MUST be reported as `readyToMark`
-    and the surface MUST show it with the `gh pr ready <n>` command. A
-    `block` at a round below three MUST create exactly one admitted root of
-    kind `pr-review-fix` with `sourceRef = pr-review-fix:<url>@<head SHA>`,
-    exactly `read, write, run-tests, open-pr`, nothing delegable, the
-    origin's priority, and a `review` record carrying the round, the
-    blockers, `reviewItemId`, `reviewerModel`, `originItemId`, and
-    `authorModel`, instructed to address exactly those blockers on the same
-    branch, keep the pull request a draft, and report it; this is the only
-    admitted root with write authority and no digest guard, bounded instead
-    by rule 52, the fingerprinted scope, the empty ceiling, and the round
-    budget. A `block` at round three, an `unable-to-review`, and a
-    `pr-review-fix` that completed without a new head MUST create nothing and
-    be reported as `needsHuman` with the reason; the operator inbox MUST
-    list those pull requests and the `readyToMark` ones in one "Review
-    adjudication" group. The sweep MUST never merge, approve, or dismiss;
-    its only writes are the ready-for-review mark and its compensating
-    conversion back to draft, and with the variable unset it MUST perform no
-    GitHub write at all.
+    and the surface MUST show it with the `gh pr ready <n>` command. On a
+    `block` the sweep MUST first partition the verdict's blockers by
+    fingerprint prefix (ADR-0067): a blocker fingerprinted `contract:pr-body:`
+    is a description blocker, named because its only cure is an edit to the
+    pull request's description, not the diff; every other blocker is a tree
+    blocker. A `block` at a round below three whose tree blockers are
+    nonempty MUST create exactly one admitted root of kind `pr-review-fix`
+    with `sourceRef = pr-review-fix:<url>@<head SHA>`, exactly `read, write,
+    run-tests, open-pr`, nothing delegable, the origin's priority, and a
+    `review` record carrying the round, the tree blockers only, `reviewItemId`,
+    `reviewerModel`, `originItemId`, and `authorModel`, instructed to address
+    exactly those blockers on the same branch, keep the pull request a draft,
+    report it, and never edit the description; this is the only admitted
+    root with write authority and no digest guard, bounded instead by rule
+    52, the fingerprinted scope, the empty ceiling, and the round budget. A
+    verdict's description blockers, if any, MUST NOT be included in a
+    `pr-review-fix`; instead they MUST be reported as `needsHuman` with a
+    reason naming the round and the description blockers (a mixed verdict
+    reports them alongside minting the fix for its tree blockers; a verdict
+    of description blockers only reports them and creates no fix at all).
+    When reporting, the sweep SHOULD read the pull request's description
+    last-edited time from GitHub (GraphQL `PullRequest.lastEditedAt`) and,
+    when it is after the verdict's `reviewedAt`, MUST append "description
+    changed after review" to the reason so a blocker that raced a human's
+    edit reads as possibly-cured rather than re-litigated; a GitHub read
+    failure MUST NOT block the report. A `block` at round three, an
+    `unable-to-review`, and a `pr-review-fix` that completed without a new
+    head MUST create nothing and be reported as `needsHuman` with the
+    reason; the operator inbox MUST list those pull requests, the ones with
+    outstanding description blockers, and the `readyToMark` ones in one
+    "Review adjudication" group. The sweep MUST never merge, approve, or
+    dismiss, and no automated actor ever edits a pull request's description
+    to satisfy a review; the sweep's only writes are the ready-for-review
+    mark and its compensating conversion back to draft, and with the
+    variable unset it MUST perform no GitHub write at all.
 56. **Baseline metrics.** `metrics [--repository <owner/repo>] [--since
     <iso>] [--until <iso>]` MUST print exactly one JSON object for the
     half-open window `[since, until)` — `since` inclusive, `until` exclusive,

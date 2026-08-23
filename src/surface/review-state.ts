@@ -1,4 +1,4 @@
-import { REVIEW_FIX_KIND, REVIEW_KIND } from "../queue/pull-request-review.ts";
+import { describeDescriptionBlockersLead, partitionReviewBlockers, REVIEW_FIX_KIND, REVIEW_KIND } from "../queue/pull-request-review.ts";
 import { MAX_REVIEW_ROUNDS, type ObservableWorkItem, type ReviewDecision, type WorkStatus } from "../queue/types.ts";
 
 /**
@@ -27,6 +27,27 @@ export interface PullRequestReviewRow {
 }
 
 /**
+ * The description-adjudication note for the current head (ADR-0067 decision
+ * point 2): the latest completed `pr-review` round bound to it, when its
+ * verdict blocked and carried description blockers (`contract:pr-body:`).
+ * Applied on top of whatever row the branches below compute for that head —
+ * a description blocker needs a human whether or not a fix exists, is in
+ * flight, or has completed for the tree portion of a mixed verdict. No
+ * GitHub call: this reads only the queue's own stored verdict, so it never
+ * carries decision point 4's staleness note (only the sweep reads GitHub).
+ */
+function describeBoundDescriptionBlockers(bound: Array<ObservableWorkItem & { review: NonNullable<ObservableWorkItem["review"]> }>, head: string): string | undefined {
+  const blocked = bound
+    .filter((item) => item.kind === REVIEW_KIND && item.status === "completed" && item.review.decision === "block" && item.review.headSha.toLowerCase() === head)
+    .sort((left, right) => left.review.round - right.review.round)
+    .at(-1);
+  if (!blocked) return undefined;
+  const { descriptionBlockers } = partitionReviewBlockers(blocked.review.blockers ?? []);
+  if (descriptionBlockers.length === 0) return undefined;
+  return describeDescriptionBlockersLead(blocked.review.round, descriptionBlockers);
+}
+
+/**
  * Derives the row from every review/fix item bound to one pull request
  * (oldest first), the pull request's current head, and whether it is still a
  * draft. Mirrors the sweep's branching in `reviewPullRequests`.
@@ -34,9 +55,16 @@ export interface PullRequestReviewRow {
 export function deriveReviewState(items: ObservableWorkItem[], currentHeadSha: string | undefined, draft: boolean): PullRequestReviewRow | undefined {
   const bound = items.filter((item): item is ObservableWorkItem & { review: NonNullable<ObservableWorkItem["review"]> } => item.review !== undefined);
   if (bound.length === 0) return undefined;
+  const head = currentHeadSha?.toLowerCase();
+  const descriptionNote = head ? describeBoundDescriptionBlockers(bound, head) : undefined;
+  const withNote = (row: PullRequestReviewRow): PullRequestReviewRow => {
+    if (!descriptionNote || row.headSha.toLowerCase() !== head) return row;
+    return { ...row, needsHuman: true, reason: row.reason ? `${row.reason}; ${descriptionNote}` : descriptionNote };
+  };
+
   const inFlight = bound.find((item) => item.status === "queued" || item.status === "claimed");
   if (inFlight) {
-    return {
+    return withNote({
       itemId: inFlight.id,
       kind: inFlight.kind as PullRequestReviewRow["kind"],
       status: inFlight.status,
@@ -45,40 +73,39 @@ export function deriveReviewState(items: ObservableWorkItem[], currentHeadSha: s
       active: true,
       needsHuman: false,
       readyToMark: false,
-    };
+    });
   }
   const completedReviews = bound
     .filter((item) => item.kind === REVIEW_KIND && item.status === "completed" && item.review.decision !== undefined)
     .sort((left, right) => left.review.round - right.review.round);
   const latest = completedReviews.at(-1);
-  const head = currentHeadSha?.toLowerCase();
   if (latest && head && latest.review.headSha.toLowerCase() === head) {
     const base = { itemId: latest.id, kind: REVIEW_KIND as typeof REVIEW_KIND, status: latest.status, round: latest.review.round, headSha: latest.review.headSha, decision: latest.review.decision, active: false };
     if (latest.review.decision === "pass") {
-      return { ...base, needsHuman: false, readyToMark: draft };
+      return withNote({ ...base, needsHuman: false, readyToMark: draft });
     }
     if (latest.review.decision === "unable-to-review") {
-      return { ...base, needsHuman: true, readyToMark: false, reason: "the reviewer was unable to review" };
+      return withNote({ ...base, needsHuman: true, readyToMark: false, reason: "the reviewer was unable to review" });
     }
     const fixDone = bound.some((item) => item.kind === REVIEW_FIX_KIND && item.status === "completed" && item.review.headSha.toLowerCase() === head);
-    if (fixDone) return { ...base, needsHuman: true, readyToMark: false, reason: "a fix completed without a new head" };
+    if (fixDone) return withNote({ ...base, needsHuman: true, readyToMark: false, reason: "a fix completed without a new head" });
     if (latest.review.round >= MAX_REVIEW_ROUNDS) {
-      return { ...base, needsHuman: true, readyToMark: false, reason: `blocked at round ${latest.review.round} of ${MAX_REVIEW_ROUNDS}` };
+      return withNote({ ...base, needsHuman: true, readyToMark: false, reason: `blocked at round ${latest.review.round} of ${MAX_REVIEW_ROUNDS}` });
     }
     const blockedFix = bound.find((item) => item.kind === REVIEW_FIX_KIND && item.status === "blocked" && item.review.headSha.toLowerCase() === head);
     if (blockedFix) {
-      return { itemId: blockedFix.id, kind: REVIEW_FIX_KIND as typeof REVIEW_FIX_KIND, status: "blocked", round: blockedFix.review.round, headSha: blockedFix.review.headSha, decision: "block", active: false, needsHuman: true, readyToMark: false, reason: "the fix is blocked" };
+      return withNote({ itemId: blockedFix.id, kind: REVIEW_FIX_KIND as typeof REVIEW_FIX_KIND, status: "blocked", round: blockedFix.review.round, headSha: blockedFix.review.headSha, decision: "block", active: false, needsHuman: true, readyToMark: false, reason: "the fix is blocked" });
     }
-    return { ...base, needsHuman: false, readyToMark: false };
+    return withNote({ ...base, needsHuman: false, readyToMark: false });
   }
   // No completed round has judged the current head.
   const round = completedReviews.length + 1;
   const newest = bound.at(-1)!;
   if (round > MAX_REVIEW_ROUNDS) {
-    return { itemId: newest.id, kind: newest.kind as PullRequestReviewRow["kind"], status: newest.status, round: completedReviews.length, headSha: newest.review.headSha, decision: latest?.review.decision, active: false, needsHuman: true, readyToMark: false, reason: `review budget exhausted (${MAX_REVIEW_ROUNDS} rounds)` };
+    return withNote({ itemId: newest.id, kind: newest.kind as PullRequestReviewRow["kind"], status: newest.status, round: completedReviews.length, headSha: newest.review.headSha, decision: latest?.review.decision, active: false, needsHuman: true, readyToMark: false, reason: `review budget exhausted (${MAX_REVIEW_ROUNDS} rounds)` });
   }
   if (newest.status === "blocked") {
-    return { itemId: newest.id, kind: newest.kind as PullRequestReviewRow["kind"], status: "blocked", round: newest.review.round, headSha: newest.review.headSha, decision: latest?.review.decision, active: false, needsHuman: true, readyToMark: false, reason: `${newest.kind} is blocked` };
+    return withNote({ itemId: newest.id, kind: newest.kind as PullRequestReviewRow["kind"], status: "blocked", round: newest.review.round, headSha: newest.review.headSha, decision: latest?.review.decision, active: false, needsHuman: true, readyToMark: false, reason: `${newest.kind} is blocked` });
   }
-  return { itemId: newest.id, kind: newest.kind as PullRequestReviewRow["kind"], status: newest.status, round: newest.review.round, headSha: newest.review.headSha, decision: latest?.review.decision, active: false, needsHuman: false, readyToMark: false };
+  return withNote({ itemId: newest.id, kind: newest.kind as PullRequestReviewRow["kind"], status: newest.status, round: newest.review.round, headSha: newest.review.headSha, decision: latest?.review.decision, active: false, needsHuman: false, readyToMark: false });
 }
