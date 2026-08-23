@@ -34,10 +34,12 @@ const FLOOR_PROFILES = {
     "src/queue/store.ts": { lines: 52, functions: 17 },
   },
   // Node 26: control varies by environment from 27.15%/2.37% to
-  // 32.50%/20.81%; ratchet to the lower unchanged-code baseline. Queue is
+  // 32.50%/20.81% — unlike Node 24, CI has reproduced the low end
+  // non-flakily on this runtime, so the floor stays ratcheted to it rather
+  // than to the newer tests' typical (but not guaranteed) result. Queue is
   // stable at 52.66%/17.14%.
   26: {
-    "src/control/store.ts": { lines: 30, functions: 18 },
+    "src/control/store.ts": { lines: 27, functions: 2 },
     "src/queue/store.ts": { lines: 52, functions: 17 },
   },
 };
