@@ -974,13 +974,23 @@ gated — and, per draft head:
 - **The latest round `block`ed this head, round 1 or 2** → one admitted root
   of kind `pr-review-fix`, keyed `pr-review-fix:<url>@<head SHA>`, with
   `read, write, run-tests, open-pr` and nothing delegable, carrying exactly
-  the fingerprinted blockers: address those, push, keep it a draft, report the
-  pull request. Its push is a new head and the next round.
+  the fingerprinted **tree** blockers: address those, push, keep it a draft,
+  report the pull request. Its push is a new head and the next round. A
+  `contract:pr-body:` **description blocker** never enters a fix
+  ([ADR-0067](../adr/0067-adjudicate-description-blockers-by-a-human.md)):
+  it lands in the **Review adjudication** group for you, and only an edit
+  you make to the pull request's body cures it.
+- **The latest round blocked only on description blockers a prior round
+  already sent you** → the tree is done and nothing remains the gate may act
+  on: the pass consequence applies instead (ready, or `readyToMark`), the
+  round still counts, and the blockers stay listed in *Review adjudication*
+  until you edit the body
+  ([ADR-0071](../adr/0071-pass-the-tree-when-only-adjudicated-description-blockers-remain.md)).
 - **Blocked at round 3, `unable-to-review`, or a fix that completed without
   a new head** → nothing is created; the output's `needsHuman` names the
   reason and the inbox's **Review adjudication** group lists the pull request
-  (beside the `readyToMark` ones). You decide: push a fix, `gh pr ready`,
-  `note` or `requeue` the item, or close the pull request.
+  (beside the `readyToMark` ones). You decide: push a fix, edit the body,
+  `gh pr ready`, `note` or `requeue` the item, or close the pull request.
 
 **Orphan pull requests.** The gate only ever sees a pull request an item
 reported, so one can escape it: a worker opens its draft, then its lease

@@ -276,39 +276,7 @@ export async function reviewPullRequests(
     if (latest?.review && latest.review.headSha === head.headSha) {
       const verdict = latest.review;
       if (verdict.decision === "pass") {
-        if (options.writes) {
-          if (!head.nodeId) {
-            result.unavailable.push({ url, reason: "GitHub response has no node id; cannot mark ready" });
-            continue;
-          }
-          const marked = await markPullRequestReady(head.nodeId, options.fetcher ?? fetch);
-          if (marked.kind === "unavailable") {
-            result.unavailable.push({ url, reason: `mark ready failed: ${marked.reason}` });
-            continue;
-          }
-          // The mutation binds to the pull request, not the head: re-read, and
-          // if a push landed between the read and the mark, convert back to a
-          // draft so no ready pull request carries an unreviewed head. The new
-          // head is then the next round's (or a human's) on a later pass.
-          const after = await readPullRequestHead(origin.repository, url, options);
-          const movedTo = after.kind === "head" && after.head.state === "open" && after.head.headSha !== head.headSha ? after.head.headSha : undefined;
-          if (after.kind === "unavailable" || movedTo) {
-            const reason = movedTo
-              ? `head moved to ${movedTo.slice(0, 7)} while being marked ready`
-              : `head could not be re-read after marking ready: ${after.kind === "unavailable" ? after.reason : "unknown"}`;
-            const reverted = await convertPullRequestToDraft(head.nodeId, options.fetcher ?? fetch);
-            if (reverted.kind === "converted") {
-              result.needsHuman.push({ url, headSha: movedTo ?? head.headSha, round: verdict.round, reason: `${reason}; converted back to draft` });
-            } else {
-              result.unavailable.push({ url, reason: `${reason}; converting back to draft failed: ${reverted.reason} — the pull request is ready with an unreviewed head` });
-            }
-            continue;
-          }
-          queue.recordPullRequestReady(origin.originItemId, url, actor, { headSha: head.headSha, reviewItemId: latest.id });
-          result.markedReady.push({ url, headSha: head.headSha, reviewItemId: latest.id });
-        } else {
-          result.readyToMark.push({ url, headSha: head.headSha, reviewItemId: latest.id });
-        }
+        await applyPassConsequence(queue, result, actor, options, origin, url, head, verdict.round, latest.id);
         continue;
       }
       if (verdict.decision === "unable-to-review") {
@@ -316,6 +284,37 @@ export async function reviewPullRequests(
         continue;
       }
       // block
+      // ADR-0067: description blockers never go into a fix item — a fix has
+      // no head to move the description, so the gate could never observe a
+      // cure. They go to human adjudication instead; a verdict with only
+      // description blockers mints no fix at all, and a mixed verdict mints
+      // the fix for the tree blockers only. The round still counts against
+      // the budget either way — it completed. Reported before the guards
+      // below, so a round-three block's description detail reaches the
+      // report too (one pull request may carry two needsHuman entries).
+      const { descriptionBlockers, treeBlockers } = partitionReviewBlockers(verdict.blockers ?? []);
+      if (descriptionBlockers.length > 0) {
+        const reason = await describeDescriptionAdjudication(origin.repository, url, descriptionBlockers, verdict, options);
+        result.needsHuman.push({ url, headSha: head.headSha, round: verdict.round, reason });
+      }
+      // ADR-0071: a description blocker the previous round already routed to
+      // a human (its fingerprint is among the verdict's priorBlockers) is
+      // outstanding, not new. When every blocker is such an outstanding
+      // description blocker, nothing remains the gate may act on: the tree
+      // takes the pass consequence — evaluated before the round budget so a
+      // clean tree is never "blocked at round three" — and the blockers stay
+      // with the human on the report above.
+      const priorDescriptionFingerprints = new Set(
+        partitionReviewBlockers(verdict.priorBlockers ?? []).descriptionBlockers.map((blocker) => blocker.fingerprint),
+      );
+      if (
+        treeBlockers.length === 0 &&
+        descriptionBlockers.length > 0 &&
+        descriptionBlockers.every((blocker) => priorDescriptionFingerprints.has(blocker.fingerprint))
+      ) {
+        await applyPassConsequence(queue, result, actor, options, origin, url, head, verdict.round, latest.id);
+        continue;
+      }
       if (reviews.some((item) => item.kind === REVIEW_FIX_KIND && item.status === "completed" && item.review?.headSha === head.headSha)) {
         result.needsHuman.push({ url, headSha: head.headSha, round: verdict.round, reason: "a fix completed without a new head" });
         continue;
@@ -323,17 +322,6 @@ export async function reviewPullRequests(
       if (verdict.round >= MAX_REVIEW_ROUNDS) {
         result.needsHuman.push({ url, headSha: head.headSha, round: verdict.round, reason: `blocked at round ${verdict.round} of ${MAX_REVIEW_ROUNDS}` });
         continue;
-      }
-      // ADR-0067: description blockers never go into a fix item — a fix has
-      // no head to move the description, so the gate could never observe a
-      // cure. They go to human adjudication instead; a verdict with only
-      // description blockers mints no fix at all, and a mixed verdict mints
-      // the fix for the tree blockers only. The round still counts against
-      // the budget either way — it completed.
-      const { descriptionBlockers, treeBlockers } = partitionReviewBlockers(verdict.blockers ?? []);
-      if (descriptionBlockers.length > 0) {
-        const reason = await describeDescriptionAdjudication(origin.repository, url, descriptionBlockers, verdict, options);
-        result.needsHuman.push({ url, headSha: head.headSha, round: verdict.round, reason });
       }
       if (treeBlockers.length === 0) continue;
       const fixReview: PullRequestReview = {
@@ -396,6 +384,60 @@ export async function reviewPullRequests(
 
   await observeUnreportedPullRequests(queue, result, gatedRepositories, actor, options);
   return result;
+}
+
+/**
+ * ADR-0065's pass consequence for one draft head: mark it ready (and
+ * compensate a head that moved mid-mark) when writes are enabled, report
+ * `readyToMark` otherwise. Shared by a `pass` verdict and by ADR-0071's
+ * outstanding-description rule — a `block` whose every blocker is a
+ * description blocker a prior round already routed to a human, leaving
+ * nothing the gate may act on.
+ */
+async function applyPassConsequence(
+  queue: QueueStore,
+  result: ReviewSweepResult,
+  actor: string,
+  options: ReviewOptions & { writes?: boolean },
+  origin: { repository: string; originItemId: string },
+  url: string,
+  head: PullRequestHead,
+  round: number,
+  reviewItemId: string,
+): Promise<void> {
+  if (!options.writes) {
+    result.readyToMark.push({ url, headSha: head.headSha, reviewItemId });
+    return;
+  }
+  if (!head.nodeId) {
+    result.unavailable.push({ url, reason: "GitHub response has no node id; cannot mark ready" });
+    return;
+  }
+  const marked = await markPullRequestReady(head.nodeId, options.fetcher ?? fetch);
+  if (marked.kind === "unavailable") {
+    result.unavailable.push({ url, reason: `mark ready failed: ${marked.reason}` });
+    return;
+  }
+  // The mutation binds to the pull request, not the head: re-read, and
+  // if a push landed between the read and the mark, convert back to a
+  // draft so no ready pull request carries an unreviewed head. The new
+  // head is then the next round's (or a human's) on a later pass.
+  const after = await readPullRequestHead(origin.repository, url, options);
+  const movedTo = after.kind === "head" && after.head.state === "open" && after.head.headSha !== head.headSha ? after.head.headSha : undefined;
+  if (after.kind === "unavailable" || movedTo) {
+    const reason = movedTo
+      ? `head moved to ${movedTo.slice(0, 7)} while being marked ready`
+      : `head could not be re-read after marking ready: ${after.kind === "unavailable" ? after.reason : "unknown"}`;
+    const reverted = await convertPullRequestToDraft(head.nodeId, options.fetcher ?? fetch);
+    if (reverted.kind === "converted") {
+      result.needsHuman.push({ url, headSha: movedTo ?? head.headSha, round, reason: `${reason}; converted back to draft` });
+    } else {
+      result.unavailable.push({ url, reason: `${reason}; converting back to draft failed: ${reverted.reason} — the pull request is ready with an unreviewed head` });
+    }
+    return;
+  }
+  queue.recordPullRequestReady(origin.originItemId, url, actor, { headSha: head.headSha, reviewItemId });
+  result.markedReady.push({ url, headSha: head.headSha, reviewItemId });
 }
 
 /**
@@ -541,7 +583,7 @@ export function reviewRootDefinition(
         : []),
       `Read the pull request's description and its diff at exactly head ${short} (for example \`gh pr diff ${head.number}\` or \`gh api repos/${repository}/pulls/${head.number}/files\`); check the head out and run the repository's own checks locally when you can.`,
       "Apply ADR-0029's pull-request profile. A blocker is ONLY a concrete correctness or security defect, an unmet acceptance criterion of the origin item, unauthorized or out-of-scope behaviour, false or materially insufficient evidence in the pull request, missing required validation, or a compatibility or contract break. Style preferences, optional improvements, alternative valid designs, speculative future concerns, and 'while you are here' work are advisories at most — never blockers.",
-      `A blocker whose only cure is an edit to the pull request's description — not the diff — for example a missing or wrong required section, risk tier, or evidence claim in the repository's template, carries the fingerprint prefix \`${DESCRIPTION_BLOCKER_PREFIX}\` and names the description, not a file, as its location (ADR-0067). Snowcat routes these straight to a human instead of a fix; use the prefix only for a defect a description edit alone would cure.`,
+      `A blocker whose only cure is an edit to the pull request's description — not the diff — for example a missing or wrong required section, risk tier, or evidence claim in the repository's template, carries the fingerprint prefix \`${DESCRIPTION_BLOCKER_PREFIX}\` and names the description, not a file, as its location (ADR-0067). Snowcat routes these straight to a human instead of a fix; use the prefix only for a defect a description edit alone would cure. Re-raise a still-uncured description blocker from the prior round honestly, under its same fingerprint: Snowcat will not spend a fix or another round on it — when such already-reported blockers are all that remain, the tree passes and they stay with the human (ADR-0071).`,
       ...(review.round > 1
         ? [
             `This is round ${review.round}: examine the prior round's blockers and the diff since head ${(previousHeadSha ?? "").slice(0, 7) || "the previous round"}, not a fresh unrestricted audit. Reuse a prior fingerprint for a blocker that is still open; name a new blocker only when this diff introduced it or made it newly assessable, and say why. Prior blockers: ${review.priorBlockers.length > 0 ? describeBlockers(review.priorBlockers) : "none"}.`,
