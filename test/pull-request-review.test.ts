@@ -766,6 +766,60 @@ test("the sweep reports, persists, and clears open pull requests no item reporte
   );
 });
 
+test("a still-claimed item's own draft pull request stays unreportedPending past the age grace period while its lease is heartbeat-renewed", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-review-unreported-live-lease-"));
+  let now = new Date("2026-08-19T15:00:00.000Z");
+  const queue = new QueueStore(join(directory, "queue.db"), () => now);
+  queue.setRepositoryEnabled(REPOSITORY, true);
+  queue.setRepositoryReviewGate(REPOSITORY, true);
+
+  // The item opened its own draft pull request but has not completed (and so
+  // cannot yet report it as an artifact via knownPullRequestUrls); it is
+  // still claimed, with its lease renewed well past the PR's creation time.
+  queue.enqueueSeed({
+    repository: REPOSITORY,
+    kind: "issue-resolution",
+    objective: "Resolve #9: a long-running fix",
+    instructions: "Open a PR.",
+    acceptanceCriteria: ["PR open.", "make check passes."],
+    allowedActions: ["read", "write", "run-tests", "open-pr"],
+    delegableActions: [],
+    priority: 5,
+    createdBy: "operator:test",
+  });
+  const claimed = queue.claim({ worker: "claude:author", kinds: ["issue-resolution"], leaseSeconds: 3600 });
+  assert.ok(claimed, "the issue-resolution item is claimable");
+
+  now = new Date("2026-08-19T15:50:00.000Z");
+  queue.heartbeat(claimed!.id, claimed!.leaseToken!, "claude:author", 3600);
+
+  const ownUrl = "https://github.com/frostyard/updex/pull/91";
+  const swept = await reviewPullRequests(queue, {
+    fetcher: apiFetcher(routesFor({ listing: [listed(91, true, "2026-08-19T15:00:00.000Z")] })).fetcher,
+    // 65 minutes after the pull request opened: past the 61-minute cutoff the
+    // age-only grace period uses, but the lease above is renewed to 16:50.
+    clock: () => new Date("2026-08-19T16:05:00.000Z"),
+  });
+
+  assert.deepEqual(swept.unreported, [], "the still-claimed item's own PR is not reported as an orphan");
+  assert.deepEqual(swept.unreportedPending, [{ url: ownUrl, number: 91, createdAt: "2026-08-19T15:00:00.000Z" }]);
+
+  // Once the item completes (and the lease is gone), the age cutoff alone governs again.
+  queue.complete({
+    id: claimed!.id,
+    leaseToken: claimed!.leaseToken!,
+    worker: "claude:author",
+    result: { summary: "Opened the PR as a draft.", evidence: ["make check"], artifacts: [{ kind: "pull-request", url: ownUrl, verification: { status: "verified", verifiedAt: now.toISOString(), number: 91, state: "open", headSha: HEAD_A, draft: true } }] },
+    followUps: [],
+  });
+  const afterCompletion = await reviewPullRequests(queue, {
+    fetcher: apiFetcher(routesFor({ listing: [listed(91, true, "2026-08-19T15:00:00.000Z")] })).fetcher,
+    clock: () => new Date("2026-08-19T16:05:00.000Z"),
+  });
+  assert.deepEqual(afterCompletion.unreported, [], "the completed item's artifact now accounts for the PR directly");
+  assert.deepEqual(afterCompletion.unreportedPending, []);
+});
+
 test("the unreported listing is bounded: more than three pages is reported truncated, and duplicates collapse", async () => {
   const queue = await newQueue("review-unreported-truncated");
   completedWithDraftPr(queue);
