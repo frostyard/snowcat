@@ -155,6 +155,37 @@ try {
     const id = required(rest[0], "work item id");
     const reason = required(rest.slice(1).join(" "), "requeue reason");
     print(withoutLeaseToken(queue.requeue(id, "operator:cli", reason, precondition("blocked", ifUpdatedAt))));
+  } else if (command === "release-lease") {
+    const { rest, ifUpdatedAt } = extractIfUpdatedAt(args);
+    const id = required(rest[0], "work item id");
+    const reason = required(rest.slice(1).join(" "), "lease release reason");
+    print(withoutLeaseToken(queue.releaseLease(id, "operator:cli", reason, precondition("claimed", ifUpdatedAt))));
+  } else if (command === "claims") {
+    // Read-only view of every current lease, lapsed first (spec rule 67):
+    // the operator's one page for "which claims outlived their workers".
+    const flags = parseFlags(args, ["repository"]);
+    const now = new Date();
+    const claims = queue
+      .list({ status: "claimed", repository: flags.repository, limit: 100 })
+      .map((item) => {
+        const attempt = queue.attempts(item.id).at(-1);
+        const expiresAt = item.leaseExpiresAt === undefined ? undefined : new Date(item.leaseExpiresAt);
+        const expired = expiresAt !== undefined && expiresAt.getTime() <= now.getTime();
+        return {
+          id: item.id,
+          repository: item.repository,
+          kind: item.kind,
+          objective: item.objective,
+          leaseOwner: item.leaseOwner,
+          label: attempt?.label,
+          claimedAt: attempt?.claimedAt,
+          leaseExpiresAt: item.leaseExpiresAt,
+          expired,
+          secondsRemaining: expiresAt === undefined ? undefined : Math.max(0, Math.round((expiresAt.getTime() - now.getTime()) / 1000)),
+        };
+      })
+      .sort((a, b) => Number(b.expired) - Number(a.expired) || (a.leaseExpiresAt ?? "").localeCompare(b.leaseExpiresAt ?? ""));
+    print(claims);
   } else if (command === "cancel") {
     const { rest, ifUpdatedAt } = extractIfUpdatedAt(args);
     const id = required(rest[0], "work item id");
@@ -313,6 +344,8 @@ try {
     console.error("       npm run queue -- reject <work-item-id> <reason> [--if-updated-at <iso>]");
     console.error("       npm run queue -- defer <work-item-id> <reason> [--if-updated-at <iso>]");
     console.error("       npm run queue -- requeue <work-item-id> <reason> [--if-updated-at <iso>]");
+    console.error("       npm run queue -- release-lease <work-item-id> <reason> [--if-updated-at <iso>]   (operator exit for a claimed lease whose holder is gone; the token is fenced)");
+    console.error("       npm run queue -- claims [--repository <owner/repo>]   (read-only; every current lease, lapsed first)");
     console.error("       npm run queue -- cancel <work-item-id> <reason> [--if-updated-at <iso>]");
     console.error("       npm run queue -- prioritize <work-item-id> <priority> <reason> [--if-updated-at <iso>]");
     console.error("       npm run queue -- note <work-item-id> <text> [--if-updated-at <iso>]");

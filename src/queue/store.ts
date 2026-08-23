@@ -1861,6 +1861,40 @@ export class QueueStore {
     });
   }
 
+  /**
+   * Returns one `claimed` item to claimable `queued` without waiting for its
+   * lease to lapse: the operator exit for a lease whose holder is gone — a
+   * dead worker, an interrupted session — observed before `leaseExpiresAt`
+   * (spec rule 67; docs/design/reality.md finding 11). Works whether the
+   * lease is live or already lapsed but unreclaimed. Clearing the lease
+   * fields fences the outstanding token: every later mutation with it fails
+   * exactly as after an expiry reclaim (rule 4). Definition, admission,
+   * result, and priority are untouched; the reason travels to the next lease
+   * as a `release-lease` note, and the ledger closes the attempt as
+   * `released`, ended by the operator, through the ordinary `work.released`
+   * event (rule 66) with the released owner and lease expiry in its payload.
+   */
+  releaseLease(id: string, actor: string, reason: string, precondition?: MutationPrecondition): WorkItem {
+    validateOperatorActor(actor, "lease release");
+    validateOperatorNoteReason(reason, "lease release reason");
+    return this.transaction(() => {
+      const item = this.getRequired(id);
+      this.assertPrecondition(item, precondition);
+      if (item.status !== "claimed") throw new Error(`work item is not claimed: ${id}`);
+      const now = this.now();
+      this.db
+        .prepare(
+          `UPDATE work_items
+           SET status = 'queued', lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
+               operator_notes_json = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(appendOperatorNote(item, { at: now, actor, action: "release-lease", reason }), now, id);
+      this.addEvent(id, "work.released", actor, { reason, previousOwner: item.leaseOwner, leaseExpiresAt: item.leaseExpiresAt });
+      return this.getRequired(id);
+    });
+  }
+
   cancel(id: string, actor: string, reason: string, precondition?: MutationPrecondition): WorkItem {
     validateOperatorActor(actor, "cancellation");
     if (!reason.trim()) throw new Error("cancellation reason is required");

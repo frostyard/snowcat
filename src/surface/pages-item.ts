@@ -4,7 +4,7 @@ import type { ItemData } from "./item.ts";
 import { artifactLabel, clock, document, itemPath, payloadGist, repositoryPath, shell, type PageContext } from "./pages.ts";
 import { enrollmentBadge } from "./pages-repositories.ts";
 import { predecessorLabel, type PredecessorEntry, type PredecessorSummary } from "./predecessor-state.ts";
-import { admissionForm, attachArtifactForm, deferForm, exitForm, noteForm, prioritizeForm, verifyForm } from "./forms.ts";
+import { admissionForm, attachArtifactForm, deferForm, exitForm, noteForm, prioritizeForm, releaseLeaseForm, verifyForm } from "./forms.ts";
 
 export function itemPage(context: PageContext, data: ItemData): string {
   const item = data.item;
@@ -48,6 +48,7 @@ function actionsCard(item: ObservableWorkItem): SafeHtml {
   if (item.status === "proposed") forms.push(admissionForm(item, here));
   if (item.status === "queued") forms.push(deferForm(item, here));
   if (item.status === "blocked") forms.push(exitForm(item, here));
+  if (item.status === "claimed") forms.push(releaseLeaseForm(item, here));
   if (item.status === "proposed" || item.status === "queued" || item.status === "blocked") forms.push(prioritizeForm(item, here));
   if (item.status === "completed" && (item.result?.artifacts ?? []).some((artifact) => artifact.kind === "issue" || artifact.kind === "pull-request")) {
     forms.push(html`<div class="fl-decide"><div class="fl-actions">${verifyForm(item.repository, here, { label: "Re-verify repository artifacts" })}</div><small class="fl-sub">Re-checks every pending issue and pull-request artifact in ${item.repository} against GitHub.</small></div>`);

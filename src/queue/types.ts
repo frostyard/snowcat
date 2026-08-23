@@ -122,7 +122,7 @@ export const mcpTokenProfiles = {
 } as const satisfies Record<string, readonly McpToolName[]>;
 export type McpTokenProfile = keyof typeof mcpTokenProfiles;
 
-export const operatorNoteActions = ["requeue", "defer", "prioritize", "note"] as const;
+export const operatorNoteActions = ["requeue", "defer", "prioritize", "note", "release-lease"] as const;
 export type OperatorNoteAction = (typeof operatorNoteActions)[number];
 
 /**
