@@ -54,6 +54,13 @@ locally available revisions:
 The sample is enough to expose repeated contract seams; it is not a claim that
 every Frostyard repository has every target-side problem below.
 
+Later the same day (2026-08-23), findings 10–17 were added from operating
+the review gate end-to-end on snowcat#199 and snowcat#202 — two review
+rounds, one review fix, and the merge-queue delivery — so their evidence is
+the queue's attempt ledger and the campaign's worker records rather than
+contract text. They cover the failure class a static audit cannot see:
+places where every document agrees and the runtime still diverges.
+
 ## Findings at a glance
 
 | Priority | Roadblock | What makes success unnecessarily hard |
@@ -67,6 +74,14 @@ every Frostyard repository has every target-side problem below.
 | P2 | Read-only review is told to run mutating gates | `make check` in two sample repositories runs `gofmt -w`, conflicting with a review item's lack of `write`. |
 | P2 | Lease correctness is a prompt ritual | Long prose asks the model to renew around every expensive step; the trial record shows this is not a reliable lifecycle mechanism. |
 | P3 | Cockpit's role spec disagrees with Cockpit | The documented implementer whitelist is stale while runtime selection is intentionally open-ended. |
+| P0 | Completion is a prompt ritual too | A worker can narrate success, exit 0, and leave its lease orphaned; nothing reconciles provider exit with the queue attempt. |
+| P1 | An orphaned lease has no operator exit | `requeue` is blocked-only and reclaim is claim-time-only, so a dead worker stalls its item for the full lease. |
+| P1 | Reviewer diversity concentrates on the weakest harness | The different-model rule routes review work to the other provider, whose lifecycle failures then gate every pull request. |
+| P1 | Credential scope is outside the work contract | The queue can mint work no fleet credential can deliver (workflow-scoped pushes), discovered only inside leases. |
+| P2 | Description blockers burn the round budget | An unadjudicated `contract:pr-body:` defect forces every later round to block on a decision already routed to a human. |
+| P2 | Identity and independence are asserted | One shared principal plus self-asserted `result.model` means nothing enforces that a reviewer is not the author. |
+| P3 | Claim/release churn has no backoff | Contract-mismatched items are claimed and released repeatedly with no cooldown or escalation. |
+| P3 | Ready is machine-terminal, not success-terminal | The gate's last act is marking ready; ready→merged is untracked and the merge procedure is undocumented. |
 
 ## Detailed findings
 
@@ -192,7 +207,10 @@ it for later launches
 The skill instruction is impossible after Cockpit launch and a long-running
 campaign's immutable base can become arbitrarily old. Conflict cure later is
 not a substitute: stale work wastes a model attempt, review round, and human
-attention before the conflict is observed.
+attention before the conflict is observed. The merge queue (core ADR-0042)
+bounds the damage — GitHub rebuilds each entry on the queue tip and re-runs
+checks — so a stale base costs wasted attempts and attention rather than a
+wrong merge.
 
 Make base freshness a checked launch precondition rather than worker prose.
 Refresh and pin per implementation launch, or give prepared bases a short
@@ -236,9 +254,12 @@ work lease.
 
 [`artifact-verification.ts`](../../src/queue/artifact-verification.ts) verifies
 the artifact kind, URL/number, target repository, state, head SHA, and draft
-state. It does not verify conventional title, PR-template sections, declared
+state. It does not verify PR-template sections, declared
 risk, protected-boundary disclosure, repository review rubric, or the checks
-the result says passed. The semantic review prompt can identify a missing
+the result says passed. (Since this was captured, snowcat#199 landed the
+conventional-title lint, its CI workflow, and the `bad-title` decay for
+snowcat itself; the remaining items and the target repositories stand as
+written.) The semantic review prompt can identify a missing
 description obligation, but only when the review gate is enabled and only when
 the target repository actually expresses the obligation.
 
@@ -307,6 +328,114 @@ once in code and test generated documentation or fixtures against it. Keep
 role selection open-ended only if the typed work contract—not a kind-name
 heuristic—carries every execution requirement.
 
+### 10. Completion is a prompt ritual too
+
+Finding 8 covers renewal; the terminal step has the same shape. On
+2026-08-23 two Cockpit reviewer workers (copilot provider) printed a
+completed-verdict narrative, exited 0, and had never called
+`complete_work`: items `ba71c5c2` (snowcat#202) and `9cc4c7a6` (snowcat#199)
+stayed `claimed` while the campaign recorded both workers as running and
+their containers were gone; one "review" lasted 14 seconds and never fetched
+the diff. Nothing reconciles provider exit with the queue attempt's outcome,
+so a worker that narrates completion is indistinguishable from one that
+completed. The prompt's "claim 3,600 seconds and heartbeat immediately"
+maximizes the damage: a worker that dies seconds after claim has already
+extended its orphaned lease to the full hour.
+
+Treat "provider exited while its claimed attempt reached no terminal
+outcome (completed, blocked, released)" as a failed lane, record it, and
+surface it. The worker-local wrapper of finding 8 is the right observer: it
+knows whether `complete_work` ever crossed the wire, and renewal tied to
+liveness stops front-loaded leases outliving their workers.
+
+### 11. An orphaned lease has no operator exit
+
+`requeue` acts only on `blocked` items; an expired lease is reclaimed only
+inside `claim_work`; no read shows "claimed, but the holder is gone".
+Recovering the two orphaned reviews above meant waiting out both full
+leases and winning a polling race against the campaign's own 30-second
+claim loop. An attributed operator command (`queue -- release-lease <id>
+<reason>`, the same decision shape as `repository -- hold`) plus a
+stale-claim listing would turn an hour of dead time per incident into a
+minute.
+
+### 12. Reviewer diversity concentrates on the weakest harness
+
+The gate asks each round for a model different from the author's
+([ADR-0065](../adr/0065-gate-worker-pull-requests-behind-bounded-review.md)),
+and most authoring runs on one provider — so review work routes
+deterministically toward the other. Both of the day's lifecycle failures
+(finding 10) were that lane. Model diversity is being purchased with
+harness monoculture: the review gate's integrity is bounded by the least
+reliable client in the fleet. The contract should separate the two
+properties — a diverse model on a qualified client — where a client
+qualifies by demonstrated lifecycle completion, not by provider name.
+
+### 13. Credential scope is outside the work contract
+
+Finding 5 qualifies tools; credentials have the same seam. Item `4ed69c08`
+(snowcat#199) required CI wiring under `.github/workflows/`, and no fleet
+credential can push one: GitHub refuses workflow files from OAuth tokens
+without the `workflow` scope, which burned two implementation attempts and
+their review rounds before an operator SSH push landed the file. The
+execution profile of finding 5 should name required credential scopes next
+to required tools, and an item whose scope touches paths the lane's
+credential cannot write is unready rather than claimable. The same episode
+is finding 3's sharpest corollary observed live: a mechanically admitted
+`pr-review-fix` was required to modify a path the repository's own policy
+marks review-required at Tier 4 — the policy said human decision; the
+mechanics said push.
+
+### 14. Description blockers burn the round budget
+
+[ADR-0067](../adr/0067-adjudicate-description-blockers-by-a-human.md)
+routes `contract:pr-body:` blockers to a human and forbids automated cure
+— but rounds are head-keyed, and each later round must honestly re-raise a
+still-uncured description defect. One unadjudicated body defect therefore
+converts every remaining round into a block: snowcat#199's round 3 blocked
+solely on the risk-classification blocker already routed to a human in
+round 2, over a clean tree. Later rounds should report an
+already-adjudicated description fingerprint without counting it toward
+block/pass. Relatedly, the minted fix item's objective names the
+`contract:pr-body:` fingerprint that ADR-0067 excludes from the fix's
+scope — item `552c67f0` read "Fix … missing-risk-classification" while the
+ADR forbids the fixer from touching it.
+
+### 15. Identity and independence are asserted, not enforced
+
+Every actor in the day's operation — campaign workers, the operator's
+session, the reclaim poller — presented the same member principal; only
+free-text claim labels differed, and `result.model` is self-asserted (the
+gate already says so). The queue would have accepted the author of a head
+claiming its own round-3 review; skill prose alone prevented it. The
+minted-token machinery (kind restrictions and tool grants, work-queue spec
+schema rungs 9 and 14) exists precisely to make identity a credential
+property and is unused by the fleet: one minted token per lane role would
+make the different-reviewer rule and review-only claims checkable instead
+of ritual. This is finding 8's shape applied to identity.
+
+### 16. Claim/release churn has no backoff
+
+A contract-mismatched item is claimed and released repeatedly with no
+cooldown, cost, or escalation: item `81dd224a` (snowcat#201's fix) was
+claimed and released five times in eleven minutes by campaign implementers
+before an attempt stuck. The attempts ledger already records everything
+needed; an item released by several workers in a short window should back
+off from claim selection and surface to the operator as evidence of
+exactly the mismatches findings 1 and 2 describe.
+
+### 17. Ready is machine-terminal, not success-terminal
+
+The gate's last automated act is marking a draft ready; delivery of the
+merge is untracked and unprompted. Three ready pull requests sat idle on
+2026-08-23 until the operator hand-enqueued them, and the merge procedure
+itself — core ADR-0042's merge queue, GraphQL `enqueuePullRequest`,
+`gh pr merge` disabled by that contract — is written down in no repository
+document. Automating merges stays off the table (see controls to
+preserve), but `verify-artifacts` already derives `delivery` and could
+name ready-but-unmerged heads, and the enqueue procedure belongs in
+[queue operations](queue-operations.md).
+
 ## Remediation order
 
 1. **Make execution target and mutation mode explicit.** Add new-PR,
@@ -321,8 +450,14 @@ heuristic—carries every execution requirement.
 4. **Make verification evidence-shaped.** Provide non-mutating target gates
    and deterministically verify mechanical PR-governance obligations.
 5. **Automate lifecycle mechanics and remove duplicate prose.** Keep lease
-   renewal in worker-local plumbing and generate Cockpit role documentation
-   from the same source as classification.
+   renewal and completion reconciliation in worker-local plumbing — a
+   provider exit with no terminal queue outcome is a failure, whatever the
+   model printed — give the operator a lease-release exit, and generate
+   Cockpit role documentation from the same source as classification.
+6. **Make identity a credential property.** Mint per-role queue tokens
+   (existing schema rungs 9 and 14) so review-only claims, the
+   different-reviewer rule, and lane attribution are enforced by the
+   credential rather than asked of the model.
 
 Each step changes a contract and therefore starts with an ADR, updates the
 [work queue spec](../specs/work-queue.md) or the appropriate Cockpit spec, and
@@ -350,6 +485,15 @@ layers enforce the same boundary without worker interpretation.
   preallocated-branch prompt.
 - Until finding 2 is fixed, Cockpit should refuse new-PR work without explicit
   `write`, even though Snowcat's current predicate accepts it.
+- A provider that exits while its claimed item is still `claimed` has failed
+  regardless of what it printed; inspect the lease and count it against that
+  lane (finding 10).
+- Until finding 11 lands, recovery from an orphaned lease is claim-at-expiry:
+  note `leaseExpiresAt` and reclaim immediately after it, ahead of the
+  campaign's own poll.
+- Route work that must touch `.github/workflows/**` — or any path fleet
+  credentials cannot push — to the operator's own credential, not a campaign
+  lane (finding 13).
 
 ## References
 
