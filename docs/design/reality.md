@@ -194,7 +194,11 @@ is admitted or mechanically admitted. At minimum, retain on the item:
   `review-required` act.
 
 Fail closed when scope is too vague to determine whether a protected boundary
-is involved. Do not make a model classify its own authority.
+is involved. Do not make a model classify its own authority. (Decided:
+[ADR-0074](../adr/0074-compile-policy-into-work-admission.md) — the policy
+binding, deterministic deny/ceiling enforcement, named satisfiers for
+review-required acts, and the delivered-diff boundary check; implementation
+follows it.)
 
 ### 4. Base freshness cannot be satisfied by a managed worker
 

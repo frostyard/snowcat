@@ -488,6 +488,33 @@ refuses an item where they cannot.
 the tree).
 ([ADR-0073](../adr/0073-declare-the-execution-target-on-every-work-item.md))
 
+#### Policy binding
+
+The Core authority revision and repository governance digest a work item was
+defined and admitted under, stamped on the item so its authorization is
+evidence rather than circumstance. An item defined without a control-plane
+store — or before the binding existed — is *unbound*: visible as such, never
+back-filled. The binding is what admission judges and what the delivered
+diff is checked against; it does not itself grant anything.
+
+**Avoid:** policy snapshot (Core snapshots are the control plane's);
+implied by enrollment; authority (the binding cites authority, it is not
+one).
+([ADR-0074](../adr/0074-compile-policy-into-work-admission.md))
+
+#### Standing authorization
+
+A closed in-code registry entry naming the Accepted ADR that pre-authorizes
+one mechanical admission path — a cure, a review round, a review fix — and
+the exact action set it may cover. A mechanically admitted item cites its
+standing authorization the way a human-admitted item records its approver;
+a mechanical path with no entry cannot mint admitted work and proposes
+instead.
+
+**Avoid:** auto-approval; policy exception; hard-coded admission; implied
+by kind.
+([ADR-0074](../adr/0074-compile-policy-into-work-admission.md))
+
 ### Assertions, evidence, and assurance
 
 #### Assertion
