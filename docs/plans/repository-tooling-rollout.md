@@ -303,25 +303,34 @@ Cockpit in Snowcat's fleet until Phase 5 needs that.
 
 ## Phase 2 — Base image (snowcat-cockpit; one to two days)
 
-- [ ] Collapse `oci/Containerfile`, `Claude.Containerfile`, and
-  `Copilot.Containerfile` into one `oci/base.Containerfile` carrying all three
-  provider CLIs (their pins unchanged) and one entrypoint that selects the
-  provider from Cockpit's launch argument. The per-provider
-  `SNOWCAT_COCKPIT_OCI_*_IMAGE` variables keep working and may all name the
-  same digest, so a Phase 0 node configuration is not broken.
-- [ ] Add `mise` (pinned release, SHA256-verified, ADR-0023) with
-  `MISE_DATA_DIR` pointing at the read-only mount Phase 4 introduces and
-  `MISE_YES=1`; keep `GOTOOLCHAIN=local`.
-- [ ] Publish the baseline as data: `oci/baseline.json` listing every
-  executable the base guarantees (shell utilities, git, gh, make, jq,
-  ripgrep, go, gofmt, node, mise, the provider CLIs) with versions; the OCI
-  workers spec references the file instead of restating the list. This is
-  the "beyond the baseline" boundary the core ADR needs to be checkable.
-- [ ] `worker-images.yml` publishes
-  `ghcr.io/frostyard/snowcat-worker-base:<version>` with a recorded
-  `@sha256` manifest digest, multi-architecture as today (first real GHCR
-  publish — Phase 0 ran from local image IDs). Roll the nodes from local
-  IDs to the published digest.
+- [x] Collapse the three Containerfiles into one `oci/Containerfile`
+  carrying all three provider CLIs (snowcat-cockpit#11). *Shape changed
+  from ADR-0012's sketch: instead of one entrypoint selecting the provider
+  from a launch argument (a Cockpit code and spec change), the file has one
+  `base` stage and three provider **targets** that add only an entrypoint —
+  the three images share every layer (21 of 21 locally), the per-provider
+  image variables keep working unchanged, and the provider entrypoints stay
+  separate files, which is what let Codex's relay fix (#10) land in
+  parallel without a conflict.*
+- [x] Add `mise` 2026.8.12 (pinned, SHA256-verified per arch) with
+  `MISE_DATA_DIR=/var/lib/snowcat-cockpit/mise` and `MISE_YES=1`; keep
+  `GOTOOLCHAIN=local` (snowcat-cockpit#11).
+- [x] Publish the baseline as data: `oci/baseline.json`, shipped in the
+  image at `/usr/local/share/snowcat-cockpit/baseline.json`; the OCI
+  workers spec references it (snowcat-cockpit#11). The stopgap
+  `golangci-lint` is listed under `stopgap` so Phase 6 knows what to remove.
+- [ ] `worker-images.yml` builds the three targets of the one file
+  (snowcat-cockpit#11); the published names stay
+  `ghcr.io/frostyard/snowcat-cockpit-worker:<provider>-<version>` (a
+  rename to `snowcat-worker-base` would break every node's configured
+  reference for no gain — the base is the shared layer set, not a fourth
+  tag). First publish on the next tag after #11 merges; roll the node.
+- [x] **Codex workers register the projected lease relay** (snowcat-cockpit#10,
+  by Codex, merged 2026-08-24; `v0.1.2`): a mode-0600 `--profile` file in
+  the tmpfs `CODEX_HOME` layers the relay server and disables the direct
+  one — verified against the pinned CLI, which documents `--profile` as
+  "layer `$CODEX_HOME/<name>.config.toml`". Codex reviewers return to the
+  campaign request.
 - **Done when:** Codex, Claude, and Copilot workers each complete a Snowcat
   item from the same base digest, and `oci/baseline.json` is the only place
   the baseline is enumerated.
