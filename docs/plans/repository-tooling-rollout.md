@@ -282,7 +282,7 @@ Cockpit in Snowcat's fleet until Phase 5 needs that.
      `ghcr.io/frostyard/snowcat-worker-base` or `FROM` it; the baseline tool
      list is a versioned, published fact of that image.
   The surfaces contract does **not** gain an execution-profile schema.
-- [ ] **Cockpit ADR-0012** (snowcat-cockpit#8, queued 2026-08-24): one provider-collapsed base image; repository tools
+- [x] **Cockpit ADR-0012** (snowcat-cockpit#8, merged 2026-08-24): one provider-collapsed base image; repository tools
   provisioned at target preparation from `mise.lock` into a per-repository
   cache mounted read-only; `mise ls --missing` non-empty or Go not satisfying
   `go.mod` ⇒ lane unready with the reason named; the worker kit stops
@@ -298,6 +298,8 @@ Cockpit in Snowcat's fleet until Phase 5 needs that.
 - **Done when:** all three ADRs are Accepted and cross-linked, ADR-0075 is
   marked Superseded, `npm run check` passes here, and the glossary's
   **Execution profile** entry describes the convention, not a schema.
+  **Met 2026-08-24** (glossary term is now *Repository tooling
+  convention*).
 
 ## Phase 2 — Base image (snowcat-cockpit; one to two days)
 
@@ -356,7 +358,9 @@ failure the convention exists to end.
   empty; deleting the `golangci-lint` entry makes `make lint` fail rather
   than skip. *Local half met 2026-08-24 (fresh `MISE_DATA_DIR`, `mise
   install`, `verify` green, tree clean, lint fails without the tool); CI
-  half is std#63's merge.*
+  half met when std#63 merged the same day — the fleet's first
+  `jdx/mise-action` run (its first attempt failed on a `lint-version-check`
+  target `std` did not have; added).* **Met 2026-08-24.**
 
 ## Phase 4 — Prep-time provisioning (snowcat-cockpit; two days)
 
@@ -390,16 +394,16 @@ lanes do it against the Phase 3 pattern. The Phase 4 node provisions from
 whatever each repository declares, so a repository can adopt while others
 have not.
 
-- [ ] `clix` and `updex`: mirror Phase 3 exactly (both already pin 2.12.2).
+- [ ] `clix` and `updex`: mirror Phase 3 exactly (clix#81, updex#391 filed
+  2026-08-24 with the exact scope; both on 2.13.1 since Phase 0).
 - [ ] `snowcat`: `mise.toml` pins Node (today only `package.json`'s
   `engines` and the deploy runbook say which); `npm run check` is already
   the full gate — add `verify` as the credential-free subset (`typecheck`,
-  `test`, `check:docs`) and document it in `AGENTS.md`.
+  `test`, `check:docs`) and document it in `AGENTS.md` (snowcat#225).
 - [ ] `core`: Node like `snowcat`; its `scripts/check-organization.mjs` is
-  `verify`.
-- [ ] `firn`: adopt per its build system (declare, do not infer — if it
-  needs tools mise cannot install, it becomes the first Phase "Later"
-  extension-image candidate rather than a partial adoption).
+  `verify` (core#109).
+- [ ] `firn`: a Go repository that never received Phase 0's `verify` and
+  hard-fail lint; its issue (firn#69) carries both plus the mise pins.
 - [ ] `snowcat-cockpit`: land the Phase P deferred items (core declaration,
   agent-governance surface), enroll it, then adopt mise like the other Go
   repositories — its Makefile already hard-pins `golangci-lint` (2.13.1;
