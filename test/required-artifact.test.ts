@@ -56,6 +56,15 @@ test("contractProblem names exactly the three undeliverable shapes and nothing e
   assert.equal(contractProblem({ allowedActions: ["read", "write", "open-pr"], requiredArtifact: "none", parentId: "p" })?.code, "child-write-without-required-pull-request");
 });
 
+test("a -discovery kind is read-only discovery: it can neither owe a pull request nor grant write or open-pr", () => {
+  const change = { allowedActions: ["read", "write", "open-pr"] as AllowedAction[], requiredArtifact: "pull-request" as const, executionTarget: "new-pull-request" as const, parentId: "p" };
+  assert.equal(contractProblem({ ...change, kind: "docs-drift-discovery" })?.code, "discovery-kind-with-change-contract", "the follow-up that inherited its parent's kind on 2026-08-24");
+  assert.equal(contractProblem({ ...change, kind: "docs-drift-fix" }), undefined, "the same contract under an implementation kind");
+  assert.equal(contractProblem({ allowedActions: ["read", "open-pr"], requiredArtifact: "none", kind: "quality-gap-discovery" })?.code, "discovery-kind-with-change-contract", "open-pr alone is a change grant");
+  assert.equal(contractProblem({ allowedActions: ["read", "create-followup"], requiredArtifact: "none", executionTarget: "read-only", kind: "quality-gap-discovery" }), undefined, "the catalog's own discovery root");
+  assert.equal(contractProblem({ allowedActions: ["read", "write", "open-pr"], requiredArtifact: "pull-request" }), undefined, "no kind, no kind rule (legacy callers)");
+});
+
 test("every definition path refuses a contract the item's own authority cannot honor", async () => {
   const { queue } = await openQueue("contract-definition");
   const { repository: _repository, ...rootDefinition } = {
