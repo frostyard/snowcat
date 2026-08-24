@@ -474,26 +474,26 @@ have not.
   wrapper re-projected `GH_TOKEN`, and both items were `requeue`d; the
   second attempts pushed. Until ADR-0076 §5's scope declaration lands on
   the governance boundary, this is discovered inside a lease.*
-- [ ] `snowcat`: `mise.toml` pins Node (today only `package.json`'s
-  `engines` and the deploy runbook say which); `npm run check` is already
-  the full gate — add `verify` as the credential-free subset (`typecheck`,
-  `test`, `check:docs`) and document it in `AGENTS.md` (snowcat#225).
-  *snowcat#232 (draft) carries the pin files and docs but not the CI step —
-  same scope wall, before the grant; snowcat#233 files the CI half.*
+- [x] `snowcat`: `mise.toml` pins Node; `npm run verify` is the
+  credential-free subset (snowcat#232, merged 2026-08-24). *The CI half
+  (snowcat#233 → #236, `jdx/mise-action`) is open and ready for human
+  merge.*
 - [ ] `core`: Node like `snowcat`; its `scripts/check-organization.mjs` is
   `verify` (core#109). *Not imported: core's own fleet declaration
   (`organization/repositories/frostyard/core.json`) has `fleet_state:
   disabled`, so Snowcat reads the repository as disabled and `import-issues
   --enrolled` skips it — a core-side decision to enable itself, not a node
   gap (it is in the node's catalog).*
-- [ ] `firn`: a Go repository that never received Phase 0's `verify` and
-  hard-fail lint; its issue (firn#69) carries both plus the mise pins.
+- [x] `firn`: `verify`, hard-fail lint, and the mise pins in one change
+  (firn#69 → firn#70, merged 2026-08-24 by a Cockpit worker).
 - [ ] `snowcat-cockpit`: land the Phase P deferred items (core declaration,
   agent-governance surface), enroll it, then adopt mise like the other Go
   repositories — its Makefile already hard-pins `golangci-lint` (2.13.1;
   align to the fleet pin or move the fleet, one change).
 - [ ] Core distributes the shared pieces the same way it distributes
-  skills (core
+  skills — *not yet needed: every adoption so far was a worker copying the
+  `std` pilot from its issue text; revisit if a new Go repository joins*
+  (core
   [ADR-0026](https://github.com/frostyard/core/blob/main/docs/adr/0026-distribute-core-skills-via-sync-prs.md)):
   a `mise.toml` settings block, the `verify` Makefile snippet, and the
   mise CI step as templates.
@@ -537,6 +537,44 @@ have not.
   repository within a sweep cadence, and a Go release ahead of lint yields a
   proposal whose CI fails on golangci-lint's own version check rather than
   a worker lease.
+
+## Where we stand — 2026-08-24, end of day
+
+**Met:** Phases 0, P, 1, 2, 3, 4. Every fleet repository that Snowcat works
+(`std`, `clix`, `updex`, `firn`, `snowcat`) pins its tools in
+`mise.toml`/`mise.lock` and exposes the `verify` gate; Cockpit `v0.1.6`
+builds one base image with three provider targets, provisions each worker's
+tools from its repository's lock before the lease, and runs Claude, Codex,
+and Copilot workers on it. The operator node is on the `v0.1.6` line with
+the cleanup (#19) and relay (#22) fixes installed; the reviewer lane runs
+Codex.
+
+**Outstanding, in order:**
+
+1. **Phase 5 closeout** — merge snowcat#236 (CI half; human-routed because it
+   touches `.github/workflows/**`); decide whether `core` enables its own
+   `fleet_state` (it is `disabled` in its declaration, so nothing there is
+   Snowcat work); the core-side conformance check from ADR-0043 (presence
+   of `mise.toml`, `mise.lock`, and the three targets) is unwritten.
+2. **Phase 6 — retire the stopgap:** `golangci-lint` still ships in the base
+   image and `oci/baseline.json` lists it under `stopgap`; with every
+   enrolled repository now on `mise.lock`, remove it, republish, roll. The
+   `verify`-cleanliness probe in the program catalog is unwritten.
+3. **Phase 7 — pin-bump automation:** nothing built; the Go/lint pair-bump
+   convention is enforced only by `lint-version-check` after the fact.
+4. **Cockpit follow-ups with evidence:** #17 (lane relaunches for an item its
+   own live worker holds — one wasted container start per five minutes per
+   long item), #20 (retained workspaces on a tmpfs; cleanup is manual — 196
+   cleaned by hand today), #21 (`release-needed` counted claimable while
+   the prompt excludes it). ADR-0012 §5–6 (kit refreshed from its source;
+   catalog derived from Core) remain design-only.
+5. **ADR-0076 §5 — credential scopes on the boundary:** not started. The
+   `workflow`-scope wall cost three leases today; until core's governance
+   schema carries `github:workflow` on `.github/workflows/**` and the queue
+   surfaces it, a worker discovers it inside the lease.
+6. **Provider reliability, observed not fixed:** Copilot mangled the lease
+   token twice (relay now immune) and once invented a `gh` limitation; keep
+   it off the reviewer lane until a run shows otherwise.
 
 ## Later / ideas
 
