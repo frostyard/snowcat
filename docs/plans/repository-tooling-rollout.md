@@ -174,11 +174,23 @@ retired by Phase 6; do not generalise it.
   one item per repository whose retained worker terminal shows
   `golangci-lint run` executing from the image (no `go install`, no
   "skipping"), and one `pr-review` item completes with `git status
-  --porcelain` empty after `make verify`. *Met for `clix` end to end
-  (implement, review, merge) on 2026-08-24. `std` has the discovery half;
-  its implementation waits on std#61's admission. `updex` is not in this
-  node's campaign catalog — add it (or run one item by hand) to close the
-  criterion; the image and gate inputs are identical to `clix`'s.*
+  --porcelain` empty after `make verify`. **Met 2026-08-24.** *`clix`:
+  implement → draft clix#80 → `pr-review` pass → merged. `std`: std#61
+  admitted → implementer on `claude-v0.1.1` verified with `make verify` →
+  draft std#62 → `pr-review` pass in round 1 at the bound detached head
+  ("golangci-lint 2.13.1 at the exact pin `0 issues.` on both passes")
+  → the gate marked it ready. `updex`: five discoverers and a reviewer
+  (updex#388 round 2, pass) ran on the image the moment the repository
+  joined the node's catalog.*
+- [x] **Cockpit:** enroll `updex` in the node's managed catalog. *Found
+  late: `updex` was fleet-enabled in Core and had queued work all day, but
+  Cockpit's catalog (`POST /api/v1/repositories`, node-local state) never
+  listed it, so no lane claimed anything there and the queue looked frozen.
+  A campaign snapshots the catalog at start; adding a repository needs a
+  campaign restart. Fifth item for the Phase 1 Cockpit ADR: the catalog
+  should derive from Core's enabled declarations (or at least report the
+  difference), because a repository Core enables and Snowcat enrolls that
+  no node works is invisible to everyone.*
 
 ## Phase P — Publish Cockpit (hours)
 
@@ -273,10 +285,13 @@ Cockpit in Snowcat's fleet until Phase 5 needs that.
 - [ ] **Cockpit ADR:** one provider-collapsed base image; repository tools
   provisioned at target preparation from `mise.lock` into a per-repository
   cache mounted read-only; `mise ls --missing` non-empty or Go not satisfying
-  `go.mod` ⇒ lane unready with the reason named; and the worker kit stops
+  `go.mod` ⇒ lane unready with the reason named; the worker kit stops
   being a release-time vendored copy of Snowcat's skills (Phase 0's
   `degraded` campaign) — refreshed from a recorded source revision, or
-  deferred to the checkout where the repository is the canonical source. Supersedes the "generic
+  deferred to the checkout where the repository is the canonical source;
+  and the managed-repository catalog derives from (or reports drift
+  against) Core's enabled declarations rather than living only as
+  node-local state (Phase 0's unenrolled `updex`). Supersedes the "generic
   baseline" posture of
   [Cockpit ADR-0005](https://github.com/frostyard/snowcat-cockpit/blob/main/docs/adr/0005-isolate-unattended-workers-in-rootless-oci.md)
   without weakening any isolation rule.
