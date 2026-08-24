@@ -465,7 +465,8 @@ name ready-but-unmerged heads, and the enqueue procedure belongs in
    requirements, and record how review-required acts were authorized.
 3. **Move freshness and environment readiness out of prompts.** Qualify the
    base and repository execution profile before claimable work consumes a
-   worker slot.
+   worker slot (rollout:
+   [repository tooling and worker image rollout](../plans/repository-tooling-rollout.md)).
 4. **Make verification evidence-shaped.** Provide non-mutating target gates
    and deterministically verify mechanical PR-governance obligations.
 5. **Automate lifecycle mechanics and remove duplicate prose.** Keep lease
