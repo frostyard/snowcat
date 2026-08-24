@@ -252,10 +252,13 @@ export function buildQueueMcpServer(
         result: z.object({
           summary: z.string().min(1),
           evidence: z.array(z.string().min(1)),
-          artifacts: z.array(artifactSchema),
+          // Optional with an empty default (#242): a pr-review reports no
+          // artifact and creates no follow-up, and a strict client that
+          // follows the review skill literally omits both keys.
+          artifacts: z.array(artifactSchema).default([]),
           model: z.string().regex(MODEL_NAME_PATTERN).optional(),
         }),
-        followUps: z.array(followUpSchema).max(10),
+        followUps: z.array(followUpSchema).max(10).default([]),
         review: reviewSchema.optional(),
       }),
     },
