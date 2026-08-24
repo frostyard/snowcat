@@ -50,8 +50,10 @@ maximizing comments.
   acceptance criteria, instructions, and `sourceRef` issue are the contract the
   pull request claims to satisfy. Read the pull request and its diff at exactly
   `review.headSha` (`gh pr diff <n>` or `gh api repos/<owner>/<repo>/pulls/<n>/files`);
-  check the head out and run the repository's own checks locally when you can
-  (`run-tests` is allowed; nothing on GitHub is).
+  check the head out and run the repository's non-mutating gate — `make
+  verify` where it exists — never `make check` or any target that formats or
+  rewrites files (`run-tests` is allowed; `write` and anything on GitHub are
+  not).
 - **Cognitive diversity.** If you completed the origin item yourself in this
   session or otherwise authored the pull request, `release_work` before judging
   so an independent worker reviews it. Prefer a different model or provider

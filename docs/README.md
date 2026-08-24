@@ -143,6 +143,7 @@ Docs are split by the question they answer:
 - [Core snapshot ingestion](plans/core-snapshot-ingestion.md)
 - [Recover a working engine](plans/recover.md)
 - [Maintenance programs](plans/maintenance-programs.md)
+- [Repository tooling and worker image rollout](plans/repository-tooling-rollout.md)
 
 ### Agent implementation designs and plans
 
