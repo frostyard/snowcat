@@ -264,7 +264,7 @@ Cockpit in Snowcat's fleet until Phase 5 needs that.
   [ubiquitous language](../domain/ubiquitous-language.md), the "Decided:"
   pointers on findings 5, 7, and 13 in the [reality report](../design/reality.md),
   and the [work queue spec](../specs/work-queue.md) reviewer-instruction rule.
-- [ ] **core ADR** (repository tooling convention; extends core
+- [x] **core ADR-0043** (repository tooling convention; merged 2026-08-24; extends core
   [ADR-0022](https://github.com/frostyard/core/blob/main/docs/adr/0022-make-ci-gate-and-test-naming-filter.md)
   and [ADR-0023](https://github.com/frostyard/core/blob/main/docs/adr/0023-verified-pinned-downloads.md)):
   1. `mise.toml` + committed `mise.lock` at the repository root declare every
@@ -282,7 +282,7 @@ Cockpit in Snowcat's fleet until Phase 5 needs that.
      `ghcr.io/frostyard/snowcat-worker-base` or `FROM` it; the baseline tool
      list is a versioned, published fact of that image.
   The surfaces contract does **not** gain an execution-profile schema.
-- [ ] **Cockpit ADR:** one provider-collapsed base image; repository tools
+- [ ] **Cockpit ADR-0012** (snowcat-cockpit#8, queued 2026-08-24): one provider-collapsed base image; repository tools
   provisioned at target preparation from `mise.lock` into a per-repository
   cache mounted read-only; `mise ls --missing` non-empty or Go not satisfying
   `go.mod` ⇒ lane unready with the reason named; the worker kit stops
@@ -329,27 +329,34 @@ Cockpit in Snowcat's fleet until Phase 5 needs that.
 `std` is the pilot because its gate soft-skips lint today — the exact
 failure the convention exists to end.
 
-- [ ] Add `mise.toml` (`[settings] idiomatic_version_file_enable_tools =
-  ["go"]`; `[tools] golangci-lint = "2.12.2"`) and run `mise install` to
-  produce `mise.lock`; commit both.
-- [ ] Confirm mise resolves Go from `go.mod` and installs 1.26.6 exactly;
-  record the result in the core ADR if it changes the convention (open
-  question 1).
-- [ ] Makefile: delete `GOLANGCI_LINT_VERSION`; `lint` invokes
-  `mise exec -- golangci-lint run` (or relies on mise shims) and fails when
-  the tool is missing; keep the Phase 0 `verify`.
-- [ ] CI: replace the Makefile `sed` and `golangci-lint-action` with
-  `jdx/mise-action` (SHA-pinned, core
-  [ADR-0021](https://github.com/frostyard/core/blob/main/docs/adr/0021-sha-pinned-actions-and-least-privilege-ci.md))
-  followed by `make ci`, so CI and workers install from the same two files.
-- [ ] Add a `lint-version-check` style guard comparing `golangci-lint
-  version`'s build Go against `go.mod`'s directive, so a Go bump ahead of
-  lint fails with a one-line reason.
+- [x] Add `mise.toml` (`[settings] idiomatic_version_file_enable_tools =
+  ["go"]`, `lockfile = true`; `[tools] golangci-lint = "2.13.1"`) and run
+  `mise install` to produce `mise.lock`; commit both (std#63).
+- [x] Confirm mise resolves Go from `go.mod`. *It does — from the
+  `toolchain go1.x.y` line, not the `go` directive: mise 2026.8 deprecates
+  reading `go` ("only a minimum compatible version"; removal 2026.11), and
+  `go mod tidy` drops a `toolchain` line equal to the `go` line. The
+  convention is therefore `go 1.x` (minimum) + `toolchain go1.x.y` (the
+  exact pin mise, `setup-go`, and `GOTOOLCHAIN=local` all read). Core
+  ADR-0043's "go.mod is the only Go pin" holds; its conformance check reads
+  the toolchain line.*
+- [x] Makefile: `GOLANGCI_LINT_VERSION` is now read from `mise.toml` and
+  `GO_TOOLCHAIN` from `go.mod`, so no version literal exists outside those
+  two files; `lint` fails naming `mise install` when the tool is missing;
+  `verify` unchanged from Phase 0 (std#63).
+- [x] CI: `jdx/mise-action` (SHA-pinned v4.2.5) installs the locked tools;
+  the Makefile `sed` and `golangci-lint-action` are gone; Go still comes
+  from `setup-go` reading the same `go.mod` (std#63).
+- [x] Guard: `make verify` compares `golangci-lint version`'s build Go
+  against the toolchain line and fails naming the bump order when the
+  linter is older (tested with a fake `built with go1.25.0` binary).
 - **Done when:** `std` CI is green with no tool version stated anywhere but
   `go.mod` and `mise.toml`; on a fresh clone with mise and no other tools,
   `mise install && make verify` passes and `git status --porcelain` is
   empty; deleting the `golangci-lint` entry makes `make lint` fail rather
-  than skip.
+  than skip. *Local half met 2026-08-24 (fresh `MISE_DATA_DIR`, `mise
+  install`, `verify` green, tree clean, lint fails without the tool); CI
+  half is std#63's merge.*
 
 ## Phase 4 — Prep-time provisioning (snowcat-cockpit; two days)
 
@@ -463,18 +470,15 @@ have not.
 
 ## Open questions
 
-- **Does mise reliably read `go.mod` as the Go version source?** Decided by
-  the Phase 3 pilot. If not, fallback is `GOTOOLCHAIN=auto` with a
-  prep-time `go version` warm in Phase 4 (sumdb-verified, ADR-0023-clean)
-  and the core ADR's rule 2 changes to "Go is provisioned by Go".
-- **Is `mise.lock` stable enough to be the ADR-0023 checksum registry?**
-  Decided by Phase 3 (the lock must record URL and SHA256 for every tool and
-  `mise install --locked` must refuse a mismatch). If not, the core ADR
-  pins tools by `mise.toml` plus a sibling checksum file until it is.
-- **Where do credential scopes live — `policies/agent-governance.json` or a
-  thin execution profile?** Decided in ADR-0076 (Phase 1) after a
-  [`model-snowcat-domain`](../../.agents/skills/model-snowcat-domain/SKILL.md)
-  pass; governance already indexes paths, which is the argument for it.
+- ~~Does mise read `go.mod`?~~ Resolved in Phase 3: yes, via the
+  `toolchain` line (see Phase 3).
+- ~~Is `mise.lock` an ADR-0023-grade registry?~~ Resolved in Phase 3: yes —
+  per-platform URL + SHA256, GitHub artifact attestations verified at
+  install, and a tampered checksum is refused with expected/actual for
+  both Go and golangci-lint (tested 2026-08-24).
+- ~~Where do credential scopes live?~~ Resolved by
+  [ADR-0076](../adr/0076-pin-repository-tools-in-the-repository-and-qualify-lanes-by-running-them.md)
+  §5: on the governance surface's protected boundary.
 - **Which repository owns the base image?** Phase 2 assumes
   `snowcat-cockpit/oci/` because Cockpit owns the launch contract
   ([ADR-0003](../adr/0003-separate-work-coordination-from-execution.md)
