@@ -162,14 +162,23 @@ retired by Phase 6; do not generalise it.
   clix#80; `std`'s discoverer noticed the new `make verify` target and
   filed the doc follow-up (re-filed as std#61 after the kind defect). One
   `std` follow-up looped three discoverer runs (the `-discovery` kind that
-  owed a pull request; snowcat#218 refuses the shape). The read-only
-  review evidence waits on the first Claude `pr-review` of clix#80.
+  owed a pull request; snowcat#218 refuses the shape).
+- [x] **Evidence, second campaign (2026-08-24, Claude reviewers):** the
+  `pr-review` of clix#80 (`worker-ba1f019c7ecad4f7`, `claude-v0.1.1`)
+  returned `pass` in round 1 after `make verify` at the bound detached
+  head — "tree stayed clean; `git status --short` empty, HEAD unchanged
+  throughout"; `golangci-lint 2.13.1 → 0 issues`; `go test ./...` ok — and
+  clix#80 merged the same hour. The snowcat lane, broken all morning by the
+  kit lock, completed four discoveries on the re-vendored kit.
 - **Done when:** a Cockpit campaign on `std`, `clix`, and `updex` completes
   one item per repository whose retained worker terminal shows
   `golangci-lint run` executing from the image (no `go install`, no
   "skipping"), and one `pr-review` item completes with `git status
-  --porcelain` empty after `make verify`. *All inputs landed 2026-08-24;
-  the campaign itself is the operator's next run.*
+  --porcelain` empty after `make verify`. *Met for `clix` end to end
+  (implement, review, merge) on 2026-08-24. `std` has the discovery half;
+  its implementation waits on std#61's admission. `updex` is not in this
+  node's campaign catalog — add it (or run one item by hand) to close the
+  criterion; the image and gate inputs are identical to `clix`'s.*
 
 ## Phase P — Publish Cockpit (hours)
 
