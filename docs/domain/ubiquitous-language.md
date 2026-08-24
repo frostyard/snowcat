@@ -515,6 +515,21 @@ instead.
 by kind.
 ([ADR-0074](../adr/0074-compile-policy-into-work-admission.md))
 
+#### Execution profile
+
+A repository's versioned, core-owned declaration of what executing its work
+needs: the credential-free `verify` (non-mutating) and `check` gates,
+required tool versions, the runtime floor, and the credential scopes bound
+to the paths that require them. Recorded at enrollment beside the
+governance policy; a repository without one is *unprofiled* — executors
+keep their defaults and nothing synthesizes a profile from Makefiles or CI
+files. It describes what execution needs, not what a worker may do (the
+governance policy) or where a checkout points (the execution target).
+
+**Avoid:** image spec; toolchain manifest; inferred from the Makefile;
+Cockpit configuration.
+([ADR-0075](../adr/0075-declare-a-repository-execution-profile-in-core.md))
+
 ### Assertions, evidence, and assurance
 
 #### Assertion

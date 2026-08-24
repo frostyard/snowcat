@@ -257,7 +257,9 @@ credential-free gate, required tool versions, resource floor, and cache/path
 needs. Cockpit should qualify or select an image against that profile before
 launch. A missing required tool must make the repository/lane unready, not
 turn into either a skipped check or an ad hoc installation charged to the
-work lease.
+work lease. (Decided:
+[ADR-0075](../adr/0075-declare-a-repository-execution-profile-in-core.md) —
+the core execution-profile surface; implementation follows core's schema.)
 
 ### 6. Pull-request verification proves existence, not governance
 
@@ -303,7 +305,9 @@ Repositories in the fleet need a credential-free, non-mutating verification
 entry point—typically `make verify` or `make ci` using `gofmt -l` plus a diff
 check. Mutating developer conveniences such as `make fmt` can remain separate.
 The execution profile should name the non-mutating command for reviews rather
-than asking the model to infer one from `AGENTS.md` and a Makefile.
+than asking the model to infer one from `AGENTS.md` and a Makefile. (Decided:
+[ADR-0075](../adr/0075-declare-a-repository-execution-profile-in-core.md),
+the `gates.verify` entry.)
 
 ### 8. Lease correctness is encoded as repeated prompt discipline
 
@@ -389,7 +393,9 @@ without the `workflow` scope, which burned two implementation attempts and
 their review rounds before an operator SSH push landed the file. The
 execution profile of finding 5 should name required credential scopes next
 to required tools, and an item whose scope touches paths the lane's
-credential cannot write is unready rather than claimable. The same episode
+credential cannot write is unready rather than claimable. (Decided:
+[ADR-0075](../adr/0075-declare-a-repository-execution-profile-in-core.md),
+the `credentials` entries.) The same episode
 is finding 3's sharpest corollary observed live: a mechanically admitted
 `pr-review-fix` was required to modify a path the repository's own policy
 marks review-required at Tier 4 — the policy said human decision; the
