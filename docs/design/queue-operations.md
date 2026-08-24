@@ -358,8 +358,11 @@ architecture weekly, conformance weekly, triage daily, dependencies weekly,
 docs weekly** (conformance and triage per
 [ADR-0062](../adr/0062-retire-hive-fluent-owns-conformance.md); triage
 children are proposals with at most `read, open-issue`; a dependency child is
-one human-merged bump). Adding a program is one catalog entry plus its Core
-enum value.
+one human-merged bump). Every discovery root's `allowedActions` is `read,
+create-followup` except conformance, which also holds `run-tests` to run the
+repository's own verify gate on its detached read-only checkout and report a
+dirty tree (ADR-0043's gate triad). Adding a program is one catalog entry
+plus its Core enum value.
 
 ```bash
 npm run --silent queue -- seed-dogfood frostyard/updex                    # each program's own cooldown

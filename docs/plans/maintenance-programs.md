@@ -125,11 +125,16 @@ Hive is retired and Snowcat owns conformance and triage.
 - **conformance** — does the repository satisfy Core's binding ADRs? Sources:
   `docs/org-adrs.md` versus Core's current ADR set, canonical surfaces
   present and valid, `make ci`, title lint, ACMM criteria (the
-  `frostyard-acmm-conformance` skill). Child: one bounded compliance change
-  or one Core issue when the ADR is what should move (the ADR-0022 → ADR-0038
-  case). Cadence: weekly in the catalog (`conformance-gap-discovery`);
-  seeding on Core-ADR change is a later refinement — the Core poll already
-  knows when the active snapshot changes.
+  `frostyard-acmm-conformance` skill). It alone also runs the repository's
+  own non-mutating verify gate (`make verify` or `npm run verify`) on its
+  detached read-only checkout and checks `git status --porcelain` afterwards
+  — a dirty tree or an absent gate is itself the gap (ADR-0043's gate triad),
+  so its discovery root's `allowedActions` also include `run-tests`, unlike
+  every other program's `read, create-followup`. Child: one bounded
+  compliance change or one Core issue when the ADR is what should move (the
+  ADR-0022 → ADR-0038 case). Cadence: weekly in the catalog
+  (`conformance-gap-discovery`); seeding on Core-ADR change is a later
+  refinement — the Core poll already knows when the active snapshot changes.
 - **triage** — stale issues, duplicates, needs-repro, missing labels, issues
   resolved by a merged pull request but still open (#299 stayed open until
   #312). Children are proposals only, because closing or labeling issues is

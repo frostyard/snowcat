@@ -22,7 +22,9 @@ test("every catalog entry is a Core program with a distinct discovery kind; Core
 
 test("every program is a read-only discovery root with a positive cooldown, a bounded child ceiling, and proposed children", () => {
   for (const program of maintenancePrograms) {
-    assert.deepEqual(program.discovery.allowedActions, ["read", "create-followup"], program.id);
+    // Conformance discovery alone also runs the repository's read-only verify gate (ADR-0043's gate triad).
+    const expectedActions = program.id === "conformance" ? ["read", "run-tests", "create-followup"] : ["read", "create-followup"];
+    assert.deepEqual(program.discovery.allowedActions, expectedActions, program.id);
     assert.ok(Number.isSafeInteger(program.cooldownSeconds) && program.cooldownSeconds > 0, program.id);
     assert.equal(program.childAdmission, "proposed", program.id);
     assert.ok(program.childCeiling.length > 0 && program.childCeiling.every((action) => ["read", "write", "run-tests", "open-issue", "open-pr", "create-followup"].includes(action)), program.id);
