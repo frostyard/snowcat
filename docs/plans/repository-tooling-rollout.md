@@ -320,7 +320,13 @@ Cockpit in Snowcat's fleet until Phase 5 needs that.
   workers spec references it (snowcat-cockpit#11). The stopgap
   `golangci-lint` is listed under `stopgap` so Phase 6 knows what to remove.
 - [x] `worker-images.yml` builds the three targets of the one file
-  (snowcat-cockpit#11, merged 2026-08-24; first publish `v0.1.3`); the published names stay
+  (snowcat-cockpit#11, merged 2026-08-24). *The first publish (`v0.1.3`)
+  failed on arm64 and exposed a latent bug in every earlier Containerfile:
+  `ARG TARGETARCH=amd64` overrides buildx's per-platform value, so arm64
+  images had been shipping amd64 Claude and Copilot binaries unnoticed —
+  nothing executed what it fetched until the new `fetch` stage did.
+  snowcat-cockpit#13 drops the default; `v0.1.4` is the first correct
+  multi-architecture publish.* The published names stay
   `ghcr.io/frostyard/snowcat-cockpit-worker:<provider>-<version>` (a
   rename to `snowcat-worker-base` would break every node's configured
   reference for no gain — the base is the shared layer set, not a fourth
