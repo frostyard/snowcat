@@ -824,7 +824,11 @@ MCP (rule 41).
     (reviewed <7>, now <7>); block this item instead`); a merged or closed
     pull request is accepted on the verdict alone. A `pr-review` MUST NOT be
     required to report the pull request as an artifact (it has no `open-pr`;
-    the subject is its `review.pullRequestUrl`). On acceptance the store MUST
+    the subject is its `review.pullRequestUrl`), and `complete_work` MUST
+    accept a call that omits `result.artifacts` or `followUps`, treating
+    each as `[]` (the MCP schema defaults both, so a strict client that
+    validates before calling can follow the review skill literally). On
+    acceptance the store MUST
     merge the verdict and `reviewedAt` into the item's `review` record and
     record `work.reviewed` naming decision, round, head, URL, and blocker
     fingerprints. A `pr-review-fix` completion MUST report its pull request

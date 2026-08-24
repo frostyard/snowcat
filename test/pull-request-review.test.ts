@@ -1082,3 +1082,45 @@ test("ADR-0074: a pass whose delivered diff touches a protected boundary goes to
   assert.equal(failed.unavailable.length, 1);
   assert.match(failed.unavailable[0]!.reason, /protected boundaries could not be checked/);
 });
+
+test("complete_work accepts a pr-review that omits result.artifacts and followUps, and its served schema does not require them (#242)", async () => {
+  const queue = await newQueue("review-complete-omits-arrays");
+  completedWithDraftPr(queue);
+  queue.setRepositoryReviewGate(REPOSITORY, true);
+  await reviewPullRequests(queue, { fetcher: apiFetcher(routesFor({})).fetcher, clock });
+  const claimed = queue.claim({ worker: "claude:reviewer", kinds: [REVIEW_KIND] })!;
+  assert.equal(claimed.kind, REVIEW_KIND);
+
+  const server = buildQueueMcpServer(":memory:", { fetcher: apiFetcher(routesFor({})).fetcher, clock }, {}, undefined, queue);
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  const client = new Client({ name: "strict-reviewer-test", version: "0.1.0" });
+  await client.connect(clientTransport);
+  try {
+    // A strict client validates against tools/list before calling: neither key may be required.
+    const tool = (await client.listTools()).tools.find((t) => t.name === "complete_work")!;
+    const schema = tool.inputSchema as unknown as { required?: string[]; properties: { result: { required?: string[] } } };
+    assert.ok(!(schema.required ?? []).includes("followUps"), "followUps is optional at the top level");
+    assert.ok(!(schema.properties.result.required ?? []).includes("artifacts"), "result.artifacts is optional");
+
+    const answer = await client.callTool({
+      name: "complete_work",
+      arguments: {
+        id: claimed.id,
+        leaseToken: claimed.leaseToken,
+        worker: "claude:reviewer",
+        result: { summary: `Reviewed round ${claimed.review!.round}.`, evidence: [`head ${claimed.review!.headSha}`], model: "gpt-5.6-sol" },
+        review: { decision: "pass", blockers: [], advisories: [] },
+      },
+    });
+    assert.equal(answer.isError ?? false, false, JSON.stringify(answer.content));
+  } finally {
+    await client.close();
+    await server.close();
+  }
+  const done = queue.get(claimed.id)!;
+  assert.equal(done.status, "completed");
+  assert.deepEqual(done.result?.artifacts, [], "an omitted artifacts list is stored as an empty array");
+  assert.equal(done.review?.decision, "pass");
+  assert.deepEqual(queue.children(claimed.id), [], "an omitted followUps list creates no children");
+});
