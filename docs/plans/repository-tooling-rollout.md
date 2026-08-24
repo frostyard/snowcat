@@ -346,9 +346,13 @@ Cockpit in Snowcat's fleet until Phase 5 needs that.
   item from the same base digest, and `oci/baseline.json` is the only place
   the baseline is enumerated. *Inputs landed 2026-08-24 (the three targets
   share every layer; the spec references `baseline.json`); the three-provider
-  completion is pending: Claude proved on `v0.1.4` (std#64–66), Codex waits
-  on `v0.1.5`, and Copilot has no lane in the current campaign request — give
-  it one role for a run, or launch one Copilot worker by hand.*
+  completion: Claude proved on `v0.1.4` (std#64–66); Codex proved on
+  `v0.1.5` — three reviewers completed, one `pass` on std#65 after `make
+  verify` at the bound head and one legitimate `block` on std#66 (spec not
+  updated for the new guarantee) that admitted a `pr-review-fix`, so the
+  full gate loop now runs on Codex; Copilot has no lane in the current
+  campaign request — give it one role for a run, or launch one Copilot
+  worker by hand.*
 
 ## Phase 3 — Pilot `std` on mise (std; half a day)
 
@@ -424,13 +428,13 @@ failure the convention exists to end.
   green with lint hard-required before opening std#64/#65/#66; the image's
   `PATH` puts the cache's shims first, so that lint was the provisioned
   binary.* **Met 2026-08-24.**
-- [ ] **Follow-up found by the same batch (snowcat-cockpit#15):** Docker
-  mounts the home tmpfs `noexec` (Podman does not), and the image keeps
-  `GOPATH`/`GOCACHE` under `/home/cockpit`, so `go tool covdata` and
-  anything Go executes from the cache fails; both implementers rediscovered
-  the workaround inside their leases. Move both under `/tmp` (already
-  `exec`) with the next image release and amend the spec sentence that
-  placed them under home.
+- [x] **Follow-up found by the same batch (snowcat-cockpit#15 → #16,
+  `v0.1.6`):** Docker mounts the home tmpfs `noexec` (Podman does not), and
+  the image kept `GOPATH`/`GOCACHE` under `/home/cockpit`, so `go tool
+  covdata` and anything Go executes from the cache failed; three workers
+  (two implementers and a Codex reviewer) rediscovered the workaround
+  inside their leases. Both now live under `/tmp` (already `exec`); the
+  spec sentence that placed them under home is amended.
 
 ## Phase 5 — Fleet adoption (five repositories; one to two days of queue time)
 
