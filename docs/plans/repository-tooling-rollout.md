@@ -84,9 +84,14 @@ retired by Phase 6; do not generalise it.
   worker terminal demonstrates the need" — findings 5 and the lost-worker
   campaign are that record).
 - [ ] **Cockpit:** tag, let `worker-images.yml` publish (Phase P proved the
-  path on `v0.1.0`), record the three published digests as
-  `SNOWCAT_COCKPIT_OCI_*_IMAGE` in the node environment, restart the node.
-  A local `make oci-image` build remains the fallback if GHCR is slow.
+  path on `v0.1.0`), then roll the node. The operator node runs the
+  **Docker** adapter from local image IDs
+  (`SNOWCAT_COCKPIT_DOCKER_{CODEX,CLAUDE,COPILOT}_IMAGE` in
+  `~/.local/libexec/snowcat-cockpit/service.env`, the user service's
+  `EnvironmentFile`): `docker pull` each published `name:tag@sha256`
+  reference, set the variable to that exact reference (the spec's
+  immutable form), `systemctl --user restart snowcat-cockpit`. A local
+  `make docker-image` build remains the fallback if GHCR is slow.
 - [ ] **std, clix, updex:** add `make verify` — strictly non-mutating and
   credential-free: `go mod tidy -diff`, `test -z "$(gofmt -l …)"`, `go vet`,
   `golangci-lint run` (hard-required, exact pin), `go test`. `updex`'s
