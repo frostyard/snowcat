@@ -291,7 +291,20 @@ Cockpit in Snowcat's fleet until Phase 5 needs that.
   deferred to the checkout where the repository is the canonical source;
   and the managed-repository catalog derives from (or reports drift
   against) Core's enabled declarations rather than living only as
-  node-local state (Phase 0's unenrolled `updex`). Supersedes the "generic
+  node-local state (Phase 0's unenrolled `updex`). *Landed the same day as
+  the ADR, from the first campaigns: cleanup compares owned skills against
+  the worker's recorded kit (snowcat-cockpit#19); the lease relay binds its
+  own token into every lifecycle call so a provider model never has to echo
+  it (#22, after two Copilot reviewers lost healthy leases to a mangled
+  token). Still open, each with evidence: #17 (a lane relaunches for an
+  item its own live worker holds), #20 (retained workspaces fill the tmpfs
+  — 181 in one day; cleaned 191 by hand), #21 (the implementer lane counts
+  `release-needed` as claimable while the prompt excludes it). Provider
+  note: Copilot completed the Phase 2 proof but, of five reviews, mangled
+  the lease token twice and once invented a `gh` limitation the image does
+  not have; Codex returned clean verdicts every time, so the campaign
+  reviewer lane runs Codex by default and the per-provider MCP server name
+  (`snowcat-mcp` for Copilot) lives in the campaign request.* Supersedes the "generic
   baseline" posture of
   [Cockpit ADR-0005](https://github.com/frostyard/snowcat-cockpit/blob/main/docs/adr/0005-isolate-unattended-workers-in-rootless-oci.md)
   without weakening any isolation rule.
