@@ -602,6 +602,8 @@ export interface RepositoryStatus {
   authorityContextDigest: string | null;
   operatorHold: RepositoryOperatorHoldDecisionPayload | null;
   effectiveState: RepositoryState;
+  /** The validated agent-governance policy the surface reconciliation recorded, verbatim (ADR-0074 reads it; null while surfaces are absent or invalid). */
+  governancePolicy: JsonValue | null;
 }
 
 export interface ProjectionAccess {
@@ -1557,6 +1559,7 @@ export class ControlPlaneStore {
           authorityContextDigest: null,
           operatorHold,
           effectiveState: "awaiting-authority",
+          governancePolicy: null,
         });
         continue;
       }
@@ -1613,6 +1616,7 @@ export class ControlPlaneStore {
             : null,
         operatorHold,
         effectiveState,
+        governancePolicy: surface?.payload.governancePolicy == null ? null : structuredClone(surface.payload.governancePolicy),
       });
     }
     return statuses.sort((left, right) => left.repositoryId.localeCompare(right.repositoryId));

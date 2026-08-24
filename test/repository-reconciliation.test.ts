@@ -74,7 +74,7 @@ test("active Core authority materializes separately from GitHub identity and enr
       coreAuthorizationRecordId: authority.coreAuthorizationRecordId,
       fleetState: "enabled",
       maintenancePrograms: ["quality", "ci"],
-      actionCeiling: ["read", "write", "run-tests", "open-issue", "open-pr"],
+      actionCeiling: ["read", "write", "run-tests", "open-issue", "open-pr", "create-followup"],
       accountableOwners: [{ kind: "github-user", login: "bketelsen" }],
       surfaceContractVersion: 1,
       githubReconciliationRecordId: null,
@@ -88,6 +88,7 @@ test("active Core authority materializes separately from GitHub identity and enr
       authorityContextDigest: null,
       operatorHold: null,
       effectiveState: "awaiting-github",
+      governancePolicy: null,
     },
   ]);
 

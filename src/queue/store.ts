@@ -47,7 +47,12 @@ import {
   requiredArtifacts,
   type ExecutionTarget,
   executionTargets,
+  type PolicyAuthorization,
+  type PolicyBoundary,
+  type PolicyDecision,
+  type PolicyRecord,
 } from "./types.ts";
+import { standingAuthorizationFor } from "./standing-authorizations.ts";
 
 type Row = Record<string, SQLInputValue>;
 
@@ -75,7 +80,7 @@ export const MAX_METRICS_WINDOW_EVENTS = 100_000;
  * that newer code has already migrated; newer code upgrades an older database
  * in place, forward only, inside one write transaction.
  */
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 /**
  * ADR-0072: a candidate with this many `work.released` events not attributed
@@ -323,7 +328,29 @@ export type ClaimEligibility = (repository: string) => boolean;
 
 export interface QueueStoreOptions {
   claimEligibility?: ClaimEligibility;
+  /**
+   * The repository's current governance authority (ADR-0074), read fresh per
+   * decision like `claimEligibility`: the Core action ceiling, the governance
+   * policy's action decisions and protected boundaries, and the revisions
+   * that identify them. `undefined` means the control plane cannot vouch for
+   * the repository right now — definition and admission fail closed. When
+   * the hook itself is absent (no control-plane store configured), items are
+   * defined unbound, exactly as before ADR-0074.
+   */
+  policyAuthority?: PolicyAuthorityHook;
 }
+
+/** What the control plane says one repository's agents may do, as of now. */
+export interface PolicyAuthority {
+  coreSnapshotId: string;
+  repositoryCommitId: string | null;
+  actionCeiling: readonly AllowedAction[];
+  defaultDecision: PolicyDecision;
+  actionDecisions: Partial<Record<AllowedAction, PolicyDecision>>;
+  protectedBoundaries: PolicyBoundary[];
+}
+
+export type PolicyAuthorityHook = (repository: string) => PolicyAuthority | undefined;
 
 /**
  * What one predecessor source reference of one item means right now
@@ -411,6 +438,7 @@ export class QueueStore {
   private readonly databasePath: string;
 
   private readonly claimEligibility: ClaimEligibility | undefined;
+  private readonly policyAuthority: PolicyAuthorityHook | undefined;
 
   constructor(
     path: string,
@@ -418,6 +446,7 @@ export class QueueStore {
     options: QueueStoreOptions = {},
   ) {
     this.claimEligibility = options.claimEligibility;
+    this.policyAuthority = options.policyAuthority;
     this.databasePath = path === ":memory:" ? path : resolve(path);
     if (path !== ":memory:") mkdirSync(dirname(this.databasePath), { recursive: true });
     // Install the busy handler while SQLite opens the connection. Setting it
@@ -817,6 +846,82 @@ export class QueueStore {
       )
       .all(repository, repository, repository) as Row[];
     return rows.map((row) => String(row.url)).filter((url) => url !== "null" && url.length > 0);
+  }
+
+  /**
+   * The repository's current policy authority through the configured hook
+   * (ADR-0074), or undefined when no hook is configured or the control plane
+   * cannot vouch for the repository. Read-only; the review sweep uses it to
+   * carry protected boundaries to reviewers and to check delivered diffs.
+   */
+  policyAuthorityFor(repository: string): PolicyAuthority | undefined {
+    return this.policyAuthority?.(repository);
+  }
+
+  /**
+   * Binds one definition to the repository's current policy authority and
+   * enforces it (ADR-0074): every allowed and delegable action must sit
+   * inside the Core action ceiling and must not be denied; the actions the
+   * policy marks review-required ride on the binding for admission to
+   * satisfy. Returns undefined — unbound — only when no hook is configured;
+   * a configured hook that cannot vouch for the repository fails closed.
+   * For work admitted on creation the authorization is recorded here too: an
+   * `operator:` or `member:` creator is its own admission decision, and a
+   * `policy:` creator must cite a standing authorization from the closed
+   * registry, inside that entry's exact action set.
+   */
+  private bindPolicy(input: {
+    repository: string;
+    kind: string;
+    allowedActions: AllowedAction[];
+    delegableActions: AllowedAction[];
+    createdBy: string;
+    admitted: boolean;
+  }): PolicyRecord | undefined {
+    if (!this.policyAuthority) return undefined;
+    const authority = this.policyAuthority(input.repository);
+    if (!authority) {
+      throw new Error(`the control plane has no policy authority for ${input.repository}; work cannot be defined against it (ADR-0074)`);
+    }
+    for (const action of new Set([...input.allowedActions, ...input.delegableActions])) {
+      if (!authority.actionCeiling.includes(action)) {
+        throw new Error(`action ${action} exceeds ${input.repository}'s Core action ceiling (ADR-0074)`);
+      }
+      if ((authority.actionDecisions[action] ?? authority.defaultDecision) === "deny") {
+        throw new Error(`action ${action} is denied by ${input.repository}'s governance policy (ADR-0074)`);
+      }
+    }
+    const reviewRequired = [...new Set(input.allowedActions)]
+      .filter((action) => (authority.actionDecisions[action] ?? authority.defaultDecision) === "review-required")
+      .sort();
+    const record: PolicyRecord = {
+      coreSnapshotId: authority.coreSnapshotId,
+      repositoryCommitId: authority.repositoryCommitId,
+      reviewRequired,
+    };
+    if (input.admitted) record.authorization = this.admissionAuthorization(input, reviewRequired);
+    return record;
+  }
+
+  /** The admission evidence for work admitted on creation (ADR-0074 decision 3). */
+  private admissionAuthorization(
+    input: { repository: string; kind: string; allowedActions: AllowedAction[]; createdBy: string },
+    reviewRequired: AllowedAction[],
+  ): PolicyAuthorization {
+    const at = this.now();
+    const creator = input.createdBy.toLowerCase();
+    if (creator.startsWith("operator:") || creator.startsWith("member:")) {
+      return { kind: "operator", actor: input.createdBy, coveredActions: reviewRequired, at };
+    }
+    const standing = standingAuthorizationFor(input.kind);
+    if (!standing) {
+      throw new Error(`no standing authorization covers mechanically admitted kind ${input.kind}; it must be proposed for a human to admit (ADR-0074)`);
+    }
+    const outside = input.allowedActions.filter((action) => !standing.actions.includes(action));
+    if (outside.length > 0) {
+      throw new Error(`standing authorization ${standing.id} does not cover action(s) ${outside.join(", ")} for kind ${input.kind} (ADR-0074)`);
+    }
+    return { kind: "standing", standingId: standing.id, adr: standing.adr, coveredActions: reviewRequired, at };
   }
 
   enqueueSeed(input: SeedWorkInput): WorkItem {
@@ -1820,8 +1925,31 @@ export class QueueStore {
         throw new Error(`work item ${id} cannot be admitted: ${problem.message} (${problem.code}); reject it and re-propose`);
       }
       const now = this.now();
-      this.db.prepare("UPDATE work_items SET admitted = 1, updated_at = ? WHERE id = ?").run(now, id);
-      this.addEvent(id, "work.approved", actor, {});
+      // ADR-0074: admission re-binds against the authority that is current at
+      // the moment of the decision and records who satisfied the
+      // review-required acts. An unreachable authority fails closed — the
+      // item stays proposed and the operator sees why.
+      let policyUpdate: PolicyRecord | undefined;
+      if (this.policyAuthority) {
+        const rebound = this.bindPolicy({
+          repository: item.repository,
+          kind: item.kind,
+          allowedActions: item.allowedActions,
+          delegableActions: item.delegableActions,
+          createdBy: item.createdBy,
+          admitted: false,
+        })!;
+        rebound.authorization = { kind: "operator", actor, coveredActions: rebound.reviewRequired, at: now };
+        policyUpdate = rebound;
+      }
+      this.db
+        .prepare("UPDATE work_items SET admitted = 1, policy_json = COALESCE(?, policy_json), updated_at = ? WHERE id = ?")
+        .run(policyUpdate ? JSON.stringify(policyUpdate) : null, now, id);
+      this.addEvent(id, "work.approved", actor, {
+        ...(policyUpdate
+          ? { policy: { coreSnapshotId: policyUpdate.coreSnapshotId, repositoryCommitId: policyUpdate.repositoryCommitId, coveredActions: policyUpdate.authorization!.coveredActions } }
+          : {}),
+      });
       return this.getRequired(id);
     });
   }
@@ -2283,6 +2411,7 @@ export class QueueStore {
 
   private insertWork(input: Omit<FollowUpInput, "requiredArtifact" | "executionTarget"> & {
     executionTarget?: ExecutionTarget;
+    policy?: PolicyRecord;
     id: string;
     rootId: string;
     parentId?: string;
@@ -2297,15 +2426,26 @@ export class QueueStore {
     cure?: PullRequestCure;
     review?: PullRequestReview;
   }): void {
+    // ADR-0074: every definition path binds here; the caller may not opt out.
+    const policy =
+      input.policy ??
+      this.bindPolicy({
+        repository: input.repository,
+        kind: input.kind,
+        allowedActions: input.allowedActions,
+        delegableActions: input.delegableActions,
+        createdBy: input.createdBy,
+        admitted: input.admitted,
+      });
     this.db
       .prepare(
         `INSERT INTO work_items (
           id, root_id, parent_id, repository, kind, objective, instructions,
           acceptance_criteria_json, allowed_actions_json, delegable_actions_json, required_artifact,
-          execution_target,
+          execution_target, policy_json,
           priority, status, admitted, created_by, created_at, updated_at, source_ref,
           predecessors_json, cure_json, review_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.id,
@@ -2320,6 +2460,7 @@ export class QueueStore {
         JSON.stringify(input.delegableActions),
         input.requiredArtifact ?? "none",
         input.executionTarget ?? null,
+        policy ? JSON.stringify(policy) : null,
         input.priority,
         input.admitted ? 1 : 0,
         input.createdBy,
@@ -2389,6 +2530,9 @@ export class QueueStore {
         contractProblem(item) ??
         (item.executionTarget === undefined
           ? { code: "undeclared-execution-target" as const, message: "the item predates ADR-0073 and declares no executionTarget" }
+          : undefined) ??
+        (this.policyAuthority && item.policy === undefined
+          ? { code: "unbound-policy" as const, message: "the item predates ADR-0074 and carries no policy binding" }
           : undefined);
       if (!problem) continue;
       findings.push({
@@ -2522,6 +2666,7 @@ function decodeWorkItem(row: Row): WorkItem {
     ...(row.execution_target == null || !(executionTargets as readonly string[]).includes(String(row.execution_target))
       ? {}
       : { executionTarget: String(row.execution_target) as ExecutionTarget }),
+    ...(row.policy_json == null ? {} : { policy: parseJson<PolicyRecord | undefined>(row.policy_json, undefined) }),
     priority: Number(row.priority),
     status: row.status === "queued" && Number(row.admitted) === 0 ? "proposed" : (String(row.status) as WorkStatus),
     createdBy: String(row.created_by),
@@ -2901,6 +3046,7 @@ export const contractProblemCodes = [
   "mutating-target-without-required-pull-request",
   "existing-pull-request-without-binding",
   "undeclared-execution-target",
+  "unbound-policy",
 ] as const;
 export type ContractProblemCode = (typeof contractProblemCodes)[number];
 
@@ -3263,6 +3409,19 @@ const MIGRATIONS: readonly Migration[] = [
       db.exec(
         "ALTER TABLE work_items ADD COLUMN execution_target TEXT CHECK (execution_target IN ('read-only', 'new-pull-request', 'existing-pull-request'))",
       );
+    }
+  },
+  // Rung 17: the policy binding and admission evidence (ADR-0074) — the Core
+  // and governance revisions an item was defined and admitted under, its
+  // review-required acts, and the authorization that satisfied them.
+  // Nullable: every existing row reads as unbound (listed by audit-contracts
+  // when a control plane is configured), never back-filled.
+  (db) => {
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(work_items)").all() as Row[]).map((column) => String(column.name)),
+    );
+    if (!columns.has("policy_json")) {
+      db.exec("ALTER TABLE work_items ADD COLUMN policy_json TEXT");
     }
   },
 ];

@@ -75,7 +75,7 @@ async function createVersionElevenDatabase(prefix: string): Promise<{ path: stri
 test("a version-11 database gains rung 12's work_items.predecessors_json column, NULL for every existing item", async () => {
   // Importing the store module already throws unless SCHEMA_VERSION equals the
   // ladder length; this pins the value the rung was appended for.
-  assert.equal(SCHEMA_VERSION, 16, "this test pins the ladder at rung 16; extend it when a rung is added");
+  assert.equal(SCHEMA_VERSION, 17, "this test pins the ladder at rung 17; extend it when a rung is added");
   const { path, itemId } = await createVersionElevenDatabase("predecessors-ladder");
 
   const migrated = new QueueStore(path);

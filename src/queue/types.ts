@@ -34,6 +34,50 @@ export type RequiredArtifact = (typeof requiredArtifacts)[number];
 export const executionTargets = ["read-only", "new-pull-request", "existing-pull-request"] as const;
 export type ExecutionTarget = (typeof executionTargets)[number];
 
+/** A governance action decision as core's repository-agent-governance schema v1 states it. */
+export type PolicyDecision = "allow" | "review-required" | "deny";
+
+/** One protected boundary from the repository's governance policy: paths a change may touch only under the named decision and minimum risk tier. */
+export interface PolicyBoundary {
+  id: string;
+  decision: PolicyDecision;
+  minimumRiskTier: string;
+  paths: string[];
+}
+
+/**
+ * How an item's `review-required` acts were satisfied (ADR-0074): a human
+ * admission decision, or a standing authorization — the closed in-code
+ * registry entry naming the Accepted ADR that pre-authorizes one mechanical
+ * admission path.
+ */
+export interface PolicyAuthorization {
+  kind: "operator" | "standing";
+  /** The admitting principal (`operator` kind). */
+  actor?: string;
+  /** The registry entry and its authorizing ADR (`standing` kind). */
+  standingId?: string;
+  adr?: string;
+  /** The `review-required` actions this decision covered, sorted. */
+  coveredActions: AllowedAction[];
+  at: string;
+}
+
+/**
+ * The policy a work item was defined and admitted under (ADR-0074): the Core
+ * snapshot and the repository commit whose governance surface was judged,
+ * the actions that policy marks review-required, and — once admitted — the
+ * authorization that satisfied them. Absent on items defined without a
+ * control-plane store or before the rung that added it (unbound legacy,
+ * listed by `audit-contracts`).
+ */
+export interface PolicyRecord {
+  coreSnapshotId: string;
+  repositoryCommitId: string | null;
+  reviewRequired: AllowedAction[];
+  authorization?: PolicyAuthorization;
+}
+
 /**
  * Snowcat's own observation of a reported issue, pull request, or release,
  * taken through the GitHub API at completion time and refreshed by
@@ -307,6 +351,8 @@ export interface WorkItem {
   requiredArtifact: RequiredArtifact;
   /** Where execution happens (ADR-0073); absent on items defined before rung 16 (undeclared legacy). */
   executionTarget?: ExecutionTarget;
+  /** The policy binding and admission evidence (ADR-0074); absent on unbound legacy rows. */
+  policy?: PolicyRecord;
   priority: number;
   status: WorkStatus;
   createdBy: string;

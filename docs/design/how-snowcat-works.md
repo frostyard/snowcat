@@ -106,17 +106,20 @@ runs code.
    — and, for a worker-proposed child, bounded by its parent's
    `delegableActions` ceiling, which the queue store enforces at
    `complete_work`. Core's `action_ceiling` and the repository's governance
-   policy are read and recorded in the control-plane enrollment fact, but
-   the queue does not apply them to items today: the only Core coupling on
-   the work path is the enrolled-repository claim filter
+   policy are applied to every item
+   ([ADR-0074](../adr/0074-compile-policy-into-work-admission.md), work-queue
+   rule 71): each definition binds to the enrolled repository's current
+   authority through
+   [`src/queue/policy-authority.ts`](../../src/queue/policy-authority.ts) —
+   denied actions and ceiling overruns are refused, admission re-binds and
+   records who satisfied the review-required acts, mechanical admission
+   cites a standing authorization, and a delivered diff that touches a
+   protected boundary goes to a human. The claim path keeps exactly the
+   enrolled-repository filter
    ([`src/queue/eligibility.ts`](../../src/queue/eligibility.ts);
    [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md),
-   Decision 3). Clamping item actions to Core's ceiling and the governance
-   file is decided by
-   [ADR-0074](../adr/0074-compile-policy-into-work-admission.md) — the
-   policy binding, admission evidence, and delivered-diff boundary check —
-   and becomes present behavior with its implementing change and
-   [work queue](../specs/work-queue.md) rules. The
+   Decision 3); those two hooks are the only couplings between the queue
+   and the control plane. The
    worker does exactly that one thing, opens one pull request, and completes
    with evidence and the pull request URL.
 

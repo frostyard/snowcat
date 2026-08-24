@@ -123,7 +123,7 @@ test("the consistency predicate binds target, actions, artifact, and binding (AD
 });
 
 test("a version-15 database gains the nullable rung-16 column: legacy rows read undeclared, stay claimable, and are audited", async () => {
-  assert.equal(SCHEMA_VERSION, 16, "this test pins the ladder at rung 16; extend it when a rung is added");
+  assert.equal(SCHEMA_VERSION, 17, "this test pins the ladder at rung 17; extend it when a rung is added");
   const directory = await mkdtemp(join(tmpdir(), "snowcat-execution-target-ladder-test-"));
   const path = join(directory, "queue.db");
   const current = new QueueStore(path);

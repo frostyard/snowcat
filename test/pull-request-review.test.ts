@@ -24,7 +24,7 @@ import {
   REVIEW_FIX_KIND,
   REVIEW_KIND,
 } from "../src/queue/pull-request-review.ts";
-import { QueueStore } from "../src/queue/store.ts";
+import { type QueueStoreOptions, type PolicyAuthority, QueueStore } from "../src/queue/store.ts";
 import type { ReviewBlocker, ReviewResult, WorkItem } from "../src/queue/types.ts";
 import { deriveReviewState } from "../src/surface/review-state.ts";
 
@@ -198,9 +198,9 @@ function completeFix(queue: QueueStore, model = "claude-opus-5"): WorkItem {
   }).completed;
 }
 
-async function newQueue(prefix: string): Promise<QueueStore> {
+async function newQueue(prefix: string, options: QueueStoreOptions = {}): Promise<QueueStore> {
   const directory = await mkdtemp(join(tmpdir(), `snowcat-${prefix}-`));
-  const queue = new QueueStore(join(directory, "queue.db"), clock);
+  const queue = new QueueStore(join(directory, "queue.db"), clock, options);
   test.after(() => queue.close());
   return queue;
 }
@@ -735,7 +735,7 @@ test("enqueueReviewRoot validates kind, action ceilings, and the review record; 
   const created = make({});
   assert.ok(created);
   assert.equal(make({}), undefined, "the same sourceRef is never enqueued twice");
-  assert.equal(queue.metadata().schemaVersion, 16);
+  assert.equal(queue.metadata().schemaVersion, 17);
   assert.throws(() => queue.enqueueReviewRoot("frostyard/lodge", { ...definition, allowedActions: [...definition.allowedActions], delegableActions: [], sourceRef: "pr-review:x@y", review }), /not opted in/);
 
   const originId = completedWithDraftPr(queue);
@@ -1036,4 +1036,49 @@ test("ADR-0071: a description blocker raised for the first time still blocks —
   const state = deriveReviewState(queue.pullRequestReviewItems(REPOSITORY, PR_URL), HEAD_B, true);
   assert.equal(state?.readyToMark, false);
   assert.equal(state?.needsHuman, true);
+});
+
+test("ADR-0074: a pass whose delivered diff touches a protected boundary goes to a human; a clean diff still marks ready; unreadable files fail closed", async () => {
+  const boundaryAuthority: PolicyAuthority = {
+    coreSnapshotId: "sha256:" + "a".repeat(64),
+    repositoryCommitId: "b".repeat(40),
+    actionCeiling: ["read", "write", "run-tests", "open-issue", "open-pr", "create-followup"],
+    defaultDecision: "deny",
+    actionDecisions: { read: "allow", write: "allow", "run-tests": "allow", "open-issue": "review-required", "open-pr": "review-required", "create-followup": "review-required" },
+    protectedBoundaries: [{ id: "workflow-and-permissions", decision: "review-required", minimumRiskTier: "high", paths: [".github/workflows/**"] }],
+  };
+  const queue = await newQueue("review-boundary", { policyAuthority: () => boundaryAuthority });
+  completedWithDraftPr(queue);
+  queue.setRepositoryReviewGate(REPOSITORY, true);
+
+  // The minted round carries the boundary in its reviewer instructions.
+  const routes = routesFor({ head: HEAD_A });
+  const minted = await reviewPullRequests(queue, { fetcher: apiFetcher(routes).fetcher, clock });
+  assert.equal(minted.enqueued.length, 1);
+  const round = queue.get(minted.enqueued[0]!.id)!;
+  assert.match(round.instructions, /Protected boundaries \(ADR-0074\)/);
+  assert.match(round.instructions, /workflow-and-permissions: \.github\/workflows\/\*\* — review-required at minimum tier high/);
+
+  // A pass over a diff that touches the boundary is a human's to mark ready.
+  await completeReview(queue, { decision: "pass", blockers: [], advisories: [] });
+  const touchedRoutes = routesFor({ head: HEAD_A });
+  (touchedRoutes as Record<string, unknown>)[`${PR_PATH}/files`] = [FILE_V1, { filename: ".github/workflows/check.yml", status: "modified", additions: 1, deletions: 1, patch: "+x" }];
+  const swept = await reviewPullRequests(queue, { fetcher: apiFetcher(touchedRoutes).fetcher, clock });
+  assert.deepEqual(swept.readyToMark, []);
+  assert.deepEqual(swept.markedReady, []);
+  assert.equal(swept.needsHuman.length, 1);
+  assert.match(swept.needsHuman[0]!.reason, /protected boundary workflow-and-permissions \(minimum tier high\)/);
+  assert.match(swept.needsHuman[0]!.reason, /ADR-0074/);
+
+  // A clean diff still takes the ordinary pass consequence.
+  const clean = await reviewPullRequests(queue, { fetcher: apiFetcher(routesFor({ head: HEAD_A })).fetcher, clock });
+  assert.equal(clean.readyToMark.length, 1);
+
+  // Files unreadable: fail closed as unavailable, mark nothing.
+  const broken = routesFor({ head: HEAD_A });
+  delete (broken as Record<string, unknown>)[`${PR_PATH}/files`];
+  const failed = await reviewPullRequests(queue, { fetcher: apiFetcher(broken).fetcher, clock });
+  assert.deepEqual(failed.readyToMark, []);
+  assert.equal(failed.unavailable.length, 1);
+  assert.match(failed.unavailable[0]!.reason, /protected boundaries could not be checked/);
 });

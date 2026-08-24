@@ -1,7 +1,7 @@
 import { githubApiJson, githubGraphql, type GitHubFetch } from "../repository/github-api.ts";
 import { asObject, listOpenPullRequests, MAX_LISTING_PAGES, parsePullRequestUrl, readPatchDigest } from "./pull-request-cure.ts";
 import { MAX_LEASE_SECONDS, type QueueStore } from "./store.ts";
-import {
+import { type PolicyBoundary,
   MAX_REVIEW_ADVISORIES,
   MAX_REVIEW_BLOCKERS,
   MAX_REVIEW_ROUNDS,
@@ -370,7 +370,7 @@ export async function reviewPullRequests(
       priorBlockers: latest?.review?.blockers ?? [],
     };
     const created = queue.enqueueReviewRoot(origin.repository, {
-      ...reviewRootDefinition(origin.repository, head, review, actor, latest?.review?.headSha),
+      ...reviewRootDefinition(origin.repository, head, review, actor, latest?.review?.headSha, (queue.policyAuthorityFor(origin.repository)?.protectedBoundaries ?? []).filter((boundary) => boundary.decision !== "allow")),
       priority: origin.priority,
       sourceRef: `${REVIEW_KIND}:${url}@${head.headSha}`,
       review,
@@ -384,6 +384,42 @@ export async function reviewPullRequests(
 
   await observeUnreportedPullRequests(queue, result, gatedRepositories, actor, options);
   return result;
+}
+
+/**
+ * Does one changed path fall inside a protected-boundary pattern (ADR-0074)?
+ * Patterns are core's governance path globs: `**` spans directories, `*`
+ * stays inside one segment. Matching is conservative — a malformed pattern
+ * matches nothing it should not.
+ */
+export function pathTouchesBoundary(path: string, pattern: string): boolean {
+  const escaped = pattern
+    .split("**")
+    .map((part) => part.split("*").map((piece) => piece.replace(/[.+^${}()|[\]\\]/g, "\\$&")).join("[^/]*"))
+    .join(".*");
+  return new RegExp(`^${escaped}$`).test(path);
+}
+
+/** The delivered pull request's changed file paths, or unavailable — never a guess. */
+async function readChangedFilenames(
+  base: string,
+  number: number,
+  fetcher: GitHubFetch,
+): Promise<{ kind: "files"; filenames: string[] } | { kind: "unavailable"; reason: string }> {
+  const filenames: string[] = [];
+  for (let page = 1; page <= 3; page += 1) {
+    const response = await githubApiJson(`${base}/pulls/${number}/files?per_page=100&page=${page}`, AbortSignal.timeout(10_000), fetcher);
+    if (response.kind === "unavailable" || response.status !== 200 || !Array.isArray(response.value)) {
+      return { kind: "unavailable", reason: "GitHub pull-request files unavailable" };
+    }
+    for (const raw of response.value) {
+      const filename = (raw as { filename?: unknown }).filename;
+      if (typeof filename !== "string") return { kind: "unavailable", reason: "GitHub pull-request file entry was malformed" };
+      filenames.push(filename);
+    }
+    if (response.value.length < 100) break;
+  }
+  return { kind: "files", filenames };
 }
 
 /**
@@ -405,6 +441,29 @@ async function applyPassConsequence(
   round: number,
   reviewItemId: string,
 ): Promise<void> {
+  // ADR-0074 decision 4: a protected boundary is checked where it becomes
+  // checkable — the delivered diff. A pull request whose changed files touch
+  // a review-required (or denied) boundary is a human's to mark ready, with
+  // the boundary and its minimum tier named; an unreadable file list fails
+  // closed as unavailable rather than marking anything.
+  const authority = queue.policyAuthorityFor(origin.repository);
+  const guarded = (authority?.protectedBoundaries ?? []).filter((boundary) => boundary.decision !== "allow");
+  if (guarded.length > 0) {
+    const locator = parsePullRequestUrl(origin.repository, url);
+    if (locator) {
+      const files = await readChangedFilenames(`/repos/${encodeURIComponent(locator.owner)}/${encodeURIComponent(locator.name)}`, locator.number, options.fetcher ?? fetch);
+      if (files.kind === "unavailable") {
+        result.unavailable.push({ url, reason: `${files.reason}; protected boundaries could not be checked (ADR-0074)` });
+        return;
+      }
+      const touched = guarded.filter((boundary) => boundary.paths.some((pattern) => files.filenames.some((filename) => pathTouchesBoundary(filename, pattern))));
+      if (touched.length > 0) {
+        const named = touched.map((boundary) => `${boundary.id} (minimum tier ${boundary.minimumRiskTier})`).join(", ");
+        result.needsHuman.push({ url, headSha: head.headSha, round, reason: `the delivered diff touches protected boundary ${named}; a human marks ready (ADR-0074)` });
+        return;
+      }
+    }
+  }
   if (!options.writes) {
     result.readyToMark.push({ url, headSha: head.headSha, reviewItemId });
     return;
@@ -570,6 +629,7 @@ export function reviewRootDefinition(
   review: PullRequestReview,
   createdBy: string,
   previousHeadSha?: string,
+  boundaries: PolicyBoundary[] = [],
 ): Omit<SeedWorkInput, "repository" | "priority"> {
   const short = head.headSha.slice(0, 7);
   const origin = review.originItemId ? `item ${review.originItemId}` : "a Snowcat worker";
@@ -594,6 +654,11 @@ export function reviewRootDefinition(
             `Cognitive diversity: ${[review.authorModel ? `the author reported model ${review.authorModel}` : "", review.priorReviewerModel ? `the previous reviewer reported model ${review.priorReviewerModel}` : ""].filter(Boolean).join(" and ")}; review with a different model or provider when your client can choose. If you completed the origin item yourself in this session, release this item so another worker reviews it.`,
           ]
         : ["If you completed the origin item yourself in this session, release this item so another worker reviews it."]),
+      ...(boundaries.length > 0
+        ? [
+            `Protected boundaries (ADR-0074) — this repository's governance marks these paths ${boundaries.map((boundary) => `[${boundary.id}: ${boundary.paths.join(", ")} — ${boundary.decision} at minimum tier ${boundary.minimumRiskTier}]`).join("; ")}. A diff that touches one is judged against that decision and tier; Snowcat routes a touched review-required boundary to a human instead of marking ready.`,
+          ]
+        : []),
       "You are READ-ONLY on GitHub: do not comment, submit a review, approve, push, edit, or mark the pull request ready; do not create follow-ups. Snowcat acts on your verdict deterministically — a pass marks the pull request ready for a human, a block schedules one bounded fix — and never merges.",
       `Complete with \`review\` on complete_work: decision pass | block | unable-to-review; at most ${MAX_REVIEW_BLOCKERS} blockers, each with a stable fingerprint (for example \`defect:<path>:<short-slug>\`), exact location, the violated acceptance criterion, contract, or concrete counterexample, the material impact, the minimally sufficient resolution, and a verification method; at most ${MAX_REVIEW_ADVISORIES} advisories. A block needs at least one blocker; a pass carries none. Report the model you ran as result.model. Do not report the pull request as an artifact — it is not yours. If the head moved since this item was created, block_work with that reason.`,
     ].join(" "),

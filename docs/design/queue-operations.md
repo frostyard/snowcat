@@ -456,6 +456,18 @@ notes override nothing in the objective, instructions, or acceptance criteria
 (change those by cancelling and re-importing or re-seeding). Only the operator
 CLI and approved policy can write notes; workers cannot, and no MCP tool does.
 
+**Every definition binds the policy it runs under** ([spec rule 71](../specs/work-queue.md),
+[ADR-0074](../adr/0074-compile-policy-into-work-admission.md)). With
+`SNOWCAT_CONTROL_DB` set, defining work reads the enrolled repository's Core
+action ceiling and governance policy: denied actions and ceiling overruns
+are refused on the spot, your `approve` is recorded as the decision that
+satisfied the review-required acts (with the exact policy revision you
+judged), and a mechanically admitted root cites the ADR that pre-authorizes
+it. A pull request whose diff touches a protected boundary lands in
+*Review adjudication* for you instead of being marked ready. Items from
+before the rung read as `unbound-policy` in `audit-contracts` and drain on
+their own.
+
 **Every definition declares where it executes** ([spec rule 70](../specs/work-queue.md),
 [ADR-0073](../adr/0073-declare-the-execution-target-on-every-work-item.md)).
 `executionTarget` — `read-only`, `new-pull-request`, or
