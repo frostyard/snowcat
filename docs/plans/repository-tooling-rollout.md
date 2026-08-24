@@ -319,8 +319,8 @@ Cockpit in Snowcat's fleet until Phase 5 needs that.
   image at `/usr/local/share/snowcat-cockpit/baseline.json`; the OCI
   workers spec references it (snowcat-cockpit#11). The stopgap
   `golangci-lint` is listed under `stopgap` so Phase 6 knows what to remove.
-- [ ] `worker-images.yml` builds the three targets of the one file
-  (snowcat-cockpit#11); the published names stay
+- [x] `worker-images.yml` builds the three targets of the one file
+  (snowcat-cockpit#11, merged 2026-08-24; first publish `v0.1.3`); the published names stay
   `ghcr.io/frostyard/snowcat-cockpit-worker:<provider>-<version>` (a
   rename to `snowcat-worker-base` would break every node's configured
   reference for no gain — the base is the shared layer set, not a fourth
@@ -333,7 +333,9 @@ Cockpit in Snowcat's fleet until Phase 5 needs that.
   campaign request.
 - **Done when:** Codex, Claude, and Copilot workers each complete a Snowcat
   item from the same base digest, and `oci/baseline.json` is the only place
-  the baseline is enumerated.
+  the baseline is enumerated. *Inputs landed 2026-08-24 (the three targets
+  share every layer; the spec references `baseline.json`); the three-provider
+  completion is the first campaign on `v0.1.3`.*
 
 ## Phase 3 — Pilot `std` on mise (std; half a day)
 
@@ -373,26 +375,36 @@ failure the convention exists to end.
 
 ## Phase 4 — Prep-time provisioning (snowcat-cockpit; two days)
 
-- [ ] In target preparation (`internal/worker/target.go`, before any lease
-  exists — OCI workers spec rule 1 ordering), run `mise install --locked`
-  in the checkout with `MISE_DATA_DIR` set to a per-repository cache under
-  the node's state directory. Downloads are verified against `mise.lock`;
-  a repository without `mise.toml` provisions nothing and is not unready
-  (ADR-0076 "absence is visible, never guessed").
-- [ ] Mount that cache read-only into the container at the path the base
-  image's `MISE_DATA_DIR` names; the entrypoint activates mise for the
-  provider's login shell. No other change to the mount posture.
-- [ ] Readiness: `mise ls --missing` non-empty, or `go version` in the
-  checkout failing under `GOTOOLCHAIN=local`, marks the lane unready with
-  the tool or version named in inventory and the dashboard. Nothing is
-  installed inside the container.
-- [ ] Record the provisioned tool set (name, version, lock digest) as
-  non-secret worker metadata beside the image digest.
+- [x] Provision at `Launch`, before any lease exists (snowcat-cockpit#12):
+  `mise install --locked` in a throwaway container of the same pinned
+  image, workspace read-only, a per-repository cache keyed by the digest of
+  `mise.toml`/`mise.lock`/`go.mod` read-write, no provider input, no
+  credential names. *Two things the sketch got wrong, found by running it:
+  `Launch` (`internal/worker/worker.go`) is where the runtime and image are
+  known — `target.go` is the in-container ADR-0073 checkout step, too late;
+  and `mise install` rewrites `mise.lock` even when unchanged, so mise runs
+  from a tmpfs copy of the three pin files and the workspace is never
+  written. `--locked` refuses any tool the lock does not pre-resolve.*
+- [x] Mount the cache read-only at the image's `MISE_DATA_DIR`; the shims
+  directory is first on `PATH` by ENV *and* `/etc/profile.d`, because
+  providers run repository commands through a login shell and Debian's
+  `/etc/profile` resets `PATH` (snowcat-cockpit#12). No other mount change.
+- [x] Readiness: `mise.toml` without a lock, a tool absent from the lock, a
+  checksum mismatch, or a tool still missing after install fails the launch
+  as `ErrNotReady` with mise's own line in the worker record; no provider
+  starts; the campaign backs the lane off and shows the reason. Go from
+  `go.mod`'s toolchain line is provisioned by the same lock, so the
+  `GOTOOLCHAIN=local` case is covered by the same path.
+- [x] The worker record carries `provisioning` — lock digest, cache path,
+  installed `tool@version` list, timestamp.
 - **Done when:** with `golangci-lint` still in the base (Phase 0), a `std`
   worker runs the lint from the mise cache (visible in the retained
   terminal's path), and a fixture repository whose `mise.lock` names a tool
   with a wrong checksum produces an unready lane naming that tool and no
-  lease.
+  lease. *Second half proven against the built image on 2026-08-24
+  (tampered checksum and a tool absent from the lock both refuse with the
+  reason; unit tests pin the no-provider-starts path); first half is the
+  first `std` worker on `v0.1.3`.*
 
 ## Phase 5 — Fleet adoption (five repositories; one to two days of queue time)
 
