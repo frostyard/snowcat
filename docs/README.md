@@ -89,6 +89,7 @@ Docs are split by the question they answer:
 - [0072 — Back off claim selection after rapid worker releases](adr/0072-back-off-claim-selection-after-rapid-worker-releases.md)
 - [0073 — Declare the execution target on every work item](adr/0073-declare-the-execution-target-on-every-work-item.md)
 - [0074 — Compile policy into work admission](adr/0074-compile-policy-into-work-admission.md)
+- [0075 — Declare a repository execution profile in core](adr/0075-declare-a-repository-execution-profile-in-core.md)
 ||||||| Stash base
 
 ### Organization decisions
