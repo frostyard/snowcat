@@ -1,6 +1,6 @@
 # 0075 — Declare a repository execution profile in core
 
-- **Status:** Accepted
+- **Status:** Superseded by [0076](0076-pin-repository-tools-in-the-repository-and-qualify-lanes-by-running-them.md)
 - **Date:** 2026-08-24
 
 ## Context
