@@ -335,13 +335,20 @@ Cockpit in Snowcat's fleet until Phase 5 needs that.
   by Codex, merged 2026-08-24; `v0.1.2`): a mode-0600 `--profile` file in
   the tmpfs `CODEX_HOME` layers the relay server and disables the direct
   one — verified against the pinned CLI, which documents `--profile` as
-  "layer `$CODEX_HOME/<name>.config.toml`". Codex reviewers return to the
-  campaign request.
+  "layer `$CODEX_HOME/<name>.config.toml`". *Second cause, found on
+  `v0.1.4` when every Codex reviewer died with "connection closed:
+  initialize response": Codex starts MCP servers with a scrubbed
+  environment, and the relay reads `SNOWCAT_MCP_URL`/`SNOWCAT_MCP_TOKEN`
+  from its own. snowcat-cockpit#14 forwards the two names through
+  `env_vars` (no value in the file); `v0.1.5`.* Codex reviewers return to
+  the campaign request.
 - **Done when:** Codex, Claude, and Copilot workers each complete a Snowcat
   item from the same base digest, and `oci/baseline.json` is the only place
   the baseline is enumerated. *Inputs landed 2026-08-24 (the three targets
   share every layer; the spec references `baseline.json`); the three-provider
-  completion is the first campaign on `v0.1.3`.*
+  completion is pending: Claude proved on `v0.1.4` (std#64–66), Codex waits
+  on `v0.1.5`, and Copilot has no lane in the current campaign request — give
+  it one role for a run, or launch one Copilot worker by hand.*
 
 ## Phase 3 — Pilot `std` on mise (std; half a day)
 
@@ -409,8 +416,21 @@ failure the convention exists to end.
   with a wrong checksum produces an unready lane naming that tool and no
   lease. *Second half proven against the built image on 2026-08-24
   (tampered checksum and a tool absent from the lock both refuse with the
-  reason; unit tests pin the no-provider-starts path); first half is the
-  first `std` worker on `v0.1.3`.*
+  reason; unit tests pin the no-provider-starts path). First half met on
+  `v0.1.4` (`v0.1.3`'s publish failed, see Phase 2): the first `std` batch —
+  four implementers and a reviewer — all carry `provisioning: go@1.26.7,
+  golangci-lint@2.13.1` from one cache (`463df448…`, provisioned once and
+  reused four times), and two implementers ran `make verify`/`make check`
+  green with lint hard-required before opening std#64/#65/#66; the image's
+  `PATH` puts the cache's shims first, so that lint was the provisioned
+  binary.* **Met 2026-08-24.**
+- [ ] **Follow-up found by the same batch (snowcat-cockpit#15):** Docker
+  mounts the home tmpfs `noexec` (Podman does not), and the image keeps
+  `GOPATH`/`GOCACHE` under `/home/cockpit`, so `go tool covdata` and
+  anything Go executes from the cache fails; both implementers rediscovered
+  the workaround inside their leases. Move both under `/tmp` (already
+  `exec`) with the next image release and amend the spec sentence that
+  placed them under home.
 
 ## Phase 5 — Fleet adoption (five repositories; one to two days of queue time)
 
