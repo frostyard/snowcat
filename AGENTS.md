@@ -298,6 +298,15 @@ removed. -->
    `test/db.test.ts`), or a subprocess spawn for an executable entrypoint (see
    `test/repository-cli.test.ts`) — or explicitly excluded with a reason. CI
    must run the same recipe, so a local pass is a CI pass.
+- [`mise.toml`](mise.toml) is the single place the Node release is pinned
+  (core ADR-0043, Snowcat ADR-0076); `mise.lock` carries its checksum and
+  `package.json`'s `engines.node` states the same floor. `mise install`
+  provisions it for a developer or a Snowcat worker; CI reads the same file.
+  Run `npm run verify` for the credential-free, non-mutating subset of
+  `check` a read-only reviewer can run (typecheck, tests, docs check — no
+  audit, build, or coverage floors, since those need network access or write
+  `coverage/`); it is not a substitute for `npm run check` before calling a
+  change done.
 - Tests are `*.test.ts` files anywhere under `test/`, discovered recursively by
   Node's test runner (the pattern in `package.json` is quoted so the shell
   never expands it). Use `npm test` for the ordinary unmeasured development
