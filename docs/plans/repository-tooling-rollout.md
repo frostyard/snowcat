@@ -478,28 +478,29 @@ have not.
   credential-free subset (snowcat#232, merged 2026-08-24). *The CI half
   (snowcat#233 → #236, `jdx/mise-action`) is open and ready for human
   merge.*
-- [ ] `core`: Node like `snowcat`; its `scripts/check-organization.mjs` is
-  `verify` (core#109). *Not imported: core's own fleet declaration
-  (`organization/repositories/frostyard/core.json`) has `fleet_state:
-  disabled`, so Snowcat reads the repository as disabled and `import-issues
-  --enrolled` skips it — a core-side decision to enable itself, not a node
-  gap (it is in the node's catalog).*
+- [x] `core`: Node like `snowcat`; its `scripts/check-organization.mjs` is
+  `verify` (core#109). *Was not importable while core's own declaration
+  had `fleet_state: disabled`; core enabled itself with its own
+  governance surface on 2026-08-24 (core#111 — the "distinct reviewed
+  organization decision" its design doc reserved), enrolled on core
+  snapshot 180, and the same evening a Cockpit implementer delivered
+  core#112 (`mise.toml`/`mise.lock`, `npm run verify`, `ci.yml` on
+  mise-action) — Codex review round 1 `pass`, CI green, a human marked it
+  ready across the workflow boundary (ADR-0074) and merged it.*
 - [x] `firn`: `verify`, hard-fail lint, and the mise pins in one change
   (firn#69 → firn#70, merged 2026-08-24 by a Cockpit worker).
-- [ ] `snowcat-cockpit`: land the Phase P deferred items (core declaration,
-  agent-governance surface), enroll it, then adopt mise like the other Go
-  repositories — its Makefile already hard-pins `golangci-lint` (2.13.1,
-  already the fleet pin). *2026-08-24: the declaration
-  (frostyard/core#110, programs `quality`, `ci`, `dependencies`, `docs` like
-  `firn`) and the governance surface (snowcat-cockpit#23 — five
-  review-required boundaries from the schema's closed id vocabulary:
-  workflows, release and image publication, worker launch and credentials,
-  the loopback dashboard, the node service and CLI) are open for human
-  merge; `make ci` on the surface branch passed only through `mise exec
-  golangci-lint@2.13.1` because the host's linter was 2.12.2 — the drift
-  this phase ends. The adoption issue is filed on the label
-  (snowcat-cockpit#24, mirrors std#63, keeps `oci/` for Phase 6) and
-  imports once `repository -- reconcile` observes both merges.*
+- [x] `snowcat-cockpit`: the Phase P deferred items landed 2026-08-24
+  (core#110 declaration, snowcat-cockpit#23 governance surface — five
+  review-required boundaries from the schema's closed id vocabulary),
+  Cockpit enrolled on core snapshot 153, opted in with the review gate
+  on, and the adoption issue (snowcat-cockpit#24, mirrors std#63, `oci/`
+  left for Phase 6) was imported by the timer and delivered by a Cockpit
+  implementer as snowcat-cockpit#27 the same hour: `mise.toml`,
+  `mise.lock`, `toolchain go1.26.7`, `verify`, `test.yml` on mise-action
+  with `Install pinned tools` visible in the `Repository gate` log; Codex
+  review round 1 `pass`; human-marked ready across the workflow boundary
+  and merged. Left over: the link-only repair to the sentence in Cockpit's
+  ADR-0012 that names the Makefile pin (issue step 5) was not made.
 - [ ] Core distributes the shared pieces the same way it distributes
   skills — *not yet needed: every adoption so far was a worker copying the
   `std` pilot from its issue text; revisit if a new Go repository joins*
@@ -510,7 +511,18 @@ have not.
 - **Done when:** every enabled declaration's repository has `mise.toml`,
   `mise.lock`, `make verify`, and CI installing from those files; a Cockpit
   campaign across all six completes at least one item each with no
-  in-lease tool install in any retained terminal.
+  in-lease tool install in any retained terminal. **Met 2026-08-24
+  evening:** all seven declarations are `enabled` and `enrolled`; `std`,
+  `clix`, `updex`, `firn`, `snowcat` (#232 + #236), `core` (#112), and
+  `snowcat-cockpit` (#27) each carry the pins and the `verify` gate with
+  CI installing from the lock; the first campaign on the `v0.1.6` node
+  completed at least one item per repository, and the last two (core#112,
+  snowcat-cockpit#27) were built by lanes provisioned from the
+  repository's own lock — the mise-action step is in their CI logs and
+  no tool install appears in the lease. snowcat#241, a second worker's
+  competing implementation of the `check.yml` change, was closed as
+  superseded by #236 once the default-branch ruleset moved from `check
+  (node 24)`/`check (node 26)` to `check`.
 
 ## Phase 6 — Retire the stopgap (snowcat-cockpit, core; half a day)
 
@@ -550,9 +562,9 @@ have not.
 
 ## Where we stand — 2026-08-24, end of day
 
-**Met:** Phases 0, P, 1, 2, 3, 4. Every fleet repository that Snowcat works
-(`std`, `clix`, `updex`, `firn`, `snowcat`) pins its tools in
-`mise.toml`/`mise.lock` and exposes the `verify` gate; Cockpit `v0.1.6`
+**Met:** Phases 0, P, 1, 2, 3, 4, 5. Every fleet repository that Snowcat works
+(`std`, `clix`, `updex`, `firn`, `snowcat`, `core`, `snowcat-cockpit`) pins
+its tools in `mise.toml`/`mise.lock` and exposes the `verify` gate; Cockpit `v0.1.6`
 builds one base image with three provider targets, provisions each worker's
 tools from its repository's lock before the lease, and runs Claude, Codex,
 and Copilot workers on it. The operator node is on the `v0.1.6` line with
@@ -561,17 +573,13 @@ Codex.
 
 **Outstanding, in order:**
 
-1. **Phase 5 closeout** — merge snowcat#236 (CI half; human-routed because it
-   touches `.github/workflows/**`); merge core#110 and snowcat-cockpit#23,
-   run `repository -- reconcile` on the host so Cockpit enrolls, and let the
-   15-minute import pick up snowcat-cockpit#24 (Cockpit's mise adoption);
-   decide whether `core` enables its own `fleet_state` (it is `disabled` in
-   its declaration, so nothing there is Snowcat work); the core-side
+1. **Phase 5 closed 2026-08-24 evening** — #236 merged after the ruleset
+   moved to `check`; core#110/#111 and snowcat-cockpit#23 merged; Cockpit
+   and core enrolled, opted in, review-gated; core#112 and
+   snowcat-cockpit#27 delivered, reviewed, and merged. Two loose ends:
+   Cockpit's ADR-0012 pin sentence (link-only repair) and the core-side
    conformance check from ADR-0043 (presence of `mise.toml`, `mise.lock`,
-   and the three targets) is unwritten. Fleet grep 2026-08-24 evening:
-   `std`, `clix`, `updex`, `firn` each have `mise.toml`, `mise.lock`, a
-   `verify` target, and a mise-action CI step; `snowcat` has the pins and
-   `npm run verify` with only #236 outstanding.
+   and the three targets), which is Phase 6's third item.
 2. **Phase 6 — retire the stopgap:** `golangci-lint` still ships in the base
    image and `oci/baseline.json` lists it under `stopgap`; with every
    enrolled repository now on `mise.lock`, remove it, republish, roll. The
