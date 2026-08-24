@@ -123,6 +123,17 @@ retired by Phase 6; do not generalise it.
   skill name `make verify` as the read-only gate and forbid `make check`
   for `pr-review` work (ADR-0075 §4, which survives into Phase 1)
   (snowcat#215, merged 2026-08-24).
+- [ ] **Cockpit:** re-vendor the embedded worker kit from snowcat `main`
+  (snowcat-cockpit#5), release, and `node install` the new binary. *Found
+  by the first Phase 0 campaign: the kit was locked at snowcat `3388b20`,
+  all three canonical skills had moved (including #215's `make verify`
+  wording), and `InstallKit` refuses to replace a drifted skill, so the
+  snowcat lane failed at kit installation and the campaign ran
+  `degraded`. Standing dependency until the Phase 1 Cockpit ADR resolves
+  it: every Snowcat skill change requires a Cockpit release and node
+  upgrade before the snowcat lane works — the kit should refresh from the
+  source revision automatically or defer to the checkout when the
+  repository is the canonical skill source.*
 - **Done when:** a Cockpit campaign on `std`, `clix`, and `updex` completes
   one item per repository whose retained worker terminal shows
   `golangci-lint run` executing from the image (no `go install`, no
@@ -223,7 +234,10 @@ Cockpit in Snowcat's fleet until Phase 5 needs that.
 - [ ] **Cockpit ADR:** one provider-collapsed base image; repository tools
   provisioned at target preparation from `mise.lock` into a per-repository
   cache mounted read-only; `mise ls --missing` non-empty or Go not satisfying
-  `go.mod` ⇒ lane unready with the reason named. Supersedes the "generic
+  `go.mod` ⇒ lane unready with the reason named; and the worker kit stops
+  being a release-time vendored copy of Snowcat's skills (Phase 0's
+  `degraded` campaign) — refreshed from a recorded source revision, or
+  deferred to the checkout where the repository is the canonical source. Supersedes the "generic
   baseline" posture of
   [Cockpit ADR-0005](https://github.com/frostyard/snowcat-cockpit/blob/main/docs/adr/0005-isolate-unattended-workers-in-rootless-oci.md)
   without weakening any isolation rule.
