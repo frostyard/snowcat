@@ -55,8 +55,11 @@ checkout you never mutate. Every follow-up you propose declares its own
 `executionTarget` alongside `requiredArtifact`.
 
 - Perform only actions listed in `allowedActions`. Absence means prohibition.
-- Pull the target repository's default branch immediately before branching,
-  so a lease taken seconds before a merge does not build on a stale base.
+- For `new-pull-request` work, pull the target repository's default branch
+  immediately before branching, so a lease taken seconds before a merge does
+  not build on a stale base. `existing-pull-request` and `read-only` work
+  never pull-and-branch onto a fresh base — see the `executionTarget`
+  paragraph above.
 - Treat execution isolation, credentials, tools, and network access as the
   client environment's responsibility; do not assume Snowcat provided a sandbox.
 - Call `heartbeat_work` before and after a step likely to approach the lease
