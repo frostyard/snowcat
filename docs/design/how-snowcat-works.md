@@ -112,8 +112,11 @@ runs code.
    ([`src/queue/eligibility.ts`](../../src/queue/eligibility.ts);
    [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md),
    Decision 3). Clamping item actions to Core's ceiling and the governance
-   file is future work that starts with an ADR and a
-   [work queue](../specs/work-queue.md) rule, not present behavior. The
+   file is decided by
+   [ADR-0074](../adr/0074-compile-policy-into-work-admission.md) — the
+   policy binding, admission evidence, and delivered-diff boundary check —
+   and becomes present behavior with its implementing change and
+   [work queue](../specs/work-queue.md) rules. The
    worker does exactly that one thing, opens one pull request, and completes
    with evidence and the pull request URL.
 
