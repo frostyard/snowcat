@@ -468,8 +468,10 @@ export function cureRootDefinition(
     ],
     allowedActions: CURE_ACTIONS,
     delegableActions: CURE_CHILD_CEILING,
-    // The cured pull request is the deliverable (rule 44; ADR-0069).
+    // The cured pull request is the deliverable (rule 44; ADR-0069), on its
+    // own branch at the recorded head (ADR-0073; the cure record binds it).
     requiredArtifact: "pull-request",
+    executionTarget: "existing-pull-request",
     createdBy,
   };
 }

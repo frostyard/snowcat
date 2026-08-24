@@ -35,7 +35,7 @@ test("the HTTP MCP endpoint refuses without a valid minted token and acts as the
   const queue = new QueueStore(path);
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/example", true);
-  queue.enqueueSeed({ repository: "frostyard/example", kind: "quality-gap-discovery", objective: "Find one gap.", instructions: "Read only.", acceptanceCriteria: ["One gap."], allowedActions: ["read", "create-followup"], delegableActions: ["read"], createdBy: "operator:test" });
+  queue.enqueueSeed({ repository: "frostyard/example", kind: "quality-gap-discovery", objective: "Find one gap.", instructions: "Read only.", acceptanceCriteria: ["One gap."], allowedActions: ["read", "create-followup"], delegableActions: ["read"], executionTarget: "read-only", createdBy: "operator:test" });
   const app = createApp({ appToken: "surface-token", surfaceStores: () => ({ queue }), mcp: { queue: () => queue, queuePath: path, verifier: { clock } } });
 
   // No token, malformed token, unknown token, revoked token: 401 with a challenge, no distinguishable reason.

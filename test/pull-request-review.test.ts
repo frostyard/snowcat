@@ -118,6 +118,8 @@ function completedWithDraftPr(queue: QueueStore, options: { head?: string; draft
     acceptanceCriteria: ["PR open.", "make check passes."],
     allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     priority: options.priority ?? 7,
     createdBy: "operator:test",
   });
@@ -265,6 +267,8 @@ test("the review gate refuses an open non-draft pull request in a gated reposito
       acceptanceCriteria: ["PR open."],
       allowedActions: ["read", "write", "run-tests", "open-pr"],
       delegableActions: [],
+      requiredArtifact: "pull-request",
+      executionTarget: "new-pull-request",
       createdBy: "operator:test",
     });
   const connect = async (fetcher: typeof fetch) => {
@@ -358,7 +362,7 @@ test("the review gate refuses an open non-draft pull request in a gated reposito
   answer = await complete(session.client, claimed, { result: { summary: "x", evidence: [], artifacts: [], model: "has spaces in it" } });
   assert.equal(answer.isError, true, "a model name with whitespace is rejected by the schema");
   assert.throws(
-    () => queue.complete({ id: claimed.id, leaseToken: claimed.leaseToken!, worker: "claude:author", result: { summary: "x", evidence: [], artifacts: [] }, followUps: [], review: { decision: "pass", blockers: [], advisories: [] } }),
+    () => queue.complete({ id: claimed.id, leaseToken: claimed.leaseToken!, worker: "claude:author", result: { summary: "x", evidence: [], artifacts: [{ kind: "pull-request", url: PR_URL }] }, followUps: [], review: { decision: "pass", blockers: [], advisories: [] } }),
     /review results are accepted only on pr-review items/,
   );
   assert.throws(
@@ -731,7 +735,7 @@ test("enqueueReviewRoot validates kind, action ceilings, and the review record; 
   const created = make({});
   assert.ok(created);
   assert.equal(make({}), undefined, "the same sourceRef is never enqueued twice");
-  assert.equal(queue.metadata().schemaVersion, 15);
+  assert.equal(queue.metadata().schemaVersion, 16);
   assert.throws(() => queue.enqueueReviewRoot("frostyard/lodge", { ...definition, allowedActions: [...definition.allowedActions], delegableActions: [], sourceRef: "pr-review:x@y", review }), /not opted in/);
 
   const originId = completedWithDraftPr(queue);
@@ -812,6 +816,7 @@ test("the sweep reports, persists, and clears open pull requests no item reporte
     acceptanceCriteria: ["Verdict supplied."],
     allowedActions: [...REVIEW_ACTIONS],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "policy:review-gate",
     sourceRef: `${REVIEW_KIND}:${boundUrl}@${HEAD_B}`,
     review: { pullRequestUrl: boundUrl, headSha: HEAD_B, round: 1, priorBlockers: [] },
@@ -903,6 +908,8 @@ test("a still-claimed item's own draft pull request stays unreportedPending past
     acceptanceCriteria: ["PR open.", "make check passes."],
     allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     priority: 5,
     createdBy: "operator:test",
   });

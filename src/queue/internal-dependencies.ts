@@ -313,9 +313,13 @@ function releaseNeededProposal(repository: string, release: RepositoryRelease, s
     ],
     allowedActions: IMPLEMENTATION_ACTIONS,
     delegableActions: [],
-    // Explicitly none (ADR-0069): the instructions allow completing with
-    // evidence and no pull request when nothing needs to change before the tag.
-    requiredArtifact: "none",
+    // A release-needed item prepares the release through one pull request
+    // (ADR-0069) from a fresh branch (ADR-0073). A worker that finds the
+    // branch already release-ready blocks with that evidence — the
+    // block-when-no-change doctrine imported issues already follow — and
+    // the operator publishes and cancels.
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:dependency-sweep",
   };
 }
@@ -336,8 +340,9 @@ function dependencyBumpProposal(repository: string, module: string, from: string
     ],
     allowedActions: IMPLEMENTATION_ACTIONS,
     delegableActions: [],
-    // One bump is one pull request (ADR-0069).
+    // One bump is one pull request (ADR-0069) from a fresh branch (ADR-0073).
     requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:dependency-sweep",
   };
 }

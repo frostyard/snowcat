@@ -32,6 +32,8 @@ function seedQueue(queue: QueueStore): void {
     acceptanceCriteria: ["A pull request."],
     allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:test",
   });
 }
@@ -45,6 +47,7 @@ function seedReview(queue: QueueStore): void {
     acceptanceCriteria: ["A verdict."],
     allowedActions: ["read", "run-tests"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
 }

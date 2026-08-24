@@ -40,6 +40,7 @@ test("seed work requires an opted-in repository and preserves child lineage", as
         allowedActions: ["read", "write", "run-tests", "open-pr"],
         delegableActions: [],
         requiredArtifact: "pull-request",
+        executionTarget: "new-pull-request",
       },
     ],
   });
@@ -159,6 +160,7 @@ test("a worker cannot grant follow-up actions above the delegation ceiling", asy
     acceptanceCriteria: ["One ambiguity is supported by a path reference."],
     allowedActions: ["read", "create-followup"],
     delegableActions: ["read"],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   const claimed = queue.claim({ worker: "copilot:core:one" })!;
@@ -179,6 +181,7 @@ test("a worker cannot grant follow-up actions above the delegation ceiling", asy
             allowedActions: ["read", "write", "open-pr"],
             delegableActions: [],
             requiredArtifact: "pull-request",
+            executionTarget: "new-pull-request",
           },
         ],
       }),
@@ -201,6 +204,7 @@ test("completion artifacts are rejected when the matching action is not allowed"
     acceptanceCriteria: ["Findings reference concrete paths."],
     allowedActions: ["read", "run-tests"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   const claimed = queue.claim({ worker: "codex:lodge:one" })!;
@@ -268,6 +272,8 @@ test("completion stores a pull-request artifact when open-pr is allowed", async 
     acceptanceCriteria: ["The pull request contains the new test."],
     allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:test",
   });
   const claimed = queue.claim({ worker: "codex:lodge:two" })!;
@@ -305,6 +311,8 @@ test("GitHub artifact claims must match the work repository and declared kind", 
     acceptanceCriteria: ["The reported artifact belongs to frostyard/lodge."],
     allowedActions: ["read", "write", "run-tests", "open-issue", "open-pr", "create-followup"],
     delegableActions: ["read"],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:test",
   });
   const claimed = queue.claim({ worker: "claude:lodge:scope" })!;
@@ -337,6 +345,7 @@ test("GitHub artifact claims must match the work repository and declared kind", 
               allowedActions: ["read"],
               delegableActions: [],
               requiredArtifact: "none",
+              executionTarget: "read-only",
             },
           ],
         }),
@@ -380,6 +389,7 @@ test("artifact URLs reject credentials before provenance is stored", async () =>
     acceptanceCriteria: ["The report URL contains no credentials."],
     allowedActions: ["read"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   const claimed = queue.claim({ worker: "codex:lodge:credentials" })!;
@@ -424,6 +434,7 @@ test("rejected proposals remain auditable and cannot be claimed", async () => {
         allowedActions: ["read"],
         delegableActions: [],
         requiredArtifact: "none",
+        executionTarget: "read-only",
       },
     ],
   });
@@ -494,6 +505,7 @@ test("follow-up count and lineage depth are hard bounded", async () => {
     allowedActions: ["read" as const],
     delegableActions: ["read" as const, "create-followup" as const],
     requiredArtifact: "none" as const,
+    executionTarget: "read-only" as const,
   }));
   assert.throws(
     () =>
@@ -525,6 +537,7 @@ test("follow-up count and lineage depth are hard bounded", async () => {
           allowedActions: ["read", "create-followup"],
           delegableActions: ["read", "create-followup"],
           requiredArtifact: "none",
+          executionTarget: "read-only",
         },
       ],
     });
@@ -549,6 +562,7 @@ test("follow-up count and lineage depth are hard bounded", async () => {
             allowedActions: ["read"],
             delegableActions: [],
             requiredArtifact: "none",
+            executionTarget: "read-only",
           },
         ],
       }),
@@ -583,6 +597,7 @@ test("the database itself refuses to claim or create claimable proposals through
         allowedActions: ["read", "write", "run-tests", "open-pr"],
         delegableActions: [],
         requiredArtifact: "pull-request",
+        executionTarget: "new-pull-request",
       },
     ],
   });
@@ -785,6 +800,7 @@ test("scheduling priority is operator-owned: workers cannot set it and children 
           acceptanceCriteria: ["Never created."],
           allowedActions: ["read", "create-followup"],
           delegableActions: ["read", "write"],
+          executionTarget: "read-only",
           priority,
           createdBy: "operator:test",
         }),
@@ -801,6 +817,7 @@ test("scheduling priority is operator-owned: workers cannot set it and children 
     acceptanceCriteria: ["Exactly one gap has file-level evidence."],
     allowedActions: ["read", "create-followup"],
     delegableActions: ["read", "write", "run-tests", "open-pr", "create-followup"],
+    executionTarget: "read-only",
     priority: 7,
     createdBy: "operator:test",
   });
@@ -814,6 +831,7 @@ test("scheduling priority is operator-owned: workers cannot set it and children 
     allowedActions: ["read", "write", "run-tests", "open-pr"] as const,
     delegableActions: [] as const,
     requiredArtifact: "pull-request" as const,
+    executionTarget: "new-pull-request" as const,
   };
 
   // A worker-supplied priority (even a low one) rejects the whole completion.
@@ -948,6 +966,7 @@ test("an operator can prioritize proposed, queued, or blocked work, and only an 
     acceptanceCriteria: ["One gap."],
     allowedActions: ["read", "create-followup"],
     delegableActions: ["read", "write", "run-tests", "open-pr"],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   const claimedParent = queue.claim({ worker: "claude:updex:parent", kinds: ["security-gap-discovery"] })!;
@@ -965,6 +984,7 @@ test("an operator can prioritize proposed, queued, or blocked work, and only an 
         allowedActions: ["read", "write", "run-tests", "open-pr"],
         delegableActions: [],
         requiredArtifact: "pull-request",
+        executionTarget: "new-pull-request",
       },
     ],
   });
@@ -1078,6 +1098,7 @@ test("cancelling the final blocked descendant makes its specialty inactive", asy
         allowedActions: ["read", "write", "run-tests", "open-pr"],
         delegableActions: [],
         requiredArtifact: "pull-request",
+        executionTarget: "new-pull-request",
       },
     ],
   });
@@ -1172,6 +1193,7 @@ test("worker identities cannot use reserved principal namespaces", async () => {
         allowedActions: ["read" as const],
         delegableActions: [],
         requiredArtifact: "none" as const,
+        executionTarget: "read-only" as const,
       },
     ],
   });
@@ -1388,6 +1410,7 @@ function seedTestingGap(queue: QueueStore, repository: string) {
     acceptanceCriteria: ["Exactly one gap has file-level evidence."],
     allowedActions: ["read", "create-followup"],
     delegableActions: ["read", "write", "run-tests", "open-pr", "create-followup"],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
 }
@@ -1406,6 +1429,8 @@ test("eventsSince reads the ledger across items in global order with joined item
     acceptanceCriteria: ["The pull request contains the new test."],
     allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:test",
   });
   const [lodge] = queue.enqueueProposedRoots("frostyard/lodge", [
@@ -1416,6 +1441,7 @@ test("eventsSince reads the ledger across items in global order with joined item
       acceptanceCriteria: ["A pull request closes the issue."],
       allowedActions: ["read"],
       delegableActions: [],
+      executionTarget: "read-only",
       createdBy: "operator:import-issues",
       sourceRef: "https://github.com/frostyard/lodge/issues/4",
     },
@@ -1496,6 +1522,7 @@ test("rename-repository carries the opt-in and every item to the new slug and le
     acceptanceCriteria: ["One gap."],
     allowedActions: ["read"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   const imported = queue.enqueueProposedRoots("frostyard/before", [
@@ -1507,6 +1534,8 @@ test("rename-repository carries the opt-in and every item to the new slug and le
       acceptanceCriteria: ["PR open."],
       allowedActions: ["read", "write", "open-pr"],
       delegableActions: [],
+      requiredArtifact: "pull-request",
+      executionTarget: "new-pull-request",
       createdBy: "operator:test",
     },
   ]);

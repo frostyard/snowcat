@@ -21,6 +21,7 @@ claim, renew, and resolve it.
 | `allowedActions` | action[] | yes | Authority for this item |
 | `delegableActions` | action[] | yes | Maximum authority for direct children |
 | `requiredArtifact` | enum | yes | The item's delivery contract ([ADR-0069](../adr/0069-declare-the-required-artifact-on-every-work-item.md)): `none` or `pull-request`. Declared by the definer — required on every follow-up, `none` when an operator seed omits it — never inferred from kind or actions, never changed afterwards. `pull-request` requires `open-pr` in `allowedActions` (rule 64) |
+| `executionTarget` | enum | when declared | Where execution happens ([ADR-0073](../adr/0073-declare-the-execution-target-on-every-work-item.md)): `read-only`, `new-pull-request`, or `existing-pull-request`. Declared by the definer on every post-rung-16 definition, never inferred; absent on pre-rung rows (undeclared legacy) |
 | `priority` | integer | yes | Safe integer; higher values claim first, creation time breaks ties. Chosen only by operator or policy seeds; worker-created children inherit the parent's value; changed afterwards only by the operator `prioritize` command (rule 38) |
 | `status` | enum | yes | `proposed`, `queued`, `claimed`, `completed`, `blocked`, or `cancelled` |
 | `createdBy` | string | yes | Operator, policy, or worker provenance |
@@ -1214,6 +1215,33 @@ MCP (rule 41).
     another client's label grants no lease authority — and `claim_work`,
     `heartbeat_work`, `complete_work`, `block_work`, and `release_work` keep
     returning the bare item without `attempts`.
+70. **Execution target ([ADR-0073](../adr/0073-declare-the-execution-target-on-every-work-item.md); extends rules 10, 37, and 64).**
+    Every definition path — seeds, imported and proposed roots, cure and
+    review roots, and every MCP follow-up — MUST declare `executionTarget`
+    as `read-only`, `new-pull-request`, or `existing-pull-request`, and MUST
+    be refused without one; nothing ever infers a target from kind or
+    actions. The consistency predicate extends rule 64, checked at every
+    definition, again at admission, and surfaced by `audit-contracts`:
+    `read-only` MUST exclude `write` and `open-pr` from `allowedActions` and
+    declare `requiredArtifact` `none`; `new-pull-request` and
+    `existing-pull-request` MUST include both `write` and `open-pr` and
+    declare `pull-request`; `existing-pull-request` MUST additionally carry
+    a pull-request binding — a `review` or `cure` record, or a `sourceRef`
+    naming `<url>@<head SHA>`. Snowcat's own definers declare accordingly:
+    rule 42's `pr-cure` and rule 55's `pr-review-fix` roots
+    `existing-pull-request`, rule 53's `pr-review` roots and the catalog's
+    discovery roots `read-only`, imports and the dependency sweep's roots
+    `new-pull-request` (a `release-needed` root therefore declares
+    `requiredArtifact` `pull-request`, and a worker that finds nothing to
+    change blocks, exactly as an imported issue's worker does). An executor
+    MUST configure the claimed target before any repository mutation — a
+    fresh branch from a fresh default-branch base, the bound branch at
+    exactly the recorded head (a moved head is refused, not adopted), or a
+    detached read-only checkout — and release or block when it cannot. Rung
+    16 adds the nullable `execution_target` column: every pre-rung row reads
+    as *undeclared*, stays claimable under the conventions of its day, is
+    listed by `audit-contracts` as `undeclared-execution-target`, and is
+    never back-filled.
 
 ## Derived artifacts
 
@@ -1235,6 +1263,7 @@ MCP (rule 41).
 | Operator lease release | `QueueStore.releaseLease` returns one claimed item to queued and fences the outstanding token per rule 67; `claims` lists every current lease, lapsed first, without tokens |
 | Undelivered work | `deliveries` lists completed items whose `delivery` is `open`, ready-to-merge or ready-to-publish rows first, per rule 68 |
 | Claim backoff | Claim selection excludes an item with three worker releases inside the trailing window and `churn` lists the evidence per rule 69 |
+| Execution target | Every definition declares where it executes and the rule 64 predicate binds target, actions, artifact, and binding per rule 70; legacy rows read undeclared |
 | MCP worker behavior | Portable `work-snowcat-queue` skill constrained by this contract |
 | Testing-gap seed | Deterministic CLI instance of this contract |
 

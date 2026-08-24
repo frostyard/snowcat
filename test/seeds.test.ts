@@ -52,6 +52,7 @@ test("the dogfood feeder creates one bounded read-only root per specialty withou
         allowedActions: ["read", "write", "run-tests", "open-pr"],
         delegableActions: [],
         requiredArtifact: "pull-request",
+        executionTarget: "new-pull-request",
       },
     ],
   });
@@ -79,6 +80,7 @@ test("the dogfood feeder detects active lineages beyond the 100-row listing cap"
       acceptanceCriteria: ["One observation is recorded."],
       allowedActions: ["read"],
       delegableActions: [],
+      executionTarget: "read-only",
       createdBy: "operator:test",
     });
   }
@@ -101,6 +103,7 @@ test("the dogfood feeder detects active lineages beyond the 100-row listing cap"
         allowedActions: ["read", "write", "run-tests", "open-pr"],
         delegableActions: [],
         requiredArtifact: "pull-request",
+        executionTarget: "new-pull-request",
       },
     ],
   });
@@ -139,6 +142,7 @@ test("an invalid later batch candidate rolls back roots inserted earlier in the 
           acceptanceCriteria: ["One gap is reported."],
           allowedActions: ["read"],
           delegableActions: [],
+          executionTarget: "read-only",
           createdBy: "operator:test",
         },
         {
@@ -148,6 +152,7 @@ test("an invalid later batch candidate rolls back roots inserted earlier in the 
           acceptanceCriteria: ["The batch rolls back."],
           allowedActions: ["read"],
           delegableActions: [],
+          executionTarget: "read-only",
           createdBy: "operator:test",
         },
       ]),
@@ -288,6 +293,7 @@ test("a no-finding assessment cools its kind for the window, while a finding doe
         allowedActions: ["read", "write", "run-tests", "open-pr"],
         delegableActions: [],
         requiredArtifact: "pull-request",
+        executionTarget: "new-pull-request",
       },
     ],
   });

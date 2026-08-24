@@ -92,7 +92,7 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
   const directory = await mkdtemp(join(tmpdir(), "snowcat-ladder-test-"));
   const path = join(directory, "queue.db");
   const { itemId } = createVersionOneDatabase(path);
-  assert.equal(SCHEMA_VERSION, 15, "this test pins the ladder at rung 15; extend it when a rung is added");
+  assert.equal(SCHEMA_VERSION, 16, "this test pins the ladder at rung 16; extend it when a rung is added");
 
   const queue = new QueueStore(path);
   test.after(() => queue.close());
@@ -130,6 +130,8 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
     acceptanceCriteria: ["Patch unchanged."],
     allowedActions: ["read", "write", "run-tests", "open-pr", "create-followup"],
     delegableActions: ["read", "write", "run-tests", "open-pr"],
+    requiredArtifact: "pull-request",
+    executionTarget: "existing-pull-request",
     createdBy: "operator:test",
     cure: { pullRequestUrl: "https://github.com/frostyard/updex/pull/9", headSha: "c".repeat(40), patchDigest: `sha256:${"1".repeat(64)}`, decay: ["behind"] },
   });
@@ -139,7 +141,9 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
   // contract is declared, never inferred from its actions), and a new root
   // stores the contract it declares.
   assert.equal(queue.get(itemId)?.requiredArtifact, "none");
-  assert.equal(queue.get(cured!.id)?.requiredArtifact, "none");
+  assert.equal(queue.get(itemId)?.executionTarget, undefined, "rung 16: the legacy item reads as undeclared, never back-filled");
+  assert.equal(queue.get(cured!.id)?.requiredArtifact, "pull-request");
+  assert.equal(queue.get(cured!.id)?.executionTarget, "existing-pull-request");
 
   // Rung 8 arrived too: a pr-review root carries its typed review record and the repository has a review-gate setting.
   const reviewed = queue.enqueueReviewRoot("frostyard/updex", {
@@ -150,6 +154,7 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
     acceptanceCriteria: ["Verdict supplied."],
     allowedActions: ["read", "run-tests"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "policy:review-gate",
     review: { pullRequestUrl: "https://github.com/frostyard/updex/pull/9", headSha: "c".repeat(40), round: 1, priorBlockers: [] },
   });
@@ -166,6 +171,8 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
       acceptanceCriteria: ["PR open."],
       allowedActions: ["read", "write", "open-pr"],
       delegableActions: [],
+      requiredArtifact: "pull-request",
+      executionTarget: "new-pull-request",
       createdBy: "operator:test",
     },
   ]);
@@ -519,6 +526,7 @@ test("backup copies the live queue to a new file, verifies it, and never overwri
     acceptanceCriteria: ["One gap has concrete evidence."],
     allowedActions: ["read"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   const claimed = queue.claim({ worker: "claude:backup-test" })!;

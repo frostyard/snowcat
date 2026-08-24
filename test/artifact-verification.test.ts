@@ -163,16 +163,19 @@ test("an unavailable or unreadable GitHub answer records unverified instead of r
   );
 });
 
-async function seedClaimed(queue: QueueStore) {
+async function seedClaimed(queue: QueueStore, shape: "change" | "reporter" = "change") {
   queue.setRepositoryEnabled(REPOSITORY, true);
   queue.enqueueSeed({
     repository: REPOSITORY,
     kind: "issue-resolution",
     objective: "Resolve #7",
-    instructions: "Open a PR.",
-    acceptanceCriteria: ["PR open."],
-    allowedActions: ["read", "write", "run-tests", "open-issue", "open-pr"],
+    instructions: shape === "change" ? "Open a PR." : "Report with evidence.",
+    acceptanceCriteria: [shape === "change" ? "PR open." : "Reported."],
+    // ADR-0073: a reporter mutates nothing and delivers no pull request.
+    allowedActions: shape === "change" ? ["read", "write", "run-tests", "open-issue", "open-pr"] : ["read", "run-tests", "open-issue"],
     delegableActions: [],
+    requiredArtifact: shape === "change" ? "pull-request" : "none",
+    executionTarget: shape === "change" ? "new-pull-request" : "read-only",
     createdBy: "operator:test",
   });
   return queue.claim({ worker: "claude:verify-test" })!;
@@ -321,7 +324,7 @@ test("delivery derives from pull-request artifacts only, and recordArtifactVerif
   const directory = await mkdtemp(join(tmpdir(), "snowcat-delivery-test-"));
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
-  const claimed = await seedClaimed(queue);
+  const claimed = await seedClaimed(queue, "reporter");
   assert.equal(queue.get(claimed.id)?.delivery, undefined, "only completed items carry delivery");
   assert.throws(() => queue.recordArtifactVerification(claimed.id, PR_URL, { status: "verified", verifiedAt: "t", number: 1, state: "open" }, "operator:test"), /not completed/);
   queue.complete({
@@ -365,6 +368,8 @@ function seedTerminalCompletions(queue: QueueStore, count: number, tick: () => v
       acceptanceCriteria: ["PR open."],
       allowedActions: ["read", "write", "run-tests", "open-pr"],
       delegableActions: [],
+      requiredArtifact: "pull-request",
+      executionTarget: "new-pull-request",
       createdBy: "operator:test",
     });
     const claimed = queue.claim({ worker: "claude:verify-test" })!;
@@ -505,6 +510,8 @@ test("verify-artifacts clears a pre-rename artifact, and completion still requir
     acceptanceCriteria: ["PR open."],
     allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:test",
   });
   const before = queue.claim({ worker: "claude:verify-test" })!;
@@ -551,6 +558,8 @@ test("verify-artifacts clears a pre-rename artifact, and completion still requir
     acceptanceCriteria: ["PR open."],
     allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:test",
   });
   const after = queue.claim({ worker: "claude:verify-test" })!;

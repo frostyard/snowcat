@@ -42,22 +42,24 @@ function root(overrides: Partial<ProposedRootInput> & { sourceRef: string; kind:
     acceptanceCriteria: ["A pull request is open."],
     allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:import-issues",
     ...overrides,
   };
 }
 
 /** One imported, still-proposed root. */
-function propose(harness: Harness, options: { sourceRef: string; kind: string; predecessors?: string[] }): WorkItem {
+function propose(harness: Harness, options: { sourceRef: string; kind: string; predecessors?: string[]; shape?: Partial<ProposedRootInput> }): WorkItem {
   const { created } = harness.queue.enqueueProposedRoots(REPOSITORY, [
-    root({ sourceRef: options.sourceRef, kind: options.kind, ...(options.predecessors ? { predecessors: options.predecessors } : {}) }),
+    root({ sourceRef: options.sourceRef, kind: options.kind, ...(options.predecessors ? { predecessors: options.predecessors } : {}), ...options.shape }),
   ]);
   harness.advance();
   return created[0]!;
 }
 
 /** One admitted (queued) item: what the gate withholds and the strips show. */
-function admit(harness: Harness, options: { sourceRef: string; kind: string; predecessors?: string[] }): WorkItem {
+function admit(harness: Harness, options: { sourceRef: string; kind: string; predecessors?: string[]; shape?: Partial<ProposedRootInput> }): WorkItem {
   return harness.queue.approve(propose(harness, options).id, "operator:test");
 }
 
@@ -66,7 +68,16 @@ function completeItem(
   harness: Harness,
   options: { sourceRef: string; kind: string; artifacts?: WorkArtifact[]; verifications?: Array<{ url: string; verification: ArtifactVerification }> },
 ): WorkItem {
-  const item = admit(harness, { sourceRef: options.sourceRef, kind: options.kind });
+  // A predecessor that will report no pull request is a read-only reporter
+  // under ADR-0073; one that will report a pull request keeps the change shape.
+  const reportsPullRequest = (options.artifacts ?? []).some((artifact) => artifact.kind === "pull-request");
+  const item = admit(harness, {
+    sourceRef: options.sourceRef,
+    kind: options.kind,
+    ...(reportsPullRequest
+      ? {}
+      : { shape: { allowedActions: ["read", "run-tests"], delegableActions: [], requiredArtifact: "none", executionTarget: "read-only" } as Partial<ProposedRootInput> }),
+  });
   const worker = `claude:test:${options.kind}`;
   const claimed = harness.queue.claim({ worker, repository: REPOSITORY, kinds: [options.kind] });
   assert.equal(claimed?.id, item.id, "the seeding claim took the intended item");

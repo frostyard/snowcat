@@ -607,6 +607,8 @@ export function reviewRootDefinition(
     delegableActions: [],
     // A review delivers a verdict, not an artifact (ADR-0069).
     requiredArtifact: "none",
+    // Judged at the exact bound head, mutating nothing (ADR-0073).
+    executionTarget: "read-only",
     createdBy,
   };
 }
@@ -639,8 +641,10 @@ export function reviewFixRootDefinition(
     ],
     allowedActions: REVIEW_FIX_ACTIONS,
     delegableActions: [],
-    // The fix lands on the reviewed pull request (ADR-0069).
+    // The fix lands on the reviewed pull request (ADR-0069), on its own
+    // branch at the recorded head (ADR-0073; the review record binds it).
     requiredArtifact: "pull-request",
+    executionTarget: "existing-pull-request",
     createdBy,
   };
 }

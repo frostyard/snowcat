@@ -38,6 +38,7 @@ function seedQueue(queue: QueueStore): string {
     allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
     requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:test",
   }).id;
 }

@@ -45,6 +45,8 @@ import {
   type WorkStatus,
   type RequiredArtifact,
   requiredArtifacts,
+  type ExecutionTarget,
+  executionTargets,
 } from "./types.ts";
 
 type Row = Record<string, SQLInputValue>;
@@ -73,7 +75,7 @@ export const MAX_METRICS_WINDOW_EVENTS = 100_000;
  * that newer code has already migrated; newer code upgrades an older database
  * in place, forward only, inside one write transaction.
  */
-export const SCHEMA_VERSION = 15;
+export const SCHEMA_VERSION = 16;
 
 /**
  * ADR-0072: a candidate with this many `work.released` events not attributed
@@ -397,6 +399,7 @@ export interface ContractFinding {
   parentId?: string;
   allowedActions: AllowedAction[];
   requiredArtifact: RequiredArtifact;
+  executionTarget?: ExecutionTarget;
   problem: ContractProblemCode;
   message: string;
   /** The operator command that clears it; an audit only reads. */
@@ -1714,6 +1717,10 @@ export class QueueStore {
         if (!(requiredArtifacts as readonly string[]).includes(followUp.requiredArtifact as string)) {
           throw new Error(`follow-up requiredArtifact must be one of ${requiredArtifacts.join(", ")}`);
         }
+        // Where the child executes is declared, never inferred (ADR-0073).
+        if (!(executionTargets as readonly string[]).includes(followUp.executionTarget as string)) {
+          throw new Error(`follow-up executionTarget must be one of ${executionTargets.join(", ")}`);
+        }
         assertKnownActions(followUp.allowedActions);
         const problem = contractProblem({ ...followUp, parentId: parent.id });
         if (problem) throw new Error(`follow-up "${followUp.kind}": ${problem.message}`);
@@ -2274,7 +2281,8 @@ export class QueueStore {
     }
   }
 
-  private insertWork(input: Omit<FollowUpInput, "requiredArtifact"> & {
+  private insertWork(input: Omit<FollowUpInput, "requiredArtifact" | "executionTarget"> & {
+    executionTarget?: ExecutionTarget;
     id: string;
     rootId: string;
     parentId?: string;
@@ -2294,9 +2302,10 @@ export class QueueStore {
         `INSERT INTO work_items (
           id, root_id, parent_id, repository, kind, objective, instructions,
           acceptance_criteria_json, allowed_actions_json, delegable_actions_json, required_artifact,
+          execution_target,
           priority, status, admitted, created_by, created_at, updated_at, source_ref,
           predecessors_json, cure_json, review_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.id,
@@ -2310,6 +2319,7 @@ export class QueueStore {
         JSON.stringify(input.allowedActions),
         JSON.stringify(input.delegableActions),
         input.requiredArtifact ?? "none",
+        input.executionTarget ?? null,
         input.priority,
         input.admitted ? 1 : 0,
         input.createdBy,
@@ -2373,7 +2383,13 @@ export class QueueStore {
     const findings: ContractFinding[] = [];
     for (const row of rows) {
       const item = decodeWorkItem(row);
-      const problem = contractProblem(item);
+      // An undeclared legacy row (pre-rung-16) is visible here, never guessed
+      // at (ADR-0073): it stays claimable while the backlog drains.
+      const problem =
+        contractProblem(item) ??
+        (item.executionTarget === undefined
+          ? { code: "undeclared-execution-target" as const, message: "the item predates ADR-0073 and declares no executionTarget" }
+          : undefined);
       if (!problem) continue;
       findings.push({
         id: item.id,
@@ -2383,6 +2399,7 @@ export class QueueStore {
         parentId: item.parentId,
         allowedActions: item.allowedActions,
         requiredArtifact: item.requiredArtifact,
+        executionTarget: item.executionTarget,
         problem: problem.code,
         message: problem.message,
         suggestedCommand:
@@ -2502,6 +2519,9 @@ function decodeWorkItem(row: Row): WorkItem {
     allowedActions: parseJson<AllowedAction[]>(row.allowed_actions_json, []),
     delegableActions: parseJson<AllowedAction[]>(row.delegable_actions_json, []),
     requiredArtifact: decodeRequiredArtifact(row.required_artifact),
+    ...(row.execution_target == null || !(executionTargets as readonly string[]).includes(String(row.execution_target))
+      ? {}
+      : { executionTarget: String(row.execution_target) as ExecutionTarget }),
     priority: Number(row.priority),
     status: row.status === "queued" && Number(row.admitted) === 0 ? "proposed" : (String(row.status) as WorkStatus),
     createdBy: String(row.created_by),
@@ -2740,6 +2760,10 @@ function validateWorkDefinition(input: {
   allowedActions: AllowedAction[];
   delegableActions: AllowedAction[];
   requiredArtifact?: RequiredArtifact;
+  executionTarget: ExecutionTarget;
+  sourceRef?: string;
+  cure?: PullRequestCure;
+  review?: PullRequestReview;
   priority?: number;
   createdBy: string;
 }): void {
@@ -2765,19 +2789,48 @@ function validateWorkDefinition(input: {
  * widens an item afterwards. Checked on every definition path and again at
  * admission; the same predicate drives `audit-contracts`.
  */
-function assertDeliverable(input: { allowedActions: AllowedAction[]; requiredArtifact?: RequiredArtifact }): void {
+function assertDeliverable(input: {
+  allowedActions: AllowedAction[];
+  requiredArtifact?: RequiredArtifact;
+  executionTarget?: ExecutionTarget;
+  sourceRef?: string;
+  cure?: PullRequestCure;
+  review?: PullRequestReview;
+}): void {
   const requiredArtifact = input.requiredArtifact ?? "none";
   if (!(requiredArtifacts as readonly string[]).includes(requiredArtifact)) {
     throw new Error(`unknown required artifact: ${String(requiredArtifact)}`);
   }
-  const problem = contractProblem({ allowedActions: input.allowedActions, requiredArtifact });
+  // Every new definition declares where it executes (ADR-0073); only rows
+  // written before rung 16 read as undeclared.
+  if (input.executionTarget === undefined || !(executionTargets as readonly string[]).includes(input.executionTarget)) {
+    throw new Error(`executionTarget must be one of ${executionTargets.join(", ")}`);
+  }
+  const problem = contractProblem({
+    allowedActions: input.allowedActions,
+    requiredArtifact,
+    executionTarget: input.executionTarget,
+    sourceRef: input.sourceRef,
+    cure: input.cure,
+    review: input.review,
+  });
   if (problem) throw new Error(problem.message);
+}
+
+/** A pull-request binding: a review or cure record, or a sourceRef naming `<url>@<head SHA>` (ADR-0073). */
+function hasPullRequestBinding(item: { sourceRef?: string; cure?: unknown; review?: unknown }): boolean {
+  if (item.cure !== undefined || item.review !== undefined) return true;
+  return item.sourceRef !== undefined && /^[a-z][a-z0-9-]*:https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/[1-9][0-9]*@[0-9a-f]{40}$/.test(item.sourceRef);
 }
 
 /** The ways a stored or proposed contract can fail to be deliverable; `undefined` when it is consistent. */
 export function contractProblem(item: {
   allowedActions: AllowedAction[];
   requiredArtifact: RequiredArtifact;
+  executionTarget?: ExecutionTarget;
+  sourceRef?: string;
+  cure?: unknown;
+  review?: unknown;
   parentId?: string;
 }): { code: ContractProblemCode; message: string } | undefined {
   if (item.requiredArtifact === "pull-request" && !item.allowedActions.includes("open-pr")) {
@@ -2798,6 +2851,43 @@ export function contractProblem(item: {
       message: 'a follow-up granting write is a change and must declare requiredArtifact "pull-request"',
     };
   }
+  // ADR-0073: where the target is declared, it must agree with the actions,
+  // the artifact, and (for existing-pull-request) the binding. An undeclared
+  // legacy row skips these checks and is listed by audit-contracts instead.
+  if (item.executionTarget === "read-only") {
+    if (item.allowedActions.includes("write") || item.allowedActions.includes("open-pr")) {
+      return {
+        code: "read-only-with-mutation",
+        message: "a read-only item mutates nothing: allowedActions must exclude write and open-pr",
+      };
+    }
+    if (item.requiredArtifact !== "none") {
+      return {
+        code: "read-only-required-pull-request",
+        message: "a read-only item cannot deliver a pull request: requiredArtifact must be none",
+      };
+    }
+  }
+  if (item.executionTarget === "new-pull-request" || item.executionTarget === "existing-pull-request") {
+    if (!item.allowedActions.includes("write") || !item.allowedActions.includes("open-pr")) {
+      return {
+        code: "mutating-target-without-write",
+        message: `a ${item.executionTarget} item alters the tree and publishes it: allowedActions must include write and open-pr`,
+      };
+    }
+    if (item.requiredArtifact !== "pull-request") {
+      return {
+        code: "mutating-target-without-required-pull-request",
+        message: `a ${item.executionTarget} item delivers through a pull request: requiredArtifact must be pull-request`,
+      };
+    }
+  }
+  if (item.executionTarget === "existing-pull-request" && !hasPullRequestBinding(item)) {
+    return {
+      code: "existing-pull-request-without-binding",
+      message: "an existing-pull-request item must bind its pull request: a review or cure record, or a sourceRef naming <url>@<head SHA>",
+    };
+  }
   return undefined;
 }
 
@@ -2805,6 +2895,12 @@ export const contractProblemCodes = [
   "required-pull-request-without-open-pr",
   "write-without-open-pr",
   "child-write-without-required-pull-request",
+  "read-only-with-mutation",
+  "read-only-required-pull-request",
+  "mutating-target-without-write",
+  "mutating-target-without-required-pull-request",
+  "existing-pull-request-without-binding",
+  "undeclared-execution-target",
 ] as const;
 export type ContractProblemCode = (typeof contractProblemCodes)[number];
 
@@ -3154,6 +3250,20 @@ const MIGRATIONS: readonly Migration[] = [
   // lifecycle events by type and recency. Pure index; no shape change.
   (db) => {
     db.exec("CREATE INDEX IF NOT EXISTS work_events_item ON work_events(work_item_id, event_type, occurred_at)");
+  },
+  // Rung 16: where a work item executes (ADR-0073) — read-only,
+  // new-pull-request, or existing-pull-request. Nullable: every existing row
+  // reads as undeclared (listed by audit-contracts), never back-filled from
+  // kind or actions; every new definition declares it.
+  (db) => {
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(work_items)").all() as Row[]).map((column) => String(column.name)),
+    );
+    if (!columns.has("execution_target")) {
+      db.exec(
+        "ALTER TABLE work_items ADD COLUMN execution_target TEXT CHECK (execution_target IN ('read-only', 'new-pull-request', 'existing-pull-request'))",
+      );
+    }
   },
 ];
 

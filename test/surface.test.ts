@@ -35,6 +35,7 @@ async function seededQueue() {
     acceptanceCriteria: ["One gap."],
     allowedActions: ["read", "create-followup"],
     delegableActions: ["read", "write", "run-tests", "open-pr"],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   const parentLease = queue.claim({ worker: "claude:updex:one", repository: "frostyard/updex" })!;
@@ -52,6 +53,7 @@ async function seededQueue() {
         allowedActions: ["read", "write", "run-tests", "open-pr"],
         delegableActions: [],
         requiredArtifact: "pull-request",
+        executionTarget: "new-pull-request",
       },
     ],
   });
@@ -65,6 +67,8 @@ async function seededQueue() {
     acceptanceCriteria: ["Tests pass."],
     allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:test",
   });
   const blockedLease = queue.claim({ worker: "copilot-cli:updex:two", repository: "frostyard/updex" })!;
@@ -79,6 +83,8 @@ async function seededQueue() {
     acceptanceCriteria: ["PR open."],
     allowedActions: ["read", "write", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:test",
   });
   const unverifiedLease = queue.claim({ worker: "claude:example:three", repository: "frostyard/example" })!;
@@ -109,6 +115,8 @@ async function seededQueue() {
     acceptanceCriteria: ["Done."],
     allowedActions: ["read", "write", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:test",
   });
   const claimed = queue.claim({ worker: "copilot-cli:example:four", repository: "frostyard/example" })!;
@@ -327,6 +335,8 @@ test("the repository board shows queued, leased, and completed columns with the 
       acceptanceCriteria: ["Done."],
       allowedActions: ["read", "write", "open-pr"],
       delegableActions: [],
+      requiredArtifact: "pull-request",
+      executionTarget: "new-pull-request",
       createdBy: "operator:test",
       ...extra,
     });
@@ -437,6 +447,8 @@ test("the board's pull-request section shows open heads with their cure decay an
       acceptanceCriteria: ["PR open."],
       allowedActions: ["read", "write", "open-pr"],
       delegableActions: [],
+      requiredArtifact: "pull-request",
+      executionTarget: "new-pull-request",
       createdBy: "operator:test",
     });
     const lease = queue.claim({ worker: "claude:example:pulls", repository: "frostyard/example" })!;
@@ -475,6 +487,8 @@ test("the board's pull-request section shows open heads with their cure decay an
     acceptanceCriteria: ["Checks green."],
     allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:test",
     sourceRef: `https://github.com/frostyard/example/pull/41@${openHead}`,
     cure: {
@@ -543,6 +557,8 @@ test("the board and inbox show the review gate: draft badge, review round, passe
     acceptanceCriteria: ["PR open as a draft."],
     allowedActions: ["read", "write", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:test",
   });
   const lease = queue.claim({ worker: "claude:example:review", repository: "frostyard/example" })!;
@@ -566,6 +582,7 @@ test("the board and inbox show the review gate: draft badge, review round, passe
     acceptanceCriteria: ["Verdict supplied."],
     allowedActions: ["read", "run-tests"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "policy:review-gate",
     sourceRef: `pr-review:${url}@${head}`,
     review: { pullRequestUrl: url, headSha: head, round: 1, originItemId: seed.id, authorModel: "claude-sonnet-5", priorBlockers: [] },
@@ -651,6 +668,7 @@ test("the item page renders the definition, artifacts with verification, operato
     acceptanceCriteria: ["One gap."],
     allowedActions: ["read", "create-followup"],
     delegableActions: ["read", "write", "run-tests", "open-pr"],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   const parentLease = queue.claim({ worker: "claude:updex:discover", repository: "frostyard/updex" })!;
@@ -668,6 +686,7 @@ test("the item page renders the definition, artifacts with verification, operato
         allowedActions: ["read", "write", "run-tests", "open-pr"],
         delegableActions: [],
         requiredArtifact: "pull-request",
+        executionTarget: "new-pull-request",
       },
     ],
   });
@@ -1080,6 +1099,7 @@ test("the event stream is session-guarded, starts with the cursor, and delivers 
     acceptanceCriteria: ["Done."],
     allowedActions: ["read"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   const lease = queue.claim({ worker: "claude:updex:stream", repository: "frostyard/updex" })!;
@@ -1251,8 +1271,10 @@ test("board actions import labeled issues, seed dogfood, verify artifacts, and i
     objective: "Ship #12.",
     instructions: "Do it.",
     acceptanceCriteria: ["Done."],
-    allowedActions: ["read", "open-pr"],
+    allowedActions: ["read", "write", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:test",
     priority: 100,
   });
@@ -1287,6 +1309,7 @@ test("board actions import labeled issues, seed dogfood, verify artifacts, and i
     acceptanceCriteria: ["Done."],
     allowedActions: ["read"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "operator:test",
     priority: 200,
   });
@@ -1368,6 +1391,8 @@ test("the board's attempts denominator counts only completed items that could ha
       acceptanceCriteria: ["Done."],
       allowedActions,
       delegableActions: [],
+      requiredArtifact: allowedActions.includes("open-pr") ? "pull-request" : "none",
+      executionTarget: allowedActions.includes("write") ? "new-pull-request" : "read-only",
       createdBy: "operator:test",
     });
     const lease = queue.claim({ worker: `claude:example:${kind}`, repository: "frostyard/example" })!;
@@ -1387,7 +1412,7 @@ test("the board's attempts denominator counts only completed items that could ha
   seedAndComplete("ci-discovery", "Read the workflow runs.", ["read", "run-tests"], []);
   seedAndComplete("settings-drift", "Report repository settings drift.", ["read", "create-followup"], []);
 
-  // Could deliver a pull request: one merged, one that reported none.
+  // Could deliver a pull request: one merged, one closed without merging.
   const merged = seedAndComplete("issue-resolution", "Resolve frostyard/example#9.", ["read", "write", "open-pr"], [
     {
       kind: "pull-request",
@@ -1395,7 +1420,15 @@ test("the board's attempts denominator counts only completed items that could ha
       verification: { status: "verified", verifiedAt: "2026-08-18T01:00:00.000Z", number: 12, state: "merged", headSha: "abcdef0123456789", mergedAt: "2026-08-18T00:59:00.000Z" },
     },
   ]);
-  seedAndComplete("docs-drift-fix", "Fix the drifted doc.", ["read", "write", "open-pr"], []);
+  // ADR-0073: a declared change item can no longer complete empty-handed —
+  // the attempt that did not merge reports its closed pull request instead.
+  seedAndComplete("docs-drift-fix", "Fix the drifted doc.", ["read", "write", "open-pr"], [
+    {
+      kind: "pull-request",
+      url: "https://github.com/frostyard/example/pull/13",
+      verification: { status: "verified", verifiedAt: "2026-08-18T01:00:00.000Z", number: 13, state: "closed", closedAt: "2026-08-18T00:58:00.000Z" },
+    },
+  ]);
 
   const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue }) });
   const cookie = `snowcat_session=${sessionDigest(TOKEN)}`;
@@ -1515,6 +1548,7 @@ test("the events page names the highest sequence a capped read reached, calls th
       acceptanceCriteria: ["Done."],
       allowedActions: ["read"],
       delegableActions: [],
+      executionTarget: "read-only",
       createdBy: "operator:test",
     });
   }

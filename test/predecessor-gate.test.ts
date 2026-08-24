@@ -72,6 +72,8 @@ function root(overrides: Partial<ProposedRootInput> & { sourceRef: string }): Pr
     acceptanceCriteria: ["A pull request is open."],
     allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:import-issues",
     ...overrides,
   };
@@ -111,6 +113,15 @@ function completePredecessor(
       sourceRef: options.sourceRef,
       kind: "project-slice",
       ...(options.allowedActions ? { allowedActions: options.allowedActions } : {}),
+      // ADR-0073: a predecessor that will report no pull request is a
+      // read-only reporter; one that will is ordinary change work.
+      ...((options.artifacts ?? []).some((artifact) => artifact.kind === "pull-request")
+        ? {}
+        : {
+            ...(options.allowedActions ? {} : { allowedActions: ["read" as const, "run-tests" as const] }),
+            requiredArtifact: "none" as const,
+            executionTarget: "read-only" as const,
+          }),
     }),
   ]);
   const item = created[0]!;

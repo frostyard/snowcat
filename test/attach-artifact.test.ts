@@ -26,11 +26,15 @@ function completedLocalOnly(queue: QueueStore, repository = "frostyard/updex") {
     repository,
     kind: "quality-implementation",
     objective: "Make the merged-state signal instance-scoped.",
-    instructions: "Implement on a local branch; the operator opens the pull request.",
+    instructions: "Diagnose and report; the operator carries any change the last mile.",
     acceptanceCriteria: ["Tests pass."],
-    allowedActions: ["read", "write", "run-tests", "open-pr"],
+    // ADR-0073: an item that itself mutates nothing — the operator carried
+    // the change — is read-only; attach-artifact records the operator's own
+    // pull request afterwards.
+    allowedActions: ["read", "run-tests"],
     delegableActions: [],
     requiredArtifact: "none",
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   const lease = queue.claim({ worker: "claude:updex:local", repository })!;
@@ -50,7 +54,7 @@ test("attachArtifact appends a verified pull request to a completed item so deli
   const queue = new QueueStore(join(directory, "queue.db"), () => now);
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/updex", true);
-  assert.equal(SCHEMA_VERSION, 15, "attaching needs no schema rung of its own: result_json already holds artifacts (rung 5 is the pull-request cure column, rung 6 the repository cure_foreign setting, rung 7 the mcp_tokens table, rung 8 the review gate, rung 9 the token claim restriction, rung 10 the unreported pull-request observation, rung 11 the labeled-issue observation, rung 12 the predecessor references, rung 13 the required-artifact contract, rung 14 the token tool grant, rung 15 the work_events index)");
+  assert.equal(SCHEMA_VERSION, 16, "attaching needs no schema rung of its own: result_json already holds artifacts (rung 5 is the pull-request cure column, rung 6 the repository cure_foreign setting, rung 7 the mcp_tokens table, rung 8 the review gate, rung 9 the token claim restriction, rung 10 the unreported pull-request observation, rung 11 the labeled-issue observation, rung 12 the predecessor references, rung 13 the required-artifact contract, rung 14 the token tool grant, rung 15 the work_events index, rung 16 the execution target)");
 
   const completed = completedLocalOnly(queue);
   assert.equal(completed.delivery, "none");
@@ -122,6 +126,8 @@ test("attachArtifact refuses non-completed items, other repositories, non-GitHub
     acceptanceCriteria: ["Done."],
     allowedActions: ["read", "write", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:test",
   });
   assert.equal(queued.status, "queued");

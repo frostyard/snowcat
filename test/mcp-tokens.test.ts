@@ -11,7 +11,7 @@ test("minted MCP tokens verify by hash, touch last_used_at sparingly, revoke ide
   let now = new Date("2026-08-18T22:00:00.000Z");
   const queue = new QueueStore(join(directory, "queue.db"), () => now);
   test.after(() => queue.close());
-  assert.equal(SCHEMA_VERSION, 15);
+  assert.equal(SCHEMA_VERSION, 16);
 
   const minted = queue.mintMcpToken({ owner: "member:bketelsen@gmail.com", client: "codex on the laptop" });
   assert.match(minted.token, /^snowcat_[0-9a-f]{16}_[A-Za-z0-9_-]{20,}$/);
@@ -66,7 +66,7 @@ test("a claim may carry the client's declared name as a label beside the transpo
   const queue = new QueueStore(join(directory, "queue.db"));
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/example", true);
-  queue.enqueueSeed({ repository: "frostyard/example", kind: "quality-gap-discovery", objective: "o", instructions: "i", acceptanceCriteria: ["a"], allowedActions: ["read"], delegableActions: [], createdBy: "operator:test" });
+  queue.enqueueSeed({ repository: "frostyard/example", kind: "quality-gap-discovery", objective: "o", instructions: "i", acceptanceCriteria: ["a"], allowedActions: ["read"], delegableActions: [], executionTarget: "read-only", createdBy: "operator:test" });
   const claimed = queue.claim({ worker: "member:me@frostyard.org/codex", label: "codex:frostyard/example:abc" })!;
   assert.equal(claimed.leaseOwner, "member:me@frostyard.org/codex");
   const event = queue.events(claimed.id).find((entry) => entry.type === "work.claimed")!;

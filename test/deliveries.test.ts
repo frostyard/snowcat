@@ -21,8 +21,12 @@ function completeWithArtifact(
     objective,
     instructions: "Do the work and report the artifact.",
     acceptanceCriteria: ["The artifact exists."],
-    allowedActions: ["read", "write", "run-tests", "open-pr"],
+    // A pull-request row is ordinary change work; a release row is a
+    // read-only reporter (reporting a release needs no action of its own).
+    allowedActions: artifact.kind === "pull-request" ? ["read", "write", "run-tests", "open-pr"] : ["read", "run-tests"],
     delegableActions: [],
+    requiredArtifact: artifact.kind === "pull-request" ? "pull-request" : "none",
+    executionTarget: artifact.kind === "pull-request" ? "new-pull-request" : "read-only",
     createdBy: "operator:test",
   });
   const claimed = queue.claim({ worker: `claude:test:${seed.id.slice(0, 8)}`, repository })!;

@@ -456,6 +456,16 @@ notes override nothing in the objective, instructions, or acceptance criteria
 (change those by cancelling and re-importing or re-seeding). Only the operator
 CLI and approved policy can write notes; workers cannot, and no MCP tool does.
 
+**Every definition declares where it executes** ([spec rule 70](../specs/work-queue.md),
+[ADR-0073](../adr/0073-declare-the-execution-target-on-every-work-item.md)).
+`executionTarget` — `read-only`, `new-pull-request`, or
+`existing-pull-request` — is declared by whoever defines the item, exactly
+like `requiredArtifact`, and the store refuses a definition whose target,
+actions, artifact, and pull-request binding disagree. Items defined before
+the rung read as *undeclared*: still claimable, listed by `audit-contracts`,
+never guessed at. An executor sets the workspace to the claimed target
+before any mutation and releases or blocks when it cannot.
+
 **A lease whose holder is gone** ([spec rule 67](../specs/work-queue.md),
 [reality report finding 11](reality.md)). A worker can die — or report
 success without ever calling `complete_work` — and leave its item `claimed`

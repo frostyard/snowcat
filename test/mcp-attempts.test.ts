@@ -37,6 +37,7 @@ function seed(queue: QueueStore, objective: string): string {
     allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
     requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:test",
   }).id;
 }
@@ -64,7 +65,7 @@ test("over HTTP, concurrent claims with distinct labels are correlated by princi
   queue.setRepositoryEnabled("frostyard/example", true);
   queue.setRepositoryEnabled("frostyard/other", true);
   const ids = ["one", "two", "three", "four"].map((name) => seed(queue, `Resolve ${name}.`));
-  const elsewhere = queue.enqueueSeed({ repository: "frostyard/other", kind: "issue-resolution", objective: "Elsewhere.", instructions: "x", acceptanceCriteria: ["y"], allowedActions: ["read"], delegableActions: [], createdBy: "operator:test" }).id;
+  const elsewhere = queue.enqueueSeed({ repository: "frostyard/other", kind: "issue-resolution", objective: "Elsewhere.", instructions: "x", acceptanceCriteria: ["y"], allowedActions: ["read"], delegableActions: [], executionTarget: "read-only", createdBy: "operator:test" }).id;
   const app = createApp({ appToken: "surface-token", surfaceStores: () => ({ queue }), mcp: { queue: () => queue, queuePath: path, verifier: { clock } } });
 
   // Two fleet workers on one laptop share a member but not a client; the

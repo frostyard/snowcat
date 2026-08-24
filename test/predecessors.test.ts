@@ -31,6 +31,8 @@ function proposedRoot(overrides: Partial<ProposedRootInput> = {}): ProposedRootI
     acceptanceCriteria: ["A pull request is open."],
     allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:import-issues",
     ...overrides,
   };
@@ -54,6 +56,7 @@ async function createVersionElevenDatabase(prefix: string): Promise<{ path: stri
     acceptanceCriteria: ["One gap."],
     allowedActions: ["read"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   current.close();
@@ -72,7 +75,7 @@ async function createVersionElevenDatabase(prefix: string): Promise<{ path: stri
 test("a version-11 database gains rung 12's work_items.predecessors_json column, NULL for every existing item", async () => {
   // Importing the store module already throws unless SCHEMA_VERSION equals the
   // ladder length; this pins the value the rung was appended for.
-  assert.equal(SCHEMA_VERSION, 15, "this test pins the ladder at rung 15; extend it when a rung is added");
+  assert.equal(SCHEMA_VERSION, 16, "this test pins the ladder at rung 16; extend it when a rung is added");
   const { path, itemId } = await createVersionElevenDatabase("predecessors-ladder");
 
   const migrated = new QueueStore(path);
@@ -184,6 +187,7 @@ test("only the proposed-root path accepts predecessors: seeds, cure and review r
     acceptanceCriteria: ["One gap."],
     allowedActions: ["read", "create-followup"],
     delegableActions: ["read", "write", "run-tests", "open-pr"],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   };
   assert.throws(() => queue.enqueueSeed({ ...seed, ...smuggled } as SeedWorkInput), /a seed root must not carry predecessors/);
@@ -201,6 +205,8 @@ test("only the proposed-root path accepts predecessors: seeds, cure and review r
     acceptanceCriteria: ["The head is current."],
     allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "policy:pull-request-cure",
     cure: {
       pullRequestUrl: "https://github.com/frostyard/updex/pull/7",
@@ -219,6 +225,7 @@ test("only the proposed-root path accepts predecessors: seeds, cure and review r
     acceptanceCriteria: ["A verdict is reported."],
     allowedActions: ["read", "run-tests"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "policy:review-gate",
     review: { pullRequestUrl: "https://github.com/frostyard/updex/pull/7", headSha, round: 1, priorBlockers: [] },
   };
@@ -246,6 +253,7 @@ test("only the proposed-root path accepts predecessors: seeds, cure and review r
             allowedActions: ["read", "write", "run-tests", "open-pr"],
             delegableActions: [],
             requiredArtifact: "pull-request",
+            executionTarget: "new-pull-request",
             ...smuggled,
           } as never,
         ],
