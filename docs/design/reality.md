@@ -119,7 +119,9 @@ Cockpit can still launch before claim only if the worker reconfigures the
 workspace immediately after claim through a deterministic helper that also
 updates the durable worker record. Prefer making claim and workspace targeting
 one worker-side operation so there is never a useful interval with the wrong
-branch.
+branch. (Decided:
+[ADR-0073](../adr/0073-declare-the-execution-target-on-every-work-item.md)
+declares the execution target on every item; implementation follows it.)
 
 ### 2. Cockpit widens `open-pr` into `write`
 
@@ -147,7 +149,10 @@ them:
 Until the queue represents that distinction, Cockpit must never infer
 `write`. New-PR work without it should be suspicious or undeliverable, and
 existing-PR work should be routed by its typed binding rather than by the
-artifact value alone.
+artifact value alone. (Decided:
+[ADR-0073](../adr/0073-declare-the-execution-target-on-every-work-item.md)'s
+consistency predicate makes `open-pr` without `write` unable to describe
+tree-changing work at all.)
 
 ### 3. Policy is retained at enrollment but not enforced on work
 

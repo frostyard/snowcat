@@ -9,6 +9,9 @@ per-repository coordinator named by
 [ADR-0020](../adr/0020-call-the-repository-coordinator-repositorycontroller.md),
 and promotion to the v1 work engine by
 [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md).
+Execution
+placement is typed on each item by
+[ADR-0073](../adr/0073-declare-the-execution-target-on-every-work-item.md).
 Contracts: [work queue](../specs/work-queue.md). Delivery:
 [recovery plan](../plans/recover.md) and
 [maintenance programs](../plans/maintenance-programs.md); pull-request cure by

@@ -467,8 +467,26 @@ delivery was merged (delivery state) or the outcome achieved.
 
 **Avoid:** expected artifact; deliverable (the initiative projection);
 implied by `write`; fix item.
+
 ([ADR-0069](../adr/0069-declare-the-required-artifact-on-every-work-item.md),
 [ADR-0031](../adr/0031-separate-delivery-from-outcome-achievement.md))
+
+#### Execution target
+
+Where a work item's execution happens, declared on the item by whoever
+defined it and never inferred from its kind or actions: `read-only` (a
+checkout to read and run checks, mutating nothing), `new-pull-request` (a
+fresh branch from a fresh default-branch base, delivering a new pull
+request), or `existing-pull-request` (the bound pull request's branch at
+exactly the recorded head). It describes the checkout and its mutation
+mode, not the worker's permissions (allowed actions) or what completion
+must report (required artifact); the three must agree, and the queue
+refuses an item where they cannot.
+
+**Avoid:** branch mode; workspace type; implied by kind; implied by
+`open-pr` (authority to publish a pull request is not authority to alter
+the tree).
+([ADR-0073](../adr/0073-declare-the-execution-target-on-every-work-item.md))
 
 ### Assertions, evidence, and assurance
 
