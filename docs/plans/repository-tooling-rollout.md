@@ -465,7 +465,7 @@ have not.
 - [x] `clix` and `updex`: mirror Phase 3 exactly (clix#81, updex#391 filed
   2026-08-24 with the exact scope; both on 2.13.1 since Phase 0). *Done by
   Cockpit workers the same day — clix#82 (Codex review `pass`, CI green)
-  and updex#395 (in review). Both first attempts finished the whole change,
+  and updex#395 (merged). Both first attempts finished the whole change,
   `make verify` green, and then **blocked on the push**: the fleet worker
   credential is the operator's `gh` login and had no `workflow` OAuth
   scope, so GitHub refused `.github/workflows/**`. Finding 13 live, twice.
@@ -488,8 +488,18 @@ have not.
   (firn#69 → firn#70, merged 2026-08-24 by a Cockpit worker).
 - [ ] `snowcat-cockpit`: land the Phase P deferred items (core declaration,
   agent-governance surface), enroll it, then adopt mise like the other Go
-  repositories — its Makefile already hard-pins `golangci-lint` (2.13.1;
-  align to the fleet pin or move the fleet, one change).
+  repositories — its Makefile already hard-pins `golangci-lint` (2.13.1,
+  already the fleet pin). *2026-08-24: the declaration
+  (frostyard/core#110, programs `quality`, `ci`, `dependencies`, `docs` like
+  `firn`) and the governance surface (snowcat-cockpit#23 — five
+  review-required boundaries from the schema's closed id vocabulary:
+  workflows, release and image publication, worker launch and credentials,
+  the loopback dashboard, the node service and CLI) are open for human
+  merge; `make ci` on the surface branch passed only through `mise exec
+  golangci-lint@2.13.1` because the host's linter was 2.12.2 — the drift
+  this phase ends. The adoption issue is filed on the label
+  (snowcat-cockpit#24, mirrors std#63, keeps `oci/` for Phase 6) and
+  imports once `repository -- reconcile` observes both merges.*
 - [ ] Core distributes the shared pieces the same way it distributes
   skills — *not yet needed: every adoption so far was a worker copying the
   `std` pilot from its issue text; revisit if a new Go repository joins*
@@ -552,10 +562,16 @@ Codex.
 **Outstanding, in order:**
 
 1. **Phase 5 closeout** — merge snowcat#236 (CI half; human-routed because it
-   touches `.github/workflows/**`); decide whether `core` enables its own
-   `fleet_state` (it is `disabled` in its declaration, so nothing there is
-   Snowcat work); the core-side conformance check from ADR-0043 (presence
-   of `mise.toml`, `mise.lock`, and the three targets) is unwritten.
+   touches `.github/workflows/**`); merge core#110 and snowcat-cockpit#23,
+   run `repository -- reconcile` on the host so Cockpit enrolls, and let the
+   15-minute import pick up snowcat-cockpit#24 (Cockpit's mise adoption);
+   decide whether `core` enables its own `fleet_state` (it is `disabled` in
+   its declaration, so nothing there is Snowcat work); the core-side
+   conformance check from ADR-0043 (presence of `mise.toml`, `mise.lock`,
+   and the three targets) is unwritten. Fleet grep 2026-08-24 evening:
+   `std`, `clix`, `updex`, `firn` each have `mise.toml`, `mise.lock`, a
+   `verify` target, and a mise-action CI step; `snowcat` has the pins and
+   `npm run verify` with only #236 outstanding.
 2. **Phase 6 — retire the stopgap:** `golangci-lint` still ships in the base
    image and `oci/baseline.json` lists it under `stopgap`; with every
    enrolled repository now on `mise.lock`, remove it, republish, roll. The
