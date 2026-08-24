@@ -350,9 +350,13 @@ Cockpit in Snowcat's fleet until Phase 5 needs that.
   `v0.1.5` — three reviewers completed, one `pass` on std#65 after `make
   verify` at the bound head and one legitimate `block` on std#66 (spec not
   updated for the new guarantee) that admitted a `pr-review-fix`, so the
-  full gate loop now runs on Codex; Copilot has no lane in the current
-  campaign request — give it one role for a run, or launch one Copilot
-  worker by hand.*
+  full gate loop now runs on Codex; Copilot proved on `v0.1.6` once the
+  reviewer lane was switched to it for a run — `pass` on std#67 with the
+  provisioned tools (`gpt-5.6-luna`). Its preflight first failed with
+  "provider returned no valid preflight proof" because the host's Copilot
+  MCP config names the server `snowcat-mcp`, not `snowcat`; the campaign
+  request carries that per-provider name, and the preflight receipt should
+  say so instead of "no proof".* **Met 2026-08-24.**
 
 ## Phase 3 — Pilot `std` on mise (std; half a day)
 
