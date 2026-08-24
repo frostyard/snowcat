@@ -2941,6 +2941,7 @@ function assertDeliverable(input: {
   sourceRef?: string;
   cure?: PullRequestCure;
   review?: PullRequestReview;
+  kind?: string;
 }): void {
   const requiredArtifact = input.requiredArtifact ?? "none";
   if (!(requiredArtifacts as readonly string[]).includes(requiredArtifact)) {
@@ -2958,6 +2959,7 @@ function assertDeliverable(input: {
     sourceRef: input.sourceRef,
     cure: input.cure,
     review: input.review,
+    kind: input.kind,
   });
   if (problem) throw new Error(problem.message);
 }
@@ -2977,7 +2979,23 @@ export function contractProblem(item: {
   cure?: unknown;
   review?: unknown;
   parentId?: string;
+  kind?: string;
 }): { code: ContractProblemCode; message: string } | undefined {
+  // A `*-discovery` kind names read-only discovery (the program catalog's roots and their
+  // discovery-only children). A follow-up that inherits the parent's kind while promising a
+  // change is claimable by discoverers and deliverable by none of them: each claims it, sees
+  // the pull request it owes, and releases it, and the executor relaunches the lane (observed
+  // 2026-08-24, three runs on one item). A change follow-up takes an implementation kind.
+  if (
+    item.kind !== undefined &&
+    item.kind.endsWith("-discovery") &&
+    (item.requiredArtifact === "pull-request" || item.allowedActions.includes("write") || item.allowedActions.includes("open-pr"))
+  ) {
+    return {
+      code: "discovery-kind-with-change-contract",
+      message: "a -discovery item is read-only discovery: it cannot declare requiredArtifact pull-request or grant write or open-pr; a change follow-up takes an implementation kind such as <program>-fix",
+    };
+  }
   if (item.requiredArtifact === "pull-request" && !item.allowedActions.includes("open-pr")) {
     return {
       code: "required-pull-request-without-open-pr",
@@ -3037,6 +3055,7 @@ export function contractProblem(item: {
 }
 
 export const contractProblemCodes = [
+  "discovery-kind-with-change-contract",
   "required-pull-request-without-open-pr",
   "write-without-open-pr",
   "child-write-without-required-pull-request",

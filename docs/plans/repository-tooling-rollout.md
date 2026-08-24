@@ -162,14 +162,35 @@ retired by Phase 6; do not generalise it.
   clix#80; `std`'s discoverer noticed the new `make verify` target and
   filed the doc follow-up (re-filed as std#61 after the kind defect). One
   `std` follow-up looped three discoverer runs (the `-discovery` kind that
-  owed a pull request; snowcat#218 refuses the shape). The read-only
-  review evidence waits on the first Claude `pr-review` of clix#80.
+  owed a pull request; snowcat#218 refuses the shape).
+- [x] **Evidence, second campaign (2026-08-24, Claude reviewers):** the
+  `pr-review` of clix#80 (`worker-ba1f019c7ecad4f7`, `claude-v0.1.1`)
+  returned `pass` in round 1 after `make verify` at the bound detached
+  head — "tree stayed clean; `git status --short` empty, HEAD unchanged
+  throughout"; `golangci-lint 2.13.1 → 0 issues`; `go test ./...` ok — and
+  clix#80 merged the same hour. The snowcat lane, broken all morning by the
+  kit lock, completed four discoveries on the re-vendored kit.
 - **Done when:** a Cockpit campaign on `std`, `clix`, and `updex` completes
   one item per repository whose retained worker terminal shows
   `golangci-lint run` executing from the image (no `go install`, no
   "skipping"), and one `pr-review` item completes with `git status
-  --porcelain` empty after `make verify`. *All inputs landed 2026-08-24;
-  the campaign itself is the operator's next run.*
+  --porcelain` empty after `make verify`. **Met 2026-08-24.** *`clix`:
+  implement → draft clix#80 → `pr-review` pass → merged. `std`: std#61
+  admitted → implementer on `claude-v0.1.1` verified with `make verify` →
+  draft std#62 → `pr-review` pass in round 1 at the bound detached head
+  ("golangci-lint 2.13.1 at the exact pin `0 issues.` on both passes")
+  → the gate marked it ready. `updex`: five discoverers and a reviewer
+  (updex#388 round 2, pass) ran on the image the moment the repository
+  joined the node's catalog.*
+- [x] **Cockpit:** enroll `updex` in the node's managed catalog. *Found
+  late: `updex` was fleet-enabled in Core and had queued work all day, but
+  Cockpit's catalog (`POST /api/v1/repositories`, node-local state) never
+  listed it, so no lane claimed anything there and the queue looked frozen.
+  A campaign snapshots the catalog at start; adding a repository needs a
+  campaign restart. Fifth item for the Phase 1 Cockpit ADR: the catalog
+  should derive from Core's enabled declarations (or at least report the
+  difference), because a repository Core enables and Snowcat enrolls that
+  no node works is invisible to everyone.*
 
 ## Phase P — Publish Cockpit (hours)
 
@@ -233,7 +254,7 @@ Cockpit in Snowcat's fleet until Phase 5 needs that.
 
 ## Phase 1 — Decide (one day; three ADRs, merged in order)
 
-- [ ] **Snowcat ADR-0076** supersedes ADR-0075: keeps named gates, keeps
+- [x] **Snowcat ADR-0076** supersedes ADR-0075 (landed 2026-08-24; credential scopes go on the governance protected boundary, §5): keeps named gates, keeps
   "qualify before the lease, never inside it" and "absence is visible, never
   guessed", keeps credential scopes bound to paths (finding 13 — decide its
   home, see open questions); drops the core-owned `tools` schema, `optional`,
@@ -243,7 +264,7 @@ Cockpit in Snowcat's fleet until Phase 5 needs that.
   [ubiquitous language](../domain/ubiquitous-language.md), the "Decided:"
   pointers on findings 5, 7, and 13 in the [reality report](../design/reality.md),
   and the [work queue spec](../specs/work-queue.md) reviewer-instruction rule.
-- [ ] **core ADR** (repository tooling convention; extends core
+- [x] **core ADR-0043** (repository tooling convention; merged 2026-08-24; extends core
   [ADR-0022](https://github.com/frostyard/core/blob/main/docs/adr/0022-make-ci-gate-and-test-naming-filter.md)
   and [ADR-0023](https://github.com/frostyard/core/blob/main/docs/adr/0023-verified-pinned-downloads.md)):
   1. `mise.toml` + committed `mise.lock` at the repository root declare every
@@ -261,94 +282,163 @@ Cockpit in Snowcat's fleet until Phase 5 needs that.
      `ghcr.io/frostyard/snowcat-worker-base` or `FROM` it; the baseline tool
      list is a versioned, published fact of that image.
   The surfaces contract does **not** gain an execution-profile schema.
-- [ ] **Cockpit ADR:** one provider-collapsed base image; repository tools
+- [x] **Cockpit ADR-0012** (snowcat-cockpit#8, merged 2026-08-24): one provider-collapsed base image; repository tools
   provisioned at target preparation from `mise.lock` into a per-repository
   cache mounted read-only; `mise ls --missing` non-empty or Go not satisfying
-  `go.mod` ⇒ lane unready with the reason named; and the worker kit stops
+  `go.mod` ⇒ lane unready with the reason named; the worker kit stops
   being a release-time vendored copy of Snowcat's skills (Phase 0's
   `degraded` campaign) — refreshed from a recorded source revision, or
-  deferred to the checkout where the repository is the canonical source. Supersedes the "generic
+  deferred to the checkout where the repository is the canonical source;
+  and the managed-repository catalog derives from (or reports drift
+  against) Core's enabled declarations rather than living only as
+  node-local state (Phase 0's unenrolled `updex`). Supersedes the "generic
   baseline" posture of
   [Cockpit ADR-0005](https://github.com/frostyard/snowcat-cockpit/blob/main/docs/adr/0005-isolate-unattended-workers-in-rootless-oci.md)
   without weakening any isolation rule.
 - **Done when:** all three ADRs are Accepted and cross-linked, ADR-0075 is
   marked Superseded, `npm run check` passes here, and the glossary's
   **Execution profile** entry describes the convention, not a schema.
+  **Met 2026-08-24** (glossary term is now *Repository tooling
+  convention*).
 
 ## Phase 2 — Base image (snowcat-cockpit; one to two days)
 
-- [ ] Collapse `oci/Containerfile`, `Claude.Containerfile`, and
-  `Copilot.Containerfile` into one `oci/base.Containerfile` carrying all three
-  provider CLIs (their pins unchanged) and one entrypoint that selects the
-  provider from Cockpit's launch argument. The per-provider
-  `SNOWCAT_COCKPIT_OCI_*_IMAGE` variables keep working and may all name the
-  same digest, so a Phase 0 node configuration is not broken.
-- [ ] Add `mise` (pinned release, SHA256-verified, ADR-0023) with
-  `MISE_DATA_DIR` pointing at the read-only mount Phase 4 introduces and
-  `MISE_YES=1`; keep `GOTOOLCHAIN=local`.
-- [ ] Publish the baseline as data: `oci/baseline.json` listing every
-  executable the base guarantees (shell utilities, git, gh, make, jq,
-  ripgrep, go, gofmt, node, mise, the provider CLIs) with versions; the OCI
-  workers spec references the file instead of restating the list. This is
-  the "beyond the baseline" boundary the core ADR needs to be checkable.
-- [ ] `worker-images.yml` publishes
-  `ghcr.io/frostyard/snowcat-worker-base:<version>` with a recorded
-  `@sha256` manifest digest, multi-architecture as today (first real GHCR
-  publish — Phase 0 ran from local image IDs). Roll the nodes from local
-  IDs to the published digest.
+- [x] Collapse the three Containerfiles into one `oci/Containerfile`
+  carrying all three provider CLIs (snowcat-cockpit#11). *Shape changed
+  from ADR-0012's sketch: instead of one entrypoint selecting the provider
+  from a launch argument (a Cockpit code and spec change), the file has one
+  `base` stage and three provider **targets** that add only an entrypoint —
+  the three images share every layer (21 of 21 locally), the per-provider
+  image variables keep working unchanged, and the provider entrypoints stay
+  separate files, which is what let Codex's relay fix (#10) land in
+  parallel without a conflict.*
+- [x] Add `mise` 2026.8.12 (pinned, SHA256-verified per arch) with
+  `MISE_DATA_DIR=/var/lib/snowcat-cockpit/mise` and `MISE_YES=1`; keep
+  `GOTOOLCHAIN=local` (snowcat-cockpit#11).
+- [x] Publish the baseline as data: `oci/baseline.json`, shipped in the
+  image at `/usr/local/share/snowcat-cockpit/baseline.json`; the OCI
+  workers spec references it (snowcat-cockpit#11). The stopgap
+  `golangci-lint` is listed under `stopgap` so Phase 6 knows what to remove.
+- [x] `worker-images.yml` builds the three targets of the one file
+  (snowcat-cockpit#11, merged 2026-08-24). *The first publish (`v0.1.3`)
+  failed on arm64 and exposed a latent bug in every earlier Containerfile:
+  `ARG TARGETARCH=amd64` overrides buildx's per-platform value, so arm64
+  images had been shipping amd64 Claude and Copilot binaries unnoticed —
+  nothing executed what it fetched until the new `fetch` stage did.
+  snowcat-cockpit#13 drops the default; `v0.1.4` is the first correct
+  multi-architecture publish.* The published names stay
+  `ghcr.io/frostyard/snowcat-cockpit-worker:<provider>-<version>` (a
+  rename to `snowcat-worker-base` would break every node's configured
+  reference for no gain — the base is the shared layer set, not a fourth
+  tag). First publish on the next tag after #11 merges; roll the node.
+- [x] **Codex workers register the projected lease relay** (snowcat-cockpit#10,
+  by Codex, merged 2026-08-24; `v0.1.2`): a mode-0600 `--profile` file in
+  the tmpfs `CODEX_HOME` layers the relay server and disables the direct
+  one — verified against the pinned CLI, which documents `--profile` as
+  "layer `$CODEX_HOME/<name>.config.toml`". *Second cause, found on
+  `v0.1.4` when every Codex reviewer died with "connection closed:
+  initialize response": Codex starts MCP servers with a scrubbed
+  environment, and the relay reads `SNOWCAT_MCP_URL`/`SNOWCAT_MCP_TOKEN`
+  from its own. snowcat-cockpit#14 forwards the two names through
+  `env_vars` (no value in the file); `v0.1.5`.* Codex reviewers return to
+  the campaign request.
 - **Done when:** Codex, Claude, and Copilot workers each complete a Snowcat
   item from the same base digest, and `oci/baseline.json` is the only place
-  the baseline is enumerated.
+  the baseline is enumerated. *Inputs landed 2026-08-24 (the three targets
+  share every layer; the spec references `baseline.json`); the three-provider
+  completion: Claude proved on `v0.1.4` (std#64–66); Codex proved on
+  `v0.1.5` — three reviewers completed, one `pass` on std#65 after `make
+  verify` at the bound head and one legitimate `block` on std#66 (spec not
+  updated for the new guarantee) that admitted a `pr-review-fix`, so the
+  full gate loop now runs on Codex; Copilot proved on `v0.1.6` once the
+  reviewer lane was switched to it for a run — `pass` on std#67 with the
+  provisioned tools (`gpt-5.6-luna`). Its preflight first failed with
+  "provider returned no valid preflight proof" because the host's Copilot
+  MCP config names the server `snowcat-mcp`, not `snowcat`; the campaign
+  request carries that per-provider name, and the preflight receipt should
+  say so instead of "no proof".* **Met 2026-08-24.**
 
 ## Phase 3 — Pilot `std` on mise (std; half a day)
 
 `std` is the pilot because its gate soft-skips lint today — the exact
 failure the convention exists to end.
 
-- [ ] Add `mise.toml` (`[settings] idiomatic_version_file_enable_tools =
-  ["go"]`; `[tools] golangci-lint = "2.12.2"`) and run `mise install` to
-  produce `mise.lock`; commit both.
-- [ ] Confirm mise resolves Go from `go.mod` and installs 1.26.6 exactly;
-  record the result in the core ADR if it changes the convention (open
-  question 1).
-- [ ] Makefile: delete `GOLANGCI_LINT_VERSION`; `lint` invokes
-  `mise exec -- golangci-lint run` (or relies on mise shims) and fails when
-  the tool is missing; keep the Phase 0 `verify`.
-- [ ] CI: replace the Makefile `sed` and `golangci-lint-action` with
-  `jdx/mise-action` (SHA-pinned, core
-  [ADR-0021](https://github.com/frostyard/core/blob/main/docs/adr/0021-sha-pinned-actions-and-least-privilege-ci.md))
-  followed by `make ci`, so CI and workers install from the same two files.
-- [ ] Add a `lint-version-check` style guard comparing `golangci-lint
-  version`'s build Go against `go.mod`'s directive, so a Go bump ahead of
-  lint fails with a one-line reason.
+- [x] Add `mise.toml` (`[settings] idiomatic_version_file_enable_tools =
+  ["go"]`, `lockfile = true`; `[tools] golangci-lint = "2.13.1"`) and run
+  `mise install` to produce `mise.lock`; commit both (std#63).
+- [x] Confirm mise resolves Go from `go.mod`. *It does — from the
+  `toolchain go1.x.y` line, not the `go` directive: mise 2026.8 deprecates
+  reading `go` ("only a minimum compatible version"; removal 2026.11), and
+  `go mod tidy` drops a `toolchain` line equal to the `go` line. The
+  convention is therefore `go 1.x` (minimum) + `toolchain go1.x.y` (the
+  exact pin mise, `setup-go`, and `GOTOOLCHAIN=local` all read). Core
+  ADR-0043's "go.mod is the only Go pin" holds; its conformance check reads
+  the toolchain line.*
+- [x] Makefile: `GOLANGCI_LINT_VERSION` is now read from `mise.toml` and
+  `GO_TOOLCHAIN` from `go.mod`, so no version literal exists outside those
+  two files; `lint` fails naming `mise install` when the tool is missing;
+  `verify` unchanged from Phase 0 (std#63).
+- [x] CI: `jdx/mise-action` (SHA-pinned v4.2.5) installs the locked tools;
+  the Makefile `sed` and `golangci-lint-action` are gone; Go still comes
+  from `setup-go` reading the same `go.mod` (std#63).
+- [x] Guard: `make verify` compares `golangci-lint version`'s build Go
+  against the toolchain line and fails naming the bump order when the
+  linter is older (tested with a fake `built with go1.25.0` binary).
 - **Done when:** `std` CI is green with no tool version stated anywhere but
   `go.mod` and `mise.toml`; on a fresh clone with mise and no other tools,
   `mise install && make verify` passes and `git status --porcelain` is
   empty; deleting the `golangci-lint` entry makes `make lint` fail rather
-  than skip.
+  than skip. *Local half met 2026-08-24 (fresh `MISE_DATA_DIR`, `mise
+  install`, `verify` green, tree clean, lint fails without the tool); CI
+  half met when std#63 merged the same day — the fleet's first
+  `jdx/mise-action` run (its first attempt failed on a `lint-version-check`
+  target `std` did not have; added).* **Met 2026-08-24.**
 
 ## Phase 4 — Prep-time provisioning (snowcat-cockpit; two days)
 
-- [ ] In target preparation (`internal/worker/target.go`, before any lease
-  exists — OCI workers spec rule 1 ordering), run `mise install --locked`
-  in the checkout with `MISE_DATA_DIR` set to a per-repository cache under
-  the node's state directory. Downloads are verified against `mise.lock`;
-  a repository without `mise.toml` provisions nothing and is not unready
-  (ADR-0076 "absence is visible, never guessed").
-- [ ] Mount that cache read-only into the container at the path the base
-  image's `MISE_DATA_DIR` names; the entrypoint activates mise for the
-  provider's login shell. No other change to the mount posture.
-- [ ] Readiness: `mise ls --missing` non-empty, or `go version` in the
-  checkout failing under `GOTOOLCHAIN=local`, marks the lane unready with
-  the tool or version named in inventory and the dashboard. Nothing is
-  installed inside the container.
-- [ ] Record the provisioned tool set (name, version, lock digest) as
-  non-secret worker metadata beside the image digest.
+- [x] Provision at `Launch`, before any lease exists (snowcat-cockpit#12):
+  `mise install --locked` in a throwaway container of the same pinned
+  image, workspace read-only, a per-repository cache keyed by the digest of
+  `mise.toml`/`mise.lock`/`go.mod` read-write, no provider input, no
+  credential names. *Two things the sketch got wrong, found by running it:
+  `Launch` (`internal/worker/worker.go`) is where the runtime and image are
+  known — `target.go` is the in-container ADR-0073 checkout step, too late;
+  and `mise install` rewrites `mise.lock` even when unchanged, so mise runs
+  from a tmpfs copy of the three pin files and the workspace is never
+  written. `--locked` refuses any tool the lock does not pre-resolve.*
+- [x] Mount the cache read-only at the image's `MISE_DATA_DIR`; the shims
+  directory is first on `PATH` by ENV *and* `/etc/profile.d`, because
+  providers run repository commands through a login shell and Debian's
+  `/etc/profile` resets `PATH` (snowcat-cockpit#12). No other mount change.
+- [x] Readiness: `mise.toml` without a lock, a tool absent from the lock, a
+  checksum mismatch, or a tool still missing after install fails the launch
+  as `ErrNotReady` with mise's own line in the worker record; no provider
+  starts; the campaign backs the lane off and shows the reason. Go from
+  `go.mod`'s toolchain line is provisioned by the same lock, so the
+  `GOTOOLCHAIN=local` case is covered by the same path.
+- [x] The worker record carries `provisioning` — lock digest, cache path,
+  installed `tool@version` list, timestamp.
 - **Done when:** with `golangci-lint` still in the base (Phase 0), a `std`
   worker runs the lint from the mise cache (visible in the retained
   terminal's path), and a fixture repository whose `mise.lock` names a tool
   with a wrong checksum produces an unready lane naming that tool and no
-  lease.
+  lease. *Second half proven against the built image on 2026-08-24
+  (tampered checksum and a tool absent from the lock both refuse with the
+  reason; unit tests pin the no-provider-starts path). First half met on
+  `v0.1.4` (`v0.1.3`'s publish failed, see Phase 2): the first `std` batch —
+  four implementers and a reviewer — all carry `provisioning: go@1.26.7,
+  golangci-lint@2.13.1` from one cache (`463df448…`, provisioned once and
+  reused four times), and two implementers ran `make verify`/`make check`
+  green with lint hard-required before opening std#64/#65/#66; the image's
+  `PATH` puts the cache's shims first, so that lint was the provisioned
+  binary.* **Met 2026-08-24.**
+- [x] **Follow-up found by the same batch (snowcat-cockpit#15 → #16,
+  `v0.1.6`):** Docker mounts the home tmpfs `noexec` (Podman does not), and
+  the image kept `GOPATH`/`GOCACHE` under `/home/cockpit`, so `go tool
+  covdata` and anything Go executes from the cache failed; three workers
+  (two implementers and a Codex reviewer) rediscovered the workaround
+  inside their leases. Both now live under `/tmp` (already `exec`); the
+  spec sentence that placed them under home is amended.
 
 ## Phase 5 — Fleet adoption (five repositories; one to two days of queue time)
 
@@ -359,16 +449,32 @@ lanes do it against the Phase 3 pattern. The Phase 4 node provisions from
 whatever each repository declares, so a repository can adopt while others
 have not.
 
-- [ ] `clix` and `updex`: mirror Phase 3 exactly (both already pin 2.12.2).
+- [x] `clix` and `updex`: mirror Phase 3 exactly (clix#81, updex#391 filed
+  2026-08-24 with the exact scope; both on 2.13.1 since Phase 0). *Done by
+  Cockpit workers the same day — clix#82 (Codex review `pass`, CI green)
+  and updex#395 (in review). Both first attempts finished the whole change,
+  `make verify` green, and then **blocked on the push**: the fleet worker
+  credential is the operator's `gh` login and had no `workflow` OAuth
+  scope, so GitHub refused `.github/workflows/**`. Finding 13 live, twice.
+  The operator added the scope (`gh auth refresh -s
+  repo,admin:org,gist,workflow`), the node was restarted so its serve
+  wrapper re-projected `GH_TOKEN`, and both items were `requeue`d; the
+  second attempts pushed. Until ADR-0076 §5's scope declaration lands on
+  the governance boundary, this is discovered inside a lease.*
 - [ ] `snowcat`: `mise.toml` pins Node (today only `package.json`'s
   `engines` and the deploy runbook say which); `npm run check` is already
   the full gate — add `verify` as the credential-free subset (`typecheck`,
-  `test`, `check:docs`) and document it in `AGENTS.md`.
+  `test`, `check:docs`) and document it in `AGENTS.md` (snowcat#225).
+  *snowcat#232 (draft) carries the pin files and docs but not the CI step —
+  same scope wall, before the grant; snowcat#233 files the CI half.*
 - [ ] `core`: Node like `snowcat`; its `scripts/check-organization.mjs` is
-  `verify`.
-- [ ] `firn`: adopt per its build system (declare, do not infer — if it
-  needs tools mise cannot install, it becomes the first Phase "Later"
-  extension-image candidate rather than a partial adoption).
+  `verify` (core#109). *Not imported: core's own fleet declaration
+  (`organization/repositories/frostyard/core.json`) has `fleet_state:
+  disabled`, so Snowcat reads the repository as disabled and `import-issues
+  --enrolled` skips it — a core-side decision to enable itself, not a node
+  gap (it is in the node's catalog).*
+- [ ] `firn`: a Go repository that never received Phase 0's `verify` and
+  hard-fail lint; its issue (firn#69) carries both plus the mise pins.
 - [ ] `snowcat-cockpit`: land the Phase P deferred items (core declaration,
   agent-governance surface), enroll it, then adopt mise like the other Go
   repositories — its Makefile already hard-pins `golangci-lint` (2.13.1;
@@ -439,18 +545,15 @@ have not.
 
 ## Open questions
 
-- **Does mise reliably read `go.mod` as the Go version source?** Decided by
-  the Phase 3 pilot. If not, fallback is `GOTOOLCHAIN=auto` with a
-  prep-time `go version` warm in Phase 4 (sumdb-verified, ADR-0023-clean)
-  and the core ADR's rule 2 changes to "Go is provisioned by Go".
-- **Is `mise.lock` stable enough to be the ADR-0023 checksum registry?**
-  Decided by Phase 3 (the lock must record URL and SHA256 for every tool and
-  `mise install --locked` must refuse a mismatch). If not, the core ADR
-  pins tools by `mise.toml` plus a sibling checksum file until it is.
-- **Where do credential scopes live — `policies/agent-governance.json` or a
-  thin execution profile?** Decided in ADR-0076 (Phase 1) after a
-  [`model-snowcat-domain`](../../.agents/skills/model-snowcat-domain/SKILL.md)
-  pass; governance already indexes paths, which is the argument for it.
+- ~~Does mise read `go.mod`?~~ Resolved in Phase 3: yes, via the
+  `toolchain` line (see Phase 3).
+- ~~Is `mise.lock` an ADR-0023-grade registry?~~ Resolved in Phase 3: yes —
+  per-platform URL + SHA256, GitHub artifact attestations verified at
+  install, and a tampered checksum is refused with expected/actual for
+  both Go and golangci-lint (tested 2026-08-24).
+- ~~Where do credential scopes live?~~ Resolved by
+  [ADR-0076](../adr/0076-pin-repository-tools-in-the-repository-and-qualify-lanes-by-running-them.md)
+  §5: on the governance surface's protected boundary.
 - **Which repository owns the base image?** Phase 2 assumes
   `snowcat-cockpit/oci/` because Cockpit owns the launch contract
   ([ADR-0003](../adr/0003-separate-work-coordination-from-execution.md)

@@ -761,7 +761,11 @@ MCP (rule 41).
     origin's `result.model`, `priorReviewerModel` from the previous round's
     `result.model`, `priorBlockers` = the previous round's blockers
     verbatim), recording `work.queued` whose payload names kind, URL, head,
-    and round. The same `sourceRef` MUST never be enqueued twice, whatever the
+    and round. The minted instructions MUST name the repository's
+    non-mutating gate (`make verify`) as the check to run and MUST forbid
+    `make check` or any target that formats or rewrites files
+    ([ADR-0076](../adr/0076-pin-repository-tools-in-the-repository-and-qualify-lanes-by-running-them.md));
+    nothing infers a gate from a Makefile. The same `sourceRef` MUST never be enqueued twice, whatever the
     earlier item's status; a pushed head is a new `sourceRef`; rounds are
     counted per pull request URL and a new head never resets them. The
     `sourceRef` prefixes `pr-review:` and `pr-review-fix:` keep these roots
@@ -1082,8 +1086,13 @@ MCP (rule 41).
     root takes the value its feeder, import, or sweep declares (`none` when
     an operator seed omits it). On every definition path, and again in
     `approve`, the store MUST refuse a contract the item's authority cannot
-    honor: `pull-request` without `open-pr`; `write` without `open-pr`; and,
-    for a follow-up, `write` without `pull-request`. A refused follow-up
+    honor: `pull-request` without `open-pr`; `write` without `open-pr`;
+    for a follow-up, `write` without `pull-request`; and a `-discovery`
+    kind that declares `pull-request` or grants `write` or `open-pr` — a
+    `-discovery` kind names read-only discovery, and a change follow-up
+    takes an implementation kind such as `<program>-fix` (a `-discovery`
+    item owing a pull request is claimable by every discoverer and
+    deliverable by none; observed 2026-08-24). A refused follow-up
     MUST roll back the whole completion and leave the parent claimed (rule
     18); a refused admission MUST change nothing and name `reject`. After
     rule 33, `complete_work` on an item whose `requiredArtifact` is

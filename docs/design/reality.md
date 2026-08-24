@@ -258,8 +258,10 @@ needs. Cockpit should qualify or select an image against that profile before
 launch. A missing required tool must make the repository/lane unready, not
 turn into either a skipped check or an ad hoc installation charged to the
 work lease. (Decided:
-[ADR-0075](../adr/0075-declare-a-repository-execution-profile-in-core.md) —
-the core execution-profile surface; implementation follows core's schema.)
+[ADR-0076](../adr/0076-pin-repository-tools-in-the-repository-and-qualify-lanes-by-running-them.md)
+— the repository pins its tools in `mise.lock`, executors provision from it
+before the lease and qualify by running the gate; supersedes ADR-0075's
+core-owned profile.)
 
 ### 6. Pull-request verification proves existence, not governance
 
@@ -306,8 +308,9 @@ entry point—typically `make verify` or `make ci` using `gofmt -l` plus a diff
 check. Mutating developer conveniences such as `make fmt` can remain separate.
 The execution profile should name the non-mutating command for reviews rather
 than asking the model to infer one from `AGENTS.md` and a Makefile. (Decided:
-[ADR-0075](../adr/0075-declare-a-repository-execution-profile-in-core.md),
-the `gates.verify` entry.)
+[ADR-0076](../adr/0076-pin-repository-tools-in-the-repository-and-qualify-lanes-by-running-them.md)
+§4 — `make verify` is the named non-mutating gate; landed in `std`, `clix`,
+`updex`, and the reviewer instructions on 2026-08-24.)
 
 ### 8. Lease correctness is encoded as repeated prompt discipline
 
@@ -394,8 +397,10 @@ their review rounds before an operator SSH push landed the file. The
 execution profile of finding 5 should name required credential scopes next
 to required tools, and an item whose scope touches paths the lane's
 credential cannot write is unready rather than claimable. (Decided:
-[ADR-0075](../adr/0075-declare-a-repository-execution-profile-in-core.md),
-the `credentials` entries.) The same episode
+[ADR-0076](../adr/0076-pin-repository-tools-in-the-repository-and-qualify-lanes-by-running-them.md)
+§5 — the scope is declared on the path's protected boundary in the
+governance surface; Snowcat surfaces it on items once core publishes the
+field.) The same episode
 is finding 3's sharpest corollary observed live: a mechanically admitted
 `pr-review-fix` was required to modify a path the repository's own policy
 marks review-required at Tier 4 — the policy said human decision; the

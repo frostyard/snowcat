@@ -515,20 +515,22 @@ instead.
 by kind.
 ([ADR-0074](../adr/0074-compile-policy-into-work-admission.md))
 
-#### Execution profile
+#### Repository tooling convention
 
-A repository's versioned, core-owned declaration of what executing its work
-needs: the credential-free `verify` (non-mutating) and `check` gates,
-required tool versions, the runtime floor, and the credential scopes bound
-to the paths that require them. Recorded at enrollment beside the
-governance policy; a repository without one is *unprofiled* — executors
-keep their defaults and nothing synthesizes a profile from Makefiles or CI
-files. It describes what execution needs, not what a worker may do (the
-governance policy) or where a checkout points (the execution target).
+What a repository declares, in its own files, so that its work can be
+executed and verified anywhere: tool pins in `mise.toml` and `mise.lock`,
+the Go version in `go.mod`, and the gate triad — `verify` (non-mutating,
+credential-free; what a read-only reviewer runs), `check` (the developer
+gate, may format), and `ci`. Core names the convention; the repository owns
+the versions; an executor provisions from the lock before any lease and
+qualifies a lane by running the gate, never by reading a declaration. It
+describes what execution needs, not what a worker may do (the governance
+policy) or where a checkout points (the execution target); a required
+credential scope for a path is declared on that path's protected boundary.
 
-**Avoid:** image spec; toolchain manifest; inferred from the Makefile;
-Cockpit configuration.
-([ADR-0075](../adr/0075-declare-a-repository-execution-profile-in-core.md))
+**Avoid:** execution profile; image spec; toolchain manifest; optional
+tool; inferred from the Makefile; Cockpit configuration.
+([ADR-0076](../adr/0076-pin-repository-tools-in-the-repository-and-qualify-lanes-by-running-them.md))
 
 ### Assertions, evidence, and assurance
 

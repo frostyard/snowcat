@@ -1,0 +1,7 @@
+# Tool pins for this repository (core ADR-0043, Snowcat ADR-0076).
+# Node is the only pin today; mise.lock carries its checksum.
+[settings]
+lockfile = true
+
+[tools]
+node = "24"
