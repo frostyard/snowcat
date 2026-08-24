@@ -528,19 +528,40 @@ have not.
 
 - [ ] Remove `golangci-lint` from the base image and `oci/baseline.json`;
   workers now get it only from the mise cache. Republish, roll the digest.
-- [ ] Remove every remaining Makefile `GOLANGCI_LINT_VERSION` and
+  *Queued 2026-08-24 as snowcat-cockpit#29 (Containerfile ARG, fetch
+  block, `COPY`, and the `baseline.json` `stopgap` object; the tag and
+  the digest roll stay with the operator — Cockpit's latest tag is
+  `v0.2.0`).*
+- [x] Remove every remaining Makefile `GOLANGCI_LINT_VERSION` and
   soft-skip across the fleet (Phase 5 should leave none; verify with a
-  fleet grep).
+  fleet grep). *Fleet grep 2026-08-24 evening: no version literal in any
+  Makefile (all five Go repositories read
+  `GOLANGCI_LINT_VERSION` from `mise.toml`), no workflow installs the
+  linter outside mise-action, and the `command -v golangci-lint` branch
+  in `std`/`clix`/`updex`/`firn` is ADR-0043's fail-with-install-command
+  path ("provision every pinned tool with: mise install", exit 1), not a
+  skip. Nothing to remove.*
 - [ ] core: add the convention check to `check-organization.mjs` or the
   repository-surfaces conformance path — `mise.toml` and `mise.lock`
   present and parseable, `verify`/`check`/`ci` targets present — so a
   repository that drops the convention fails core's gate, not a worker's
-  lease.
+  lease. *Queued 2026-08-24 as core#117 with the design fixed: a
+  `scripts/check-fleet-conventions.mjs` that reads each enabled
+  declaration's default-branch head through the GitHub contents API
+  (presence only, never a version), Go repositories by Makefile targets
+  and Node repositories by `package.json` scripts, run as its own
+  `fleet-conventions` CI job rather than inside the offline `npm run
+  check`; making it a required check is an operator step afterwards.*
 - [ ] Snowcat: a maintenance-program probe (catalog in
   [`src/queue/programs.ts`](../../src/queue/programs.ts)) that runs `make
   verify` on a clean checkout and proposes a `quality` item when the tree
   is dirty afterwards — the mechanical "a profile can lie" check ADR-0075
-  wanted, now against a Makefile instead of a schema.
+  wanted, now against a Makefile instead of a schema. *Queued 2026-08-24
+  as snowcat#245: the `conformance` discovery root alone gains
+  `run-tests`, runs `make verify`/`npm run verify` on its detached
+  read-only checkout, and reports `git status --porcelain` afterwards;
+  every other discovery root stays `read` + `create-followup`, no new
+  program, no ADR.*
 - **Done when:** the base image contains no repository-specific tool, and a
   deliberately dirty `verify` in a fixture repository yields one proposed
   Snowcat item naming the mutation.
@@ -576,27 +597,32 @@ Codex.
 1. **Phase 5 closed 2026-08-24 evening** — #236 merged after the ruleset
    moved to `check`; core#110/#111 and snowcat-cockpit#23 merged; Cockpit
    and core enrolled, opted in, review-gated; core#112 and
-   snowcat-cockpit#27 delivered, reviewed, and merged. Two loose ends:
-   Cockpit's ADR-0012 pin sentence (link-only repair) and the core-side
-   conformance check from ADR-0043 (presence of `mise.toml`, `mise.lock`,
-   and the three targets), which is Phase 6's third item.
-2. **Phase 6 — retire the stopgap:** `golangci-lint` still ships in the base
+   snowcat-cockpit#27 delivered, reviewed, and merged. The ADR-0012
+   "loose end" was moot — that ADR names the `v0.1.1` stopgap image as
+   history, not a Makefile pin, and accepted ADRs are immutable; the
+   core-side presence check is Phase 6's third item, now core#117.
+2. **Phase 6 opened 2026-08-24 evening** — item 2 closed by the fleet
+   grep; items 1, 3, 4 are queue work (snowcat-cockpit#29, core#117,
+   snowcat#245) on repositories that are all enrolled and opted in, so
+   the 15-minute import proposes them and any lane can claim them. After
+   #29 merges the operator tags Cockpit and rolls the node's digest.
+3. **Phase 6 — retire the stopgap:** `golangci-lint` still ships in the base
    image and `oci/baseline.json` lists it under `stopgap`; with every
    enrolled repository now on `mise.lock`, remove it, republish, roll. The
    `verify`-cleanliness probe in the program catalog is unwritten.
-3. **Phase 7 — pin-bump automation:** nothing built; the Go/lint pair-bump
+4. **Phase 7 — pin-bump automation:** nothing built; the Go/lint pair-bump
    convention is enforced only by `lint-version-check` after the fact.
-4. **Cockpit follow-ups with evidence:** #17 (lane relaunches for an item its
+5. **Cockpit follow-ups with evidence:** #17 (lane relaunches for an item its
    own live worker holds — one wasted container start per five minutes per
    long item), #20 (retained workspaces on a tmpfs; cleanup is manual — 196
    cleaned by hand today), #21 (`release-needed` counted claimable while
    the prompt excludes it). ADR-0012 §5–6 (kit refreshed from its source;
    catalog derived from Core) remain design-only.
-5. **ADR-0076 §5 — credential scopes on the boundary:** not started. The
+6. **ADR-0076 §5 — credential scopes on the boundary:** not started. The
    `workflow`-scope wall cost three leases today; until core's governance
    schema carries `github:workflow` on `.github/workflows/**` and the queue
    surfaces it, a worker discovers it inside the lease.
-6. **Provider reliability, observed not fixed:** Copilot mangled the lease
+7. **Provider reliability, observed not fixed:** Copilot mangled the lease
    token twice (relay now immune) and once invented a `gh` limitation; keep
    it off the reviewer lane until a run shows otherwise.
 
