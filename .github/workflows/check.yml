@@ -35,30 +35,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # `mise.toml` pins 24, the minimum major in package.json engines.node
-        # (core ADR-0043); 26 exercises the current line explicitly, not from
-        # the pin, since qualifying the next major is deliberate range-testing.
-        # A green check certifies both supported range endpoints.
+        # 24 is the minimum major in package.json engines.node; 26 exercises the
+        # current line. A green check certifies the supported range endpoints.
         node-version: [24, 26]
     name: check (node ${{ matrix.node-version }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # mise.toml/mise.lock are the single source of the pinned Node release
-      # (core ADR-0043): this installs exactly the locked, checksum-verified
-      # release the same way a developer's `mise install` and a Snowcat
-      # worker's provisioning do, so the two cannot drift. The 26 leg tests
-      # the next major explicitly and stays on setup-node.
-      - if: matrix.node-version == 24
-        uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          install: true
-          cache: true
-      - if: matrix.node-version == 26
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 26
+          node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
       - run: npm run check
