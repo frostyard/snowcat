@@ -254,7 +254,7 @@ Cockpit in Snowcat's fleet until Phase 5 needs that.
 
 ## Phase 1 — Decide (one day; three ADRs, merged in order)
 
-- [ ] **Snowcat ADR-0076** supersedes ADR-0075: keeps named gates, keeps
+- [x] **Snowcat ADR-0076** supersedes ADR-0075 (landed 2026-08-24; credential scopes go on the governance protected boundary, §5): keeps named gates, keeps
   "qualify before the lease, never inside it" and "absence is visible, never
   guessed", keeps credential scopes bound to paths (finding 13 — decide its
   home, see open questions); drops the core-owned `tools` schema, `optional`,
