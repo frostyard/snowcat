@@ -70,15 +70,22 @@ The image lacks the one tool three gates need, and reviewers are told to run
 a mutating gate. Both are one-line fixes per file. Everything here is
 retired by Phase 6; do not generalise it.
 
-- [ ] **Cockpit:** install `golangci-lint` **2.12.2** (the fleet's pin, not
-  Cockpit's 2.13.1) in all three Containerfiles from the upstream release
-  tarball with a pinned URL and SHA256 (core
+- [ ] **Cockpit:** install `golangci-lint` **2.13.1** in all three
+  Containerfiles from the upstream release tarball with a pinned URL and
+  per-architecture SHA256 (core
   [ADR-0023](https://github.com/frostyard/core/blob/main/docs/adr/0023-verified-pinned-downloads.md));
-  one shared build stage, `COPY`'d into each final image at
-  `/usr/local/bin/golangci-lint`.
+  one build stage per file, `COPY`'d into the final image at
+  `/usr/local/bin/golangci-lint` (snowcat-cockpit#4). *The plan first said
+  2.12.2: `std` had already bumped to 2.13.1 on 2026-08-23 (std#54) while
+  `clix` and `updex` stayed on 2.12.2 — the fleet was split, so the bump
+  rides along in their verify-gate PRs and one image serves all three.*
 - [ ] **Cockpit:** set `GOTOOLCHAIN=local` in every image `ENV`, so a
   `go.mod` the image's Go cannot satisfy fails loudly at the first `go`
-  invocation instead of downloading a toolchain inside the lease.
+  invocation instead of downloading a toolchain inside the lease
+  (snowcat-cockpit#4). *This immediately bit: `std`'s `go.mod` requires
+  1.26.7 and the image shipped 1.26.6, so the base moves to
+  `golang:1.26.7-bookworm`. Rule until Phase 4: the image's Go tracks the
+  highest `go` directive in the fleet.*
 - [ ] **Cockpit:** add both facts to the OCI workers spec's command baseline
   ("a new tool enters this list only after a repository contract or retained
   worker terminal demonstrates the need" — findings 5 and the lost-worker
@@ -96,14 +103,23 @@ retired by Phase 6; do not generalise it.
   credential-free: `go mod tidy -diff`, `test -z "$(gofmt -l …)"`, `go vet`,
   `golangci-lint run` (hard-required, exact pin), `go test`. `updex`'s
   `make ci` is the model minus its mutating `go mod tidy`; make `ci` call
-  `verify`. Leave `make check` (`fmt lint test`) as the developer gate.
-- [ ] **std, clix:** `make lint` stops soft-skipping when the binary is absent
+  `verify`. Leave `make check` (`fmt lint test`) as the developer gate
+  (std#60, clix#79, updex#390; each verified locally under the pinned Go
+  with `git status --porcelain` empty afterwards). *Finding: golangci-lint
+  2.13.1 is built with Go 1.27 and embeds its gofmt, which formats one
+  `updex` test file differently from Go 1.26's gofmt — and each rejects
+  the other's form. The fix restructures the code so both agree; neither
+  pin was wrong. This is the Go/lint mismatch in its purest form and the
+  reason Phase 7 bumps the pair together.*
+- [x] **std, clix:** `make lint` stops soft-skipping when the binary is absent
   — a missing linter fails, matching the PR template's "lint clean" claim.
+  *Already landed upstream before this plan; `updex` gets it in #390.*
 - [ ] **Snowcat:** the reviewer instruction in
   [`src/queue/pull-request-review.ts`](../../src/queue/pull-request-review.ts)
   and the [`review-snowcat-queue`](../../.agents/skills/review-snowcat-queue/SKILL.md)
   skill name `make verify` as the read-only gate and forbid `make check`
-  for `pr-review` work (ADR-0075 §4, which survives into Phase 1).
+  for `pr-review` work (ADR-0075 §4, which survives into Phase 1)
+  (snowcat#215).
 - **Done when:** a Cockpit campaign on `std`, `clix`, and `updex` completes
   one item per repository whose retained worker terminal shows
   `golangci-lint run` executing from the image (no `go install`, no
