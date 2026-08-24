@@ -1253,7 +1253,10 @@ MCP (rule 41).
     naming `<url>@<head SHA>`. Snowcat's own definers declare accordingly:
     rule 42's `pr-cure` and rule 55's `pr-review-fix` roots
     `existing-pull-request`, rule 53's `pr-review` roots and the catalog's
-    discovery roots `read-only`, imports and the dependency sweep's roots
+    discovery roots `read-only` (the conformance root's `allowedActions` also
+    holds `run-tests`, to run the repository's own verify gate on that same
+    detached checkout — `read-only` bounds mutation, not which read-only
+    actions a root may hold), imports and the dependency sweep's roots
     `new-pull-request` (a `release-needed` root therefore declares
     `requiredArtifact` `pull-request`, and a worker that finds nothing to
     change blocks, exactly as an imported issue's worker does). An executor

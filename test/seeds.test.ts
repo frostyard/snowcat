@@ -29,7 +29,9 @@ test("the dogfood feeder creates one bounded read-only root per specialty withou
   for (const item of first.created) {
     assert.equal(item.status, "queued");
     assert.equal(item.createdBy, "operator:dogfood");
-    assert.deepEqual(item.allowedActions, ["read", "create-followup"]);
+    // Conformance discovery alone also runs the repository's read-only verify gate (ADR-0043's gate triad).
+    const expectedActions = item.kind === "conformance-gap-discovery" ? ["read", "run-tests", "create-followup"] : ["read", "create-followup"];
+    assert.deepEqual(item.allowedActions, expectedActions);
     assert.equal(item.parentId, undefined);
   }
 
