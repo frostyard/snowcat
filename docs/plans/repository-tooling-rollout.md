@@ -445,14 +445,27 @@ lanes do it against the Phase 3 pattern. The Phase 4 node provisions from
 whatever each repository declares, so a repository can adopt while others
 have not.
 
-- [ ] `clix` and `updex`: mirror Phase 3 exactly (clix#81, updex#391 filed
-  2026-08-24 with the exact scope; both on 2.13.1 since Phase 0).
+- [x] `clix` and `updex`: mirror Phase 3 exactly (clix#81, updex#391 filed
+  2026-08-24 with the exact scope; both on 2.13.1 since Phase 0). *Done by
+  Cockpit workers the same day — clix#82 (Codex review `pass`, CI green)
+  and updex#395 (in review). Both first attempts finished the whole change,
+  `make verify` green, and then **blocked on the push**: the fleet worker
+  credential is the operator's `gh` login and had no `workflow` OAuth
+  scope, so GitHub refused `.github/workflows/**`. Finding 13 live, twice.
+  The operator added the scope (`gh auth refresh -s
+  repo,admin:org,gist,workflow`), the node was restarted so its serve
+  wrapper re-projected `GH_TOKEN`, and both items were `requeue`d; the
+  second attempts pushed. Until ADR-0076 §5's scope declaration lands on
+  the governance boundary, this is discovered inside a lease.*
 - [ ] `snowcat`: `mise.toml` pins Node (today only `package.json`'s
   `engines` and the deploy runbook say which); `npm run check` is already
   the full gate — add `verify` as the credential-free subset (`typecheck`,
   `test`, `check:docs`) and document it in `AGENTS.md` (snowcat#225).
+  *snowcat#232 (draft) carries the pin files and docs but not the CI step —
+  same scope wall, before the grant; snowcat#233 files the CI half.*
 - [ ] `core`: Node like `snowcat`; its `scripts/check-organization.mjs` is
-  `verify` (core#109).
+  `verify` (core#109). *Not imported: `core` is not in the node's managed
+  catalog (the ADR-0012 §6 gap again) — enroll it like `updex` was.*
 - [ ] `firn`: a Go repository that never received Phase 0's `verify` and
   hard-fail lint; its issue (firn#69) carries both plus the mise pins.
 - [ ] `snowcat-cockpit`: land the Phase P deferred items (core declaration,
