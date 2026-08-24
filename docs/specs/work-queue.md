@@ -22,6 +22,7 @@ claim, renew, and resolve it.
 | `delegableActions` | action[] | yes | Maximum authority for direct children |
 | `requiredArtifact` | enum | yes | The item's delivery contract ([ADR-0069](../adr/0069-declare-the-required-artifact-on-every-work-item.md)): `none` or `pull-request`. Declared by the definer — required on every follow-up, `none` when an operator seed omits it — never inferred from kind or actions, never changed afterwards. `pull-request` requires `open-pr` in `allowedActions` (rule 64) |
 | `executionTarget` | enum | when declared | Where execution happens ([ADR-0073](../adr/0073-declare-the-execution-target-on-every-work-item.md)): `read-only`, `new-pull-request`, or `existing-pull-request`. Declared by the definer on every post-rung-16 definition, never inferred; absent on pre-rung rows (undeclared legacy) |
+| `policy` | record | when bound | The policy binding and admission evidence ([ADR-0074](../adr/0074-compile-policy-into-work-admission.md)): the Core snapshot and repository commit judged, the actions the policy marks review-required, and the `authorization` that satisfied them (`operator` with the admitting principal, or `standing` with the registry id and its ADR). Absent on rows defined without a control-plane store or before rung 17 (unbound legacy) |
 | `priority` | integer | yes | Safe integer; higher values claim first, creation time breaks ties. Chosen only by operator or policy seeds; worker-created children inherit the parent's value; changed afterwards only by the operator `prioritize` command (rule 38) |
 | `status` | enum | yes | `proposed`, `queued`, `claimed`, `completed`, `blocked`, or `cancelled` |
 | `createdBy` | string | yes | Operator, policy, or worker provenance |
@@ -825,7 +826,16 @@ MCP (rule 41).
     fingerprints. A `pr-review-fix` completion MUST report its pull request
     as a `pull-request` artifact and is subject to rule 52's draft refusal.
 55. **Consequences (ADR-0065).** On a later pass, for a draft head whose
-    latest completed `pr-review` round names that head: a `pass` MUST, when
+    latest completed `pr-review` round names that head: before any pass
+    consequence, when the repository's policy authority names protected
+    boundaries ([ADR-0074](../adr/0074-compile-policy-into-work-admission.md)),
+    the sweep MUST read the pull request's changed files and, when any file
+    falls inside a non-`allow` boundary's paths, MUST report the pull
+    request as `needsHuman` naming the boundary and its minimum risk tier
+    and mark nothing; an unreadable file list MUST be reported as
+    `unavailable` and mark nothing. The sweep MUST also carry those
+    boundaries into the reviewer instructions it mints. Then: a `pass`
+    MUST, when
     `SNOWCAT_REVIEW_GATE_WRITES=1`, mark the pull request ready for review
     through GraphQL `markPullRequestReadyForReview` as `policy:review-gate`
     and then record `artifact.ready` on the origin item (URL, head, review
@@ -1242,6 +1252,31 @@ MCP (rule 41).
     as *undeclared*, stays claimable under the conventions of its day, is
     listed by `audit-contracts` as `undeclared-execution-target`, and is
     never back-filled.
+71. **Policy binding and admission evidence ([ADR-0074](../adr/0074-compile-policy-into-work-admission.md); extends rules 14, 24–25, 37, and 64).**
+    When a policy-authority hook is configured (the control-plane store,
+    read fresh per decision exactly as claim eligibility is), every
+    definition path MUST bind the item to the repository's current
+    authority — Core snapshot, repository commit, and the actions the
+    governance policy marks review-required — and MUST refuse a definition
+    whose allowed or delegable actions exceed the Core `action_ceiling` or
+    include a denied action; a hook that cannot vouch for the repository
+    MUST fail the definition closed. Admission MUST re-bind against the
+    authority current at the decision and record its satisfier: `approve`
+    stamps the admitting principal and the covered review-required actions
+    on the item and in the `work.approved` payload, and an unreachable
+    authority leaves the item proposed. Work admitted on creation records
+    its authorization the same way: an `operator:` or `member:` creator is
+    its own admission decision, and a `policy:` creator MUST cite a standing
+    authorization from the closed in-code registry
+    (`src/queue/standing-authorizations.ts`) naming the Accepted ADR that
+    pre-authorizes that kind and the exact action set it may cover — a kind
+    with no entry, or actions outside the entry, MUST be refused. The
+    binding's protected boundaries are enforced at the delivered diff (rule
+    55). Rung 17 adds the nullable `policy_json` column: every pre-rung row
+    reads as *unbound*, stays claimable, is listed by `audit-contracts` as
+    `unbound-policy` only when a hook is configured, and is never
+    back-filled. Without a hook, definition and admission behave exactly as
+    before this rule.
 
 ## Derived artifacts
 
@@ -1264,6 +1299,7 @@ MCP (rule 41).
 | Undelivered work | `deliveries` lists completed items whose `delivery` is `open`, ready-to-merge or ready-to-publish rows first, per rule 68 |
 | Claim backoff | Claim selection excludes an item with three worker releases inside the trailing window and `churn` lists the evidence per rule 69 |
 | Execution target | Every definition declares where it executes and the rule 64 predicate binds target, actions, artifact, and binding per rule 70; legacy rows read undeclared |
+| Policy binding | Definitions bind to the control plane's current authority, admission records its satisfier, standing authorizations gate mechanical admission, and boundary touches route to a human per rules 55 and 71 |
 | MCP worker behavior | Portable `work-snowcat-queue` skill constrained by this contract |
 | Testing-gap seed | Deterministic CLI instance of this contract |
 

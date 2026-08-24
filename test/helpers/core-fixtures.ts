@@ -25,7 +25,7 @@ export function enabledDeclaration(): RepositoryDeclaration {
     accountable_owners: [{ kind: "github-user", login: "bketelsen" }],
     fleet_state: "enabled",
     maintenance_programs: ["quality", "ci"],
-    action_ceiling: ["read", "write", "run-tests", "open-issue", "open-pr"],
+    action_ceiling: ["read", "write", "run-tests", "open-issue", "open-pr", "create-followup"],
     surface_contract_version: 1,
   };
 }
@@ -115,8 +115,26 @@ export function validGovernance() {
   return {
     schema_version: 1,
     default_decision: "deny",
-    actions: {},
-    protected_boundaries: [],
+    // A realistic enrolled-repository policy (ADR-0074 reads it): the core
+    // trio allowed, the GitHub-facing acts review-required, and one
+    // protected boundary for boundary-check tests.
+    actions: {
+      read: "allow",
+      write: "allow",
+      "run-tests": "allow",
+      "open-issue": "review-required",
+      "open-pr": "review-required",
+      "create-followup": "review-required",
+    },
+    protected_boundaries: [
+      {
+        id: "workflow-and-permissions",
+        decision: "review-required",
+        minimum_risk_tier: "high",
+        paths: [".github/workflows/**"],
+        detectors: [],
+      },
+    ],
     change_controls: {
       pull_requests_required: true,
       human_review_before_merge: true,

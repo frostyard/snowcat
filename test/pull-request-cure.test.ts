@@ -576,7 +576,7 @@ test("enqueueCureRoot validates its cure record and kind", async () => {
   });
   assert.deepEqual(threads?.cure?.decay, ["unresolved-threads"]);
   assert.equal(queue.enqueueCureRoot(REPOSITORY, { ...base, allowedActions: [...base.allowedActions], delegableActions: [...base.delegableActions], cure }), undefined);
-  assert.equal(queue.metadata().schemaVersion, 16, "rung 5 carries cure_json; rung 6 the repository cure_foreign setting; rung 7 the mcp_tokens table; rung 8 the review gate; rung 9 the token claim restriction; rung 10 the unreported pull-request observation; rung 11 the labeled-issue observation; rung 12 the predecessor references; rung 13 the required-artifact contract; rung 14 the token tool grant; rung 15 the work_events index; rung 16 the execution target");
+  assert.equal(queue.metadata().schemaVersion, 17, "rung 5 carries cure_json; rung 6 the repository cure_foreign setting; rung 7 the mcp_tokens table; rung 8 the review gate; rung 9 the token claim restriction; rung 10 the unreported pull-request observation; rung 11 the labeled-issue observation; rung 12 the predecessor references; rung 13 the required-artifact contract; rung 14 the token tool grant; rung 15 the work_events index; rung 16 the execution target; rung 17 the policy binding");
 });
 
 test("the cure sweep selects items with non-terminal artifacts, so more than 100 terminal completions cannot hide a newer decayed head", async () => {

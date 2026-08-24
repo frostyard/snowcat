@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 
 import type { RepositoryMaintenanceProgram } from "../control/registry.ts";
 import { ControlPlaneStore } from "../control/store.ts";
+import { controlPlanePolicyAuthority } from "./policy-authority.ts";
 import type { ClaimEligibility, QueueStoreOptions } from "./store.ts";
 
 export interface EnrolledRepositoryPrograms {
@@ -62,5 +63,7 @@ export function controlPlaneClaimEligibility(controlPlanePath: string): ClaimEli
 export function queueStoreOptionsFromEnvironment(env: NodeJS.ProcessEnv = process.env): QueueStoreOptions {
   const configured = env.SNOWCAT_CONTROL_DB;
   if (!configured || configured === ":memory:") return {};
-  return { claimEligibility: controlPlaneClaimEligibility(configured) };
+  // ADR-0074: the same configuration that gates claims also binds every
+  // definition and admission to the repository's current policy authority.
+  return { claimEligibility: controlPlaneClaimEligibility(configured), policyAuthority: controlPlanePolicyAuthority(configured) };
 }

@@ -222,8 +222,13 @@ removed. -->
   release whatever it sends and never sees a lease token. When
   `SNOWCAT_CONTROL_DB` is set, `claim_work` also requires the repository to be
   `enrolled` in the control-plane store
-  ([`src/queue/eligibility.ts`](src/queue/eligibility.ts)); the hook is the
-  only coupling between the two databases.
+  ([`src/queue/eligibility.ts`](src/queue/eligibility.ts)), and every
+  definition binds to — and every admission is judged against — the enrolled
+  repository's Core ceiling and governance policy through the ADR-0074
+  policy-authority hook
+  ([`src/queue/policy-authority.ts`](src/queue/policy-authority.ts)), with
+  standing authorizations gating mechanical admission; those two hooks are
+  the only couplings between the two databases.
 - Keep the target control-plane store separate from the queue store. It is an
   authority and observation sidecar: target schema and startup live in
   [`src/control/store.ts`](src/control/store.ts); closed vocabulary lives only
