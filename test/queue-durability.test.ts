@@ -92,7 +92,7 @@ test("a version-1 database upgrades in place through the ladder and keeps its hi
   const directory = await mkdtemp(join(tmpdir(), "snowcat-ladder-test-"));
   const path = join(directory, "queue.db");
   const { itemId } = createVersionOneDatabase(path);
-  assert.equal(SCHEMA_VERSION, 14, "this test pins the ladder at rung 14; extend it when a rung is added");
+  assert.equal(SCHEMA_VERSION, 15, "this test pins the ladder at rung 15; extend it when a rung is added");
 
   const queue = new QueueStore(path);
   test.after(() => queue.close());

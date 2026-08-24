@@ -86,6 +86,8 @@ Docs are split by the question they answer:
 - [0069 — Declare the required artifact on every work item](adr/0069-declare-the-required-artifact-on-every-work-item.md)
 - [0070 — Grant MCP tokens a server-enforced tool scope](adr/0070-grant-mcp-tokens-a-server-enforced-tool-scope.md)
 - [0071 — Pass the tree when only adjudicated description blockers remain](adr/0071-pass-the-tree-when-only-adjudicated-description-blockers-remain.md)
+- [0072 — Back off claim selection after rapid worker releases](adr/0072-back-off-claim-selection-after-rapid-worker-releases.md)
+||||||| Stash base
 
 ### Organization decisions
 

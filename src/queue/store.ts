@@ -73,7 +73,21 @@ export const MAX_METRICS_WINDOW_EVENTS = 100_000;
  * that newer code has already migrated; newer code upgrades an older database
  * in place, forward only, inside one write transaction.
  */
-export const SCHEMA_VERSION = 14;
+export const SCHEMA_VERSION = 15;
+
+/**
+ * ADR-0072: a candidate with this many `work.released` events not attributed
+ * to an `operator:` or `policy:` actor inside the trailing window is not in
+ * the running for a claim. Deliberate policy, not configuration.
+ */
+export const CLAIM_BACKOFF_RELEASES = 3;
+export const CLAIM_BACKOFF_WINDOW_SECONDS = 30 * 60;
+
+/** The SQL predicate counting the releases the claim backoff reads (ADR-0072): worker-attributed `work.released` events newer than the bound parameter. */
+const BACKOFF_RELEASE_COUNT = `(SELECT COUNT(*) FROM work_events e
+  WHERE e.work_item_id = w.id AND e.event_type = 'work.released'
+    AND lower(e.actor) NOT LIKE 'operator:%' AND lower(e.actor) NOT LIKE 'policy:%'
+    AND e.occurred_at > ?)`;
 
 /**
  * Backup manifest emitted by `QueueStore.backup` and re-derived by
@@ -1231,6 +1245,56 @@ export class QueueStore {
     return rows.map((row) => withDelivery(decodeWorkItem(row)));
   }
 
+  /**
+   * The queued, admitted items claim selection is currently backing off
+   * (ADR-0072, spec rule 69): at least `CLAIM_BACKOFF_RELEASES`
+   * worker-attributed `work.released` events inside the trailing window.
+   * Each row carries those counted releases (newest first, with the worker
+   * and the recorded reason) and the instant the backoff lapses — when the
+   * decisive release slides out of the window. Read-only and derived: the
+   * backoff is never stored, so this view and claim selection can only
+   * agree. The remedies stay the ordinary operator ones; the reasons here
+   * are the evidence of what to fix.
+   */
+  churningItems(options: { repository?: string } = {}): Array<{ item: WorkItem; releases: Array<{ at: string; worker: string; reason?: string }>; backoffUntil: string }> {
+    const windowStart = new Date(this.clock().getTime() - CLAIM_BACKOFF_WINDOW_SECONDS * 1000).toISOString();
+    const params: SQLInputValue[] = [windowStart];
+    let repositoryClause = "";
+    if (options.repository) {
+      validateRepository(options.repository);
+      repositoryClause = " AND w.repository = ?";
+      params.push(options.repository);
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT w.* FROM work_items w
+         WHERE w.status = 'queued' AND w.admitted = 1
+           AND ${BACKOFF_RELEASE_COUNT} >= ${CLAIM_BACKOFF_RELEASES}${repositoryClause}
+         ORDER BY w.priority DESC, w.created_at ASC`,
+      )
+      .all(...params) as Row[];
+    return rows.map((row) => {
+      const item = withDelivery(decodeWorkItem(row));
+      const releaseRows = this.db
+        .prepare(
+          `SELECT actor, payload_json, occurred_at FROM work_events
+           WHERE work_item_id = ? AND event_type = 'work.released'
+             AND lower(actor) NOT LIKE 'operator:%' AND lower(actor) NOT LIKE 'policy:%'
+             AND occurred_at > ?
+           ORDER BY occurred_at DESC, sequence DESC`,
+        )
+        .all(item.id, windowStart) as Row[];
+      const releases = releaseRows.map((event) => {
+        const reason = parseJson<{ reason?: string }>(event.payload_json, {}).reason;
+        return { at: String(event.occurred_at), worker: String(event.actor), ...(reason === undefined ? {} : { reason }) };
+      });
+      // Claimable again the instant the decisive release leaves the window.
+      const decisive = releases[CLAIM_BACKOFF_RELEASES - 1]!;
+      const backoffUntil = new Date(new Date(decisive.at).getTime() + CLAIM_BACKOFF_WINDOW_SECONDS * 1000).toISOString();
+      return { item, releases, backoffUntil };
+    });
+  }
+
   /** The status/repository/kind filter list() and recentlyUpdatedItems() share. */
   private filterClauses(options: { status?: WorkStatus; repository?: string; kind?: string; leaseOwner?: string; label?: string }): { clauses: string[]; params: SQLInputValue[] } {
     const clauses: string[] = [];
@@ -1492,8 +1556,14 @@ export class QueueStore {
       const clauses = [
         "r.enabled = 1",
         "((w.status = 'queued' AND w.admitted = 1) OR (w.status = 'claimed' AND w.lease_expires_at <= ?))",
+        // ADR-0072: an item workers keep declining backs off. Enough
+        // worker-attributed releases inside the window (operator and policy
+        // releases — the rule 67 lease release — never count) take it out of
+        // the running until the window slides; `churningItems` and
+        // `queue -- churn` read the same ledger as the operator's evidence.
+        `${BACKOFF_RELEASE_COUNT} < ${CLAIM_BACKOFF_RELEASES}`,
       ];
-      const params: SQLInputValue[] = [now];
+      const params: SQLInputValue[] = [now, new Date(this.clock().getTime() - CLAIM_BACKOFF_WINDOW_SECONDS * 1000).toISOString()];
       if (input.repository) {
         clauses.push("w.repository = ?");
         params.push(input.repository);
@@ -3078,6 +3148,12 @@ const MIGRATIONS: readonly Migration[] = [
     if (!columns.has("tools_json")) {
       db.exec("ALTER TABLE mcp_tokens ADD COLUMN tools_json TEXT");
     }
+  },
+  // Rung 15: an index for per-item ledger reads — the attempts projection
+  // and ADR-0072's claim-backoff release count both select one item's
+  // lifecycle events by type and recency. Pure index; no shape change.
+  (db) => {
+    db.exec("CREATE INDEX IF NOT EXISTS work_events_item ON work_events(work_item_id, event_type, occurred_at)");
   },
 ];
 
