@@ -83,6 +83,7 @@ npm run queue -- requeue <work-item-id> <reason>
 npm run queue -- release-lease <work-item-id> <reason>
 npm run queue -- claims [--repository <owner/repo>]
 npm run queue -- deliveries [--repository <owner/repo>]
+npm run queue -- churn [--repository <owner/repo>]
 npm run queue -- cancel <work-item-id> <reason>
 npm run queue -- prioritize <work-item-id> <priority> <reason>
 npm run queue -- note <work-item-id> <text>
@@ -1166,6 +1167,25 @@ MCP (rule 41).
     first, oldest item first. The listing MUST NOT reveal a lease token
     (rule 11) and MUST NOT mutate anything: freshness comes from
     `verify-artifacts`' own timer, not from this read.
+69. **Claim backoff on rapid worker releases ([ADR-0072](../adr/0072-back-off-claim-selection-after-rapid-worker-releases.md); extends rules 2–3).**
+    Claim selection MUST exclude a candidate with at least three
+    `work.released` events not attributed to an `operator:` or `policy:`
+    actor inside the trailing thirty-minute window
+    (`CLAIM_BACKOFF_RELEASES`, `CLAIM_BACKOFF_WINDOW_SECONDS`; deliberate
+    policy, not configuration), so an item workers keep declining stops
+    consuming leases while the mismatch its releases evidence stands
+    ([reality report finding 16](../design/reality.md)). The backoff MUST be
+    derived from the ledger by the same clock claim selection uses and never
+    stored: nothing on the item changes, no event is recorded, and the item
+    re-enters the running the instant the decisive release leaves the
+    window. An operator lease release (rule 67) and a lease expiry MUST NOT
+    count — they evidence a gone holder, not a declined contract. The
+    read-only `churn` listing (`queue -- churn [--repository <owner/repo>]`)
+    MUST list each currently backed-off queued item with its counted
+    releases — time, worker, and the release's recorded reason — and the
+    instant the backoff lapses, and MUST NOT reveal a lease token (rule 11).
+    Rung 15 adds the `work_events(work_item_id, event_type, occurred_at)`
+    index this read and the rule 66 attempts projection share.
 
     A claim label MUST be one bounded line: 1–`MAX_CLAIM_LABEL_LENGTH` (120)
     characters with no control characters, refused at the MCP `worker`
@@ -1214,6 +1234,7 @@ MCP (rule 41).
 | Attempt provenance | `QueueStore.attempts` folds an item's newest `work.claimed` / `work.completed` / `work.blocked` / `work.released` / `lease.expired` events, plus the clock against a lapsed lease, into at most ten attempts per rule 66; `list_work` and `get_work` carry them and `list` filters exactly by `leaseOwner` and `label` |
 | Operator lease release | `QueueStore.releaseLease` returns one claimed item to queued and fences the outstanding token per rule 67; `claims` lists every current lease, lapsed first, without tokens |
 | Undelivered work | `deliveries` lists completed items whose `delivery` is `open`, ready-to-merge or ready-to-publish rows first, per rule 68 |
+| Claim backoff | Claim selection excludes an item with three worker releases inside the trailing window and `churn` lists the evidence per rule 69 |
 | MCP worker behavior | Portable `work-snowcat-queue` skill constrained by this contract |
 | Testing-gap seed | Deterministic CLI instance of this contract |
 

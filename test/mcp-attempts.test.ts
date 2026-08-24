@@ -10,7 +10,7 @@ import { createApp } from "../src/app.ts";
 import { buildQueueMcpServer } from "../src/mcp/server.ts";
 import { DatabaseSync } from "node:sqlite";
 
-import { QueueStore, validateClaimLabel } from "../src/queue/store.ts";
+import { CLAIM_BACKOFF_WINDOW_SECONDS, QueueStore, validateClaimLabel } from "../src/queue/store.ts";
 import { MAX_ITEM_ATTEMPTS } from "../src/queue/types.ts";
 
 /**
@@ -218,6 +218,10 @@ test("the store bounds the projection to the newest attempts, oldest first, and 
 
   const cycles = MAX_ITEM_ATTEMPTS + 2;
   for (let round = 1; round <= cycles; round += 1) {
+    // Spread the cycles wider than the claim backoff window (ADR-0072, spec
+    // rule 69): this test exercises the projection's size bound, not churn,
+    // so the item must stay claimable through all twelve rounds.
+    now = new Date(now.getTime() + (CLAIM_BACKOFF_WINDOW_SECONDS + 1) * 1000);
     const claimed = queue.claim({ worker: `member:operator@frostyard.org/fleet`, label: `cockpit:worker:${round}` })!;
     queue.release(claimed.id, claimed.leaseToken!, "member:operator@frostyard.org/fleet", "next");
   }

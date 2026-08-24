@@ -482,6 +482,24 @@ is merely slow is not gone: prefer waiting for the heartbeat window over
 cutting a live lease, and never release an item a worker is visibly still
 driving — the claim is its authorization to keep pushing.
 
+**An item workers keep releasing** ([spec rule 69](../specs/work-queue.md),
+[ADR-0072](../adr/0072-back-off-claim-selection-after-rapid-worker-releases.md)).
+A release is a worker saying "not me": a contract mismatch, a missing
+capability, a self-authored review. The same mismatch repeats on the next
+claim, so three worker releases inside thirty minutes take the item out of
+claim selection until the window slides — no status change, no event, just
+not a candidate. See who declined and why:
+
+```bash
+npm run --silent queue -- churn [--repository <owner/repo>]
+```
+
+The recorded reasons are the evidence: fix what they complain about, or
+`cancel`, `defer`, or re-propose the item with a contract the fleet can
+honor. An operator `release-lease` and a lease expiry never count — those
+evidence a gone holder, not a declined contract — and the backoff lifts by
+itself, so doing nothing costs at most the window.
+
 **A project's slices wait for each other** ([spec rules 58, 62–63](../specs/work-queue.md),
 [ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md)).
 An imported slice may carry `predecessors` — the issue URLs of the slices it

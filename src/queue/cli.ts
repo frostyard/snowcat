@@ -210,6 +210,21 @@ try {
       })
       .sort((a, b) => Number(b.ready) - Number(a.ready) || a.createdAt.localeCompare(b.createdAt));
     print(deliveries);
+  } else if (command === "churn") {
+    // Read-only view of the items claim selection is backing off (ADR-0072,
+    // spec rule 69): who released them, why, and when they re-enter the
+    // running. The reasons are the operator's contract-mismatch evidence.
+    const flags = parseFlags(args, ["repository"]);
+    print(
+      queue.churningItems({ repository: flags.repository }).map(({ item, releases, backoffUntil }) => ({
+        id: item.id,
+        repository: item.repository,
+        kind: item.kind,
+        objective: item.objective,
+        backoffUntil,
+        releases,
+      })),
+    );
   } else if (command === "cancel") {
     const { rest, ifUpdatedAt } = extractIfUpdatedAt(args);
     const id = required(rest[0], "work item id");
@@ -371,6 +386,7 @@ try {
     console.error("       npm run queue -- release-lease <work-item-id> <reason> [--if-updated-at <iso>]   (operator exit for a claimed lease whose holder is gone; the token is fenced)");
     console.error("       npm run queue -- claims [--repository <owner/repo>]   (read-only; every current lease, lapsed first)");
     console.error("       npm run queue -- deliveries [--repository <owner/repo>]   (read-only; undelivered completed work, ready-to-merge first)");
+    console.error("       npm run queue -- churn [--repository <owner/repo>]   (read-only; items claim selection is backing off after repeated worker releases)");
     console.error("       npm run queue -- cancel <work-item-id> <reason> [--if-updated-at <iso>]");
     console.error("       npm run queue -- prioritize <work-item-id> <priority> <reason> [--if-updated-at <iso>]");
     console.error("       npm run queue -- note <work-item-id> <text> [--if-updated-at <iso>]");
