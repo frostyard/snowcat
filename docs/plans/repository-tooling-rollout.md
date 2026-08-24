@@ -464,8 +464,11 @@ have not.
   *snowcat#232 (draft) carries the pin files and docs but not the CI step —
   same scope wall, before the grant; snowcat#233 files the CI half.*
 - [ ] `core`: Node like `snowcat`; its `scripts/check-organization.mjs` is
-  `verify` (core#109). *Not imported: `core` is not in the node's managed
-  catalog (the ADR-0012 §6 gap again) — enroll it like `updex` was.*
+  `verify` (core#109). *Not imported: core's own fleet declaration
+  (`organization/repositories/frostyard/core.json`) has `fleet_state:
+  disabled`, so Snowcat reads the repository as disabled and `import-issues
+  --enrolled` skips it — a core-side decision to enable itself, not a node
+  gap (it is in the node's catalog).*
 - [ ] `firn`: a Go repository that never received Phase 0's `verify` and
   hard-fail lint; its issue (firn#69) carries both plus the mise pins.
 - [ ] `snowcat-cockpit`: land the Phase P deferred items (core declaration,
