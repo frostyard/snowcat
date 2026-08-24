@@ -311,6 +311,7 @@ function driftProposal(repository: string, report: RepositorySettingsReport, dig
       "No setting was changed by a worker; the operator applied the contract.",
     ],
     allowedActions: DRIFT_ACTIONS,
+    executionTarget: "read-only",
     delegableActions: [],
     createdBy: "operator:settings-sweep",
   };

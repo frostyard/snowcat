@@ -77,7 +77,7 @@ test("behind Access the surface needs an assertion, attributes mutations to memb
   test.after(() => queue.close());
   queue.setRepositoryEnabled("frostyard/example", true);
   const proposal = queue.enqueueProposedRoots("frostyard/example", [
-    { sourceRef: "https://github.com/frostyard/example/issues/1", kind: "issue-resolution", objective: "Resolve #1", instructions: "Do it.", acceptanceCriteria: ["PR open."], allowedActions: ["read", "write", "open-pr"], delegableActions: [], createdBy: "operator:test" },
+    { sourceRef: "https://github.com/frostyard/example/issues/1", kind: "issue-resolution", objective: "Resolve #1", instructions: "Do it.", acceptanceCriteria: ["PR open."], allowedActions: ["read", "write", "open-pr"], delegableActions: [], requiredArtifact: "pull-request", executionTarget: "new-pull-request", createdBy: "operator:test" },
   ]).created[0]!;
   const verifier = new AccessVerifier({ teamDomain: TEAM, audience: AUD, fetcher: certsFetcher().fetcher, clock: now });
   const app = createApp({ access: verifier, surfaceStores: () => ({ queue }) });

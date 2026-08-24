@@ -24,6 +24,17 @@ export const requiredArtifacts = ["none", "pull-request"] as const;
 export type RequiredArtifact = (typeof requiredArtifacts)[number];
 
 /**
+ * Where a work item's execution happens (ADR-0073): a checkout to read and
+ * run checks mutating nothing; a fresh branch from a fresh default-branch
+ * base delivering a new pull request; or the bound pull request's branch at
+ * exactly the recorded head. Declared by the definer, never inferred from
+ * kind or actions; absent only on items defined before the rung that added
+ * it (undeclared legacy, listed by `audit-contracts`).
+ */
+export const executionTargets = ["read-only", "new-pull-request", "existing-pull-request"] as const;
+export type ExecutionTarget = (typeof executionTargets)[number];
+
+/**
  * Snowcat's own observation of a reported issue, pull request, or release,
  * taken through the GitHub API at completion time and refreshed by
  * `verify-artifacts`. Workers never supply it; the MCP boundary rejects it as
@@ -158,6 +169,8 @@ export interface FollowUpInput {
    * `allowedActions`; the store refuses the whole completion otherwise.
    */
   requiredArtifact: RequiredArtifact;
+  /** Where the child executes (ADR-0073); required on every follow-up, like `requiredArtifact`. */
+  executionTarget: ExecutionTarget;
 }
 
 /** The pull-request cure a `pr-cure` root was created for (ADR-0061). */
@@ -292,6 +305,8 @@ export interface WorkItem {
   delegableActions: AllowedAction[];
   /** The item's delivery contract (ADR-0069): what a completion must report. */
   requiredArtifact: RequiredArtifact;
+  /** Where execution happens (ADR-0073); absent on items defined before rung 16 (undeclared legacy). */
+  executionTarget?: ExecutionTarget;
   priority: number;
   status: WorkStatus;
   createdBy: string;
@@ -405,6 +420,8 @@ export interface SeedWorkInput {
   delegableActions: AllowedAction[];
   /** Delivery contract (ADR-0069); `none` when omitted. `pull-request` requires `open-pr` in `allowedActions`. */
   requiredArtifact?: RequiredArtifact;
+  /** Where the item executes (ADR-0073); required on every new definition, never inferred. */
+  executionTarget: ExecutionTarget;
   priority?: number;
   createdBy: string;
 }

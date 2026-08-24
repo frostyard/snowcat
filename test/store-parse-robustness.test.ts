@@ -49,6 +49,7 @@ test("store read paths tolerate malformed persisted JSON", async () => {
     acceptanceCriteria: ["Exactly one gap has file-level evidence."],
     allowedActions: ["read", "create-followup"],
     delegableActions: ["read"],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   const claimed = queue.claim({ worker: "codex:updex:one", repository, leaseSeconds: 60 });

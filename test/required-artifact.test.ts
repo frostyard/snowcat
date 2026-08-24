@@ -31,6 +31,7 @@ const implementationChild = {
   allowedActions: ["read", "write", "run-tests", "open-pr"] as AllowedAction[],
   delegableActions: [] as AllowedAction[],
   requiredArtifact: "pull-request" as const,
+  executionTarget: "new-pull-request" as const,
 };
 
 /** Writes one proposed child row that bypasses the store's checks, as a row created before ADR-0069 would read. */
@@ -75,27 +76,33 @@ test("every definition path refuses a contract the item's own authority cannot h
     createdBy: "operator:test",
   };
   assert.throws(
-    () => queue.enqueueSeed({ ...base, allowedActions: ["read", "run-tests"], delegableActions: [], requiredArtifact: "pull-request" }),
+    () => queue.enqueueSeed({ ...base, allowedActions: ["read", "run-tests"], delegableActions: [], requiredArtifact: "pull-request", executionTarget: "read-only" }),
     /must deliver a pull request requires open-pr/,
   );
   assert.throws(
-    () => queue.enqueueSeed({ ...base, allowedActions: ["read", "write", "run-tests"], delegableActions: [] }),
+    () => queue.enqueueSeed({ ...base, allowedActions: ["read", "write", "run-tests"], delegableActions: [], executionTarget: "read-only" }),
     /granted write has no way to land its change/,
   );
   assert.throws(
-    () => queue.enqueueSeed({ ...base, allowedActions: ["read"], delegableActions: [], requiredArtifact: "release" as never }),
+    () => queue.enqueueSeed({ ...base, allowedActions: ["read"], delegableActions: [], requiredArtifact: "release" as never, executionTarget: "read-only" }),
     /unknown required artifact/,
   );
   assert.throws(
     () =>
       queue.enqueueProposedRoots(REPOSITORY, [
-        { ...rootDefinition, sourceRef: "https://github.com/frostyard/updex/issues/5", allowedActions: ["read", "write"], delegableActions: [] },
+        { ...rootDefinition, sourceRef: "https://github.com/frostyard/updex/issues/5", allowedActions: ["read", "write"], delegableActions: [], executionTarget: "read-only" },
       ]),
     /granted write has no way to land its change/,
   );
-  const seeded = queue.enqueueSeed({ ...base, allowedActions: ["read", "write", "run-tests", "open-pr"], delegableActions: [], requiredArtifact: "pull-request" });
+  const seeded = queue.enqueueSeed({ ...base, allowedActions: ["read", "write", "run-tests", "open-pr"], delegableActions: [], requiredArtifact: "pull-request", executionTarget: "new-pull-request" });
   assert.equal(seeded.requiredArtifact, "pull-request");
-  const defaulted = queue.enqueueSeed({ ...base, kind: "release-slice", allowedActions: ["read", "write", "run-tests", "open-pr"], delegableActions: [] });
+  // ADR-0073: a mutating target with an omitted (hence none) artifact is no
+  // longer declarable — the release-needed shape now states pull-request.
+  assert.throws(
+    () => queue.enqueueSeed({ ...base, kind: "release-slice", allowedActions: ["read", "write", "run-tests", "open-pr"], delegableActions: [], executionTarget: "new-pull-request" }),
+    /delivers through a pull request: requiredArtifact must be pull-request/,
+  );
+  const defaulted = queue.enqueueSeed({ ...base, kind: "release-slice", allowedActions: ["read"], delegableActions: [], executionTarget: "read-only" });
   assert.equal(defaulted.requiredArtifact, "none", "an omitted contract is none, never inferred from the actions");
   assert.equal(queue.list({ repository: REPOSITORY }).length, 2, "refused definitions wrote nothing");
 });
@@ -186,11 +193,14 @@ test("an item that must deliver a pull request completes only with one reported,
     repository: REPOSITORY,
     kind: "release-needed",
     objective: "Prepare the release.",
-    instructions: "Complete with evidence and no pull request if nothing needs to change.",
+    instructions: "Report the release state with evidence.",
     acceptanceCriteria: ["The result names the version."],
-    allowedActions: ["read", "write", "run-tests", "open-pr"],
+    // ADR-0073: an artifact-none item is a read-only reporter; the old
+    // write-capable release-needed shape now declares pull-request instead.
+    allowedActions: ["read", "run-tests"],
     delegableActions: [],
     requiredArtifact: "none",
+    executionTarget: "read-only",
     createdBy: "operator:dependency-sweep",
   });
   const releaseLease = queue.claim({ worker: "claude:updex:release" })!;

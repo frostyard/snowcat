@@ -23,6 +23,7 @@ test("a manually started MCP client can claim, complete, and create child work",
     acceptanceCriteria: ["Exactly one testing gap is identified with file-level evidence."],
     allowedActions: ["read", "create-followup"],
     delegableActions: ["read", "write", "run-tests", "open-pr"],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   setup.close();
@@ -85,6 +86,7 @@ test("a manually started MCP client can claim, complete, and create child work",
             allowedActions: ["read", "write", "run-tests", "open-pr"],
             delegableActions: [],
             requiredArtifact: "pull-request",
+            executionTarget: "new-pull-request",
           },
         ],
       },
@@ -115,6 +117,7 @@ test("the MCP boundary rejects a follow-up that supplies priority", async () => 
     acceptanceCriteria: ["Exactly one testing gap is identified with file-level evidence."],
     allowedActions: ["read", "create-followup"],
     delegableActions: ["read", "write", "run-tests", "open-pr"],
+    executionTarget: "read-only",
     priority: 5,
     createdBy: "operator:test",
   });
@@ -146,6 +149,7 @@ test("the MCP boundary rejects a follow-up that supplies priority", async () => 
     allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
     requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
   };
   const completion = {
     id: seed.id,
@@ -197,6 +201,7 @@ test("the MCP boundary rejects worker identities in reserved principal namespace
     acceptanceCriteria: ["One gap is identified."],
     allowedActions: ["read"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   setup.close();
@@ -248,6 +253,7 @@ test("the MCP release path omits the old token and permits reclaim by another wo
     acceptanceCriteria: ["One gap is identified."],
     allowedActions: ["read"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   setup.close();
@@ -309,6 +315,8 @@ test("claim_work on a requeued item carries operator notes and prior results, an
     acceptanceCriteria: ["A pull request is open."],
     allowedActions: ["read", "write", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:test",
   });
   const first = setup.claim({ worker: "claude:updex:first" })!;

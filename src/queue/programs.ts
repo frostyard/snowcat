@@ -61,6 +61,8 @@ export const maintenancePrograms: readonly MaintenanceProgram[] = [
         "Any follow-up has a bounded change and verifiable project check.",
       ],
       allowedActions: discoveryActions,
+      // Discovery reads and files follow-ups; it mutates no checkout (ADR-0073).
+      executionTarget: "read-only",
       priority: 0,
     },
   },
@@ -80,6 +82,8 @@ export const maintenancePrograms: readonly MaintenanceProgram[] = [
         "Any follow-up states the signal that will change and how it will be verified.",
       ],
       allowedActions: discoveryActions,
+      // Discovery reads and files follow-ups; it mutates no checkout (ADR-0073).
+      executionTarget: "read-only",
       priority: 0,
     },
   },
@@ -99,6 +103,8 @@ export const maintenancePrograms: readonly MaintenanceProgram[] = [
         "Any follow-up has least-authority actions and mechanically verifiable criteria.",
       ],
       allowedActions: discoveryActions,
+      // Discovery reads and files follow-ups; it mutates no checkout (ADR-0073).
+      executionTarget: "read-only",
       priority: 0,
     },
   },
@@ -118,6 +124,8 @@ export const maintenancePrograms: readonly MaintenanceProgram[] = [
         "Any follow-up preserves the distinction between current truth and aspiration.",
       ],
       allowedActions: discoveryActions,
+      // Discovery reads and files follow-ups; it mutates no checkout (ADR-0073).
+      executionTarget: "read-only",
       priority: 0,
     },
   },
@@ -137,6 +145,8 @@ export const maintenancePrograms: readonly MaintenanceProgram[] = [
         "Any follow-up is one bounded compliance change with a mechanically verifiable check, or one bounded item to raise the contract with Core; never both.",
       ],
       allowedActions: discoveryActions,
+      // Discovery reads and files follow-ups; it mutates no checkout (ADR-0073).
+      executionTarget: "read-only",
       priority: 0,
     },
   },
@@ -156,6 +166,8 @@ export const maintenancePrograms: readonly MaintenanceProgram[] = [
         "No issue was commented on, labeled, or closed by this item.",
       ],
       allowedActions: discoveryActions,
+      // Discovery reads and files follow-ups; it mutates no checkout (ADR-0073).
+      executionTarget: "read-only",
       priority: 0,
     },
   },
@@ -175,6 +187,8 @@ export const maintenancePrograms: readonly MaintenanceProgram[] = [
         "Any follow-up names the exact modules and target versions, keeps to one bump or one consolidated bump, and requires the repository's own checks to pass on the change.",
       ],
       allowedActions: discoveryActions,
+      // Discovery reads and files follow-ups; it mutates no checkout (ADR-0073).
+      executionTarget: "read-only",
       priority: 0,
     },
   },
@@ -194,6 +208,8 @@ export const maintenancePrograms: readonly MaintenanceProgram[] = [
         "Any follow-up names the exact document (or code) change and a mechanically verifiable check — the example runs, the flag exists, the path resolves — that a docs gate or test can pin.",
       ],
       allowedActions: discoveryActions,
+      // Discovery reads and files follow-ups; it mutates no checkout (ADR-0073).
+      executionTarget: "read-only",
       priority: 0,
     },
   },

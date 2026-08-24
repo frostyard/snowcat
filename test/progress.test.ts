@@ -128,6 +128,7 @@ test("progress renders ledger-derived stage entry times and the current-stage du
     acceptanceCriteria: ["Verdict."],
     allowedActions: ["read", "run-tests"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "policy:review-gate",
     sourceRef: `pr-review:https://github.com/frostyard/example/pull/139@${"b".repeat(40)}`,
     review: {
@@ -212,6 +213,7 @@ test("the session-guarded progress page renders every stage, folds review satell
     acceptanceCriteria: ["Verdict."],
     allowedActions: ["read", "run-tests"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "policy:review-gate",
     sourceRef: `pr-review:https://github.com/frostyard/example/pull/7@${"a".repeat(40)}`,
     review: {
@@ -506,6 +508,8 @@ function completeDiscovery(queue: QueueStore, objective: string, repository = RE
   const seed = queue.enqueueSeed({
     ...definition(objective, "quality-gap-discovery", repository),
     allowedActions: ["read", "create-followup"],
+    requiredArtifact: "none",
+    executionTarget: "read-only",
   });
   const lease = queue.claim({ worker: `worker:${seed.id}`, repository, kinds: [seed.kind] })!;
   return queue.complete({
@@ -571,6 +575,8 @@ function definition(objective: string, kind: string, repository = REPOSITORY): S
     acceptanceCriteria: ["Done."],
     allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:test",
   };
 }
@@ -608,6 +614,7 @@ function item(overrides: Partial<ObservableWorkItem> = {}): ObservableWorkItem {
     allowedActions: ["read", "open-pr"],
     delegableActions: [],
     requiredArtifact: "none",
+    executionTarget: "read-only",
     priority: 0,
     status: "queued",
     createdBy: "operator:test",
@@ -668,6 +675,8 @@ function proposeRoot(
       acceptanceCriteria: ["A pull request is open."],
       allowedActions: ["read", "write", "run-tests", "open-pr"],
       delegableActions: [],
+      requiredArtifact: "pull-request",
+      executionTarget: "new-pull-request",
       createdBy: "operator:import-issues",
       sourceRef: options.sourceRef,
       kind: options.kind,

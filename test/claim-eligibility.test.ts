@@ -21,6 +21,7 @@ function seed(queue: QueueStore, repository: string, priority: number, kind = "q
     acceptanceCriteria: ["One gap."],
     allowedActions: ["read"],
     delegableActions: [],
+    executionTarget: "read-only",
     priority,
     createdBy: "operator:test",
   });

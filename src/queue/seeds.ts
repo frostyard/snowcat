@@ -24,6 +24,8 @@ export function enqueueTestingGap(queue: QueueStore, repository: string, created
       "Any follow-up specifies a concrete test and verifiable completion criteria.",
     ],
     allowedActions: discoveryActions,
+    // Discovery reads and files follow-ups; it mutates no checkout (ADR-0073).
+    executionTarget: "read-only",
     delegableActions: implementationCeiling,
     priority: 0,
     createdBy,

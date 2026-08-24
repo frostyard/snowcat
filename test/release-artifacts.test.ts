@@ -181,8 +181,10 @@ async function seedClaimed(queue: QueueStore) {
     // so the release the worker reports is one a human published.
     instructions: "Prepare the release notes; a human publishes the tag.",
     acceptanceCriteria: ["Release prepared."],
-    allowedActions: ["read", "write", "run-tests", "open-pr"],
+    allowedActions: ["read", "run-tests"],
     delegableActions: [],
+    requiredArtifact: "none",
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   return queue.claim({ worker: "claude:release-test" })!;
@@ -443,6 +445,8 @@ test("a pull-request completion still verifies and derives exactly as before bes
     acceptanceCriteria: ["PR open."],
     allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:test",
   });
   const claimed = queue.claim({ worker: "claude:release-test" })!;

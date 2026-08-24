@@ -20,6 +20,7 @@ function seedClaimable(queue: QueueStore, repository: string) {
     acceptanceCriteria: ["One gap has concrete evidence."],
     allowedActions: ["read"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
 }
@@ -131,6 +132,7 @@ test("the CLI lists claims lapsed-first and releases a lease; the surface offers
     acceptanceCriteria: ["One gap has concrete evidence."],
     allowedActions: ["read"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   queue.claim({ worker: "copilot:std:gone", repository: "frostyard/std", leaseSeconds: 30 });

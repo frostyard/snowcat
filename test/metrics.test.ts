@@ -31,6 +31,8 @@ function seed(queue: QueueStore, objective: string): WorkItem {
     acceptanceCriteria: ["The pull request is open and reported."],
     allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:test",
   });
 }
@@ -223,6 +225,7 @@ test("a repository-narrowed reading counts only that repository", () => {
     acceptanceCriteria: ["It is resolved."],
     allowedActions: ["read"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   at("2026-08-19T10:00:00.000Z");

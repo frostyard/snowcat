@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { CLAIM_BACKOFF_RELEASES, CLAIM_BACKOFF_WINDOW_SECONDS, QueueStore } from "../src/queue/store.ts";
+import { CLAIM_BACKOFF_RELEASES, CLAIM_BACKOFF_WINDOW_SECONDS, QueueStore, SCHEMA_VERSION } from "../src/queue/store.ts";
 import { childEnvironment } from "./helpers/child-environment.ts";
 
 function seed(queue: QueueStore, repository: string, objective: string) {
@@ -18,6 +18,7 @@ function seed(queue: QueueStore, repository: string, objective: string) {
     acceptanceCriteria: ["One gap has concrete evidence."],
     allowedActions: ["read"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
 }
@@ -148,7 +149,7 @@ test("a version-14 database gains rung 15's work_events index on open", async ()
 
   const migrated = new QueueStore(path);
   test.after(() => migrated.close());
-  assert.equal(migrated.schemaVersion(), 15);
+  assert.equal(migrated.schemaVersion(), SCHEMA_VERSION);
   const inspect = new DatabaseSync(path, { readOnly: true });
   const indexes = (inspect.prepare("PRAGMA index_list(work_events)").all() as Array<Record<string, unknown>>).map((row) => String(row.name));
   inspect.close();

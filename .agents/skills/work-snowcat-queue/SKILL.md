@@ -46,6 +46,14 @@ its sandbox; Snowcat only owns queue authorization and bookkeeping.
 
 ## Do the work
 
+Honor the claimed item's `executionTarget` before touching the repository
+(ADR-0073): `existing-pull-request` means the bound pull request's branch at
+exactly its recorded head — release or block when the head moved; never a new
+branch, never a second pull request. `new-pull-request` means a fresh branch
+from a freshly pulled default-branch base. `read-only` means a detached
+checkout you never mutate. Every follow-up you propose declares its own
+`executionTarget` alongside `requiredArtifact`.
+
 - Perform only actions listed in `allowedActions`. Absence means prohibition.
 - Pull the target repository's default branch immediately before branching,
   so a lease taken seconds before a merge does not build on a stale base.

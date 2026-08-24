@@ -25,6 +25,7 @@ test("administrative queue listings do not expose a live lease token", async () 
     acceptanceCriteria: ["One gap has concrete evidence."],
     allowedActions: ["read"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   const claimed = queue.claim({ worker: "claude:updex:cli-test" })!;
@@ -57,6 +58,7 @@ test("the list command rejects an unknown status instead of printing an empty ar
     acceptanceCriteria: ["One gap has concrete evidence."],
     allowedActions: ["read"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   queue.close();
@@ -98,6 +100,7 @@ test("operator CLI exposes blocked requeue and cancellation without lease tokens
     acceptanceCriteria: ["One gap."],
     allowedActions: ["read"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   const second = queue.enqueueSeed({
@@ -108,6 +111,7 @@ test("operator CLI exposes blocked requeue and cancellation without lease tokens
     acceptanceCriteria: ["One gap."],
     allowedActions: ["read"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   const firstClaim = queue.claim({ worker: "claude:updex:first" })!;
@@ -192,6 +196,7 @@ test("operator CLI can defer admitted work and approve it later", async () => {
     acceptanceCriteria: ["One gap."],
     allowedActions: ["read"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   queue.close();
@@ -231,6 +236,7 @@ test("operator CLI --if-updated-at refuses a stale approve, prioritize, and note
     acceptanceCriteria: ["One gap."],
     allowedActions: ["read"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   now = new Date(now.getTime() + 1000);
@@ -300,6 +306,7 @@ test("operator CLI reports metadata, backs up to a new path, and verifies the co
     acceptanceCriteria: ["One gap has concrete evidence."],
     allowedActions: ["read"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   const claimed = queue.claim({ worker: "claude:updex:backup" })!;
@@ -603,16 +610,17 @@ test("operator CLI attach-artifact verifies against GitHub first: refuses anothe
   const path = join(directory, "queue.db");
   const queue = new QueueStore(path);
   queue.setRepositoryEnabled("frostyard/updex", true);
-  // An item that required no pull request (ADR-0069) completed with no artifacts; the operator opened the PR by hand.
+  // A read-only reporter (ADR-0073) completed with no artifacts; the operator carried the change and opened the PR by hand.
   const seed = queue.enqueueSeed({
     repository: "frostyard/updex",
     kind: "quality-implementation",
     objective: "Make the merged-state signal instance-scoped.",
-    instructions: "Implement on a local branch; the operator opens the pull request.",
+    instructions: "Diagnose and report; the operator carries any change the last mile.",
     acceptanceCriteria: ["Tests pass."],
-    allowedActions: ["read", "write", "run-tests", "open-pr"],
+    allowedActions: ["read", "run-tests"],
     delegableActions: [],
     requiredArtifact: "none",
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   const lease = queue.claim({ worker: "claude:updex:local", repository: "frostyard/updex" })!;
@@ -733,6 +741,7 @@ test("operator CLI list filters by repository and kind, and show prints an item 
       acceptanceCriteria: ["One gap."],
       allowedActions: ["read"],
       delegableActions: [],
+      executionTarget: "read-only",
       createdBy: "operator:test",
     });
   const target = seedOne("frostyard/updex", "quality-gap-discovery");
@@ -782,6 +791,7 @@ test("operator CLI events reads the ledger since a sequence as JSON without leas
       acceptanceCriteria: ["One gap."],
       allowedActions: ["read"],
       delegableActions: [],
+      executionTarget: "read-only",
       createdBy: "operator:test",
     });
   const updex = seedOne("frostyard/updex");
@@ -839,6 +849,7 @@ test("operator CLI watch tails new events as JSON lines and stops cleanly when s
     acceptanceCriteria: ["One gap."],
     allowedActions: ["read"],
     delegableActions: [],
+    executionTarget: "read-only",
     createdBy: "operator:test",
   });
   const env = childEnvironment({ SNOWCAT_QUEUE_DB: path });

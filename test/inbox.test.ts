@@ -18,6 +18,8 @@ function completeWithPullRequest(queue: QueueStore, worker: string, number: numb
     acceptanceCriteria: ["PR open."],
     allowedActions: ["read", "write", "run-tests", "open-pr"],
     delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
     createdBy: "operator:test",
   });
   const claimed = queue.claim({ worker })!;
