@@ -134,6 +134,36 @@ retired by Phase 6; do not generalise it.
   upgrade before the snowcat lane works — the kit should refresh from the
   source revision automatically or defer to the checkout when the
   repository is the canonical skill source.*
+- [x] **Cockpit:** re-vendor done (snowcat-cockpit#5 merged; node at
+  `dev-1-gcd34de3`). *The upgrade itself surfaced four more dependencies,
+  each now known rather than rediscoverable:*
+  1. *`node install` restarts the service, and a restart **stops the board
+     campaign** (workers survive; the campaign must be re-`POST`ed to
+     `/api/v1/campaign` with the same request).*
+  2. *`InstallKit` also refuses to overwrite the node's own `worker-kit`
+     state directory when it is drifted, so a kit-changing upgrade needs
+     that directory replaced by hand before `install-kit` writes the new
+     revision (`profiles` reads `kit=drifted` until then).*
+  3. *Preflight receipts are bound to the kit revision: every provider reads
+     "not structurally ready" after a kit change until `preflight` is
+     re-run per provider, and the campaign backs the provider off for five
+     minutes on its first failed refresh.*
+  4. *Codex workers never start the projected lease-proxy MCP server (the
+     entrypoint's `--config …args=[…]` override; snowcat-cockpit#6) — Codex
+     reviewers block on "lifecycle tools not callable"; the campaign runs
+     Claude reviewers (`opus` against `sonnet` implementers) until fixed.*
+  *snowcat#218 (the `-discovery`-kind contract rule) edits a vendored skill
+  and is held out of the merge queue until the next re-vendor cycle, so it
+  does not drift the kit mid-campaign.*
+- [x] **Evidence, first campaign (2026-08-24):** the `clix` implementer
+  (`worker-f186215712b86be9`, image `claude-v0.1.1`) completed
+  `quality-gap-fix` with `make check` green — lint is hard-required there,
+  so the pass proves `golangci-lint` ran from the image — and opened draft
+  clix#80; `std`'s discoverer noticed the new `make verify` target and
+  filed the doc follow-up (re-filed as std#61 after the kind defect). One
+  `std` follow-up looped three discoverer runs (the `-discovery` kind that
+  owed a pull request; snowcat#218 refuses the shape). The read-only
+  review evidence waits on the first Claude `pr-review` of clix#80.
 - **Done when:** a Cockpit campaign on `std`, `clix`, and `updex` completes
   one item per repository whose retained worker terminal shows
   `golangci-lint run` executing from the image (no `go install`, no
