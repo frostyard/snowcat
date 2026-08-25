@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { LineCounter, isMap, isScalar, parseDocument, visit, type Pair, type YAMLMap } from "yaml";
+import { LineCounter, isMap, isScalar, isSeq, parseDocument, visit, type Pair, type YAMLMap } from "yaml";
 
 const WORKFLOW_DIRECTORY = join(process.cwd(), ".github", "workflows");
 const FULL_SHA = /@[0-9a-f]{40}$/i;
@@ -91,6 +91,77 @@ jobs:
     /full 40-character commit SHA/,
   );
 });
+
+test("the check job invokes the repository's canonical full gate exactly once", () => {
+  const source = readFileSync(join(WORKFLOW_DIRECTORY, "check.yml"), "utf8");
+  const document = parseDocument(source);
+  assert.ok(isMap(document.contents), "workflow must contain a top-level mapping");
+  const errors = fullGateErrors(document.contents, canonicalFullGateCommand());
+  assert.deepEqual(errors, [], errors.join("\n"));
+});
+
+test("the full-gate check rejects a weaker command such as npm test", () => {
+  const weakened = `jobs:
+  check:
+    steps:
+      - run: npm ci
+      - run: npm test
+`;
+  const document = parseDocument(weakened);
+  assert.ok(isMap(document.contents));
+  const errors = fullGateErrors(document.contents, "npm run check");
+  assert.match(errors.join("\n"), /canonical full gate/);
+
+  const missing = `jobs:
+  check:
+    steps:
+      - run: npm ci
+`;
+  const missingDocument = parseDocument(missing);
+  assert.ok(isMap(missingDocument.contents));
+  assert.match(fullGateErrors(missingDocument.contents, "npm run check").join("\n"), /canonical full gate/);
+
+  const duplicated = `jobs:
+  check:
+    steps:
+      - run: npm run check
+      - run: npm run check
+`;
+  const duplicatedDocument = parseDocument(duplicated);
+  assert.ok(isMap(duplicatedDocument.contents));
+  assert.match(fullGateErrors(duplicatedDocument.contents, "npm run check").join("\n"), /canonical full gate/);
+});
+
+function canonicalFullGateCommand(): string {
+  try {
+    const makefile = readFileSync(join(process.cwd(), "Makefile"), "utf8");
+    if (/^ci\s*:/m.test(makefile)) return "make ci";
+  } catch {
+    // no root Makefile: fall through to the npm entry point
+  }
+  return "npm run check";
+}
+
+function fullGateErrors(root: YAMLMap, expectedCommand: string): string[] {
+  const jobs = root.get("jobs", true);
+  if (!isMap(jobs)) return ["workflow must contain a jobs mapping"];
+  const checkJob = jobs.get("check", true);
+  if (!isMap(checkJob)) return ["workflow must declare a check job"];
+  const steps = checkJob.get("steps", true);
+  if (!isSeq(steps)) return ["check job must declare a steps sequence"];
+
+  const matches = steps.items.filter((step) => {
+    if (!isMap(step)) return false;
+    const run = step.get("run");
+    return typeof run === "string" && run.trim() === expectedCommand;
+  });
+  if (matches.length !== 1) {
+    return [
+      `check job must invoke the canonical full gate (\`${expectedCommand}\`) exactly once; found ${matches.length}`,
+    ];
+  }
+  return [];
+}
 
 function workflowContractErrors(source: string): string[] {
   const lineCounter = new LineCounter();
