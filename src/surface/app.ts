@@ -380,7 +380,7 @@ export function createSurfaceApp(options: SurfaceOptions): Hono<SurfaceEnv> {
           const outcome = await applyAttachArtifact(stores.queue, id, body, stores.verifier ?? {}, actorOf(context));
           return redirectWithBanner(back, outcome.eventType, `${outcome.url} ${outcome.state ?? outcome.status}`);
         }
-        const outcome = applyItemMutation(stores.queue, mutation as ItemMutation, id, body, actorOf(context));
+        const outcome = await applyItemMutation(stores.queue, mutation as ItemMutation, id, body, actorOf(context), stores.verifier ?? {});
         return redirectWithBanner(back, outcome.eventType);
       } catch (error) {
         const item = readItem(stores.queue, id, enrollments);
@@ -412,7 +412,7 @@ export function createSurfaceApp(options: SurfaceOptions): Hono<SurfaceEnv> {
       }
       if (!board) return new Response(notFoundPage(chrome, `${slug} is neither opted in to the queue nor declared in the control plane.`), htmlHeaders(404));
       const outcome = await applyVerifyArtifacts(stores.queue, slug, stores.verifier ?? {}, actorOf(context));
-      const detail = `${outcome.checked} checked, ${outcome.updated} updated, ${outcome.rejected} rejected, ${outcome.unavailable} unavailable, ${outcome.cured} cure item${outcome.cured === 1 ? "" : "s"} queued, ${outcome.reviewed} review item${outcome.reviewed === 1 ? "" : "s"} queued, ${outcome.markedReady} marked ready`;
+      const detail = `${outcome.checked} checked, ${outcome.updated} updated, ${outcome.rejected} rejected, ${outcome.unavailable} unavailable, ${outcome.cured} cure item${outcome.cured === 1 ? "" : "s"} queued, ${outcome.reviewed} review item${outcome.reviewed === 1 ? "" : "s"} queued, ${outcome.markedReady} marked ready, ${outcome.retired} retired`;
       return redirectWithBanner(back, outcome.eventType, detail);
     })(context),
   );

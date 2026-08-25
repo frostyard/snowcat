@@ -2122,6 +2122,40 @@ export class QueueStore {
   }
 
   /**
+   * Retires one queued or blocked PR-bound item (`pr-review`, `pr-review-fix`,
+   * `pr-cure`, `pr-cure-change`) whose bound pull request has merged or
+   * closed (issue #252): nothing can be delivered on it, so leaving it
+   * claimable or requeueable only spends another worker lease discovering the
+   * same dead branch. Unlike the operator's `cancel`, this accepts `queued`
+   * as well as `blocked` and carries no precondition — it is a system
+   * observation of external state, not an operator decision from a rendered
+   * form — but it still requires an `operator:` or `policy:` actor and
+   * records the same `work.cancelled` event so existing consumers of the
+   * ledger see it exactly like an operator cancellation.
+   */
+  retirePullRequestBoundWork(id: string, actor: string, reason: string): WorkItem {
+    validateOperatorActor(actor, "retirement");
+    if (!reason.trim()) throw new Error("retirement reason is required");
+    return this.transaction(() => {
+      const item = this.getRequired(id);
+      if (item.status !== "queued" && item.status !== "blocked") {
+        throw new Error(`work item is not queued or blocked: ${id}`);
+      }
+      const now = this.now();
+      this.db
+        .prepare(
+          `UPDATE work_items
+           SET status = 'cancelled', result_json = ?, lease_owner = NULL, lease_token = NULL,
+               lease_expires_at = NULL, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(JSON.stringify({ summary: reason, evidence: [], artifacts: [] }), now, id);
+      this.addEvent(id, "work.cancelled", actor, { reason });
+      return this.getRequired(id);
+    });
+  }
+
+  /**
    * Replaces the verification of one artifact on a completed item and records
    * `artifact.verified`. Used by the completion-time verifier's later refresh
    * pass; the artifact itself (kind, URL, description) never changes.

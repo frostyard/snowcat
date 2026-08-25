@@ -171,7 +171,7 @@ test("the CLI lists claims lapsed-first and releases a lease; the surface offers
   // The surface applies the same store method under the same mutation name.
   assert.ok((itemMutations as readonly string[]).includes("release-lease"));
   const item = reopened.get(live.id)!;
-  const outcome = applyItemMutation(reopened, "release-lease", live.id, {
+  const outcome = await applyItemMutation(reopened, "release-lease", live.id, {
     status: item.status,
     updatedAt: item.updatedAt,
     reason: "Session interrupted; nothing is driving this lease.",
