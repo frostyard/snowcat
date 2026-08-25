@@ -528,9 +528,11 @@ have not.
 
 - [ ] Remove `golangci-lint` from the base image and `oci/baseline.json`;
   workers now get it only from the mise cache. Republish, roll the digest.
-  *Queued 2026-08-24 as snowcat-cockpit#29 (Containerfile ARG, fetch
-  block, `COPY`, and the `baseline.json` `stopgap` object; the tag and
-  the digest roll stay with the operator — Cockpit's latest tag is
+  *Queued 2026-08-24 as snowcat-cockpit#29; delivered by a Cockpit lane
+  as snowcat-cockpit#33 (Containerfile ARG, fetch block, `COPY`, the
+  `baseline.json` `stopgap` object, and the OCI workers spec) — Codex
+  review round 1 `pass`, merged the same night. The tag and the digest
+  roll stay with the operator (Cockpit's latest tag before this is
   `v0.2.0`).*
 - [x] Remove every remaining Makefile `GOLANGCI_LINT_VERSION` and
   soft-skip across the fleet (Phase 5 should leave none; verify with a
@@ -551,7 +553,17 @@ have not.
   (presence only, never a version), Go repositories by Makefile targets
   and Node repositories by `package.json` scripts, run as its own
   `fleet-conventions` CI job rather than inside the offline `npm run
-  check`; making it a required check is an operator step afterwards.*
+  check`; making it a required check is an operator step afterwards.
+  Delivered as core#118 and merged 2026-08-25. Its first run found real
+  drift — `clix` and `firn` had `verify`/`check` but no `ci:` target —
+  fixed the same evening as clix#85 and firn#77 (firn's ruleset needed
+  the same required-contexts repair as snowcat's when the worker
+  consolidated jobs into one `Repository gate`). Two review rounds
+  blocked on "CI not green": round 1 correctly, round 2 falsely — the
+  reviewer read the pull request's stale body instead of the head's
+  check runs (snowcat#248 is the instruction fix). The required-check
+  step (`apply-repo-settings.sh frostyard/core --required-checks
+  "docs-gate,scaffold-e2e,fleet-conventions"`) is still open.*
 - [ ] Snowcat: a maintenance-program probe (catalog in
   [`src/queue/programs.ts`](../../src/queue/programs.ts)) that runs `make
   verify` on a clean checkout and proposes a `quality` item when the tree
@@ -561,7 +573,21 @@ have not.
   `run-tests`, runs `make verify`/`npm run verify` on its detached
   read-only checkout, and reports `git status --porcelain` afterwards;
   every other discovery root stays `read` + `create-followup`, no new
-  program, no ADR.*
+  program, no ADR. Delivered as snowcat#247, merged 2026-08-24 and
+  deployed to the host 2026-08-25 (`0303dbe`).*
+- [ ] **`make verify` everywhere (core ADR-0044, accepted 2026-08-24):**
+  the false block on core#118 round 2 came from a reviewer running `make
+  verify` in a Node repository that only had `npm run verify`; every
+  consumer of the gate had grown a language branch. ADR-0044 widens
+  ADR-0043's triad to every repository — Node Makefiles wrap the npm
+  scripts — so instructions name `make verify` unconditionally. Queue
+  work, in order: Makefiles for `snowcat` (snowcat#249) and `core`
+  (core#120); then core's `check-fleet-conventions.mjs` drops its Node
+  branch and the conformance program text drops "`npm run verify` where
+  `package.json` declares it" (to file once the Makefiles land); the
+  reviewer-instruction fix (snowcat#248: read the head's check runs, never
+  the description; `make verify` unconditional, a missing target is a
+  blocker) can land in parallel.
 - **Done when:** the base image contains no repository-specific tool, and a
   deliberately dirty `verify` in a fixture repository yields one proposed
   Snowcat item naming the mutation.
@@ -601,11 +627,12 @@ Codex.
    "loose end" was moot — that ADR names the `v0.1.1` stopgap image as
    history, not a Makefile pin, and accepted ADRs are immutable; the
    core-side presence check is Phase 6's third item, now core#117.
-2. **Phase 6 opened 2026-08-24 evening** — item 2 closed by the fleet
-   grep; items 1, 3, 4 are queue work (snowcat-cockpit#29, core#117,
-   snowcat#245) on repositories that are all enrolled and opted in, so
-   the 15-minute import proposes them and any lane can claim them. After
-   #29 merges the operator tags Cockpit and rolls the node's digest.
+2. **Phase 6 nearly met, 2026-08-25 early** — items 1, 3, 4 merged
+   (snowcat-cockpit#33, core#118, snowcat#247) within an hour of
+   admission; the host runs `0303dbe`. Open: the Cockpit tag and digest
+   roll (operator), making `fleet-conventions` required on core
+   (operator), and the ADR-0044 follow-ups (snowcat#249, core#120, then
+   the check and program-text simplifications, plus snowcat#248).
 3. **Phase 6 — retire the stopgap:** `golangci-lint` still ships in the base
    image and `oci/baseline.json` lists it under `stopgap`; with every
    enrolled repository now on `mise.lock`, remove it, republish, roll. The
@@ -624,7 +651,12 @@ Codex.
    surfaces it, a worker discovers it inside the lease.
 7. **Provider reliability, observed not fixed:** Copilot mangled the lease
    token twice (relay now immune) and once invented a `gh` limitation; keep
-   it off the reviewer lane until a run shows otherwise.
+   it off the reviewer lane until a run shows otherwise. A Codex reviewer
+   (`gpt-5.3-codex`, core#118 round 2) judged a CI criterion from the
+   pull request's body rather than the head's check runs — the body was
+   the author's claim from the previous head. snowcat#248 makes the
+   instructions demand the check runs; until it lands, treat a "CI not
+   green" blocker as unverified until the head's runs are read.
 
 ## Later / ideas
 
