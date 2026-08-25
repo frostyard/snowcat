@@ -761,8 +761,13 @@ MCP (rule 41).
     origin's `result.model`, `priorReviewerModel` from the previous round's
     `result.model`, `priorBlockers` = the previous round's blockers
     verbatim), recording `work.queued` whose payload names kind, URL, head,
-    and round. The minted instructions MUST name the repository's
-    non-mutating gate (`make verify`) as the check to run and MUST forbid
+    and round. The minted instructions MUST direct the reviewer to the head's
+    check runs (for example `gh pr checks` or the commit's check-runs API) as
+    the evidence for any CI-anchored acceptance criterion, and MUST treat the
+    pull request's description as the author's claim, never as evidence of a
+    check's state. The minted instructions MUST name the repository's
+    non-mutating gate (`make verify`) unconditionally — never "where it
+    exists" or "when it exists" — as the check to run and MUST forbid
     `make check` or any target that formats or rewrites files
     ([ADR-0076](../adr/0076-pin-repository-tools-in-the-repository-and-qualify-lanes-by-running-them.md));
     nothing infers a gate from a Makefile. The same `sourceRef` MUST never be enqueued twice, whatever the

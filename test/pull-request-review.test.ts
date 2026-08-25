@@ -403,6 +403,8 @@ test("the sweep reads nothing without a gated repository and creates one admitte
   assert.match(item.instructions, /get_work\("/);
   assert.match(item.instructions, /the author reported model claude-sonnet-5/);
   assert.match(item.instructions, /READ-ONLY on GitHub/);
+  assert.match(item.instructions, /gh pr checks|check-runs/);
+  assert.doesNotMatch(item.instructions, /when it exists|where it exists/);
   assert.match(item.objective, /round 1 of 3/);
   const queued = queue.events(item.id).find((event) => event.type === "work.queued")!;
   assert.deepEqual(queued.payload, { root: true, review: { kind: REVIEW_KIND, pullRequestUrl: PR_URL, headSha: HEAD_A, round: 1 } });
@@ -488,6 +490,8 @@ test("block → one admitted fix root; a new head → the next round with prior 
   );
   assert.match(fix.instructions, /\[defect:catalog\/repo.go:import\] at catalog\/repo.go:12/);
   assert.match(fix.instructions, /keep the pull request a DRAFT/);
+  assert.match(fix.instructions, /gh pr checks|check-runs/);
+  assert.doesNotMatch(fix.instructions, /when it exists|where it exists/);
   const queued = queue.events(fix.id).find((event) => event.type === "work.queued")!;
   assert.deepEqual(queued.payload, { root: true, review: { kind: REVIEW_FIX_KIND, pullRequestUrl: PR_URL, headSha: HEAD_A, round: 1, reviewItemId: round1.id, fingerprints: ["defect:catalog/repo.go:import"] } });
   // Idempotent while the fix is in flight, and after it completes the fix itself is no candidate origin.
