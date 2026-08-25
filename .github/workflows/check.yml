@@ -49,4 +49,4 @@ jobs:
           install: true
           cache: true
       - run: npm ci
-      - run: npm run check
+      - run: make ci
