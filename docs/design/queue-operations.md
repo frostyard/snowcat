@@ -1421,7 +1421,8 @@ cd /opt/snowcat && deploy/upgrade.sh
 the new version once so every later step is the new commit's — `npm ci`,
 `npm run check`, `systemctl daemon-reload`,
 and restarts the six timers (via `sudo` when not root; `SNOWCAT_SYSTEMCTL`
-overrides). If `check` fails it exits non-zero, does not restart the timers,
+overrides); `make ci` runs the same recipe as `npm run check` here (core
+ADR-0044). If `check` fails it exits non-zero, does not restart the timers,
 and leaves the checkout on the new commit for inspection — roll back with
 `git checkout <previous>` and re-run, or fix forward. If the pull changed
 `deploy/systemd/`, `deploy/env.example`, or `deploy/install.sh`, it tells you

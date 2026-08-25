@@ -297,7 +297,11 @@ removed. -->
    a test — a minimal import test for a side-effect-free module (see
    `test/db.test.ts`), or a subprocess spawn for an executable entrypoint (see
    `test/repository-cli.test.ts`) — or explicitly excluded with a reason. CI
-   must run the same recipe, so a local pass is a CI pass.
+   must run the same recipe, so a local pass is a CI pass. `make verify`,
+   `make check`, and `make ci` are the entry points CI, workers, reviewers,
+   and the organization gate invoke (core ADR-0044) and simply wrap
+   `npm run verify` and `npm run check`; run the npm scripts directly for the
+   same result.
 - [`mise.toml`](mise.toml) is the single place the Node release is pinned
   (core ADR-0043, Snowcat ADR-0076); `mise.lock` carries its checksum and
   `package.json`'s `engines.node` states the same floor. `mise install`
