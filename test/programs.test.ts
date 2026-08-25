@@ -31,6 +31,13 @@ test("every program is a read-only discovery root with a positive cooldown, a bo
     assert.ok(program.discovery.kind.endsWith("-discovery"), program.id);
     assert.equal(program.discovery.priority, 0, program.id);
     assert.match(program.discovery.instructions, /Do not edit files or open a GitHub artifact/, program.id);
+    if (program.id === "conformance") {
+      // ADR-0044: every enrolled repository exposes `make verify` unconditionally — no `npm run verify` fallback.
+      assert.match(program.discovery.instructions, /make verify/);
+      assert.doesNotMatch(program.discovery.instructions, /npm run verify/);
+      assert.doesNotMatch(program.discovery.instructions, /where a `Makefile` declares/);
+      assert.match(program.discovery.acceptanceCriteria.join("\n"), /make verify/);
+    }
   }
   // Cadence defaults recorded in the maintenance programs plan.
   const cadence = Object.fromEntries(maintenancePrograms.map((program) => [program.id, program.cooldownSeconds]));
