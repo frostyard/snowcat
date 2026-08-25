@@ -360,8 +360,9 @@ docs weekly** (conformance and triage per
 children are proposals with at most `read, open-issue`; a dependency child is
 one human-merged bump). Every discovery root's `allowedActions` is `read,
 create-followup` except conformance, which also holds `run-tests` to run the
-repository's own verify gate on its detached read-only checkout and report a
-dirty tree (ADR-0043's gate triad). Adding a program is one catalog entry
+repository's own `make verify` gate (core ADR-0044: every enrolled repository
+exposes it unconditionally) on its detached read-only checkout and report a
+dirty tree. Adding a program is one catalog entry
 plus its Core enum value.
 
 ```bash

@@ -33,6 +33,12 @@ test("the dogfood feeder creates one bounded read-only root per specialty withou
     const expectedActions = item.kind === "conformance-gap-discovery" ? ["read", "run-tests", "create-followup"] : ["read", "create-followup"];
     assert.deepEqual(item.allowedActions, expectedActions);
     assert.equal(item.parentId, undefined);
+    if (item.kind === "conformance-gap-discovery") {
+      // ADR-0044: every enrolled repository exposes `make verify` unconditionally — no `npm run verify` fallback.
+      assert.match(item.instructions, /make verify/);
+      assert.doesNotMatch(item.instructions, /npm run verify/);
+      assert.doesNotMatch(item.instructions, /where a `Makefile` declares/);
+    }
   }
 
   const second = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY);
