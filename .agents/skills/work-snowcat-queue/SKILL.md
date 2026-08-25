@@ -78,8 +78,9 @@ checkout you never mutate. Every follow-up you propose declares its own
   `.github/pull_request_template.md` when one exists: read it first
   (`cat .github/pull_request_template.md`), then write the body from it with
   every section present, including a **Risk classification** — the highest
-  applicable tier, never lower, named against the repository's
-  `docs/risk-tiers.md` — with a one-line rationale, and Checks/Verification
+  applicable tier, never lower, named against the repository's risk-tier
+  scale (`docs/risk-tiers.md` where it has one; otherwise core ADR-0019's
+  four tiers) — with a one-line rationale, and Checks/Verification
   items ticked only when you actually ran them (paste the command's tail;
   never claim a check you did not run). A repository with no template still
   gets a Summary / Verification / Risk tier body. A missing section blocks in
