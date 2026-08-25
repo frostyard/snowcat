@@ -1,6 +1,6 @@
 import type { ObservableWorkItem, ObservedWorkEvent } from "../queue/types.ts";
 import { html, raw, type SafeHtml } from "./html.ts";
-import type { AdjudicationRow, BlockedRow, InboxData, ProposalRow, SidebarRepository, UnverifiedRow } from "./inbox.ts";
+import type { AdjudicationRow, BlockedRow, InboxData, ProposalRow, ReadyRow, SidebarRepository, UnverifiedRow } from "./inbox.ts";
 import { admissionForm, exitForm, verifyForm } from "./forms.ts";
 import { DEFAULT_STREAM_POLL_MS, QUEUE_VIEW_EVENT_PREFIX, QUEUE_VIEW_EVENT_TYPES } from "./stream.ts";
 import { progressPath } from "./progress-state.ts";
@@ -258,7 +258,7 @@ export function unavailablePage(message: string): string {
 }
 
 /** The inbox fragments the live script refetches; each renders one element with that id. */
-export const inboxPartials = ["stats", "proposals", "blocked", "unverified", "adjudication"] as const;
+export const inboxPartials = ["stats", "proposals", "readyToMerge", "blocked", "unverified", "adjudication"] as const;
 export type InboxPartial = (typeof inboxPartials)[number];
 
 export function inboxPartial(data: InboxData, partial: InboxPartial): string {
@@ -267,6 +267,8 @@ export function inboxPartial(data: InboxData, partial: InboxPartial): string {
       return statRow(data).value;
     case "proposals":
       return proposalsGroup(data.proposals).value;
+    case "readyToMerge":
+      return readyToMergeGroup(data.readyToMerge).value;
     case "blocked":
       return blockedGroup(data.blocked).value;
     case "unverified":
@@ -286,6 +288,7 @@ export function inboxPage(context: PageContext, data: InboxData): string {
       ${data.truncated.length > 0 ? html`<div class="fl-error">Showing the first 100 rows of: ${data.truncated.join(", ")}. Use the CLI for the full list.</div>` : ""}
       <div class="fl-columns"><div class="fl-stack">
         ${proposalsGroup(data.proposals)}
+        ${readyToMergeGroup(data.readyToMerge)}
         ${blockedGroup(data.blocked)}
         ${unverifiedGroup(data.unverified)}
         ${adjudicationGroup(data.adjudication)}
@@ -367,6 +370,7 @@ function statRow(data: InboxData): SafeHtml {
     html`<div class="ph-stat"><span>${label}</span><strong>${value}</strong><small>${caption}</small></div>`;
   return html`<div class="ph-stats" id="stats">
     ${tile("Proposals", data.stats.proposals, "awaiting admission")}
+    ${tile("Ready to merge", data.stats.readyToMerge, "waiting for you to mark ready or merge")}
     ${tile("Blocked", data.stats.blocked, "needs an operator exit")}
     ${tile("Unverified artifacts", data.stats.unverified, "GitHub could not be asked")}
     ${tile("Review adjudication", data.stats.adjudication, "PRs the gate cannot advance or never saw")}
@@ -398,6 +402,37 @@ function proposalsGroup(rows: ProposalRow[]): SafeHtml {
     )}</tbody></table>`,
     "Nothing is waiting for admission.",
     "proposals",
+  );
+}
+
+/**
+ * Pull requests the gate has finished with, across every repository
+ * (issue #251): passed review and still a draft (`mark ready`), or already
+ * open and either passed or ungated (`queue for merge`) — the two acts the
+ * operator repeats most, gathered from every repository board's *Pull
+ * requests* section into one rail.
+ */
+function readyToMergeGroup(rows: ReadyRow[]): SafeHtml {
+  return group(
+    "Ready to merge",
+    rows.length,
+    html`<table class="fl-table"><thead><tr><th>Pull request</th><th>Repository</th><th>Review</th><th class="right">Action</th></tr></thead><tbody>${rows.map((row) => {
+      const pull = row.pullRequest;
+      const review = pull.review;
+      const verdict = review ? html`passed round ${review.round}${row.verdictModel ? ` (${row.verdictModel})` : ""}` : html`review gate off`;
+      const action =
+        row.kind === "mark-ready"
+          ? html`<span class="ph-badge ok">mark ready</span> <code>gh pr ready ${pull.number ?? ""} --repo ${row.repository}</code>`
+          : html`<span class="ph-badge ok">queue for merge</span> add it to the merge queue`;
+      return html`<tr>
+        <td><div class="fl-name"><strong><a href="${pull.url}" rel="noreferrer noopener">${pull.number === undefined ? "pull request" : `#${pull.number}`}</a> <span>${pull.title}</span></strong><small>${pull.draft ? "draft" : "ready"}${pull.headSha ? ` · head ${pull.headSha.slice(0, 7)}` : ""}</small></div></td>
+        <td><a href="${repositoryPath(row.repository)}">${row.repository}</a></td>
+        <td class="fl-reason">${verdict}</td>
+        <td class="right">${action}${review ? html` <a class="ph-button secondary" href="${itemPath(review.itemId)}">Open ${review.kind}</a>` : ""}</td>
+      </tr>`;
+    })}</tbody></table>`,
+    "Nothing is waiting for you to mark ready or merge.",
+    "readyToMerge",
   );
 }
 

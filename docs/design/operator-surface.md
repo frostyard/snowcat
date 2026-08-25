@@ -47,7 +47,7 @@ as well as on the item page.
 
 | View | Route | Reads | Purpose |
 | --- | --- | --- | --- |
-| Inbox | `/` | `list({status:"proposed"})`, `list({status:"blocked"})`, `completedItemsWithPendingArtifacts({ unverifiedOnly: true })` — completed items with an `unverified` issue or pull-request artifact, newest first, selected in the store rather than filtered out of the first 100 completions | Everything waiting on the operator, grouped: proposals to admit (children under their parent's finding), blocked items to requeue or cancel, unverified artifacts to re-check |
+| Inbox | `/` | `list({status:"proposed"})`, `list({status:"blocked"})`, `completedItemsWithPendingArtifacts({ unverifiedOnly: true })` — completed items with an `unverified` issue or pull-request artifact, newest first, selected in the store rather than filtered out of the first 100 completions; `readPullRequests(queue, repository, now)` for every opted-in repository (below), the same read the board uses | Everything waiting on the operator, grouped: proposals to admit (children under their parent's finding), pull requests [ready to merge](#pull-requests) (mark ready or queue for merge), blocked items to requeue or cancel, unverified artifacts to re-check |
 | Repository board | `/repositories/:owner/:name` | `counts(repository)`, `list({repository, status})` for `queued`/`claimed`/`completed`, `list({repository, kind:"pr-cure", status})` per status, `events(id)` for the completing worker; `ControlPlaneStore.repositoryStatuses()` and `activeCoreSnapshot()` for the enrollment badge (effective state, Core source commit, surface commit, repository id, hold) | Three columns: queued in claim order (priority tag, `note` tag when `operatorNotes` is non-empty), leased (worker identity, lease-time bar from `updatedAt` → `leaseExpiresAt`), completed newest first with the `delivery` tag; four stat tiles (queued, leased, completed today, merged / attempts — the attempts denominator counts only completed items whose `allowedActions` include `open-pr`, see below); under them the [pull requests](#pull-requests) section; the header's Verify artifacts / Import issues / Seed dogfood / Hold (or Clear hold) actions, each one same-origin `POST` (see [Mutations](#mutations) and the operational notes below; [spec rule 40](../specs/work-queue.md)) |
 | Progress | `/progress` | `list({status})` for the live statuses and `recentlyUpdatedItems({status})` — the same filters ordered newest first in the store — for `completed` and `cancelled`, so more than 100 old merged completions cannot hide today's work behind claim order; `recentEvents(id, 100)` for each visible primary and folded review satellite; plus `repositoryLabeledIssueObservations(repository)` and each repository's review-gate setting, and `predecessorStatuses(id)` for each **queued** item that declares predecessors — the claim gate's own evaluation, read once per pass through a shared cache | Lifecycle strips grouped by repository, preceded by counts for awaiting import, proposed, queued, working, in review, awaiting merge, and needs attention. The eight fixed stages run from awaiting import through merged; review and fix satellites fold into their primary item. Completed and current stages expose their ledger-derived entered-at times on hover, while the current waiting chip shows its elapsed stage duration (and carries its full text as a `title`, since the chip itself is one clipped line). A queued item the predecessor gate withholds ([ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md), [spec rules 62–63](../specs/work-queue.md)) reads `waiting for predecessor issue #N · <reason label>` instead of `in queue`, naming the nearest unmet edge in stored order; when its unmet chain loops back to itself the chip reads `predecessor cycle · issue #N` and the row carries an amber **predecessor cycle** stop, because no worker can ever claim it. Every stop is collected in a pinned needs-attention group — the amber and red ones (blocked, expired lease, predecessor cycle, a pull request closed without merge, a round-three human decision) and the grey unverified artifact — while active leases pulse. A cancelled item leaves the projection at once (it stays on `/events` and on its item page), and a completed discovery root with no pull request reads `delivered · proposals filed` at the merged stage; merged, published, and delivered rows age out after seven days. The strips are read-only except for two states: a proposed strip offers Approve, and a blocked strip offers Requeue with note and Cancel, both through the existing mutation routes |
 | Item | `/items/:id` | `get(id)`, `events(id)`, `get(parentId)`, `get(rootId)`, `children(id)`, `predecessorStatuses(id)` | Exactly what `queue -- show` prints, rendered: header with status and delivery tags; Definition (objective, repository + enrollment, kind, lineage links to parent/root/children, priority, allowed/delegable tags, created/updated, instructions, acceptance criteria); Predecessors, for an item that declares any ([ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md), [spec rule 63](../specs/work-queue.md)) — one row per declared source reference in stored order, each with the URL, a scannable verdict (`met`, `not imported`, `not completed`, `cancelled`, `not delivered`, `predecessor cycle`), the gate's own reason, and a link to the work item that reason was read from; its caption says whether the gate withholds the item, and a cycle says so outright; Result (summary, evidence, artifacts table with verification tag, head SHA, merged/verified time and the re-verifying actor from `artifact.verified`); Operator notes; Previous results; the full event timeline |
@@ -112,13 +112,31 @@ like the CLI. `QueueStore.counts(repository?)`, `QueueStore.children(id)`,
 and the bounded `QueueStore.recentEvents(id, limit)` are read-only additions
 the surface needed; none is exposed through MCP.
 
+The inbox's **Ready to merge** rail ([#251](https://github.com/frostyard/snowcat/issues/251))
+is the cross-repository view of the same open rows the board's
+[pull requests](#pull-requests) section lists one repository at a time: every
+open, verified pull request across every opted-in repository, with no
+unfinished `pr-cure` root on its current head, that the gate has finished
+with — a passed draft (`readyToMark`, without `needsHuman`) waits for `mark
+ready`, and a passed or ungated non-draft waits to be added to the merge
+queue. A pull request the gate cannot advance by itself (round budget spent,
+`unable-to-review`, a stuck fix, a description blocker) stays off this rail
+and only ever appears on *Review adjudication*, whether or not it also
+carries a stale `readyToMark`. Read-only projection, no GitHub call: the same
+`readPullRequests(queue, repository, now)` read the board uses, once per
+opted-in repository, folded into `InboxData.readyToMerge` alongside the
+existing adjudication loop so a gated repository's pull requests are read
+once for both rails.
+
 ### Pull requests
 
 Shipped with [#49](https://github.com/frostyard/snowcat/issues/49). The board
 carries a *Pull requests* section under the three columns, and the
 repositories index the same counts per repository, so the day's open,
 decayed, and just-merged pull requests are visible without leaving the
-surface.
+surface. The inbox's [Ready to merge](#views) rail is the cross-repository
+view of the same open rows — the ones the gate has finished with, across
+every opted-in repository at once, instead of one board at a time.
 
 It is a **read-only projection over the queue** — `readPullRequests(queue,
 repository, now)` in [`src/surface/repositories.ts`](../../src/surface/repositories.ts),
