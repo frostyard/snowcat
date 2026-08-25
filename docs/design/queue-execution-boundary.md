@@ -203,11 +203,14 @@ operator step the guard cannot perform.
   Snowcat MCP servers after upgrading; the database triggers and schema-version
   guard turn a forgotten restart into a hard write failure rather than silent
   drift, but only the operator can restart the process.
-- MCP is served over stdio, so the MCP host and Snowcat checkout share a
-  machine (containers on that host included). Remote clients need
-  authenticated Streamable HTTP and per-worker grants; that is the deferred
-  set named in the runbook's Deployment section and gets its own ADR when the
-  first off-host worker is needed.
+- Stdio remains available for the local operator, where the MCP host and
+  Snowcat checkout share a machine (containers on that host included). A
+  remote or off-host worker uses the authenticated Streamable HTTP endpoint
+  mounted at `/mcp` (`src/mcp/http.ts`), which verifies a Snowcat-minted
+  bearer token on every request and derives the transport identity from it
+  ([ADR-0063](../adr/0063-authenticate-people-through-cloudflare-access-and-mint-mcp-tokens.md);
+  see also "Who the client *is*" above and the operator-surface design for
+  minting and revoking tokens).
 - The queue uses Node's built-in SQLite API in WAL mode; PostgreSQL waits for
   measured need (roadmap "Later").
 - The optional Flue HTTP app listens on all interfaces on `PORT` (default
