@@ -26,7 +26,8 @@ import {
 } from "../src/queue/pull-request-review.ts";
 import { type QueueStoreOptions, type PolicyAuthority, QueueStore } from "../src/queue/store.ts";
 import type { ReviewBlocker, ReviewResult, WorkItem } from "../src/queue/types.ts";
-import { deriveReviewState } from "../src/surface/review-state.ts";
+import { deriveReviewState, settleReviewState } from "../src/surface/review-state.ts";
+import { readPullRequests } from "../src/surface/repositories.ts";
 
 const REPOSITORY = "frostyard/updex";
 const PR_URL = "https://github.com/frostyard/updex/pull/12";
@@ -1127,4 +1128,30 @@ test("complete_work accepts a pr-review that omits result.artifacts and followUp
   assert.deepEqual(done.result?.artifacts, [], "an omitted artifacts list is stored as an empty array");
   assert.equal(done.review?.decision, "pass");
   assert.deepEqual(queue.children(claimed.id), [], "an omitted followUps list creates no children");
+});
+
+test("a merged pull request keeps its last verdict on the board but never needs a human (settleReviewState)", async () => {
+  const queue = await newQueue("review-settled-on-merge");
+  completedWithDraftPr(queue);
+  queue.setRepositoryReviewGate(REPOSITORY, true);
+  await reviewPullRequests(queue, { fetcher: apiFetcher(routesFor({})).fetcher, clock });
+  const descriptionBlocker = blocker(`${DESCRIPTION_BLOCKER_PREFIX}risk-tier-missing`, { location: "pull request description" });
+  await completeReview(queue, { decision: "block", blockers: [descriptionBlocker], advisories: [] });
+
+  const open = deriveReviewState(queue.pullRequestReviewItems(REPOSITORY, PR_URL), HEAD_A, true);
+  assert.equal(open?.needsHuman, true, "while open, the description blocker needs a human");
+  const settled = settleReviewState(open);
+  assert.deepEqual({ needsHuman: settled?.needsHuman, readyToMark: settled?.readyToMark, active: settled?.active, reason: settled?.reason }, { needsHuman: false, readyToMark: false, active: false, reason: undefined });
+  assert.equal(settled?.decision, "block", "the historical verdict stays");
+  assert.equal(settled?.round, open?.round);
+
+  // Board: once the artifact verifies as merged, the row carries the verdict without any human flag.
+  await refreshArtifactVerifications(queue, { fetcher: apiFetcher(routesFor({ state: "closed", merged: true })).fetcher, clock });
+  const board = readPullRequests(queue, REPOSITORY, clock());
+  const row = board.merged.find((candidate) => candidate.url === PR_URL);
+  assert.ok(row, "the pull request moved to the merged list");
+  assert.equal(row.review?.decision, "block");
+  assert.equal(row.review?.needsHuman, false, "a merged pull request is never adjudication");
+  assert.equal(row.review?.readyToMark, false);
+  assert.equal(board.open.some((candidate) => candidate.url === PR_URL), false);
 });

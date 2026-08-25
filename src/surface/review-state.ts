@@ -52,6 +52,20 @@ function describeBoundDescriptionBlockers(bound: Array<ObservableWorkItem & { re
  * (oldest first), the pull request's current head, and whether it is still a
  * draft. Mirrors the sweep's branching in `reviewPullRequests`.
  */
+/**
+ * A merged or closed pull request is past every human decision the gate can
+ * ask for: keep the row's historical verdict (round, decision, item link) but
+ * never flag it `needsHuman` or `readyToMark`. Without this, a description
+ * block on a head that later merged rode the board's "Merged · last 7 days"
+ * list as `needs human` until the window closed (observed 2026-08-25 on
+ * snowcat#188).
+ */
+export function settleReviewState(row: PullRequestReviewRow | undefined): PullRequestReviewRow | undefined {
+  if (!row) return row;
+  const { reason: _reason, ...rest } = row;
+  return { ...rest, active: false, needsHuman: false, readyToMark: false };
+}
+
 export function deriveReviewState(items: ObservableWorkItem[], currentHeadSha: string | undefined, draft: boolean): PullRequestReviewRow | undefined {
   const bound = items.filter((item): item is ObservableWorkItem & { review: NonNullable<ObservableWorkItem["review"]> } => item.review !== undefined);
   if (bound.length === 0) return undefined;
