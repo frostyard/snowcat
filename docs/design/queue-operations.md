@@ -771,7 +771,10 @@ checkout. Start the client with whatever credentials and sandbox you want it
 to have — Snowcat grants none — and ask it to work the queue. The portable
 [`work-snowcat-queue` skill](../../.agents/skills/work-snowcat-queue/SKILL.md)
 tells it to claim one item, do only the item's `allowedActions`, report
-evidence and artifacts, and stop. The skill lives in this repository, so a
+evidence and artifacts, and stop; it also has the worker fill the target
+repository's `.github/pull_request_template.md` in full — Risk classification
+included — so operators should expect a template-shaped pull request body,
+not a bare summary. The skill lives in this repository, so a
 client started in another checkout needs it installed where that client looks
 for skills — for Claude Code, symlink or copy
 `.agents/skills/work-snowcat-queue` into `~/.claude/skills/`; other clients
