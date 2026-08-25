@@ -17,7 +17,7 @@ import {
   type WorkStatus,
 } from "../queue/types.ts";
 import type { SidebarRepository } from "./inbox.ts";
-import { deriveReviewState, type PullRequestReviewRow } from "./review-state.ts";
+import { deriveReviewState, settleReviewState, type PullRequestReviewRow } from "./review-state.ts";
 
 /** `list()` caps at 100 rows per status; columns read that many and say so if they hit the cap. */
 const LIST_LIMIT = 100;
@@ -384,7 +384,9 @@ export function readPullRequests(queue: QueueStore, repository: string, now: Dat
   for (const row of rows.values()) {
     const items = queue.pullRequestReviewItems(repository, row.url).map(withoutLeaseToken);
     if (items.length === 0) continue;
-    row.review = deriveReviewState(items, row.headSha, row.draft === true);
+    const derived = deriveReviewState(items, row.headSha, row.draft === true);
+    // A merged or closed pull request needs nobody: keep the verdict, drop the flags.
+    row.review = row.state === "merged" || row.state === "closed" ? settleReviewState(derived) : derived;
   }
 
   const startOfToday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
