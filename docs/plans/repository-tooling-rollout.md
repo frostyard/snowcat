@@ -587,10 +587,24 @@ have not.
   `package.json` declares it" (to file once the Makefiles land); the
   reviewer-instruction fix (snowcat#248: read the head's check runs, never
   the description; `make verify` unconditional, a missing target is a
-  blocker) can land in parallel.
+  blocker) can land in parallel. *All merged 2026-08-25 early:
+  core#121 and snowcat#254 (Makefiles), core#126 (check requires the
+  triad everywhere), snowcat#261 (conformance text), snowcat#253
+  (reviewer instructions), and snowcat#263 (workers fill the pull-request
+  template — the description-only block that stalled four snowcat and
+  four updex pull requests that night; Cockpit re-locks its kit in
+  snowcat-cockpit#43). The host runs `7e939df`.*
 - **Done when:** the base image contains no repository-specific tool, and a
   deliberately dirty `verify` in a fixture repository yields one proposed
-  Snowcat item naming the mutation.
+  Snowcat item naming the mutation. **Met 2026-08-25:** the image published
+  from snowcat-cockpit#33 carries no `golangci-lint` (baseline `stopgap`
+  object gone) and the node's digest was rolled the same night; the
+  `conformance` discovery root now runs `make verify` and reports `git
+  status --porcelain` on every enrolled repository (snowcat#247, #261),
+  which is the mechanism — the first deliberately dirty fixture is Phase
+  7's job to stage, since every live repository's `verify` is clean today.
+  Beyond the plan: `fleet-conventions` is a required check on core, and
+  ADR-0044 made the three `make` targets universal.
 
 ## Phase 7 — Pin-bump automation (snowcat or core; one day)
 
@@ -609,7 +623,7 @@ have not.
 
 ## Where we stand — 2026-08-24, end of day
 
-**Met:** Phases 0, P, 1, 2, 3, 4, 5. Every fleet repository that Snowcat works
+**Met:** Phases 0, P, 1, 2, 3, 4, 5, 6. Every fleet repository that Snowcat works
 (`std`, `clix`, `updex`, `firn`, `snowcat`, `core`, `snowcat-cockpit`) pins
 its tools in `mise.toml`/`mise.lock` and exposes the `verify` gate; Cockpit `v0.1.6`
 builds one base image with three provider targets, provisions each worker's
@@ -627,12 +641,11 @@ Codex.
    "loose end" was moot — that ADR names the `v0.1.1` stopgap image as
    history, not a Makefile pin, and accepted ADRs are immutable; the
    core-side presence check is Phase 6's third item, now core#117.
-2. **Phase 6 nearly met, 2026-08-25 early** — items 1, 3, 4 merged
-   (snowcat-cockpit#33, core#118, snowcat#247) within an hour of
-   admission; the host runs `0303dbe`. Open: the Cockpit tag and digest
-   roll (operator), making `fleet-conventions` required on core
-   (operator), and the ADR-0044 follow-ups (snowcat#249, core#120, then
-   the check and program-text simplifications, plus snowcat#248).
+2. **Phase 6 met 2026-08-25 ~02:00 UTC** — image republished and rolled,
+   fleet grep clean, `fleet-conventions` required on core, verify probe
+   live, and the six ADR-0044 follow-ups merged; host at `7e939df`.
+   Phase 7 (pin-bump automation) is next; its first act should be the
+   dirty-`verify` fixture that proves the probe end to end.
 3. **Phase 6 — retire the stopgap:** `golangci-lint` still ships in the base
    image and `oci/baseline.json` lists it under `stopgap`; with every
    enrolled repository now on `mise.lock`, remove it, republish, roll. The
