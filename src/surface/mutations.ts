@@ -5,7 +5,8 @@ import {
   type ArtifactVerifierOptions,
 } from "../queue/artifact-verification.ts";
 import { curePullRequests } from "../queue/pull-request-cure.ts";
-import { reviewGateWritesFromEnvironment, reviewPullRequests } from "../queue/pull-request-review.ts";
+import { assertPullRequestBoundRequeueable, retireMergedOrClosedPullRequestBoundWork } from "../queue/pull-request-lifecycle.ts";
+import { reviewGateWritesFromEnvironment, reviewPullRequests, type ReviewOptions } from "../queue/pull-request-review.ts";
 import { PreconditionMismatchError, type MutationPrecondition, type QueueStore } from "../queue/store.ts";
 import { workStatuses, type WorkStatus } from "../queue/types.ts";
 
@@ -63,9 +64,21 @@ export function returnPath(body: Record<string, unknown>, fallback: string): str
  * Applies one item mutation through the store method the CLI uses, attributed
  * `operator:web` and guarded by the rendered precondition. Throws
  * `PreconditionMismatchError` untouched so the caller can render the item's
- * current state; other store errors surface as their message.
+ * current state; other store errors surface as their message. A `requeue` of
+ * a PR-bound item (`pr-review`, `pr-review-fix`, `pr-cure`, `pr-cure-change`)
+ * additionally asks GitHub whether its bound pull request is still open
+ * (issue #252) — only when the item is actually blocked, so a stale form
+ * still gets its ordinary precondition-mismatch response instead of an
+ * unnecessary GitHub call.
  */
-export function applyItemMutation(queue: QueueStore, mutation: ItemMutation, id: string, body: Record<string, unknown>, actor: string = WEB_ACTOR): MutationOutcome {
+export async function applyItemMutation(
+  queue: QueueStore,
+  mutation: ItemMutation,
+  id: string,
+  body: Record<string, unknown>,
+  actor: string = WEB_ACTOR,
+  verifier: ReviewOptions = {},
+): Promise<MutationOutcome> {
   const precondition = parsePrecondition(body);
   switch (mutation) {
     case "approve":
@@ -77,9 +90,12 @@ export function applyItemMutation(queue: QueueStore, mutation: ItemMutation, id:
     case "defer":
       queue.defer(id, actor, reason(body, "a deferral reason"), precondition);
       return { eventType: "work.deferred" };
-    case "requeue":
+    case "requeue": {
+      const item = queue.get(id);
+      if (item?.status === "blocked") await assertPullRequestBoundRequeueable(item, verifier);
       queue.requeue(id, actor, reason(body, "a note for the next lease"), precondition);
       return { eventType: "work.requeued" };
+    }
     case "cancel":
       queue.cancel(id, actor, reason(body, "a cancellation reason"), precondition);
       return { eventType: "work.cancelled" };
@@ -108,8 +124,15 @@ export async function applyVerifyArtifacts(
   repository: string,
   verifier: ArtifactVerifierOptions,
   actor: string = WEB_ACTOR,
-): Promise<MutationOutcome & { checked: number; updated: number; unavailable: number; rejected: number; cured: number; reviewed: number; markedReady: number }> {
+): Promise<
+  MutationOutcome & { checked: number; updated: number; unavailable: number; rejected: number; cured: number; reviewed: number; markedReady: number; retired: number }
+> {
   const result = await refreshArtifactVerifications(queue, { ...verifier, repository, actor });
+  // Retires any queued or blocked pr-review, pr-review-fix, pr-cure, or
+  // pr-cure-change item whose bound pull request has already merged or
+  // closed (issue #252), before the cure and review passes below spend a
+  // GitHub call on the same dead branch.
+  const retired = await retireMergedOrClosedPullRequestBoundWork(queue, { ...verifier, repository });
   // Same pass as the CLI: decayed pull-request heads become pr-cure roots
   // (ADR-0061) and draft heads in a review-gated repository advance through
   // the review gate (ADR-0065; the sweep's own policy actor, not the web one).
@@ -123,7 +146,9 @@ export async function applyVerifyArtifacts(
           ? "artifact.ready"
           : result.updated.length + result.rejected.length > 0
             ? "artifact.verified"
-            : "artifact.unchanged",
+            : retired.retired.length > 0
+              ? "work.cancelled"
+              : "artifact.unchanged",
     checked: result.checked,
     updated: result.updated.length,
     unavailable: result.unavailable.length,
@@ -131,6 +156,7 @@ export async function applyVerifyArtifacts(
     cured: cure.enqueued.length,
     reviewed: review.enqueued.length,
     markedReady: review.markedReady.length,
+    retired: retired.retired.length,
   };
 }
 

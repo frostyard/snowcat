@@ -276,7 +276,14 @@ MCP (rule 41).
     record `work.requeued`. Cancellation MUST clear lease fields, store the
     operator reason as `result.summary`, move the item to terminal
     `cancelled`, and record `work.cancelled`. Neither operation is a worker
-    MCP tool.
+    MCP tool. A requeue of a PR-bound item (`pr-review`, `pr-review-fix`,
+    `pr-cure`, `pr-cure-change`) MUST first read the pull request its
+    `review` or `cure` record names and MUST refuse with an explicit reason,
+    leaving the item unchanged and blocked, when GitHub reports it merged or
+    closed — nothing can be delivered on a dead branch, so requeuing it only
+    spends a worker lease discovering that. An unavailable or unrecognized
+    GitHub answer is not evidence of merge or close and MUST NOT block the
+    requeue.
 25. An operator MAY withdraw admission only from an admitted, unclaimed
     `queued` item. Deferral MUST preserve the definition and stored `queued`
     status, set `admitted = 0`, record `work.deferred` with actor and reason,
@@ -383,6 +390,16 @@ MCP (rule 41).
     the items that need checking rather than arbitrary completions and a
     repository with more than 100 terminal completions cannot starve a newer
     one; the pull-request cure sweep (rules 42–43) MUST use the same selection.
+    Before curing or reviewing, `verify-artifacts` MUST also retire every
+    queued or blocked `pr-review`, `pr-review-fix`, `pr-cure`, or
+    `pr-cure-change` item whose bound pull request GitHub reports merged or
+    closed, moving each straight to terminal `cancelled` with a
+    `work.cancelled` event naming the reason, attributed to a `policy:`
+    actor — so a PR-bound item outlives its pull request only until the next
+    sweep, not indefinitely (unlike rule 24's operator-only exit, this path
+    needs no precondition: it observes external GitHub state, not an
+    operator decision). An unavailable GitHub answer leaves the item queued
+    or blocked exactly as before.
     An artifact URL whose `owner/repository` slug is not the item's — an
     artifact recorded under the repository's **former name**, before
     `rename-repository` (rule 47) carried the item to the new slug without

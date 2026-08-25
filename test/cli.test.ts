@@ -8,6 +8,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { ControlPlaneStore } from "../src/control/store.ts";
+import { cureRootDefinition } from "../src/queue/pull-request-cure.ts";
 import { QueueStore, SCHEMA_VERSION } from "../src/queue/store.ts";
 import { disabledDeclaration, enrollExampleRepository } from "./helpers/core-fixtures.ts";
 import { childEnvironment } from "./helpers/child-environment.ts";
@@ -456,6 +457,7 @@ test("operator CLI verify-artifacts validates its flags and reports an empty pas
     updated: [],
     unavailable: [],
     rejected: [],
+    retired: { inspected: 0, retired: [], unavailable: [] },
     cure: { inspected: 0, foreign: { listed: 0, inspected: 0 }, enqueued: [], healthy: [], skipped: [], unavailable: [], notes: [] },
     review: { inspected: 0, enqueued: [], markedReady: [], readyToMark: [], needsHuman: [], skipped: [], unavailable: [], unreported: [], unreportedPending: [] },
   });
@@ -499,6 +501,64 @@ test("operator CLI cure-foreign is a repository-level setting: on|off for an opt
 
   const usage = run("nonsense");
   assert.match(usage.stderr, /cure-foreign <owner\/repo> on\|off/);
+});
+
+test("operator CLI requeue refuses a PR-bound item whose pull request has merged, leaving it blocked (issue #252)", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cli-requeue-pr-bound-test-"));
+  const path = join(directory, "queue.db");
+  const fixturePath = join(directory, "github.json");
+  const prUrl = "https://github.com/frostyard/updex/pull/55";
+  const headSha = "a".repeat(40);
+
+  const queue = new QueueStore(path);
+  queue.setRepositoryEnabled("frostyard/updex", true);
+  const created = queue.enqueueCureRoot("frostyard/updex", {
+    ...cureRootDefinition(
+      "frostyard/updex",
+      { url: prUrl, number: 55, headSha, decay: ["behind"], failingChecks: [], mergeableState: "behind", unresolvedThreads: 0, title: "fix: require HTTPS" },
+      "policy:cure-gate",
+    ),
+    priority: 0,
+    sourceRef: `${prUrl}@${headSha}`,
+    cure: { pullRequestUrl: prUrl, headSha, patchDigest: `sha256:${"d".repeat(64)}`, decay: ["behind"] },
+  })!;
+  const claimed = queue.claim({ worker: "claude:cure-test", kinds: ["pr-cure"] })!;
+  queue.block(claimed.id, claimed.leaseToken!, "claude:cure-test", "Needs a maintainer decision.");
+  queue.close();
+
+  await writeFile(
+    fixturePath,
+    JSON.stringify({
+      "/repos/frostyard/updex/pulls/55": {
+        status: 200,
+        body: {
+          number: 55,
+          html_url: prUrl,
+          state: "closed",
+          merged: true,
+          merged_at: "2026-08-25T00:00:00Z",
+          closed_at: "2026-08-25T00:00:00Z",
+          head: { sha: headSha },
+          base: { repo: { full_name: "frostyard/updex" } },
+        },
+      },
+    }),
+  );
+  const env = childEnvironment({ SNOWCAT_QUEUE_DB: path, SNOWCAT_GITHUB_TOKEN: "test-token", SNOWCAT_TEST_FAKE_GITHUB: fixturePath });
+  const run = (...args: string[]) =>
+    spawnSync(process.execPath, ["--import", "tsx", "--import", "./test/helpers/fake-github-fetch.ts", "src/queue/cli.ts", ...args], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env,
+    });
+
+  const refused = run("requeue", created.id, "Should be fine now.");
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stderr, /pull request https:\/\/github\.com\/frostyard\/updex\/pull\/55 is merged; nothing can be delivered on it, so it cannot be requeued/);
+
+  const reopened = new QueueStore(path);
+  test.after(() => reopened.close());
+  assert.equal(reopened.get(created.id)!.status, "blocked");
 });
 
 test("operator CLI review-gate is a repository-level setting: on|off for an opted-in repository only, and verify-artifacts can skip the review step", async () => {
@@ -559,6 +619,7 @@ test("operator CLI review-gate is a repository-level setting: on|off for an opte
     updated: unknown[];
     unavailable: unknown[];
     rejected: unknown[];
+    retired: { inspected: number; retired: unknown[]; unavailable: unknown[] };
     review: { inspected: number; enqueued: unknown[]; markedReady: unknown[]; readyToMark: unknown[]; needsHuman: unknown[]; unreported: unknown[]; unreportedPending: unknown[] };
   };
   assert.deepEqual(sweptOutput, {
@@ -566,6 +627,7 @@ test("operator CLI review-gate is a repository-level setting: on|off for an opte
     updated: [],
     unavailable: [],
     rejected: [],
+    retired: { inspected: 0, retired: [], unavailable: [] },
     review: {
       inspected: 0,
       enqueued: [],
@@ -591,7 +653,13 @@ test("operator CLI review-gate is a repository-level setting: on|off for an opte
   );
   const noReview = run("verify-artifacts", "--no-cure", "--no-review");
   assert.equal(noReview.status, 0, noReview.stderr);
-  assert.deepEqual(JSON.parse(noReview.stdout), { checked: 0, updated: [], unavailable: [], rejected: [] });
+  assert.deepEqual(JSON.parse(noReview.stdout), {
+    checked: 0,
+    updated: [],
+    unavailable: [],
+    rejected: [],
+    retired: { inspected: 0, retired: [], unavailable: [] },
+  });
 
   const off = run("review-gate", "frostyard/updex", "off");
   assert.equal(off.status, 0, off.stderr);

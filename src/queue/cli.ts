@@ -3,6 +3,7 @@
 import { attachVerifiedArtifact, refreshArtifactVerifications, type AttachableArtifactKind } from "./artifact-verification.ts";
 import { queueStoreOptionsFromEnvironment } from "./eligibility.ts";
 import { curePullRequests } from "./pull-request-cure.ts";
+import { assertPullRequestBoundRequeueable, retireMergedOrClosedPullRequestBoundWork } from "./pull-request-lifecycle.ts";
 import { reviewGateWritesFromEnvironment, reviewPullRequests } from "./pull-request-review.ts";
 import { importLabeledIssues, importLabeledIssuesForEnrolled } from "./github-issues.ts";
 import { parseMetricsTimestamp, queueMetrics } from "./metrics.ts";
@@ -154,6 +155,8 @@ try {
     const { rest, ifUpdatedAt } = extractIfUpdatedAt(args);
     const id = required(rest[0], "work item id");
     const reason = required(rest.slice(1).join(" "), "requeue reason");
+    const item = queue.get(id);
+    if (item) await assertPullRequestBoundRequeueable(item);
     print(withoutLeaseToken(queue.requeue(id, "operator:cli", reason, precondition("blocked", ifUpdatedAt))));
   } else if (command === "release-lease") {
     const { rest, ifUpdatedAt } = extractIfUpdatedAt(args);
@@ -352,13 +355,18 @@ try {
     const limit = flags.limit === undefined ? undefined : parseNonNegativeInteger(flags.limit, "limit");
     if (limit !== undefined && (limit < 1 || limit > 100)) throw new Error("limit must be between 1 and 100");
     const refreshed = await refreshArtifactVerifications(queue, { repository: flags.repository, limit });
+    // Retires any queued or blocked pr-review, pr-review-fix, pr-cure, or
+    // pr-cure-change item whose bound pull request has already merged or
+    // closed (issue #252), before the cure and review passes below spend a
+    // GitHub call on the same dead branch.
+    const retired = await retireMergedOrClosedPullRequestBoundWork(queue, { repository: flags.repository, limit });
     // The same pass detects pull-request decay and enqueues one pr-cure root
     // per decayed head (ADR-0061); --no-cure runs the refresh alone. It also
     // advances the review gate for draft pull requests in review-gated
     // repositories (ADR-0065); --no-review skips that step.
     const cure = noCure ? undefined : await curePullRequests(queue, { repository: flags.repository, limit });
     const review = noReview ? undefined : await reviewPullRequests(queue, { repository: flags.repository, limit, writes: reviewGateWritesFromEnvironment() });
-    print({ ...refreshed, ...(cure ? { cure } : {}), ...(review ? { review } : {}) });
+    print({ ...refreshed, retired, ...(cure ? { cure } : {}), ...(review ? { review } : {}) });
   } else if (command === "metadata") {
     print(queue.metadata());
   } else if (command === "backup") {
