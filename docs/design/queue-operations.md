@@ -909,7 +909,11 @@ npm run --silent queue -- deliveries [--repository <owner/repo>]
 `ready: true` rows are waiting on you: an open non-draft pull request (the
 gate passed it, or the repository is not gated) or a draft release whose tag
 is unpublished. Draft pull requests in a gated repository are still the
-gate's, not yours.
+gate's, not yours. From the browser, the inbox's **Ready to merge** rail
+([#251](https://github.com/frostyard/snowcat/issues/251)) is the same rows
+across every opted-in repository at once — a passed draft to mark ready, an
+open non-draft to add to the merge queue — so you rarely need `deliveries` or
+a repository board just to find what is sitting.
 
 Every frostyard repository merges through a **merge queue** (core ADR-0042;
 CI re-runs on `merge_group` against the queue tip). `gh pr merge` does NOT

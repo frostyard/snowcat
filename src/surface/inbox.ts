@@ -1,3 +1,4 @@
+import { REVIEW_KIND } from "../queue/pull-request-review.ts";
 import type { QueueStore } from "../queue/store.ts";
 import { withoutLeaseToken, type ObservableWorkItem, type ObservedWorkEvent, type UnreportedPullRequest, type WorkArtifact } from "../queue/types.ts";
 import { readPullRequests, type PullRequestRow, type RepositoryEnrollment } from "./repositories.ts";
@@ -46,10 +47,21 @@ export type AdjudicationRow =
   | { kind: "review"; repository: string; pullRequest: PullRequestRow }
   | { kind: "unreported"; repository: string; pullRequest: UnreportedPullRequest; observedAt: string };
 
+/**
+ * An open pull request the gate has finished with, across every repository
+ * (issue #251): `mark-ready` passed review and is still a draft — a human
+ * marks it ready — and `queue-for-merge` is already open (non-draft) with
+ * either a passing verdict for its current head or no review gate to pass.
+ * `verdictModel` is the reviewing worker's own `result.model`, shown as
+ * worker-asserted provenance like everywhere else it appears.
+ */
+export type ReadyRow = { kind: "mark-ready" | "queue-for-merge"; repository: string; pullRequest: PullRequestRow; verdictModel?: string };
+
 export interface InboxData {
   stats: {
     proposals: number;
     blocked: number;
+    readyToMerge: number;
     unverified: number;
     adjudication: number;
     leased: number;
@@ -57,6 +69,7 @@ export interface InboxData {
   };
   proposals: ProposalRow[];
   blocked: BlockedRow[];
+  readyToMerge: ReadyRow[];
   unverified: UnverifiedRow[];
   adjudication: AdjudicationRow[];
   events: ObservedWorkEvent[];
@@ -66,11 +79,35 @@ export interface InboxData {
 }
 
 /**
+ * Whether an open pull request belongs on the *Ready to merge* rail, and
+ * which action it waits on. No pull request with an active `pr-cure` root
+ * qualifies — its head is still decayed. `readyToMark` alone (with
+ * `needsHuman` false) covers a passed draft head whether the sweep never
+ * tried to mark it ready (writes off) or tried and stopped at a protected
+ * boundary (ADR-0074): either way the pull request stays a draft with a
+ * passed round, and the queue stores nothing that tells the two apart
+ * without a GitHub call, which rendering never makes. A `needsHuman` row is
+ * always a problem (round budget, unable-to-review, a stuck fix, or a
+ * description blocker, including the ADR-0071 pass-consequence variant that
+ * still carries an outstanding one) and stays on *Review adjudication* only.
+ */
+function readyAction(pullRequest: PullRequestRow, reviewGateOn: boolean): ReadyRow["kind"] | undefined {
+  if (pullRequest.state !== "open" || pullRequest.cure?.active === true) return undefined;
+  const review = pullRequest.review;
+  if (review?.readyToMark === true && review.needsHuman !== true) return "mark-ready";
+  if (pullRequest.draft === false) {
+    const passed = review?.kind === REVIEW_KIND && review.status === "completed" && review.decision === "pass";
+    if (passed || !reviewGateOn) return "queue-for-merge";
+  }
+  return undefined;
+}
+
+/**
  * Everything the inbox renders, read through the same store methods the CLI
  * uses. Lease tokens are stripped at the boundary with `withoutLeaseToken`;
  * nothing here writes.
  */
-export function readInbox(queue: QueueStore, enrollments: Map<string, RepositoryEnrollment> | undefined): InboxData {
+export function readInbox(queue: QueueStore, enrollments: Map<string, RepositoryEnrollment> | undefined, now: Date = new Date()): InboxData {
   const metadata = queue.metadata();
   const counts = queue.counts();
   const truncated: string[] = [];
@@ -141,16 +178,23 @@ export function readInbox(queue: QueueStore, enrollments: Map<string, Repository
     }
   }
 
-  // Review-gated repositories only (ADR-0065): pull requests whose gate
-  // needs a human — third-round block, unable-to-review, a fix that went
-  // nowhere — or that passed and wait to be marked ready, plus the ones the
-  // last review sweep found that no item reported (they are outside the gate
-  // entirely, so they are a human decision in exactly the same way).
+  // Every opted-in repository (`repositoryReviewGateSettings` lists them all,
+  // gated or not): the Ready to merge rail needs both, so one
+  // `readPullRequests` read per repository serves it and, for gated
+  // repositories only, the existing adjudication rail below.
   const adjudication: AdjudicationRow[] = [];
+  const readyToMerge: ReadyRow[] = [];
   for (const setting of queue.repositoryReviewGateSettings()) {
-    if (!setting.reviewGate) continue;
-    const pulls = readPullRequests(queue, setting.repository);
+    const pulls = readPullRequests(queue, setting.repository, now);
     if (pulls.truncated) truncated.push(`pull requests (${setting.repository})`);
+    for (const pullRequest of pulls.open) {
+      const action = readyAction(pullRequest, setting.reviewGate);
+      if (action) {
+        const verdictModel = pullRequest.review ? queue.get(pullRequest.review.itemId)?.result?.model : undefined;
+        readyToMerge.push({ kind: action, repository: setting.repository, pullRequest, ...(verdictModel ? { verdictModel } : {}) });
+      }
+    }
+    if (!setting.reviewGate) continue;
     for (const pullRequest of pulls.open) {
       if (pullRequest.review?.needsHuman || pullRequest.review?.readyToMark) adjudication.push({ kind: "review", repository: setting.repository, pullRequest });
     }
@@ -173,6 +217,7 @@ export function readInbox(queue: QueueStore, enrollments: Map<string, Repository
     stats: {
       proposals: counts.proposed,
       blocked: counts.blocked,
+      readyToMerge: readyToMerge.length,
       unverified: unverified.length,
       adjudication: adjudication.length,
       leased: counts.claimed,
@@ -180,6 +225,7 @@ export function readInbox(queue: QueueStore, enrollments: Map<string, Repository
     },
     proposals,
     blocked,
+    readyToMerge,
     unverified,
     adjudication,
     events,
