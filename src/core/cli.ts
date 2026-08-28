@@ -132,9 +132,14 @@ try {
   } else if (command === "poll" && args.length === 0) {
     const healthyIntervalSeconds = parseCorePollInterval(process.env.SNOWCAT_CORE_POLL_INTERVAL_SECONDS);
     const store = new ControlPlaneStore(controlPlaneDatabasePath());
+    // The abort controller is the stop request the loop waits on, so a signal
+    // received during a scheduled wait wakes the loop instead of leaving the
+    // process to sit out the remaining bounded delay.
+    const stopRequest = new AbortController();
     let stopping = false;
     const stop = () => {
       stopping = true;
+      stopRequest.abort();
     };
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
@@ -146,6 +151,7 @@ try {
         () => stopping,
         (result) => console.log(JSON.stringify(result)),
         reconcileRepositories,
+        stopRequest.signal,
       );
     } finally {
       process.off("SIGINT", stop);
