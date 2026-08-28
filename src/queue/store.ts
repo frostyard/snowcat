@@ -1530,6 +1530,18 @@ export class QueueStore {
     return new Map(rows.map((row) => [String(row.kind), String(row.updated_at)]));
   }
 
+  /**
+   * One item's delegation ceiling, or `undefined` when it has no parent or the
+   * parent is gone. `approve` reads it so admission re-checks a child's
+   * contract against the same ceiling the proposal was checked against.
+   */
+  private delegableActionsOf(id: string | undefined): AllowedAction[] | undefined {
+    if (id === undefined) return undefined;
+    const row = this.db.prepare("SELECT delegable_actions_json FROM work_items WHERE id = ?").get(id) as Row | undefined;
+    if (row === undefined) return undefined;
+    return parseJson<AllowedAction[]>(row.delegable_actions_json, []);
+  }
+
   private sourceRefExists(repository: string, sourceRef: string): boolean {
     const row = this.db
       .prepare("SELECT 1 AS present FROM work_items WHERE repository = ? AND source_ref = ? LIMIT 1")
@@ -1827,7 +1839,7 @@ export class QueueStore {
           throw new Error(`follow-up executionTarget must be one of ${executionTargets.join(", ")}`);
         }
         assertKnownActions(followUp.allowedActions);
-        const problem = contractProblem({ ...followUp, parentId: parent.id });
+        const problem = contractProblem({ ...followUp, parentId: parent.id, parentDelegableActions: parent.delegableActions });
         if (problem) throw new Error(`follow-up "${followUp.kind}": ${problem.message}`);
         validateWorkDefinition({ ...followUp, createdBy: input.worker });
         assertSubset(followUp.allowedActions, parent.delegableActions, "follow-up allowedActions");
@@ -1920,7 +1932,7 @@ export class QueueStore {
       // Admission re-checks the delivery contract (ADR-0069): a proposal that
       // reached the store before the rule, or through a path that skipped it,
       // must not become claimable work nobody can complete. Reject it instead.
-      const problem = contractProblem(item);
+      const problem = contractProblem({ ...item, parentDelegableActions: this.delegableActionsOf(item.parentId) });
       if (problem) {
         throw new Error(`work item ${id} cannot be admitted: ${problem.message} (${problem.code}); reject it and re-propose`);
       }
@@ -3013,6 +3025,8 @@ export function contractProblem(item: {
   cure?: unknown;
   review?: unknown;
   parentId?: string;
+  /** The parent's delegation ceiling, supplied only where a parent is in hand: the follow-up loop and `approve`. */
+  parentDelegableActions?: AllowedAction[];
   kind?: string;
 }): { code: ContractProblemCode; message: string } | undefined {
   // A `*-discovery` kind names read-only discovery (the program catalog's roots and their
@@ -3046,6 +3060,23 @@ export function contractProblem(item: {
     return {
       code: "child-write-without-required-pull-request",
       message: 'a follow-up granting write is a change and must declare requiredArtifact "pull-request"',
+    };
+  }
+  // A child that changes the tree finds adjacent work while it is in there,
+  // and without `create-followup` the only place that finding can go is the
+  // completion evidence — which nothing re-queues, nothing indexes, and no
+  // later worker reads (three findings lost that way on 2026-08-27/28). The
+  // proposer must not build a wall its own ceiling did not require, so refuse
+  // the under-authorization; the parent's ceiling is still the ceiling, and a
+  // child whose parent cannot delegate the capability is unaffected.
+  if (
+    item.allowedActions.includes("write") &&
+    !item.allowedActions.includes("create-followup") &&
+    item.parentDelegableActions?.includes("create-followup") === true
+  ) {
+    return {
+      code: "change-child-cannot-propose",
+      message: `a follow-up granting write finds adjacent work while it changes the tree, and evidence re-queues nothing: add create-followup to ${item.kind === undefined ? "its" : `"${item.kind}"'s`} allowedActions, which its parent's delegableActions already permit`,
     };
   }
   // ADR-0073: where the target is declared, it must agree with the actions,
@@ -3093,6 +3124,7 @@ export const contractProblemCodes = [
   "required-pull-request-without-open-pr",
   "write-without-open-pr",
   "child-write-without-required-pull-request",
+  "change-child-cannot-propose",
   "read-only-with-mutation",
   "read-only-required-pull-request",
   "mutating-target-without-write",

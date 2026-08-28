@@ -1113,7 +1113,15 @@ MCP (rule 41).
     an operator seed omits it). On every definition path, and again in
     `approve`, the store MUST refuse a contract the item's authority cannot
     honor: `pull-request` without `open-pr`; `write` without `open-pr`;
-    for a follow-up, `write` without `pull-request`; and a `-discovery`
+    for a follow-up, `write` without `pull-request`; for a follow-up whose
+    parent's `delegableActions` include `create-followup`, `write` without
+    `create-followup` (`change-child-cannot-propose`) — a child that changes
+    the tree finds adjacent work while it is in there, and a finding that
+    reaches only the completion evidence is re-queued by nothing and read by
+    no later worker (three lost that way on 2026-08-27/28); the parent's
+    ceiling remains the ceiling, so a parent that cannot delegate
+    `create-followup` MUST impose no such requirement and the store MUST NOT
+    grant the capability silently; and a `-discovery`
     kind that declares `pull-request` or grants `write` or `open-pr` — a
     `-discovery` kind names read-only discovery, and a change follow-up
     takes an implementation kind such as `<program>-fix` (a `-discovery`
