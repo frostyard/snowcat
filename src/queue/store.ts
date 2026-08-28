@@ -3019,6 +3019,8 @@ function hasPullRequestBinding(item: { sourceRef?: string; cure?: unknown; revie
 /** The ways a stored or proposed contract can fail to be deliverable; `undefined` when it is consistent. */
 export function contractProblem(item: {
   allowedActions: AllowedAction[];
+  /** The item's own delegation ceiling, where the caller has it: a change child that may propose needs a usable one. */
+  delegableActions?: AllowedAction[];
   requiredArtifact: RequiredArtifact;
   executionTarget?: ExecutionTarget;
   sourceRef?: string;
@@ -3069,14 +3071,23 @@ export function contractProblem(item: {
   // proposer must not build a wall its own ceiling did not require, so refuse
   // the under-authorization; the parent's ceiling is still the ceiling, and a
   // child whose parent cannot delegate the capability is unaffected.
+  //
+  // Holding `create-followup` is not enough on its own: a child that may
+  // propose but delegates nothing has an empty ceiling, so every child it
+  // proposes — even a read-only one — exceeds it and the finding is stranded
+  // just the same. Both halves are required, and neither is auto-granted:
+  // the proposer states a usable ceiling, still bounded by the parent's.
   if (
     item.allowedActions.includes("write") &&
-    !item.allowedActions.includes("create-followup") &&
-    item.parentDelegableActions?.includes("create-followup") === true
+    item.parentDelegableActions?.includes("create-followup") === true &&
+    (!item.allowedActions.includes("create-followup") || (item.delegableActions !== undefined && item.delegableActions.length === 0))
   ) {
+    const missing = item.allowedActions.includes("create-followup")
+      ? "a non-empty delegableActions for the children it will propose (at most its parent's ceiling)"
+      : "create-followup to its allowedActions, which its parent's delegableActions already permit";
     return {
       code: "change-child-cannot-propose",
-      message: `a follow-up granting write finds adjacent work while it changes the tree, and evidence re-queues nothing: add create-followup to ${item.kind === undefined ? "its" : `"${item.kind}"'s`} allowedActions, which its parent's delegableActions already permit`,
+      message: `a follow-up granting write finds adjacent work while it changes the tree, and evidence re-queues nothing: give ${item.kind === undefined ? "it" : `"${item.kind}"`} ${missing}`,
     };
   }
   // ADR-0073: where the target is declared, it must agree with the actions,

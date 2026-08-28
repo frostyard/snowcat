@@ -38,7 +38,7 @@ test("seed work requires an opted-in repository and preserves child lineage", as
         instructions: "Add the smallest deterministic test and run the repository check.",
         acceptanceCriteria: ["The test fails without retry exhaustion handling and passes with current behavior."],
         allowedActions: ["read", "write", "run-tests", "open-pr", "create-followup"],
-        delegableActions: [],
+        delegableActions: ["read", "create-followup"],
         requiredArtifact: "pull-request",
         executionTarget: "new-pull-request",
       },
@@ -595,7 +595,7 @@ test("the database itself refuses to claim or create claimable proposals through
         instructions: "Add the test and run the check.",
         acceptanceCriteria: ["The test exists and passes."],
         allowedActions: ["read", "write", "run-tests", "open-pr", "create-followup"],
-        delegableActions: [],
+        delegableActions: ["read", "create-followup"],
         requiredArtifact: "pull-request",
         executionTarget: "new-pull-request",
       },
@@ -829,7 +829,7 @@ test("scheduling priority is operator-owned: workers cannot set it and children 
     instructions: "Add the test and run the check.",
     acceptanceCriteria: ["The test passes."],
     allowedActions: ["read", "write", "run-tests", "open-pr", "create-followup"] as const,
-    delegableActions: [] as const,
+    delegableActions: ["read", "create-followup"] as const,
     requiredArtifact: "pull-request" as const,
     executionTarget: "new-pull-request" as const,
   };
@@ -843,7 +843,7 @@ test("scheduling priority is operator-owned: workers cannot set it and children 
         leaseToken: claimed.leaseToken!,
         worker: "claude:core:priority",
         result: { summary: "Found a gap.", evidence: ["src/example.ts"], artifacts: [] },
-        followUps: [{ ...child, allowedActions: [...child.allowedActions], delegableActions: [] }, smuggled],
+        followUps: [{ ...child, allowedActions: [...child.allowedActions], delegableActions: [...child.delegableActions] }, smuggled],
       }),
     /follow-up items may not set priority/,
   );
@@ -857,7 +857,7 @@ test("scheduling priority is operator-owned: workers cannot set it and children 
     leaseToken: claimed.leaseToken!,
     worker: "claude:core:priority",
     result: { summary: "Found a gap.", evidence: ["src/example.ts"], artifacts: [] },
-    followUps: [{ ...child, allowedActions: [...child.allowedActions], delegableActions: [] }],
+    followUps: [{ ...child, allowedActions: [...child.allowedActions], delegableActions: [...child.delegableActions] }],
   });
   assert.equal(completion.followUps[0]?.priority, 7);
   assert.equal(queue.get(completion.followUps[0]!.id)?.priority, 7);
@@ -1096,7 +1096,7 @@ test("cancelling the final blocked descendant makes its specialty inactive", asy
         instructions: "Add one test and run the check.",
         acceptanceCriteria: ["The test passes."],
         allowedActions: ["read", "write", "run-tests", "open-pr", "create-followup"],
-        delegableActions: [],
+        delegableActions: ["read", "create-followup"],
         requiredArtifact: "pull-request",
         executionTarget: "new-pull-request",
       },

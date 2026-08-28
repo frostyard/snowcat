@@ -29,7 +29,7 @@ const implementationChild = {
   instructions: "Patch, test, and open one pull request.",
   acceptanceCriteria: ["The regression test passes on the pull request head."],
   allowedActions: ["read", "write", "run-tests", "open-pr", "create-followup"] as AllowedAction[],
-  delegableActions: [] as AllowedAction[],
+  delegableActions: ["read", "create-followup"] as AllowedAction[],
   requiredArtifact: "pull-request" as const,
   executionTarget: "new-pull-request" as const,
 };
@@ -173,7 +173,7 @@ test("an item that must deliver a pull request completes only with one reported,
     leaseToken: rootClaim.leaseToken!,
     worker: "claude:updex:discovery",
     result: { summary: "One gap.", evidence: ["src/retry.ts:12"], artifacts: [] },
-    followUps: [{ ...implementationChild, allowedActions: [...implementationChild.allowedActions], delegableActions: [] }],
+    followUps: [{ ...implementationChild, allowedActions: [...implementationChild.allowedActions], delegableActions: [...implementationChild.delegableActions] }],
   });
   const child = queue.approve(followUps[0]!.id, "operator:cli");
   assert.equal(child.status, "queued");
@@ -286,12 +286,23 @@ test("a change follow-up must be able to propose what it finds, but only where i
   const underAuthorized = { ...implementationChild, allowedActions: ["read", "write", "run-tests", "open-pr"] as AllowedAction[] };
   assert.throws(
     () => queue.complete(completion(underAuthorized)),
-    /follow-up "quality-implementation": a follow-up granting write finds adjacent work while it changes the tree, and evidence re-queues nothing: add create-followup to "quality-implementation"'s allowedActions, which its parent's delegableActions already permit/,
+    /follow-up "quality-implementation": a follow-up granting write finds adjacent work while it changes the tree, and evidence re-queues nothing: give "quality-implementation" create-followup to its allowedActions, which its parent's delegableActions already permit/,
   );
   assert.equal(queue.get(root.id)?.status, "claimed", "a refused completion rolls back whole and leaves the root claimed");
   assert.equal(queue.list({ repository: REPOSITORY }).length, 1, "and proposes nothing");
 
-  // Adding the capability is all it takes, and both lists are stored as given.
+  // Holding create-followup is not enough on its own: a child that may propose
+  // but delegates nothing has an empty ceiling, so every child it proposes —
+  // even a read-only one — would exceed it and the finding is stranded just the
+  // same. That was the shape every affected fixture carried.
+  assert.throws(
+    () => queue.complete(completion({ ...underAuthorized, allowedActions: [...underAuthorized.allowedActions, "create-followup"], delegableActions: [] })),
+    /follow-up "quality-implementation": a follow-up granting write finds adjacent work while it changes the tree, and evidence re-queues nothing: give "quality-implementation" a non-empty delegableActions for the children it will propose \(at most its parent's ceiling\)/,
+  );
+  assert.equal(queue.get(root.id)?.status, "claimed", "that refusal rolls back whole too");
+  assert.equal(queue.list({ repository: REPOSITORY }).length, 1);
+
+  // Both halves together are all it takes, and both lists are stored as given.
   const accepted = queue.complete(
     completion({ ...underAuthorized, allowedActions: [...underAuthorized.allowedActions, "create-followup"], delegableActions: ["read", "create-followup"] }),
   );
@@ -299,6 +310,34 @@ test("a change follow-up must be able to propose what it finds, but only where i
   assert.deepEqual(child.allowedActions, ["read", "write", "run-tests", "open-pr", "create-followup"]);
   assert.deepEqual(child.delegableActions, ["read", "create-followup"]);
   assert.equal(queue.approve(child.id, "operator:cli").status, "queued", "admission re-checks the same predicate and admits it");
+
+  // End to end: the admitted child can actually queue the adjacent finding it
+  // discovers, using only the ceiling it was given. This is the loop that was
+  // broken — the finding reaches the queue instead of the evidence prose.
+  const lease = queue.claim({ worker: "claude:updex:fixer", kinds: ["quality-implementation"] })!;
+  assert.equal(lease.id, child.id);
+  const adjacent = queue.complete({
+    id: child.id,
+    leaseToken: lease.leaseToken!,
+    worker: "claude:updex:fixer",
+    result: { summary: "Fixed the gap; found an adjacent one.", evidence: ["src/retry.ts:12"], artifacts: [{ kind: "pull-request", url: PR_URL }] },
+    followUps: [
+      {
+        kind: "quality-gap-discovery",
+        objective: "Assess the adjacent gap this fix uncovered.",
+        instructions: "Read only; report what you find.",
+        acceptanceCriteria: ["The adjacent gap is described with file-level evidence."],
+        allowedActions: ["read"],
+        delegableActions: [],
+        requiredArtifact: "none",
+        executionTarget: "read-only",
+      },
+    ],
+  });
+  const grandchild = queue.get(adjacent.followUps[0]!.id)!;
+  assert.equal(grandchild.status, "proposed", "the finding is queued as a proposal, not stranded in evidence");
+  assert.equal(grandchild.parentId, child.id);
+  assert.deepEqual(grandchild.allowedActions, ["read"]);
 });
 
 test("the change-child rule never invents authority its parent lacks (issue #270)", async () => {
@@ -326,7 +365,7 @@ test("the change-child rule never invents authority its parent lacks (issue #270
   });
 
   // The same proposal that was refused above is accepted here, unchanged.
-  const underAuthorized = { ...implementationChild, allowedActions: ["read", "write", "run-tests", "open-pr"] as AllowedAction[] };
+  const underAuthorized = { ...implementationChild, allowedActions: ["read", "write", "run-tests", "open-pr"] as AllowedAction[], delegableActions: [] as AllowedAction[] };
   const accepted = queue.complete(completion({ ...underAuthorized, kind: "security-gap-fix" }));
   const child = queue.get(accepted.followUps[0]!.id)!;
   assert.deepEqual(child.allowedActions, ["read", "write", "run-tests", "open-pr"], "no capability is granted silently");
