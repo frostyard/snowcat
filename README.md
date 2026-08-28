@@ -103,7 +103,8 @@ program that just completed with no finding is cooled for its own cadence —
 daily for quality, CI, security, and triage; weekly for architecture,
 conformance, dependencies, and docs (`--cooldown-hours <n>` overrides every
 program; `0` disables) — doubling per consecutive empty assessment, up to
-14 days, until a root proposes a child.
+14 days (a ceiling that never shortens a longer base), until a root proposes a
+child.
 `seed-dogfood --enrolled` seeds only the programs each
 repository's Core declaration lists. Worker-created children appear under
 `list proposed` and require operator admission before any worker can claim

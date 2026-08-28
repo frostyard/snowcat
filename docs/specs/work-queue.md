@@ -362,7 +362,13 @@ MCP (rule 41).
     clamped to `MAX_NO_FINDING_COOLDOWN_SECONDS` (14 days). A streak of one
     is therefore exactly the base window, the first root that proposes a
     child resets the streak to the catalog cadence, and a base of `0` stays
-    disabled with no back-off. The back-off MUST NOT shorten any window.
+    disabled with no back-off. The back-off MUST NOT shorten any window: the
+    ceiling is a floor of the base too, so an explicit `--cooldown-hours <n>`
+    longer than 14 days MUST keep its own window rather than be cut down to
+    the ceiling. Root chronology MUST come from an immutable ordering: a
+    `note` bumps a completed root's `updated_at`, so ordering by it would let
+    a note on an older no-finding root outrank a newer root that proposed a
+    child and suppress the kind that a finding should have reset.
 33. `complete_work` MUST verify every `issue` and `pull-request` artifact
     against the GitHub API before the completion transaction, using the item's
     repository. When GitHub answers that the artifact does not exist, resolves

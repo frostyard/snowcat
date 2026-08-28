@@ -179,7 +179,8 @@ removed. -->
   them) and repeat `seed-dogfood` freely — its no-finding cooldown suppresses
   re-asking at each program's own cadence and doubles that window per
   consecutive empty assessment up to `MAX_NO_FINDING_COOLDOWN_SECONDS`
-  (14 days), resetting to the cadence the first time a root proposes a child,
+  (14 days, a ceiling on the back-off that never shortens a longer base),
+  resetting to the cadence the first time a root proposes a child,
   and `--enrolled` seeds only the
   programs each repository's Core declaration lists (the catalog is
   [`src/queue/programs.ts`](src/queue/programs.ts); a new program is one

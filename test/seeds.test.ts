@@ -9,7 +9,7 @@ import { ControlPlaneStore } from "../src/control/store.ts";
 import { enrolledRepositories } from "../src/queue/eligibility.ts";
 import { maintenancePrograms } from "../src/queue/programs.ts";
 import { enqueueDogfoodBatch, enqueueDogfoodBatchForEnrolled } from "../src/queue/seeds.ts";
-import { MAX_NO_FINDING_COOLDOWN_SECONDS, QueueStore } from "../src/queue/store.ts";
+import { backedOffCooldownSeconds, MAX_NO_FINDING_COOLDOWN_SECONDS, QueueStore } from "../src/queue/store.ts";
 import { disabledDeclaration, enrollExampleRepository } from "./helpers/core-fixtures.ts";
 
 const DOGFOOD_REPOSITORY = "frostyard/snowcat";
@@ -545,4 +545,113 @@ test("the no-finding cooldown backs off per consecutive empty assessment, resets
   assert.deepEqual(seed().cooledKinds, [KIND]);
   after(1);
   assert.deepEqual(seed().created, [KIND]);
+});
+
+test("an operator note on an older no-finding root cannot outrank a newer finding root", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-dogfood-note-order-test-"));
+  let now = new Date("2026-08-17T12:00:00.000Z");
+  const queue = new QueueStore(join(directory, "queue.db"), () => now);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled(DOGFOOD_REPOSITORY, true);
+
+  const KIND = "quality-gap-discovery";
+  const WORKER = "claude:snowcat:dogfood";
+  const seed = (): { created: string[]; cooledKinds: string[] } => {
+    const batch = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { programs: ["quality"] });
+    return { created: batch.created.map((item) => item.kind), cooledKinds: batch.cooledKinds };
+  };
+  const assess = (followUps: Parameters<QueueStore["complete"]>[0]["followUps"] = []): string[] => {
+    const item = queue.claim({ worker: WORKER, kinds: [KIND] })!;
+    return queue
+      .complete({
+        id: item.id,
+        leaseToken: item.leaseToken!,
+        worker: WORKER,
+        result: { summary: followUps.length === 0 ? "Nothing found." : "Found one gap.", evidence: ["src/"], artifacts: [] },
+        followUps,
+      })
+      .followUps.map((child) => child.id);
+  };
+
+  // The older root answers "nothing"...
+  assert.deepEqual(seed().created, [KIND]);
+  assess();
+  const older = queue.list({ repository: DOGFOOD_REPOSITORY, limit: 10 })[0]!;
+
+  // ...and the newer one finds something, which must reset the streak.
+  now = new Date("2026-08-17T13:00:00.000Z");
+  assert.deepEqual(enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { programs: ["quality"], cooldownSeconds: 0 }).created.map((item) => item.kind), [KIND]);
+  const proposals = assess([
+    {
+      kind: "quality-gap-fix",
+      objective: "Close the quality gap.",
+      instructions: "Smallest change; run checks.",
+      acceptanceCriteria: ["The check passes."],
+      allowedActions: ["read", "write", "run-tests", "open-pr"],
+      delegableActions: [],
+      requiredArtifact: "pull-request",
+      executionTarget: "new-pull-request",
+    },
+  ]);
+  queue.reject(proposals[0]!, "operator:test", "Not now.");
+
+  // An operator note on the OLDER root bumps its updated_at past the newer root's.
+  now = new Date("2026-08-17T14:00:00.000Z");
+  queue.note(older.id, "operator:test", "Re-read this one when you get a chance.");
+  assert.ok(queue.get(older.id)!.updatedAt > queue.get(older.id)!.createdAt);
+
+  // Chronology is `created_at`, so the finding still resets the streak: the
+  // kind is offered again rather than cooled by the noted older root.
+  now = new Date("2026-08-17T14:30:00.000Z");
+  const next = seed();
+  assert.deepEqual(next.created, [KIND]);
+  assert.deepEqual(next.cooledKinds, []);
+});
+
+test("a base longer than the clamp keeps its own window: the back-off never shortens one", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-dogfood-large-base-test-"));
+  let now = new Date("2026-08-17T12:00:00.000Z");
+  const queue = new QueueStore(join(directory, "queue.db"), () => now);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled(DOGFOOD_REPOSITORY, true);
+
+  const KIND = "quality-gap-discovery";
+  const WORKER = "claude:snowcat:dogfood";
+  const DAY = 24 * 3600;
+  const BASE = 20 * DAY; // `--cooldown-hours 480`: longer than the 14-day ceiling.
+  const seed = (cooldownSeconds: number): { created: string[]; cooledKinds: string[] } => {
+    const batch = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { programs: ["quality"], cooldownSeconds });
+    return { created: batch.created.map((item) => item.kind), cooledKinds: batch.cooledKinds };
+  };
+  const assess = (): void => {
+    const item = queue.claim({ worker: WORKER, kinds: [KIND] })!;
+    queue.complete({
+      id: item.id,
+      leaseToken: item.leaseToken!,
+      worker: WORKER,
+      result: { summary: "Nothing found.", evidence: ["src/"], artifacts: [] },
+      followUps: [],
+    });
+  };
+
+  // Two consecutive no-findings: a streak of two, which doubles to 40 days and
+  // clamps to 14 — but 14 is shorter than the base the operator chose.
+  assert.deepEqual(seed(BASE).created, [KIND]);
+  assess();
+  now = new Date(now.getTime() + 1000);
+  assert.deepEqual(seed(0).created, [KIND]);
+  assess();
+
+  assert.ok(backedOffCooldownSeconds(BASE, 2) >= BASE, "the clamp is a ceiling, never a cut below the base");
+  assert.equal(backedOffCooldownSeconds(BASE, 2), BASE);
+  assert.equal(backedOffCooldownSeconds(DAY, 5), MAX_NO_FINDING_COOLDOWN_SECONDS, "and it still clamps a base under it");
+
+  // Past the 14-day ceiling but inside the 20-day base: still cooling.
+  now = new Date(now.getTime() + (MAX_NO_FINDING_COOLDOWN_SECONDS + 1) * 1000);
+  assert.deepEqual(seed(BASE).cooledKinds, [KIND]);
+  assert.deepEqual(seed(BASE).created, []);
+
+  // Past the base: offered again.
+  now = new Date(now.getTime() + (BASE - MAX_NO_FINDING_COOLDOWN_SECONDS) * 1000);
+  assert.deepEqual(seed(BASE).created, [KIND]);
 });

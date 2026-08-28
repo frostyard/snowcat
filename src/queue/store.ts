@@ -84,13 +84,17 @@ export const MAX_NO_FINDING_COOLDOWN_SECONDS = 14 * 24 * 60 * 60;
  * The no-finding cooldown a kind has earned: its base window doubled per
  * consecutive no-finding root beyond the first, clamped to
  * `MAX_NO_FINDING_COOLDOWN_SECONDS`. A streak of `0` or `1` is exactly the base
- * window, and a base of `0` — suppression disabled — stays `0`, so the back-off
- * can only ever lengthen a window that already applied.
+ * window, and a base of `0` — suppression disabled — stays `0`.
+ *
+ * The back-off can only ever lengthen a window, never shorten one, so the
+ * ceiling is a floor of the base too: an explicit `--cooldown-hours <n>` longer
+ * than the ceiling keeps its own window rather than being cut down to 14 days,
+ * which would ask more often than the operator asked for.
  */
-function backedOffCooldownSeconds(baseSeconds: number, streak: number): number {
+export function backedOffCooldownSeconds(baseSeconds: number, streak: number): number {
   if (baseSeconds <= 0 || streak <= 1) return baseSeconds;
   const doublings = Math.min(streak - 1, 60);
-  return Math.min(baseSeconds * 2 ** doublings, MAX_NO_FINDING_COOLDOWN_SECONDS);
+  return Math.max(baseSeconds, Math.min(baseSeconds * 2 ** doublings, MAX_NO_FINDING_COOLDOWN_SECONDS));
 }
 
 /**
@@ -1544,17 +1548,32 @@ export class QueueStore {
    * stops at the first root that proposed a child or is not `completed`, so one
    * finding resets the streak to zero and the kind drops out of the map. A
    * caller applies its own cooldown window per kind and backs it off by the
-   * streak. Roots recorded in the same instant are walked in insertion order,
-   * so "newest first" stays deterministic under a timestamp tie.
+   * streak.
+   *
+   * Chronology comes from `created_at`, never `updated_at`: `note` bumps
+   * `updated_at` even on a completed root, so ordering by it would let an
+   * operator note on an older no-finding root move it ahead of a newer root
+   * that proposed a child, and a real finding would fail to reset the streak.
+   * `created_at` is immutable, and the feeder creates a kind's next root only
+   * once the previous lineage is terminal, so it is the roots' true order;
+   * roots created in the same instant are walked in insertion order, so
+   * "newest first" stays deterministic under a timestamp tie. The cooldown
+   * anchor is the ledger's `work.completed` instant for the same reason, with
+   * `updated_at` as the fallback for a row whose event is missing.
    */
   private noFindingStreaks(repository: string): Map<string, { completedAt: string; streak: number }> {
     const rows = this.db
       .prepare(
-        `SELECT root.kind AS kind, root.status AS status, root.updated_at AS updated_at,
+        `SELECT root.kind AS kind, root.status AS status,
+                COALESCE(
+                  (SELECT MAX(event.occurred_at) FROM work_events event
+                    WHERE event.work_item_id = root.id AND event.event_type = 'work.completed'),
+                  root.updated_at
+                ) AS completed_at,
                 EXISTS (SELECT 1 FROM work_items child WHERE child.parent_id = root.id) AS has_child
          FROM work_items root
          WHERE root.repository = ? AND root.parent_id IS NULL
-         ORDER BY root.kind, root.updated_at DESC, root.rowid DESC`,
+         ORDER BY root.kind, root.created_at DESC, root.rowid DESC`,
       )
       .all(repository) as Row[];
     const streaks = new Map<string, { completedAt: string; streak: number }>();
@@ -1567,7 +1586,7 @@ export class QueueStore {
         continue;
       }
       const entry = streaks.get(kind);
-      if (entry === undefined) streaks.set(kind, { completedAt: String(row.updated_at), streak: 1 });
+      if (entry === undefined) streaks.set(kind, { completedAt: String(row.completed_at), streak: 1 });
       else entry.streak += 1;
     }
     return streaks;
