@@ -7,6 +7,8 @@ import { LineCounter, isMap, isScalar, isSeq, parseDocument, visit, type Pair, t
 const WORKFLOW_DIRECTORY = join(process.cwd(), ".github", "workflows");
 const FULL_SHA = /@[0-9a-f]{40}$/i;
 const VERSION_COMMENT = /^v?\d+(?:\.\d+){0,2}(?:[-+][A-Za-z0-9.-]+)?$/;
+const CANONICAL_FULL_GATE = "npm run check";
+const MAKE_CI_TARGET = "ci";
 
 test("every workflow pins actions and declares least privilege", () => {
   const workflows = readdirSync(WORKFLOW_DIRECTORY)
@@ -92,12 +94,21 @@ jobs:
   );
 });
 
-test("the check job invokes the repository's canonical full gate exactly once", () => {
+test("every link of the CI signal chain reaches the canonical full gate", () => {
+  const makefile = readMakefile();
+  const workflowCommand = canonicalFullGateCommand(makefile);
   const source = readFileSync(join(WORKFLOW_DIRECTORY, "check.yml"), "utf8");
   const document = parseDocument(source);
   assert.ok(isMap(document.contents), "workflow must contain a top-level mapping");
-  const errors = fullGateErrors(document.contents, canonicalFullGateCommand());
-  assert.deepEqual(errors, [], errors.join("\n"));
+
+  const workflowErrors = fullGateErrors(document.contents, workflowCommand);
+  assert.deepEqual(workflowErrors, [], workflowErrors.join("\n"));
+
+  if (workflowCommand === CANONICAL_FULL_GATE) return;
+  assert.equal(workflowCommand, `make ${MAKE_CI_TARGET}`);
+  assert.ok(makefile !== undefined);
+  const makefileErrors = makefileGateErrors(makefile, MAKE_CI_TARGET, CANONICAL_FULL_GATE);
+  assert.deepEqual(makefileErrors, [], makefileErrors.join("\n"));
 });
 
 test("the full-gate check rejects a weaker command such as npm test", () => {
@@ -132,14 +143,114 @@ test("the full-gate check rejects a weaker command such as npm test", () => {
   assert.match(fullGateErrors(duplicatedDocument.contents, "npm run check").join("\n"), /canonical full gate/);
 });
 
-function canonicalFullGateCommand(): string {
+test("the full-gate contract rejects a Makefile `ci` recipe weakened to npm test", () => {
+  const weakened = `.PHONY: verify check ci
+
+verify:
+\tnpm run verify
+
+check:
+\tnpm run check
+
+ci:
+\tnpm test
+`;
+  // The workflow link is untouched: check.yml still invokes `make ci`.
+  const workflow = parseDocument(`jobs:
+  check:
+    steps:
+      - run: npm ci
+      - run: make ci
+`);
+  assert.ok(isMap(workflow.contents));
+  assert.equal(canonicalFullGateCommand(weakened), "make ci");
+  assert.deepEqual(fullGateErrors(workflow.contents, "make ci"), []);
+
+  // The Makefile link is not, so the contract must still fail.
+  assert.match(
+    makefileGateErrors(weakened, "ci", "npm run check").join("\n"),
+    /canonical full gate/,
+  );
+
+  const canonical = weakened.replace("ci:\n\tnpm test", "ci:\n\tnpm run check");
+  assert.deepEqual(makefileGateErrors(canonical, "ci", "npm run check"), []);
+});
+
+test("the Makefile full-gate check rejects a missing, duplicated, or wrapped recipe", () => {
+  assert.match(
+    makefileGateErrors("check:\n\tnpm run check\n", "ci", "npm run check").join("\n"),
+    /must declare a `ci` target/,
+  );
+  assert.match(
+    makefileGateErrors("ci:\n", "ci", "npm run check").join("\n"),
+    /canonical full gate/,
+  );
+  assert.match(
+    makefileGateErrors("ci:\n\tnpm run check\n\tnpm run check\n", "ci", "npm run check").join("\n"),
+    /found 2/,
+  );
+  // A silenced or ignore-errors prefix still counts as the canonical invocation.
+  assert.deepEqual(makefileGateErrors("ci:\n\t@npm run check\n", "ci", "npm run check"), []);
+  // A following target's recipe is not read as part of this one.
+  assert.match(
+    makefileGateErrors("ci:\n\tnpm test\n\ncheck:\n\tnpm run check\n", "ci", "npm run check").join("\n"),
+    /found 0 in \[npm test\]/,
+  );
+});
+
+function readMakefile(): string | undefined {
   try {
-    const makefile = readFileSync(join(process.cwd(), "Makefile"), "utf8");
-    if (/^ci\s*:/m.test(makefile)) return "make ci";
+    return readFileSync(join(process.cwd(), "Makefile"), "utf8");
   } catch {
-    // no root Makefile: fall through to the npm entry point
+    // no root Makefile: the workflow must invoke the npm entry point directly
+    return undefined;
   }
-  return "npm run check";
+}
+
+function canonicalFullGateCommand(makefile: string | undefined): string {
+  if (makefile !== undefined && makefileRecipe(makefile, MAKE_CI_TARGET) !== undefined) {
+    return `make ${MAKE_CI_TARGET}`;
+  }
+  return CANONICAL_FULL_GATE;
+}
+
+/**
+ * The recipe lines of one Makefile target, or undefined when it declares none.
+ * Recipe lines are tab-indented; comments, blank lines, and the `-@+` command
+ * prefixes are dropped, and the first other unindented line ends the target.
+ */
+function makefileRecipe(source: string, target: string): string[] | undefined {
+  const lines = source.split(/\r?\n/);
+  const header = new RegExp(`^${target}\\s*:(?!=)`);
+  let index = lines.findIndex((line) => header.test(line));
+  if (index === -1) return undefined;
+
+  const recipe: string[] = [];
+  for (index += 1; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    if (line.startsWith("\t")) {
+      const command = line.slice(1).replace(/^[-@+]+/, "").trim();
+      if (command !== "" && !command.startsWith("#")) recipe.push(command);
+      continue;
+    }
+    if (line.trim() === "" || line.trimStart().startsWith("#")) continue;
+    break;
+  }
+  return recipe;
+}
+
+function makefileGateErrors(source: string, target: string, expectedCommand: string): string[] {
+  const recipe = makefileRecipe(source, target);
+  if (recipe === undefined) return [`Makefile must declare a \`${target}\` target`];
+
+  const matches = recipe.filter((command) => command === expectedCommand);
+  if (matches.length !== 1) {
+    return [
+      `Makefile \`${target}\` target must invoke the canonical full gate ` +
+        `(\`${expectedCommand}\`) exactly once; found ${matches.length} in [${recipe.join("; ")}]`,
+    ];
+  }
+  return [];
 }
 
 function fullGateErrors(root: YAMLMap, expectedCommand: string): string[] {
