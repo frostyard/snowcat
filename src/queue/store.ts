@@ -5,6 +5,7 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 
 import {
   allowedActions,
+  CURE_CHANGE_KIND,
   deriveDelivery,
   MAX_REVIEW_ADVISORIES,
   MAX_ITEM_ATTEMPTS,
@@ -72,6 +73,30 @@ const MAX_PREDECESSORS = 20;
 const METRICS_EVENT_TYPES = ["work.claimed", "work.completed", "work.blocked", "work.cancelled"] as const;
 /** Events one metrics window may carry before it is refused instead of aggregated. */
 export const MAX_METRICS_WINDOW_EVENTS = 100_000;
+
+/**
+ * Ceiling on a backed-off no-finding cooldown. A program that keeps answering
+ * "nothing" doubles its window per consecutive no-finding root, and never waits
+ * longer than this before the repository is asked again.
+ */
+export const MAX_NO_FINDING_COOLDOWN_SECONDS = 14 * 24 * 60 * 60;
+
+/**
+ * The no-finding cooldown a kind has earned: its base window doubled per
+ * consecutive no-finding root beyond the first, clamped to
+ * `MAX_NO_FINDING_COOLDOWN_SECONDS`. A streak of `0` or `1` is exactly the base
+ * window, and a base of `0` — suppression disabled — stays `0`.
+ *
+ * The back-off can only ever lengthen a window, never shorten one, so the
+ * ceiling is a floor of the base too: an explicit `--cooldown-hours <n>` longer
+ * than the ceiling keeps its own window rather than being cut down to 14 days,
+ * which would ask more often than the operator asked for.
+ */
+export function backedOffCooldownSeconds(baseSeconds: number, streak: number): number {
+  if (baseSeconds <= 0 || streak <= 1) return baseSeconds;
+  const doublings = Math.min(streak - 1, 60);
+  return Math.max(baseSeconds, Math.min(baseSeconds * 2 ** doublings, MAX_NO_FINDING_COOLDOWN_SECONDS));
+}
 
 /**
  * Schema version recorded in SQLite `PRAGMA user_version`. It equals the length
@@ -945,6 +970,13 @@ export class QueueStore {
    * (a no-finding assessment) is skipped and reported in `cooledKinds`, so a
    * repeating feeder does not re-ask a question that was just answered
    * "nothing to do".
+   *
+   * The window backs off over consecutive no-finding roots: `base × 2^(n − 1)`
+   * for a streak of `n`, clamped to `MAX_NO_FINDING_COOLDOWN_SECONDS`. A single
+   * no-finding therefore waits exactly the base window as before, a program
+   * whose population is permanently empty is asked exponentially less often,
+   * and the first root that proposes a child resets the streak to the catalog
+   * cadence. A base of `0` disables suppression, back-off included.
    */
   enqueueInactiveRootBatch(
     repository: string,
@@ -963,7 +995,9 @@ export class QueueStore {
     return this.transaction(() => {
       this.assertRepositoryEnabled(repository);
       const activeKinds = new Set(this.activeRootKinds(repository));
-      const noFindingAt = cooldowns.some((seconds) => seconds > 0) ? this.latestNoFindingRoots(repository) : new Map<string, string>();
+      const noFinding = cooldowns.some((seconds) => seconds > 0)
+        ? this.noFindingStreaks(repository)
+        : new Map<string, { completedAt: string; streak: number }>();
       const created: WorkItem[] = [];
       const skippedKinds: string[] = [];
       const cooledKinds: string[] = [];
@@ -977,9 +1011,9 @@ export class QueueStore {
           skippedKinds.push(input.kind);
           return;
         }
-        const completedAt = noFindingAt.get(input.kind);
-        const cooldownSeconds = cooldowns[index]!;
-        if (completedAt !== undefined && cooldownSeconds > 0 && new Date(completedAt).getTime() >= this.clock().getTime() - cooldownSeconds * 1000) {
+        const entry = noFinding.get(input.kind);
+        const cooldownSeconds = backedOffCooldownSeconds(cooldowns[index]!, entry?.streak ?? 0);
+        if (entry !== undefined && cooldownSeconds > 0 && new Date(entry.completedAt).getTime() >= this.clock().getTime() - cooldownSeconds * 1000) {
           cooledKinds.push(input.kind);
           return;
         }
@@ -1510,24 +1544,53 @@ export class QueueStore {
   /**
    * For each kind whose most recent root in the repository is `completed` and
    * proposed no child — the assessment ran and found nothing actionable — the
-   * completion time, so a caller can apply its own cooldown window per kind.
+   * completion time and the consecutive no-finding streak: how many of that
+   * kind's leading roots, newest first, are completed with no child. The walk
+   * stops at the first root that proposed a child or is not `completed`, so one
+   * finding resets the streak to zero and the kind drops out of the map. A
+   * caller applies its own cooldown window per kind and backs it off by the
+   * streak.
+   *
+   * Chronology comes from `created_at`, never `updated_at`: `note` bumps
+   * `updated_at` even on a completed root, so ordering by it would let an
+   * operator note on an older no-finding root move it ahead of a newer root
+   * that proposed a child, and a real finding would fail to reset the streak.
+   * `created_at` is immutable, and the feeder creates a kind's next root only
+   * once the previous lineage is terminal, so it is the roots' true order;
+   * roots created in the same instant are walked in insertion order, so
+   * "newest first" stays deterministic under a timestamp tie. The cooldown
+   * anchor is the ledger's `work.completed` instant for the same reason, with
+   * `updated_at` as the fallback for a row whose event is missing.
    */
-  private latestNoFindingRoots(repository: string): Map<string, string> {
+  private noFindingStreaks(repository: string): Map<string, { completedAt: string; streak: number }> {
     const rows = this.db
       .prepare(
-        `SELECT latest.kind AS kind, latest.updated_at AS updated_at
-         FROM work_items latest
-         WHERE latest.repository = ? AND latest.parent_id IS NULL
-           AND latest.updated_at = (
-             SELECT MAX(root.updated_at) FROM work_items root
-             WHERE root.repository = latest.repository AND root.parent_id IS NULL AND root.kind = latest.kind
-           )
-           AND latest.status = 'completed'
-           AND NOT EXISTS (SELECT 1 FROM work_items child WHERE child.parent_id = latest.id)
-         ORDER BY latest.kind`,
+        `SELECT root.kind AS kind, root.status AS status,
+                COALESCE(
+                  (SELECT MAX(event.occurred_at) FROM work_events event
+                    WHERE event.work_item_id = root.id AND event.event_type = 'work.completed'),
+                  root.updated_at
+                ) AS completed_at,
+                EXISTS (SELECT 1 FROM work_items child WHERE child.parent_id = root.id) AS has_child
+         FROM work_items root
+         WHERE root.repository = ? AND root.parent_id IS NULL
+         ORDER BY root.kind, root.created_at DESC, root.rowid DESC`,
       )
       .all(repository) as Row[];
-    return new Map(rows.map((row) => [String(row.kind), String(row.updated_at)]));
+    const streaks = new Map<string, { completedAt: string; streak: number }>();
+    const settled = new Set<string>();
+    for (const row of rows) {
+      const kind = String(row.kind);
+      if (settled.has(kind)) continue;
+      if (String(row.status) !== "completed" || Number(row.has_child) !== 0) {
+        settled.add(kind);
+        continue;
+      }
+      const entry = streaks.get(kind);
+      if (entry === undefined) streaks.set(kind, { completedAt: String(row.completed_at), streak: 1 });
+      else entry.streak += 1;
+    }
+    return streaks;
   }
 
   /**
@@ -1824,6 +1887,15 @@ export class QueueStore {
         if ("priority" in followUp) {
           throw new Error("follow-up items may not set priority; children inherit the parent's priority");
         }
+        // A pull-request binding is derived from the parent, never proposed: a
+        // worker-supplied one could name any pull request at any head, which is
+        // exactly what the binding predicate exists to prevent. Refuse it here
+        // as well as at the MCP schema so non-MCP callers cannot bypass it.
+        for (const field of ["sourceRef", "cure", "review"] as const) {
+          if (field in followUp) {
+            throw new Error(`follow-up items may not set ${field}; a pull-request-bound child inherits its parent's binding`);
+          }
+        }
         // Sequencing edges belong to imported roots, not to lineage (ADR-0066).
         assertNoPredecessors(followUp, "a follow-up item");
         // The proposer states the child's delivery contract (ADR-0069); the
@@ -1839,14 +1911,22 @@ export class QueueStore {
           throw new Error(`follow-up executionTarget must be one of ${executionTargets.join(", ")}`);
         }
         assertKnownActions(followUp.allowedActions);
-        const problem = contractProblem({ ...followUp, parentId: parent.id, parentDelegableActions: parent.delegableActions });
+        // ADR-0061 + ADR-0073: a pr-cure-change child changes the patch of the
+        // very pull request its parent is bound to, and `followUpSchema` gives
+        // the worker no way to name one — deliberately, since a
+        // worker-supplied binding could reach any pull request at any head.
+        // Derive it from the parent, before the contract is checked and as it
+        // is stored, so a child binds its parent's pull request or nothing.
+        const binding = inheritedCureBinding(parent, followUp);
+        const problem = contractProblem({ ...followUp, ...binding, parentId: parent.id, parentDelegableActions: parent.delegableActions });
         if (problem) throw new Error(`follow-up "${followUp.kind}": ${problem.message}`);
-        validateWorkDefinition({ ...followUp, createdBy: input.worker });
+        validateWorkDefinition({ ...followUp, ...binding, createdBy: input.worker });
         assertSubset(followUp.allowedActions, parent.delegableActions, "follow-up allowedActions");
         assertSubset(followUp.delegableActions, parent.delegableActions, "follow-up delegableActions");
         const id = randomUUID();
         this.insertWork({
           ...followUp,
+          ...binding,
           id,
           rootId: parent.rootId,
           parentId: parent.id,
@@ -3010,6 +3090,32 @@ function assertDeliverable(input: {
   if (problem) throw new Error(problem.message);
 }
 
+/**
+ * The pull-request binding a proposed follow-up inherits from its parent
+ * (ADR-0061): the parent's own cure record, and only for a `pr-cure-change`
+ * child that declares it works on that existing pull request. The proposer
+ * cannot supply one — `followUpSchema` in the MCP boundary is closed over eight
+ * fields and rejects any other key — so a child can only ever bind the pull
+ * request and head its parent already holds. A child under a parent with no
+ * cure record inherits nothing and is still refused as
+ * `existing-pull-request-without-binding`.
+ *
+ * The parent's `sourceRef` is deliberately not copied: `work_items` carries a
+ * unique index on `(repository, source_ref)`, so a child repeating its parent's
+ * reference could not be stored at all. The cure record is the binding — it
+ * names the pull request URL and the head SHA — and `knownPullRequestUrls`
+ * already reads it.
+ *
+ * A `review` record is likewise not inherited: `pullRequestReviewItems` counts
+ * every `pr-review`/`pr-review-fix` item carrying one as a review round, and
+ * the gate mints those roots itself through `enqueueReviewRoot` rather than
+ * accepting them as proposals.
+ */
+function inheritedCureBinding(parent: WorkItem, followUp: FollowUpInput): { cure?: PullRequestCure } {
+  if (followUp.kind !== CURE_CHANGE_KIND || followUp.executionTarget !== "existing-pull-request") return {};
+  return parent.cure === undefined ? {} : { cure: parent.cure };
+}
+
 /** A pull-request binding: a review or cure record, or a sourceRef naming `<url>@<head SHA>` (ADR-0073). */
 function hasPullRequestBinding(item: { sourceRef?: string; cure?: unknown; review?: unknown }): boolean {
   if (item.cure !== undefined || item.review !== undefined) return true;
@@ -3121,6 +3227,20 @@ export function contractProblem(item: {
       };
     }
   }
+  // ADR-0061: a pr-cure-change exists to change the patch of the pull request
+  // its parent is bound to. The proposer picks the target, and declaring
+  // `new-pull-request` would validate while instructing the next worker to open
+  // a SECOND pull request for a head that already has one — the very failure
+  // ADR-0061 forbids. Refuse the declaration rather than rewriting it: a
+  // silently corrected target hides the proposer's mistake. An undeclared
+  // legacy row is left to `undeclared-execution-target`, as the other
+  // ADR-0073 rules do.
+  if (item.kind === CURE_CHANGE_KIND && item.executionTarget !== undefined && item.executionTarget !== "existing-pull-request") {
+    return {
+      code: "cure-change-without-existing-target",
+      message: `a ${CURE_CHANGE_KIND} item changes the patch of the pull request its parent is bound to: executionTarget must be existing-pull-request, never ${item.executionTarget} — a second pull request for the same head is what ADR-0061 forbids`,
+    };
+  }
   if (item.executionTarget === "existing-pull-request" && !hasPullRequestBinding(item)) {
     return {
       code: "existing-pull-request-without-binding",
@@ -3141,6 +3261,7 @@ export const contractProblemCodes = [
   "mutating-target-without-write",
   "mutating-target-without-required-pull-request",
   "existing-pull-request-without-binding",
+  "cure-change-without-existing-target",
   "undeclared-execution-target",
   "unbound-policy",
 ] as const;

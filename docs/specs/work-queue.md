@@ -356,7 +356,19 @@ MCP (rule 41).
     the repository is `completed` within its window and proposed no child MUST
     be skipped and reported as cooled; a kind whose latest root proposed a
     child or is older than its window is offered again once its lineage is
-    inactive.
+    inactive. The window MUST back off over consecutive no-finding roots:
+    for a streak of `n` — that kind's `n` newest roots in the repository, all
+    `completed` with no child — the effective window is `base × 2^(n − 1)`,
+    clamped to `MAX_NO_FINDING_COOLDOWN_SECONDS` (14 days). A streak of one
+    is therefore exactly the base window, the first root that proposes a
+    child resets the streak to the catalog cadence, and a base of `0` stays
+    disabled with no back-off. The back-off MUST NOT shorten any window: the
+    ceiling is a floor of the base too, so an explicit `--cooldown-hours <n>`
+    longer than 14 days MUST keep its own window rather than be cut down to
+    the ceiling. Root chronology MUST come from an immutable ordering: a
+    `note` bumps a completed root's `updated_at`, so ordering by it would let
+    a note on an older no-finding root outrank a newer root that proposed a
+    child and suppress the kind that a finding should have reset.
 33. `complete_work` MUST verify every `issue` and `pull-request` artifact
     against the GitHub API before the completion transaction, using the item's
     repository. When GitHub answers that the artifact does not exist, resolves
@@ -1283,7 +1295,23 @@ MCP (rule 41).
     `existing-pull-request` MUST include both `write` and `open-pr` and
     declare `pull-request`; `existing-pull-request` MUST additionally carry
     a pull-request binding — a `review` or `cure` record, or a `sourceRef`
-    naming `<url>@<head SHA>`. Snowcat's own definers declare accordingly:
+    naming `<url>@<head SHA>`. A follow-up MUST NOT name its own binding:
+    `complete_work` MUST refuse one carrying `sourceRef`, `cure`, or
+    `review` at the schema and again in the store, because a
+    proposer-supplied binding could name any pull request at any head. A
+    `pr-cure-change` follow-up (rule 42) MUST declare
+    `existing-pull-request` and MUST be refused
+    (`cure-change-without-existing-target`) when it declares any other
+    target, rather than having one inferred or rewritten for it: it changes
+    the patch of the pull request its parent is bound to, and a second pull
+    request for a head that already has one is what ADR-0061 forbids. It
+    MUST instead inherit its parent's `cure` record verbatim — the same
+    pull request URL and the same head SHA, stored on the child — so the
+    substantive cure ADR-0061 prescribes is reachable without widening what
+    a proposal may reach; the parent's `sourceRef` MUST NOT be copied, since
+    `(repository, source_ref)` is unique. A child under a parent carrying no
+    binding MUST inherit nothing and MUST still be refused
+    `existing-pull-request-without-binding`. Snowcat's own definers declare accordingly:
     rule 42's `pr-cure` and rule 55's `pr-review-fix` roots
     `existing-pull-request`, rule 53's `pr-review` roots and the catalog's
     discovery roots `read-only` (the conformance root's `allowedActions` also
