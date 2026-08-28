@@ -231,6 +231,14 @@ export interface PullRequestCure {
   originItemId?: string;
 }
 
+/**
+ * ADR-0061: the follow-up kind a `pr-cure` worker proposes when curing the head
+ * needs the patch to change. It works on the pull request its parent is already
+ * bound to, so it inherits the parent's cure record rather than naming one of
+ * its own — the proposer has no way to supply a binding, deliberately.
+ */
+export const CURE_CHANGE_KIND = "pr-cure-change";
+
 export const pullRequestDecays = ["behind", "dirty", "failing-checks", "changes-requested", "unresolved-threads", "bad-title"] as const;
 export type PullRequestDecay = (typeof pullRequestDecays)[number];
 

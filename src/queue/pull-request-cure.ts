@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { githubApiJson, githubGraphql, type GitHubFetch } from "../repository/github-api.ts";
 import { lintPullRequestTitle } from "./pr-title-lint.ts";
 import type { QueueStore } from "./store.ts";
-import type { AllowedAction, PullRequestCure, PullRequestDecay, SeedWorkInput, WorkArtifact, WorkItem } from "./types.ts";
+import { CURE_CHANGE_KIND, type AllowedAction, type PullRequestCure, type PullRequestDecay, type SeedWorkInput, type WorkArtifact, type WorkItem } from "./types.ts";
 
 /**
  * Pull-request cure (ADR-0061): the verification pass that already re-checks
@@ -35,7 +35,7 @@ const REVIEW_THREADS_QUERY = `query FluentReviewThreads($owner: String!, $name: 
 }`;
 
 export const CURE_KIND = "pr-cure";
-export const CURE_CHANGE_KIND = "pr-cure-change";
+export { CURE_CHANGE_KIND } from "./types.ts";
 export const CURE_ACTIONS: AllowedAction[] = ["read", "write", "run-tests", "open-pr", "create-followup"];
 export const CURE_CHILD_CEILING: AllowedAction[] = ["read", "write", "run-tests", "open-pr"];
 

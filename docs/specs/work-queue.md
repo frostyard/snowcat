@@ -1284,7 +1284,23 @@ MCP (rule 41).
     `existing-pull-request` MUST include both `write` and `open-pr` and
     declare `pull-request`; `existing-pull-request` MUST additionally carry
     a pull-request binding — a `review` or `cure` record, or a `sourceRef`
-    naming `<url>@<head SHA>`. Snowcat's own definers declare accordingly:
+    naming `<url>@<head SHA>`. A follow-up MUST NOT name its own binding:
+    `complete_work` MUST refuse one carrying `sourceRef`, `cure`, or
+    `review` at the schema and again in the store, because a
+    proposer-supplied binding could name any pull request at any head. A
+    `pr-cure-change` follow-up (rule 42) MUST declare
+    `existing-pull-request` and MUST be refused
+    (`cure-change-without-existing-target`) when it declares any other
+    target, rather than having one inferred or rewritten for it: it changes
+    the patch of the pull request its parent is bound to, and a second pull
+    request for a head that already has one is what ADR-0061 forbids. It
+    MUST instead inherit its parent's `cure` record verbatim — the same
+    pull request URL and the same head SHA, stored on the child — so the
+    substantive cure ADR-0061 prescribes is reachable without widening what
+    a proposal may reach; the parent's `sourceRef` MUST NOT be copied, since
+    `(repository, source_ref)` is unique. A child under a parent carrying no
+    binding MUST inherit nothing and MUST still be refused
+    `existing-pull-request-without-binding`. Snowcat's own definers declare accordingly:
     rule 42's `pr-cure` and rule 55's `pr-review-fix` roots
     `existing-pull-request`, rule 53's `pr-review` roots and the catalog's
     discovery roots `read-only` (the conformance root's `allowedActions` also
