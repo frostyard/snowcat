@@ -68,13 +68,16 @@ export interface SurfaceOptions {
   stream?: StreamOptions;
 }
 
-/**
- * The read-first operator surface (ADR-0060): a cookie session over
- * `SNOWCAT_APP_TOKEN`, then server-rendered pages over the same `QueueStore`
- * methods the CLI uses. No route mutates the queue in this slice.
- */
 type SurfaceEnv = { Variables: { actor: string } };
 
+/**
+ * The read-first operator surface (ADR-0060): a session, then server-rendered
+ * pages over the same `QueueStore` and `ControlPlaneStore` methods the CLI
+ * uses. Its mutation routes are exactly the operator commands the CLI already
+ * has, invoked through those same CLI-backed store transitions and attributed
+ * to the web actor: the surface introduces no new state transition, no
+ * worker-facing route, and never renders a lease token.
+ */
 export function createSurfaceApp(options: SurfaceOptions): Hono<SurfaceEnv> {
   const app = new Hono<SurfaceEnv>();
   const accessMode = options.access !== undefined;
