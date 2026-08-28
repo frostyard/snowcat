@@ -5,6 +5,7 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 
 import {
   allowedActions,
+  CURE_CHANGE_KIND,
   deriveDelivery,
   MAX_REVIEW_ADVISORIES,
   MAX_ITEM_ATTEMPTS,
@@ -1812,6 +1813,15 @@ export class QueueStore {
         if ("priority" in followUp) {
           throw new Error("follow-up items may not set priority; children inherit the parent's priority");
         }
+        // A pull-request binding is derived from the parent, never proposed: a
+        // worker-supplied one could name any pull request at any head, which is
+        // exactly what the binding predicate exists to prevent. Refuse it here
+        // as well as at the MCP schema so non-MCP callers cannot bypass it.
+        for (const field of ["sourceRef", "cure", "review"] as const) {
+          if (field in followUp) {
+            throw new Error(`follow-up items may not set ${field}; a pull-request-bound child inherits its parent's binding`);
+          }
+        }
         // Sequencing edges belong to imported roots, not to lineage (ADR-0066).
         assertNoPredecessors(followUp, "a follow-up item");
         // The proposer states the child's delivery contract (ADR-0069); the
@@ -1827,14 +1837,22 @@ export class QueueStore {
           throw new Error(`follow-up executionTarget must be one of ${executionTargets.join(", ")}`);
         }
         assertKnownActions(followUp.allowedActions);
-        const problem = contractProblem({ ...followUp, parentId: parent.id });
+        // ADR-0061 + ADR-0073: a pr-cure-change child changes the patch of the
+        // very pull request its parent is bound to, and `followUpSchema` gives
+        // the worker no way to name one — deliberately, since a
+        // worker-supplied binding could reach any pull request at any head.
+        // Derive it from the parent, before the contract is checked and as it
+        // is stored, so a child binds its parent's pull request or nothing.
+        const binding = inheritedCureBinding(parent, followUp);
+        const problem = contractProblem({ ...followUp, ...binding, parentId: parent.id });
         if (problem) throw new Error(`follow-up "${followUp.kind}": ${problem.message}`);
-        validateWorkDefinition({ ...followUp, createdBy: input.worker });
+        validateWorkDefinition({ ...followUp, ...binding, createdBy: input.worker });
         assertSubset(followUp.allowedActions, parent.delegableActions, "follow-up allowedActions");
         assertSubset(followUp.delegableActions, parent.delegableActions, "follow-up delegableActions");
         const id = randomUUID();
         this.insertWork({
           ...followUp,
+          ...binding,
           id,
           rootId: parent.rootId,
           parentId: parent.id,
@@ -2996,6 +3014,32 @@ function assertDeliverable(input: {
     kind: input.kind,
   });
   if (problem) throw new Error(problem.message);
+}
+
+/**
+ * The pull-request binding a proposed follow-up inherits from its parent
+ * (ADR-0061): the parent's own cure record, and only for a `pr-cure-change`
+ * child that declares it works on that existing pull request. The proposer
+ * cannot supply one — `followUpSchema` in the MCP boundary is closed over eight
+ * fields and rejects any other key — so a child can only ever bind the pull
+ * request and head its parent already holds. A child under a parent with no
+ * cure record inherits nothing and is still refused as
+ * `existing-pull-request-without-binding`.
+ *
+ * The parent's `sourceRef` is deliberately not copied: `work_items` carries a
+ * unique index on `(repository, source_ref)`, so a child repeating its parent's
+ * reference could not be stored at all. The cure record is the binding — it
+ * names the pull request URL and the head SHA — and `knownPullRequestUrls`
+ * already reads it.
+ *
+ * A `review` record is likewise not inherited: `pullRequestReviewItems` counts
+ * every `pr-review`/`pr-review-fix` item carrying one as a review round, and
+ * the gate mints those roots itself through `enqueueReviewRoot` rather than
+ * accepting them as proposals.
+ */
+function inheritedCureBinding(parent: WorkItem, followUp: FollowUpInput): { cure?: PullRequestCure } {
+  if (followUp.kind !== CURE_CHANGE_KIND || followUp.executionTarget !== "existing-pull-request") return {};
+  return parent.cure === undefined ? {} : { cure: parent.cure };
 }
 
 /** A pull-request binding: a review or cure record, or a sourceRef naming `<url>@<head SHA>` (ADR-0073). */

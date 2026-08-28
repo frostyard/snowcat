@@ -9,7 +9,7 @@ import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { buildQueueMcpServer } from "../src/mcp/server.ts";
 import { refreshArtifactVerifications } from "../src/queue/artifact-verification.ts";
 import { assertCureCompletion, cureRootDefinition, curePullRequests, inspectPullRequestHealth } from "../src/queue/pull-request-cure.ts";
-import { QueueStore } from "../src/queue/store.ts";
+import { contractProblem, QueueStore } from "../src/queue/store.ts";
 
 const REPOSITORY = "frostyard/updex";
 const PR_URL = "https://github.com/frostyard/updex/pull/12";
@@ -629,4 +629,134 @@ test("the cure sweep selects items with non-terminal artifacts, so more than 100
   assert.equal(cure.kind, "pr-cure");
   assert.equal(cure.sourceRef, `${PR_URL}@${HEAD_A}`);
   assert.equal(cure.cure?.originItemId, originId);
+});
+
+test("a pr-cure-change follow-up inherits its parent's binding, and can bind nothing else (issue #269)", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cure-change-binding-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"), clock);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled(REPOSITORY, true);
+  const cure = { pullRequestUrl: PR_URL, headSha: HEAD_A, patchDigest: `sha256:${"0".repeat(64)}`, decay: ["dirty" as const] };
+  const parent = queue.enqueueCureRoot(REPOSITORY, {
+    kind: "pr-cure",
+    objective: `Cure ${PR_URL}`,
+    instructions: "Mechanical only.",
+    acceptanceCriteria: ["Patch unchanged."],
+    allowedActions: ["read", "write", "run-tests", "open-pr", "create-followup"],
+    delegableActions: ["read", "write", "run-tests", "open-pr"],
+    requiredArtifact: "pull-request",
+    executionTarget: "existing-pull-request",
+    createdBy: "operator:test",
+    sourceRef: `${PR_URL}@${HEAD_A}`,
+    cure,
+  })!;
+  const change = {
+    kind: "pr-cure-change",
+    objective: "Resolve the conflict the mechanical cure could not.",
+    instructions: "Edit the two conflicted files on the pull request's own branch and push.",
+    acceptanceCriteria: ["The pull request is mergeable and its checks are green."],
+    allowedActions: ["read", "write", "run-tests", "open-pr"] as const,
+    delegableActions: [] as const,
+    requiredArtifact: "pull-request" as const,
+    executionTarget: "existing-pull-request" as const,
+  };
+  const completion = {
+    worker: "claude:updex:cure",
+    result: { summary: "Mechanical cure done; the rest needs the patch to change.", evidence: [PR_URL], artifacts: [{ kind: "pull-request" as const, url: PR_URL }] },
+  };
+
+  // A worker may not name a binding: it could reach any pull request at any head.
+  const claimed = queue.claim({ worker: completion.worker, kinds: ["pr-cure"] })!;
+  assert.equal(claimed.id, parent.id);
+  for (const smuggled of [
+    { sourceRef: `pr-cure-change:https://github.com/${REPOSITORY}/pull/999@${HEAD_B}` },
+    { cure: { ...cure, pullRequestUrl: `https://github.com/${REPOSITORY}/pull/999`, headSha: HEAD_B } },
+    { review: { pullRequestUrl: PR_URL, headSha: HEAD_B, round: 1, priorBlockers: [] } },
+  ]) {
+    assert.throws(
+      () =>
+        queue.complete({
+          id: parent.id,
+          leaseToken: claimed.leaseToken!,
+          ...completion,
+          followUps: [{ ...change, allowedActions: [...change.allowedActions], delegableActions: [...change.delegableActions], ...smuggled } as never],
+        }),
+      /may not set (sourceRef|cure|review); a pull-request-bound child inherits its parent's binding/,
+    );
+  }
+  assert.equal(queue.get(parent.id)?.status, "claimed", "a refused completion leaves the item claimed");
+
+  // The lawful proposal is accepted, and its binding is exactly the parent's.
+  const accepted = queue.complete({
+    id: parent.id,
+    leaseToken: claimed.leaseToken!,
+    ...completion,
+    followUps: [{ ...change, allowedActions: [...change.allowedActions], delegableActions: [...change.delegableActions] }],
+  });
+  const child = queue.get(accepted.followUps[0]!.id)!;
+  assert.equal(child.kind, "pr-cure-change");
+  assert.equal(child.status, "proposed");
+  assert.equal(child.executionTarget, "existing-pull-request");
+  assert.equal(child.cure?.pullRequestUrl, cure.pullRequestUrl);
+  assert.equal(child.cure?.headSha, cure.headSha);
+  assert.deepEqual(child.cure, parent.cure);
+  assert.equal(child.review, undefined, "a cure child inherits the cure record only");
+  // The parent's sourceRef is not copied: (repository, source_ref) is unique.
+  assert.equal(child.sourceRef, undefined);
+  assert.equal(queue.get(parent.id)?.sourceRef, `${PR_URL}@${HEAD_A}`);
+});
+
+test("an existing-pull-request follow-up under an unbound parent is still refused (issue #269)", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-cure-change-unbound-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"), clock);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled(REPOSITORY, true);
+  const parent = queue.enqueueSeed({
+    repository: REPOSITORY,
+    kind: "issue-resolution",
+    objective: "Resolve the issue.",
+    instructions: "Open one pull request.",
+    acceptanceCriteria: ["The issue is closed."],
+    allowedActions: ["read", "write", "run-tests", "open-pr", "create-followup"],
+    delegableActions: ["read", "write", "run-tests", "open-pr"],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
+    createdBy: "operator:test",
+  });
+  assert.equal(parent.cure, undefined);
+  const claimed = queue.claim({ worker: "claude:updex:issue" })!;
+
+  assert.throws(
+    () =>
+      queue.complete({
+        id: parent.id,
+        leaseToken: claimed.leaseToken!,
+        worker: "claude:updex:issue",
+        result: { summary: "Opened the pull request.", evidence: [PR_URL], artifacts: [{ kind: "pull-request", url: PR_URL }] },
+        followUps: [
+          {
+            kind: "pr-cure-change",
+            objective: "Change a pull request this lineage does not own.",
+            instructions: "Push to someone else's branch.",
+            acceptanceCriteria: ["Never admitted."],
+            allowedActions: ["read", "write", "run-tests", "open-pr"],
+            delegableActions: [],
+            requiredArtifact: "pull-request",
+            executionTarget: "existing-pull-request",
+          },
+        ],
+      }),
+    /follow-up "pr-cure-change": an existing-pull-request item must bind its pull request/,
+  );
+  assert.equal(queue.get(parent.id)?.status, "claimed");
+  assert.equal(
+    contractProblem({
+      allowedActions: ["read", "write", "open-pr"],
+      requiredArtifact: "pull-request",
+      executionTarget: "existing-pull-request",
+      kind: "pr-cure-change",
+      parentId: parent.id,
+    })?.code,
+    "existing-pull-request-without-binding",
+  );
 });

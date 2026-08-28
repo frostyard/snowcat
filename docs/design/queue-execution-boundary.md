@@ -129,8 +129,20 @@ Tokens are minted and revoked on the surface (or the CLI) and stored only as
 hashes ([work queue](../specs/work-queue.md) rules 48–51).
 
 Completion records a structured summary, concrete evidence, artifact URLs, and
-zero or more bounded child items. Those reports are provenance, not independent
-attestation. Deterministic checks can reject malformed, cross-repository, or
+zero or more bounded child items. A child that works on an *existing* pull
+request rather than opening a new one
+([ADR-0073](../adr/0073-declare-the-execution-target-on-every-work-item.md))
+must be bound to one, and the proposer never names that binding: the MCP
+follow-up schema is closed over its eight fields, and the store refuses a
+follow-up carrying `sourceRef`, `cure`, or `review` even from a non-MCP caller,
+because a proposer-supplied binding could reach any pull request at any head.
+The binding is inherited instead — a `pr-cure-change` child
+([ADR-0061](../adr/0061-cure-pull-requests-as-bounded-per-head-work.md)) takes
+its parent's `cure` record verbatim, the same pull request URL and the same
+head SHA — so the substantive cure is reachable while a proposal still cannot
+reach a pull request its parent does not already hold. A child under a parent
+with no binding inherits nothing and is refused exactly as before. Those
+reports are provenance, not independent attestation. Deterministic checks can reject malformed, cross-repository, or
 unauthorized artifact claims, but only reconciliation with GitHub or another
 source can establish that an artifact exists and has the reported state.
 
