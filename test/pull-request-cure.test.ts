@@ -686,6 +686,44 @@ test("a pr-cure-change follow-up inherits its parent's binding, and can bind not
   }
   assert.equal(queue.get(parent.id)?.status, "claimed", "a refused completion leaves the item claimed");
 
+  // Nor may it escape the binding by declaring a different target: ADR-0061
+  // forbids a second pull request for a head that already has one, and the
+  // declaration is refused rather than silently rewritten.
+  assert.throws(
+    () =>
+      queue.complete({
+        id: parent.id,
+        leaseToken: claimed.leaseToken!,
+        ...completion,
+        followUps: [{ ...change, allowedActions: [...change.allowedActions], delegableActions: [...change.delegableActions], executionTarget: "new-pull-request" } as never],
+      }),
+    /follow-up "pr-cure-change": a pr-cure-change item changes the patch of the pull request its parent is bound to: executionTarget must be existing-pull-request, never new-pull-request/,
+  );
+  // `read-only` needs no new rule: a change child declaring it is already
+  // refused by read-only-with-mutation, before this one is reached.
+  assert.throws(
+    () =>
+      queue.complete({
+        id: parent.id,
+        leaseToken: claimed.leaseToken!,
+        ...completion,
+        followUps: [{ ...change, allowedActions: [...change.allowedActions], delegableActions: [...change.delegableActions], executionTarget: "read-only" } as never],
+      }),
+    /follow-up "pr-cure-change": a read-only item mutates nothing/,
+  );
+  assert.equal(queue.get(parent.id)?.status, "claimed", "and that refusal rolls the whole completion back too");
+  assert.equal(queue.list({ repository: REPOSITORY }).length, 1, "nothing was proposed");
+  assert.equal(
+    contractProblem({
+      allowedActions: ["read", "write", "run-tests", "open-pr"],
+      requiredArtifact: "pull-request",
+      executionTarget: "new-pull-request",
+      kind: "pr-cure-change",
+      parentId: parent.id,
+    })?.code,
+    "cure-change-without-existing-target",
+  );
+
   // The lawful proposal is accepted, and its binding is exactly the parent's.
   const accepted = queue.complete({
     id: parent.id,

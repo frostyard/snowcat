@@ -1276,7 +1276,12 @@ MCP (rule 41).
     `complete_work` MUST refuse one carrying `sourceRef`, `cure`, or
     `review` at the schema and again in the store, because a
     proposer-supplied binding could name any pull request at any head. A
-    `pr-cure-change` follow-up (rule 42) declaring `existing-pull-request`
+    `pr-cure-change` follow-up (rule 42) MUST declare
+    `existing-pull-request` and MUST be refused
+    (`cure-change-without-existing-target`) when it declares any other
+    target, rather than having one inferred or rewritten for it: it changes
+    the patch of the pull request its parent is bound to, and a second pull
+    request for a head that already has one is what ADR-0061 forbids. It
     MUST instead inherit its parent's `cure` record verbatim — the same
     pull request URL and the same head SHA, stored on the child — so the
     substantive cure ADR-0061 prescribes is reachable without widening what

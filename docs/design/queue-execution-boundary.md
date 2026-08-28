@@ -140,7 +140,11 @@ The binding is inherited instead — a `pr-cure-change` child
 ([ADR-0061](../adr/0061-cure-pull-requests-as-bounded-per-head-work.md)) takes
 its parent's `cure` record verbatim, the same pull request URL and the same
 head SHA — so the substantive cure is reachable while a proposal still cannot
-reach a pull request its parent does not already hold. A child under a parent
+reach a pull request its parent does not already hold. Nor can it escape the
+binding by declaring a different target: a `pr-cure-change` that says
+`new-pull-request` is refused rather than corrected, because opening a second
+pull request for a head that already has one is exactly what ADR-0061
+forbids. A child under a parent
 with no binding inherits nothing and is refused exactly as before. Those
 reports are provenance, not independent attestation. Deterministic checks can reject malformed, cross-repository, or
 unauthorized artifact claims, but only reconciliation with GitHub or another

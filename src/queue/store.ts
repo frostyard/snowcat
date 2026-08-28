@@ -3123,6 +3123,20 @@ export function contractProblem(item: {
       };
     }
   }
+  // ADR-0061: a pr-cure-change exists to change the patch of the pull request
+  // its parent is bound to. The proposer picks the target, and declaring
+  // `new-pull-request` would validate while instructing the next worker to open
+  // a SECOND pull request for a head that already has one — the very failure
+  // ADR-0061 forbids. Refuse the declaration rather than rewriting it: a
+  // silently corrected target hides the proposer's mistake. An undeclared
+  // legacy row is left to `undeclared-execution-target`, as the other
+  // ADR-0073 rules do.
+  if (item.kind === CURE_CHANGE_KIND && item.executionTarget !== undefined && item.executionTarget !== "existing-pull-request") {
+    return {
+      code: "cure-change-without-existing-target",
+      message: `a ${CURE_CHANGE_KIND} item changes the patch of the pull request its parent is bound to: executionTarget must be existing-pull-request, never ${item.executionTarget} — a second pull request for the same head is what ADR-0061 forbids`,
+    };
+  }
   if (item.executionTarget === "existing-pull-request" && !hasPullRequestBinding(item)) {
     return {
       code: "existing-pull-request-without-binding",
@@ -3142,6 +3156,7 @@ export const contractProblemCodes = [
   "mutating-target-without-write",
   "mutating-target-without-required-pull-request",
   "existing-pull-request-without-binding",
+  "cure-change-without-existing-target",
   "undeclared-execution-target",
   "unbound-policy",
 ] as const;
