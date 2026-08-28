@@ -80,9 +80,12 @@ eligible, whether retention pruning ran, and the completed state.
 11. Startup MUST validate the complete state row. Backup content digest MUST
     cover it. Poll state MUST NOT appear as a record, event, fact, decision, or
     projection.
-12. `poll` MUST await one run before another, cap any single sleep at 60
-    seconds so shutdown can be observed, and terminate cleanly on SIGINT or
-    SIGTERM without starting another run.
+12. `poll` MUST await one run before another, cap any single scheduled wait at
+    60 seconds, and terminate cleanly on SIGINT or SIGTERM without starting
+    another run. The scheduled wait MUST be interruptible by the same stop
+    request the signal handlers set, so a signal received mid-wait ends the
+    command without sitting out the remaining delay; waking early MUST NOT
+    change the persisted schedule, the backoff, or the lease.
 13. Schema version `8` and registry version `18` have no in-place migration
     from the pre-production target; initialize a fresh database.
 

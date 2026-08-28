@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-import { runCorePollOnce, type CoreSourceSynchronizer } from "../src/core/controller.ts";
+import {
+  runCorePollOnce,
+  waitForStopOrDelay,
+  type CoreSourceSynchronizer,
+} from "../src/core/controller.ts";
 import {
   CORE_POLL_DEFAULT_INTERVAL_SECONDS,
   corePollDelaySeconds,
@@ -264,4 +268,90 @@ test("startup fails closed on malformed Core poll operational state", async () =
   raw.prepare("UPDATE core_poll_state SET next_poll_at = 'not-a-time' WHERE singleton = 1").run();
   raw.close();
   assert.throws(() => new ControlPlaneStore(path), /Core next poll time/);
+});
+
+test("a scheduled wait resolves as soon as the stop request aborts", async () => {
+  const aborted = new AbortController();
+  aborted.abort();
+  const alreadyStopped = Date.now();
+  await waitForStopOrDelay(60_000, aborted.signal);
+  assert.ok(Date.now() - alreadyStopped < 1_000, "an already-aborted stop request never waits");
+
+  const stopRequest = new AbortController();
+  const startedAt = Date.now();
+  const waiting = waitForStopOrDelay(60_000, stopRequest.signal);
+  setTimeout(() => stopRequest.abort(), 10);
+  await waiting;
+  assert.ok(
+    Date.now() - startedAt < 5_000,
+    "an aborted stop request wakes the wait rather than sitting out the 60-second timer",
+  );
+
+  const bounded = Date.now();
+  await waitForStopOrDelay(5, undefined);
+  assert.ok(Date.now() - bounded < 5_000, "an unsignalled wait still resolves on its own timer");
+});
+
+test("core -- poll exits promptly when SIGTERM arrives during its scheduled wait", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-core-poll-stop-test-"));
+  const path = join(directory, "control-plane.db");
+  // Complete one poll so the loop's first iteration is `not-due` and it goes
+  // straight into the bounded scheduled wait without reaching a Git source.
+  const store = new ControlPlaneStore(path);
+  const claim = store.claimCorePoll(3600);
+  assert.equal(claim.status, "claimed");
+  if (claim.status !== "claimed") return;
+  store.completeCorePoll({
+    runId: claim.runId,
+    runStatus: "completed",
+    sourceOutcome: "eligible",
+    checkDisposition: "recorded",
+    pruneRan: false,
+  });
+  store.close();
+
+  const child = spawn(process.execPath, ["--import", "tsx", "src/core/cli.ts", "poll"], {
+    cwd: process.cwd(),
+    env: childEnvironment({ SNOWCAT_CONTROL_DB: path, SNOWCAT_CORE_POLL_INTERVAL_SECONDS: "3600" }),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+
+  const exited = new Promise<number | null>((resolveExit) => {
+    child.on("exit", (code) => resolveExit(code));
+  });
+  const waiting = new Promise<void>((resolveWaiting, rejectWaiting) => {
+    const guard = setTimeout(() => {
+      child.kill("SIGKILL");
+      rejectWaiting(new Error(`core -- poll never emitted its first result: ${stderr}`));
+    }, 60_000);
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+      if (!stdout.includes("\n")) return;
+      clearTimeout(guard);
+      resolveWaiting();
+    });
+  });
+
+  try {
+    await waiting;
+    assert.equal(JSON.parse(stdout.split("\n")[0]!).status, "not-due");
+    const stoppedAt = Date.now();
+    child.kill("SIGTERM");
+    const code = await exited;
+    const elapsed = Date.now() - stoppedAt;
+    assert.equal(code, 0, `core -- poll exited ${code}: ${stderr}`);
+    assert.ok(
+      elapsed < 5_000,
+      `core -- poll took ${elapsed}ms to stop; the scheduled wait must be interruptible, not a 60-second timer`,
+    );
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  }
 });

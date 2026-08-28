@@ -85,6 +85,15 @@ export async function runCorePollOnce(
   };
 }
 
+/**
+ * Run the Core polling loop until `shouldStop()` reports a stop request.
+ *
+ * `stopSignal` is the same stop request the caller wires to SIGINT and
+ * SIGTERM: aborting it wakes the loop out of its scheduled wait immediately
+ * instead of leaving the process to sit out the remaining bounded delay. It
+ * changes nothing about poll cadence or lease semantics — a woken wait always
+ * re-tests `shouldStop()` and returns without claiming.
+ */
 export async function runCorePollingLoop(
   store: ControlPlaneStore,
   config: CoreGitSourceConfig,
@@ -92,6 +101,7 @@ export async function runCorePollingLoop(
   shouldStop: () => boolean,
   emit: (result: CorePollOnceResult) => void,
   reconcile: RepositoryReconciler | undefined = undefined,
+  stopSignal: AbortSignal | undefined = undefined,
 ): Promise<void> {
   let lastWaitingKey: string | null = null;
   while (!shouldStop()) {
@@ -112,10 +122,31 @@ export async function runCorePollingLoop(
           ? result.nextPollAt
           : result.state.nextPollAt;
     const remaining = Math.max(0, new Date(wakeAt).getTime() - Date.now());
-    await sleep(Math.min(remaining, 60_000));
+    await waitForStopOrDelay(Math.min(remaining, 60_000), stopSignal);
   }
 }
 
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
+/**
+ * Wait up to `milliseconds`, resolving as soon as `stopSignal` aborts. Without
+ * a signal — or once the signal is already aborted — the behavior is exactly
+ * the plain bounded delay the loop waited on before, so cadence is unchanged.
+ * Whichever side settles first clears the timer and drops the abort listener.
+ */
+export function waitForStopOrDelay(
+  milliseconds: number,
+  stopSignal: AbortSignal | undefined = undefined,
+): Promise<void> {
+  if (stopSignal?.aborted) return Promise.resolve();
+  return new Promise((resolvePromise) => {
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      stopSignal?.removeEventListener("abort", settle);
+      resolvePromise();
+    };
+    const timer = setTimeout(settle, milliseconds);
+    stopSignal?.addEventListener("abort", settle, { once: true });
+  });
 }
