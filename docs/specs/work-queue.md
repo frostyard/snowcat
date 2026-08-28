@@ -356,7 +356,13 @@ MCP (rule 41).
     the repository is `completed` within its window and proposed no child MUST
     be skipped and reported as cooled; a kind whose latest root proposed a
     child or is older than its window is offered again once its lineage is
-    inactive.
+    inactive. The window MUST back off over consecutive no-finding roots:
+    for a streak of `n` — that kind's `n` newest roots in the repository, all
+    `completed` with no child — the effective window is `base × 2^(n − 1)`,
+    clamped to `MAX_NO_FINDING_COOLDOWN_SECONDS` (14 days). A streak of one
+    is therefore exactly the base window, the first root that proposes a
+    child resets the streak to the catalog cadence, and a base of `0` stays
+    disabled with no back-off. The back-off MUST NOT shorten any window.
 33. `complete_work` MUST verify every `issue` and `pull-request` artifact
     against the GitHub API before the completion transaction, using the item's
     repository. When GitHub answers that the artifact does not exist, resolves

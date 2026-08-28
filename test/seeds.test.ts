@@ -9,7 +9,7 @@ import { ControlPlaneStore } from "../src/control/store.ts";
 import { enrolledRepositories } from "../src/queue/eligibility.ts";
 import { maintenancePrograms } from "../src/queue/programs.ts";
 import { enqueueDogfoodBatch, enqueueDogfoodBatchForEnrolled } from "../src/queue/seeds.ts";
-import { QueueStore } from "../src/queue/store.ts";
+import { MAX_NO_FINDING_COOLDOWN_SECONDS, QueueStore } from "../src/queue/store.ts";
 import { disabledDeclaration, enrollExampleRepository } from "./helpers/core-fixtures.ts";
 
 const DOGFOOD_REPOSITORY = "frostyard/snowcat";
@@ -326,9 +326,13 @@ test("a no-finding assessment cools its kind for the window, while a finding doe
     result: { summary: "Still nothing.", evidence: ["src/"], artifacts: [] },
     followUps: [],
   });
+  // That was quality's second consecutive no-finding (completed 12:10), so the one-hour
+  // base window has backed off to two hours: still cooling at 14:00, offered again at 14:20.
   now = new Date("2026-08-17T12:20:00.000Z");
   assert.deepEqual(enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { cooldownSeconds: 3600 }).cooledKinds, ["quality-gap-discovery"]);
   now = new Date("2026-08-17T14:00:00.000Z");
+  assert.deepEqual(enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { cooldownSeconds: 3600 }).cooledKinds, ["quality-gap-discovery"]);
+  now = new Date("2026-08-17T14:20:00.000Z");
   const later = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { cooldownSeconds: 3600 });
   assert.deepEqual(later.created.map((item) => item.kind), ["quality-gap-discovery"]);
 
@@ -451,4 +455,94 @@ test("the enrolled feeder seeds only repositories that are opted in and enrolled
 
   // A missing control-plane database throws instead of seeding anything.
   assert.throws(() => enqueueDogfoodBatchForEnrolled(queue, join(directory, "nope.db")), /does not exist/);
+});
+
+test("the no-finding cooldown backs off per consecutive empty assessment, resets on a finding, and is clamped", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-dogfood-backoff-test-"));
+  let now = new Date("2026-08-17T12:00:00.000Z");
+  const queue = new QueueStore(join(directory, "queue.db"), () => now);
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled(DOGFOOD_REPOSITORY, true);
+
+  const KIND = "quality-gap-discovery";
+  const DAY = 24 * 3600;
+  const WORKER = "claude:snowcat:dogfood";
+  const after = (seconds: number): void => {
+    now = new Date(now.getTime() + seconds * 1000);
+  };
+  const seed = (options: { cooldownSeconds?: number } = {}): { created: string[]; cooledKinds: string[] } => {
+    const batch = enqueueDogfoodBatch(queue, DOGFOOD_REPOSITORY, { programs: ["quality"], ...options });
+    return { created: batch.created.map((item) => item.kind), cooledKinds: batch.cooledKinds };
+  };
+  const assess = (followUps: Parameters<QueueStore["complete"]>[0]["followUps"] = []): string[] => {
+    const item = queue.claim({ worker: WORKER, kinds: [KIND] })!;
+    return queue
+      .complete({
+        id: item.id,
+        leaseToken: item.leaseToken!,
+        worker: WORKER,
+        result: { summary: followUps.length === 0 ? "Nothing found." : "Found one gap.", evidence: ["src/"], artifacts: [] },
+        followUps,
+      })
+      .followUps.map((child) => child.id);
+  };
+
+  // A streak of one waits exactly the base window, so a single no-finding behaves as it always has.
+  assert.deepEqual(seed().created, [KIND]);
+  assess();
+  after(DAY);
+  assert.deepEqual(seed().cooledKinds, [KIND]);
+  after(1);
+  assert.deepEqual(seed().created, [KIND]);
+
+  // Two consecutive no-findings double the window: still cooling one second past the base window.
+  assess();
+  after(DAY + 1);
+  const doubled = seed();
+  assert.deepEqual(doubled.cooledKinds, [KIND]);
+  assert.deepEqual(doubled.created, []);
+  after(DAY);
+  assert.deepEqual(seed().created, [KIND]);
+
+  // A root that proposed a child resets the streak: the next no-finding waits the base window, not a multiple.
+  const proposals = assess([
+    {
+      kind: "quality-gap-fix",
+      objective: "Close the quality gap.",
+      instructions: "Smallest change; run checks.",
+      acceptanceCriteria: ["The check passes."],
+      allowedActions: ["read", "write", "run-tests", "open-pr"],
+      delegableActions: [],
+      requiredArtifact: "pull-request",
+      executionTarget: "new-pull-request",
+    },
+  ]);
+  queue.reject(proposals[0]!, "operator:test", "Not now.");
+  after(1);
+  assert.deepEqual(seed().created, [KIND]);
+  assess();
+  after(DAY);
+  assert.deepEqual(seed().cooledKinds, [KIND]);
+  after(1);
+  assert.deepEqual(seed().created, [KIND]);
+
+  // Grow the streak to five, which would be sixteen days unclamped.
+  assess();
+  for (let streak = 2; streak <= 5; streak += 1) {
+    after(1);
+    assert.deepEqual(seed({ cooldownSeconds: 0 }).created, [KIND]);
+    assess();
+  }
+
+  // `--cooldown-hours 0` still creates the root whatever the streak.
+  after(60);
+  assert.deepEqual(seed().cooledKinds, [KIND]);
+  assert.deepEqual(seed({ cooldownSeconds: 0 }).created, [KIND]);
+  assess();
+
+  // The clamp holds the window at exactly the ceiling, and never beyond it.
+  after(MAX_NO_FINDING_COOLDOWN_SECONDS);
+  assert.deepEqual(seed().cooledKinds, [KIND]);
+  after(1);
+  assert.deepEqual(seed().created, [KIND]);
 });

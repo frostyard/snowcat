@@ -374,7 +374,17 @@ npm run --silent queue -- seed-dogfood --enrolled                         # ever
 The feeder is idempotent: a program with active lineage is skipped, and one
 that just completed with no finding is reported as `cooledKinds` rather than
 re-asked until its cadence elapses (`--cooldown-hours <n>` overrides every
-program's cadence for that run). `--enrolled` requires `SNOWCAT_CONTROL_DB` (it exits non-zero naming
+program's cadence for that run). That cadence **backs off** while the answer
+keeps coming back empty: consecutive no-finding roots double the window —
+`base × 2^(streak − 1)`, clamped to `MAX_NO_FINDING_COOLDOWN_SECONDS`
+(14 days) — so a program whose population is permanently empty (triage in a
+repository with no open issues) costs one lease a day, then every two, four,
+eight, and finally every fourteen days, instead of one a day forever. A single
+no-finding still waits exactly the catalog cadence, the first root that
+proposes a child resets the streak to it, and `--cooldown-hours 0` still
+disables suppression outright. The back-off only ever lengthens a window, so
+it cannot make the feeder ask more often than it does today.
+`--enrolled` requires `SNOWCAT_CONTROL_DB` (it exits non-zero naming
 the variable otherwise), reads the control-plane store once, and runs the
 feeder in one transaction per repository that is both opted in and `enrolled`,
 printing each repository's result plus any enrolled repository that is not
