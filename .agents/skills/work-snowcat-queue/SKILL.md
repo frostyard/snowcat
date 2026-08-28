@@ -195,7 +195,15 @@ yourself.
   acceptance criteria. Follow-ups become non-claimable proposals for operator
   or approved-policy review; never treat proposing work as approving it.
 - Keep every child action inside the parent's `delegableActions`. A follow-up is
-  not permission to escalate autonomy — but do not under-authorize either.
+  not permission to escalate autonomy — and under-authorizing is now refused,
+  not merely discouraged: a child granted `write` MUST also hold
+  `create-followup` whenever the parent's `delegableActions` allow it — and a
+  non-empty `delegableActions` of its own, since a child that may propose into
+  an empty ceiling can propose nothing at all. Missing either half refuses the
+  whole completion with `change-child-cannot-propose`. A worker that changes
+  the tree finds adjacent work while it is in there, and evidence re-queues
+  nothing. A parent that cannot delegate `create-followup` imposes no
+  such requirement — the ceiling is still the ceiling.
 - Declare `requiredArtifact` on every follow-up; it is required, never
   defaulted. A follow-up whose objective is a change (a fix, a bump, a doc
   edit) is `requiredArtifact: "pull-request"` with `write` and `open-pr` in

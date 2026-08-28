@@ -1593,6 +1593,18 @@ export class QueueStore {
     return streaks;
   }
 
+  /**
+   * One item's delegation ceiling, or `undefined` when it has no parent or the
+   * parent is gone. `approve` reads it so admission re-checks a child's
+   * contract against the same ceiling the proposal was checked against.
+   */
+  private delegableActionsOf(id: string | undefined): AllowedAction[] | undefined {
+    if (id === undefined) return undefined;
+    const row = this.db.prepare("SELECT delegable_actions_json FROM work_items WHERE id = ?").get(id) as Row | undefined;
+    if (row === undefined) return undefined;
+    return parseJson<AllowedAction[]>(row.delegable_actions_json, []);
+  }
+
   private sourceRefExists(repository: string, sourceRef: string): boolean {
     const row = this.db
       .prepare("SELECT 1 AS present FROM work_items WHERE repository = ? AND source_ref = ? LIMIT 1")
@@ -1906,7 +1918,7 @@ export class QueueStore {
         // Derive it from the parent, before the contract is checked and as it
         // is stored, so a child binds its parent's pull request or nothing.
         const binding = inheritedCureBinding(parent, followUp);
-        const problem = contractProblem({ ...followUp, ...binding, parentId: parent.id });
+        const problem = contractProblem({ ...followUp, ...binding, parentId: parent.id, parentDelegableActions: parent.delegableActions });
         if (problem) throw new Error(`follow-up "${followUp.kind}": ${problem.message}`);
         validateWorkDefinition({ ...followUp, ...binding, createdBy: input.worker });
         assertSubset(followUp.allowedActions, parent.delegableActions, "follow-up allowedActions");
@@ -2000,7 +2012,7 @@ export class QueueStore {
       // Admission re-checks the delivery contract (ADR-0069): a proposal that
       // reached the store before the rule, or through a path that skipped it,
       // must not become claimable work nobody can complete. Reject it instead.
-      const problem = contractProblem(item);
+      const problem = contractProblem({ ...item, parentDelegableActions: this.delegableActionsOf(item.parentId) });
       if (problem) {
         throw new Error(`work item ${id} cannot be admitted: ${problem.message} (${problem.code}); reject it and re-propose`);
       }
@@ -3113,12 +3125,16 @@ function hasPullRequestBinding(item: { sourceRef?: string; cure?: unknown; revie
 /** The ways a stored or proposed contract can fail to be deliverable; `undefined` when it is consistent. */
 export function contractProblem(item: {
   allowedActions: AllowedAction[];
+  /** The item's own delegation ceiling, where the caller has it: a change child that may propose needs a usable one. */
+  delegableActions?: AllowedAction[];
   requiredArtifact: RequiredArtifact;
   executionTarget?: ExecutionTarget;
   sourceRef?: string;
   cure?: unknown;
   review?: unknown;
   parentId?: string;
+  /** The parent's delegation ceiling, supplied only where a parent is in hand: the follow-up loop and `approve`. */
+  parentDelegableActions?: AllowedAction[];
   kind?: string;
 }): { code: ContractProblemCode; message: string } | undefined {
   // A `*-discovery` kind names read-only discovery (the program catalog's roots and their
@@ -3152,6 +3168,32 @@ export function contractProblem(item: {
     return {
       code: "child-write-without-required-pull-request",
       message: 'a follow-up granting write is a change and must declare requiredArtifact "pull-request"',
+    };
+  }
+  // A child that changes the tree finds adjacent work while it is in there,
+  // and without `create-followup` the only place that finding can go is the
+  // completion evidence — which nothing re-queues, nothing indexes, and no
+  // later worker reads (three findings lost that way on 2026-08-27/28). The
+  // proposer must not build a wall its own ceiling did not require, so refuse
+  // the under-authorization; the parent's ceiling is still the ceiling, and a
+  // child whose parent cannot delegate the capability is unaffected.
+  //
+  // Holding `create-followup` is not enough on its own: a child that may
+  // propose but delegates nothing has an empty ceiling, so every child it
+  // proposes — even a read-only one — exceeds it and the finding is stranded
+  // just the same. Both halves are required, and neither is auto-granted:
+  // the proposer states a usable ceiling, still bounded by the parent's.
+  if (
+    item.allowedActions.includes("write") &&
+    item.parentDelegableActions?.includes("create-followup") === true &&
+    (!item.allowedActions.includes("create-followup") || (item.delegableActions !== undefined && item.delegableActions.length === 0))
+  ) {
+    const missing = item.allowedActions.includes("create-followup")
+      ? "a non-empty delegableActions for the children it will propose (at most its parent's ceiling)"
+      : "create-followup to its allowedActions, which its parent's delegableActions already permit";
+    return {
+      code: "change-child-cannot-propose",
+      message: `a follow-up granting write finds adjacent work while it changes the tree, and evidence re-queues nothing: give ${item.kind === undefined ? "it" : `"${item.kind}"`} ${missing}`,
     };
   }
   // ADR-0073: where the target is declared, it must agree with the actions,
@@ -3213,6 +3255,7 @@ export const contractProblemCodes = [
   "required-pull-request-without-open-pr",
   "write-without-open-pr",
   "child-write-without-required-pull-request",
+  "change-child-cannot-propose",
   "read-only-with-mutation",
   "read-only-required-pull-request",
   "mutating-target-without-write",
