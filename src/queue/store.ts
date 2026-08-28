@@ -74,6 +74,30 @@ const METRICS_EVENT_TYPES = ["work.claimed", "work.completed", "work.blocked", "
 export const MAX_METRICS_WINDOW_EVENTS = 100_000;
 
 /**
+ * Ceiling on a backed-off no-finding cooldown. A program that keeps answering
+ * "nothing" doubles its window per consecutive no-finding root, and never waits
+ * longer than this before the repository is asked again.
+ */
+export const MAX_NO_FINDING_COOLDOWN_SECONDS = 14 * 24 * 60 * 60;
+
+/**
+ * The no-finding cooldown a kind has earned: its base window doubled per
+ * consecutive no-finding root beyond the first, clamped to
+ * `MAX_NO_FINDING_COOLDOWN_SECONDS`. A streak of `0` or `1` is exactly the base
+ * window, and a base of `0` — suppression disabled — stays `0`.
+ *
+ * The back-off can only ever lengthen a window, never shorten one, so the
+ * ceiling is a floor of the base too: an explicit `--cooldown-hours <n>` longer
+ * than the ceiling keeps its own window rather than being cut down to 14 days,
+ * which would ask more often than the operator asked for.
+ */
+export function backedOffCooldownSeconds(baseSeconds: number, streak: number): number {
+  if (baseSeconds <= 0 || streak <= 1) return baseSeconds;
+  const doublings = Math.min(streak - 1, 60);
+  return Math.max(baseSeconds, Math.min(baseSeconds * 2 ** doublings, MAX_NO_FINDING_COOLDOWN_SECONDS));
+}
+
+/**
  * Schema version recorded in SQLite `PRAGMA user_version`. It equals the length
  * of the migration ladder below: rung N upgrades a database from version N-1
  * to N. A process running older code refuses to keep writing to a database
@@ -945,6 +969,13 @@ export class QueueStore {
    * (a no-finding assessment) is skipped and reported in `cooledKinds`, so a
    * repeating feeder does not re-ask a question that was just answered
    * "nothing to do".
+   *
+   * The window backs off over consecutive no-finding roots: `base × 2^(n − 1)`
+   * for a streak of `n`, clamped to `MAX_NO_FINDING_COOLDOWN_SECONDS`. A single
+   * no-finding therefore waits exactly the base window as before, a program
+   * whose population is permanently empty is asked exponentially less often,
+   * and the first root that proposes a child resets the streak to the catalog
+   * cadence. A base of `0` disables suppression, back-off included.
    */
   enqueueInactiveRootBatch(
     repository: string,
@@ -963,7 +994,9 @@ export class QueueStore {
     return this.transaction(() => {
       this.assertRepositoryEnabled(repository);
       const activeKinds = new Set(this.activeRootKinds(repository));
-      const noFindingAt = cooldowns.some((seconds) => seconds > 0) ? this.latestNoFindingRoots(repository) : new Map<string, string>();
+      const noFinding = cooldowns.some((seconds) => seconds > 0)
+        ? this.noFindingStreaks(repository)
+        : new Map<string, { completedAt: string; streak: number }>();
       const created: WorkItem[] = [];
       const skippedKinds: string[] = [];
       const cooledKinds: string[] = [];
@@ -977,9 +1010,9 @@ export class QueueStore {
           skippedKinds.push(input.kind);
           return;
         }
-        const completedAt = noFindingAt.get(input.kind);
-        const cooldownSeconds = cooldowns[index]!;
-        if (completedAt !== undefined && cooldownSeconds > 0 && new Date(completedAt).getTime() >= this.clock().getTime() - cooldownSeconds * 1000) {
+        const entry = noFinding.get(input.kind);
+        const cooldownSeconds = backedOffCooldownSeconds(cooldowns[index]!, entry?.streak ?? 0);
+        if (entry !== undefined && cooldownSeconds > 0 && new Date(entry.completedAt).getTime() >= this.clock().getTime() - cooldownSeconds * 1000) {
           cooledKinds.push(input.kind);
           return;
         }
@@ -1510,24 +1543,53 @@ export class QueueStore {
   /**
    * For each kind whose most recent root in the repository is `completed` and
    * proposed no child — the assessment ran and found nothing actionable — the
-   * completion time, so a caller can apply its own cooldown window per kind.
+   * completion time and the consecutive no-finding streak: how many of that
+   * kind's leading roots, newest first, are completed with no child. The walk
+   * stops at the first root that proposed a child or is not `completed`, so one
+   * finding resets the streak to zero and the kind drops out of the map. A
+   * caller applies its own cooldown window per kind and backs it off by the
+   * streak.
+   *
+   * Chronology comes from `created_at`, never `updated_at`: `note` bumps
+   * `updated_at` even on a completed root, so ordering by it would let an
+   * operator note on an older no-finding root move it ahead of a newer root
+   * that proposed a child, and a real finding would fail to reset the streak.
+   * `created_at` is immutable, and the feeder creates a kind's next root only
+   * once the previous lineage is terminal, so it is the roots' true order;
+   * roots created in the same instant are walked in insertion order, so
+   * "newest first" stays deterministic under a timestamp tie. The cooldown
+   * anchor is the ledger's `work.completed` instant for the same reason, with
+   * `updated_at` as the fallback for a row whose event is missing.
    */
-  private latestNoFindingRoots(repository: string): Map<string, string> {
+  private noFindingStreaks(repository: string): Map<string, { completedAt: string; streak: number }> {
     const rows = this.db
       .prepare(
-        `SELECT latest.kind AS kind, latest.updated_at AS updated_at
-         FROM work_items latest
-         WHERE latest.repository = ? AND latest.parent_id IS NULL
-           AND latest.updated_at = (
-             SELECT MAX(root.updated_at) FROM work_items root
-             WHERE root.repository = latest.repository AND root.parent_id IS NULL AND root.kind = latest.kind
-           )
-           AND latest.status = 'completed'
-           AND NOT EXISTS (SELECT 1 FROM work_items child WHERE child.parent_id = latest.id)
-         ORDER BY latest.kind`,
+        `SELECT root.kind AS kind, root.status AS status,
+                COALESCE(
+                  (SELECT MAX(event.occurred_at) FROM work_events event
+                    WHERE event.work_item_id = root.id AND event.event_type = 'work.completed'),
+                  root.updated_at
+                ) AS completed_at,
+                EXISTS (SELECT 1 FROM work_items child WHERE child.parent_id = root.id) AS has_child
+         FROM work_items root
+         WHERE root.repository = ? AND root.parent_id IS NULL
+         ORDER BY root.kind, root.created_at DESC, root.rowid DESC`,
       )
       .all(repository) as Row[];
-    return new Map(rows.map((row) => [String(row.kind), String(row.updated_at)]));
+    const streaks = new Map<string, { completedAt: string; streak: number }>();
+    const settled = new Set<string>();
+    for (const row of rows) {
+      const kind = String(row.kind);
+      if (settled.has(kind)) continue;
+      if (String(row.status) !== "completed" || Number(row.has_child) !== 0) {
+        settled.add(kind);
+        continue;
+      }
+      const entry = streaks.get(kind);
+      if (entry === undefined) streaks.set(kind, { completedAt: String(row.completed_at), streak: 1 });
+      else entry.streak += 1;
+    }
+    return streaks;
   }
 
   private sourceRefExists(repository: string, sourceRef: string): boolean {
