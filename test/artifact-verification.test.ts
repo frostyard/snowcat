@@ -31,7 +31,8 @@ function pullRequest(overrides: Record<string, unknown> = {}): Record<string, un
     merged_at: null,
     closed_at: null,
     head: { sha: "0123456789abcdef0123456789abcdef01234567" },
-    base: { repo: { full_name: "frostyard/updex" } },
+    base: { repo: { full_name: "frostyard/updex", private: false } },
+    body: "## Summary\n\nFix the retry path.\n\n## Verification\n\n- [x] `npm test`\n\n## Risk tier\n\nTier 2",
     ...overrides,
   };
 }
@@ -65,6 +66,7 @@ function apiFetcher(routes: Record<string, unknown>, options: { status?: number;
 }
 
 const PR_PATH = "/repos/frostyard/updex/pulls/12";
+const PR_TEMPLATE_PATH = "/repos/frostyard/updex/contents/.github/pull_request_template.md";
 const ISSUE_PATH = "/repos/frostyard/updex/issues/7";
 const prArtifact: WorkArtifact = { kind: "pull-request", url: PR_URL };
 const issueArtifact: WorkArtifact = { kind: "issue", url: ISSUE_URL };
@@ -152,15 +154,371 @@ test("an unavailable or unreadable GitHub answer records unverified instead of r
   const verified = await verifyCompletionArtifacts(
     REPOSITORY,
     [prArtifact, { kind: "report", url: "https://example.com/r" }, issueArtifact],
-    { fetcher: apiFetcher({ [PR_PATH]: pullRequest() }, { status: 502 }).fetcher, clock },
+    { fetcher: apiFetcher({ [PR_PATH]: pullRequest() }, { status: 502 }).fetcher, clock, completionEvidence: ["attempted tests"] },
   );
   assert.equal(verified[0]?.verification?.status, "unverified");
   assert.equal(verified[1]?.verification, undefined, "non-GitHub artifacts pass through untouched");
   assert.equal(verified[2]?.verification?.status, "unverified");
   await assert.rejects(
-    verifyCompletionArtifacts(REPOSITORY, [prArtifact], { fetcher: apiFetcher({}).fetcher, clock }),
+    verifyCompletionArtifacts(REPOSITORY, [prArtifact], {
+      fetcher: apiFetcher({}).fetcher,
+      clock,
+      completionEvidence: ["attempted tests"],
+    }),
     /artifact rejected: pull-request .* does not exist/,
   );
+  const noEvidenceApi = apiFetcher({}, { status: 503 });
+  await assert.rejects(
+    verifyCompletionArtifacts(REPOSITORY, [prArtifact], {
+      fetcher: noEvidenceApi.fetcher,
+      clock,
+      completionEvidence: [],
+    }),
+    /pull-request completion reports no evidence/,
+  );
+  assert.deepEqual(noEvidenceApi.requests, [], "locally invalid evidence is refused before GitHub is asked");
+  const blankEvidenceApi = apiFetcher({
+    [PR_PATH]: pullRequest(),
+    [PR_TEMPLATE_PATH]: {
+      encoding: "base64",
+      content: Buffer.from("## Summary\n\n## Verification\n\n## Risk tier").toString("base64"),
+    },
+  });
+  await assert.rejects(
+    verifyCompletionArtifacts(REPOSITORY, [prArtifact], {
+      fetcher: blankEvidenceApi.fetcher,
+      clock,
+      completionEvidence: ["  "],
+    }),
+    /pull-request completion reports no evidence/,
+  );
+  assert.deepEqual(blankEvidenceApi.requests, [], "blank evidence is refused before GitHub is asked");
+});
+
+test("completion validates an open pull request's template sections, risk choice, and evidence", async () => {
+  const template = [
+    "## Summary",
+    "<!-- explain -->",
+    "## Checks",
+    "- [ ] `npm test`",
+    "## Risk classification",
+    "- [ ] Tier 1",
+    "- [ ] Tier 2",
+  ].join("\n");
+  const body = [
+    "## Summary",
+    "Fix the retry path.",
+    "## Checks",
+    "- [x] `npm test`",
+    "## Risk classification",
+    "- [ ] Tier 1",
+    "- [x] Tier 2",
+  ].join("\n");
+  const routes = {
+    [PR_PATH]: pullRequest({ body }),
+    [PR_TEMPLATE_PATH]: { encoding: "base64", content: Buffer.from(template).toString("base64") },
+  };
+  const verified = await verifyCompletionArtifacts(REPOSITORY, [prArtifact], {
+    fetcher: apiFetcher(routes).fetcher,
+    clock,
+    completionEvidence: ["npm test passed"],
+  });
+  assert.equal(verified[0]?.verification?.status, "verified");
+
+  await assert.rejects(
+    verifyCompletionArtifacts(REPOSITORY, [prArtifact], {
+      fetcher: apiFetcher(routes).fetcher,
+      clock,
+      completionEvidence: [],
+    }),
+    /completion reports no evidence/,
+  );
+  await assert.rejects(
+    verifyCompletionArtifacts(REPOSITORY, [prArtifact], {
+      fetcher: apiFetcher({ ...routes, [PR_PATH]: pullRequest({ body: body.replace("## Checks", "## Testing") }) }).fetcher,
+      clock,
+      completionEvidence: ["npm test passed"],
+    }),
+    /missing 1 required template section/,
+  );
+  await assert.rejects(
+    verifyCompletionArtifacts(REPOSITORY, [prArtifact], {
+      fetcher: apiFetcher({ ...routes, [PR_PATH]: pullRequest({ body: body.replace("- [x] Tier 2", "- [ ] Tier 2") }) }).fetcher,
+      clock,
+      completionEvidence: ["npm test passed"],
+    }),
+    /risk section must select exactly one tier \(found 0\)/,
+  );
+  await assert.rejects(
+    verifyCompletionArtifacts(REPOSITORY, [prArtifact], {
+      fetcher: apiFetcher({
+        ...routes,
+        [PR_PATH]: pullRequest({
+          body: body.replace("- [x] Tier 2", "- [ ] Tier 2\n- [x] I read the policy"),
+        }),
+      }).fetcher,
+      clock,
+      completionEvidence: ["npm test passed"],
+    }),
+    /risk section must select exactly one tier \(found 0\)/,
+  );
+  const multipleRiskSections = [
+    "## Summary",
+    "Fix the retry path.",
+    "## Verification",
+    "- [x] `npm test`",
+    "## Risk analysis",
+    "The change is bounded.",
+    "## Risk classification",
+    "- [ ] Tier 1",
+    "- [ ] Tier 2",
+  ].join("\n");
+  await assert.rejects(
+    verifyCompletionArtifacts(REPOSITORY, [prArtifact], {
+      fetcher: apiFetcher({
+        [PR_PATH]: pullRequest({ body: multipleRiskSections }),
+        [PR_TEMPLATE_PATH]: {
+          encoding: "base64",
+          content: Buffer.from(multipleRiskSections.replace("The change is bounded.", "")).toString("base64"),
+        },
+      }).fetcher,
+      clock,
+      completionEvidence: ["npm test passed"],
+    }),
+    /risk section must select exactly one tier \(found 0\)/,
+  );
+  await assert.rejects(
+    verifyCompletionArtifacts(REPOSITORY, [prArtifact], {
+      fetcher: apiFetcher({
+        ...routes,
+        [PR_PATH]: pullRequest({
+          body: ["```md", body, "```"].join("\n"),
+        }),
+      }).fetcher,
+      clock,
+      completionEvidence: ["npm test passed"],
+    }),
+    /missing 3 required template sections/,
+  );
+
+  const unconstrained = await verifyCompletionArtifacts(REPOSITORY, [prArtifact], {
+    fetcher: apiFetcher({
+      [PR_PATH]: pullRequest({ body: "A repository-specific body without level-two headings." }),
+      [PR_TEMPLATE_PATH]: {
+        encoding: "base64",
+        content: Buffer.from("# Pull request\n\nExplain the change in prose.").toString("base64"),
+      },
+    }).fetcher,
+    clock,
+    completionEvidence: ["npm test passed"],
+  });
+  assert.equal(unconstrained[0]?.verification?.status, "verified");
+});
+
+test("completion reads one pull-request template for multiple artifacts in the same repository", async () => {
+  const secondUrl = `https://github.com/${REPOSITORY}/pull/13`;
+  const secondPath = `/repos/${REPOSITORY}/pulls/13`;
+  const template = "## Summary\n\n## Verification\n\n## Risk tier";
+  const api = apiFetcher({
+    [PR_PATH]: pullRequest(),
+    [secondPath]: pullRequest({ number: 13, html_url: secondUrl }),
+    [PR_TEMPLATE_PATH]: { encoding: "base64", content: Buffer.from(template).toString("base64") },
+  });
+
+  const verified = await verifyCompletionArtifacts(
+    REPOSITORY,
+    [prArtifact, { kind: "pull-request", url: secondUrl }],
+    { fetcher: api.fetcher, clock, completionEvidence: ["npm test passed"] },
+  );
+
+  assert.deepEqual(verified.map((artifact) => artifact.verification?.status), ["verified", "verified"]);
+  assert.equal(api.requests.filter((request) => request === PR_TEMPLATE_PATH).length, 1);
+});
+
+test("an unavailable pull-request template keeps the pull request verified with a deferred handoff check", async () => {
+  const { fetcher } = apiFetcher(
+    { [PR_PATH]: pullRequest() },
+    {},
+  );
+  const routed = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    if (url.pathname === PR_TEMPLATE_PATH) return new Response("{}", { status: 503, headers: { "content-type": "application/json" } });
+    return fetcher(input, init);
+  }) as typeof fetch;
+  const verified = await verifyCompletionArtifacts(REPOSITORY, [prArtifact], {
+    fetcher: routed,
+    clock,
+    completionEvidence: ["npm test passed"],
+  });
+  assert.equal(verified[0]?.verification?.status, "verified");
+  assert.equal(verified[0]?.verification?.status === "verified" && verified[0].verification.state, "open");
+  assert.equal(
+    verified[0]?.verification?.status === "verified" && verified[0].verification.handoff?.status,
+    "unverified",
+  );
+  assert.match(
+    verified[0]?.verification?.status === "verified" && verified[0].verification.handoff?.status === "unverified"
+      ? verified[0].verification.handoff.reason
+      : "",
+    /template API returned HTTP 503/,
+  );
+});
+
+test("an unauthenticated template 404 is unavailable rather than proof that no template exists", async () => {
+  const token = process.env.SNOWCAT_GITHUB_TOKEN;
+  delete process.env.SNOWCAT_GITHUB_TOKEN;
+  try {
+    const verified = await verifyCompletionArtifacts(REPOSITORY, [prArtifact], {
+      fetcher: apiFetcher({ [PR_PATH]: pullRequest() }).fetcher,
+      clock,
+      completionEvidence: ["npm test passed"],
+    });
+    assert.equal(verified[0]?.verification?.status, "verified");
+    assert.match(
+      verified[0]?.verification?.status === "verified" && verified[0].verification.handoff?.status === "unverified"
+        ? verified[0].verification.handoff.reason
+        : "",
+      /without SNOWCAT_GITHUB_TOKEN/,
+    );
+  } finally {
+    if (token !== undefined) process.env.SNOWCAT_GITHUB_TOKEN = token;
+  }
+});
+
+test("a private repository template 404 is unavailable even with a token", async () => {
+  const verified = await verifyCompletionArtifacts(REPOSITORY, [prArtifact], {
+    fetcher: apiFetcher({
+      [PR_PATH]: pullRequest({ base: { repo: { full_name: REPOSITORY, private: true } } }),
+    }).fetcher,
+    clock,
+    completionEvidence: ["npm test passed"],
+  });
+
+  assert.equal(verified[0]?.verification?.status, "verified");
+  assert.match(
+    verified[0]?.verification?.status === "verified" && verified[0].verification.handoff?.status === "unverified"
+      ? verified[0].verification.handoff.reason
+      : "",
+    /without proving the repository is public/,
+  );
+});
+
+test("malformed base64 template content defers handoff validation", async () => {
+  const verified = await verifyCompletionArtifacts(REPOSITORY, [prArtifact], {
+    fetcher: apiFetcher({
+      [PR_PATH]: pullRequest({ body: "No canonical sections." }),
+      [PR_TEMPLATE_PATH]: { encoding: "base64", content: "!!!!" },
+    }).fetcher,
+    clock,
+    completionEvidence: ["npm test passed"],
+  });
+
+  assert.equal(verified[0]?.verification?.status, "verified");
+  assert.match(
+    verified[0]?.verification?.status === "verified" && verified[0].verification.handoff?.status === "unverified"
+      ? verified[0].verification.handoff.reason
+      : "",
+    /not base64/,
+  );
+});
+
+test("refresh keeps a defective handoff attached to the verified pull request and clears it after repair", async () => {
+  const queue = new QueueStore(":memory:", clock);
+  test.after(() => queue.close());
+  const claimed = await seedClaimed(queue);
+  const completed = queue.complete({
+    id: claimed.id,
+    leaseToken: claimed.leaseToken!,
+    worker: claimed.leaseOwner!,
+    result: {
+      summary: "Opened the pull request.",
+      evidence: ["npm test passed"],
+      artifacts: [
+        {
+          ...prArtifact,
+          verification: {
+            status: "verified",
+            verifiedAt: clock().toISOString(),
+            number: 12,
+            state: "open",
+            headSha: "0123456789abcdef0123456789abcdef01234567",
+            handoff: { status: "unverified", attemptedAt: clock().toISOString(), reason: "template unavailable" },
+          },
+        },
+      ],
+    },
+    followUps: [],
+  }).completed;
+  const template = "## Summary\n\n## Verification\n\n## Risk tier\n";
+  const routes: Record<string, unknown> = {
+    [PR_PATH]: pullRequest({ body: "## Summary\n\nIncomplete.\n\n## Risk tier\n\nTier 2" }),
+    [PR_TEMPLATE_PATH]: { encoding: "base64", content: Buffer.from(template).toString("base64") },
+  };
+
+  const rejected = await refreshArtifactVerifications(queue, { fetcher: apiFetcher(routes).fetcher, clock });
+  assert.equal(rejected.rejected.length, 1);
+  let stored = queue.get(completed.id)!;
+  assert.equal(stored.delivery, "open");
+  assert.equal(stored.result?.artifacts[0]?.verification?.status, "verified");
+  assert.equal(
+    stored.result?.artifacts[0]?.verification?.status === "verified"
+      ? stored.result.artifacts[0].verification.handoff?.status
+      : undefined,
+    "rejected",
+  );
+  const eventCount = queue.events(completed.id).filter((event) => event.type === "artifact.verified").length;
+  await refreshArtifactVerifications(queue, { fetcher: apiFetcher(routes).fetcher, clock });
+  assert.equal(
+    queue.events(completed.id).filter((event) => event.type === "artifact.verified").length,
+    eventCount,
+    "the same handoff defect is not written every sweep",
+  );
+
+  routes[PR_PATH] = pullRequest();
+  const repaired = await refreshArtifactVerifications(queue, { fetcher: apiFetcher(routes).fetcher, clock });
+  assert.equal(repaired.updated.length, 1);
+  stored = queue.get(completed.id)!;
+  assert.equal(
+    stored.result?.artifacts[0]?.verification?.status === "verified"
+      ? stored.result.artifacts[0].verification.handoff
+      : "not verified",
+    undefined,
+  );
+});
+
+test("refresh verifies a legacy source-unavailable pull request without inventing an evidence defect", async () => {
+  const queue = new QueueStore(":memory:", clock);
+  test.after(() => queue.close());
+  const claimed = await seedClaimed(queue);
+  const completed = queue.complete({
+    id: claimed.id,
+    leaseToken: claimed.leaseToken!,
+    worker: claimed.leaseOwner!,
+    result: {
+      summary: "Legacy completion.",
+      evidence: [],
+      artifacts: [
+        {
+          ...prArtifact,
+          verification: {
+            status: "unverified",
+            attemptedAt: clock().toISOString(),
+            reason: "GitHub API unavailable",
+          },
+        },
+      ],
+    },
+    followUps: [],
+  }).completed;
+
+  const refreshed = await refreshArtifactVerifications(queue, {
+    fetcher: apiFetcher({ [PR_PATH]: pullRequest() }).fetcher,
+    clock,
+  });
+  assert.equal(refreshed.updated.length, 1);
+  const verification = queue.get(completed.id)?.result?.artifacts[0]?.verification;
+  assert.equal(verification?.status, "verified");
+  assert.equal(verification?.status === "verified" ? verification.handoff : "not verified", undefined);
 });
 
 async function seedClaimed(queue: QueueStore, shape: "change" | "reporter" = "change") {

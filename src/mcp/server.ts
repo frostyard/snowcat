@@ -280,7 +280,10 @@ export function buildQueueMcpServer(
       // `unverified` and the later verify-artifacts pass closes the loop.
       const item = queue.get(input.id);
       const artifacts = item
-        ? await verifyCompletionArtifacts(item.repository, input.result.artifacts, verifier)
+        ? await verifyCompletionArtifacts(item.repository, input.result.artifacts, {
+            ...verifier,
+            completionEvidence: input.result.evidence,
+          })
         : input.result.artifacts;
       // In a review-gated repository an open pull request must be a draft
       // (ADR-0065); a pr-cure completion is refused when the pull request's

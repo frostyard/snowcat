@@ -30,6 +30,7 @@ function pullRequest(overrides: Record<string, unknown> = {}): Record<string, un
     mergeable_state: "clean",
     head: { sha: HEAD_A },
     base: { repo: { full_name: REPOSITORY } },
+    body: "## Summary\n\nCure the pull request.\n\n## Verification\n\nChecks observed.\n\n## Risk tier\n\nTier 2",
     ...overrides,
   };
 }

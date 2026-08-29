@@ -205,6 +205,28 @@ test("the Ready to merge rail queues a non-draft pull request for merge when the
 
   const head = "f".repeat(40);
   reportAndReview(queue, { repository: "frostyard/gamma", prNumber: 30, head, draft: false });
+  const syntheticUrl = "https://github.com/frostyard/gamma/pull/31";
+  const cure = queue.enqueueCureRoot("frostyard/gamma", {
+    kind: "pr-cure",
+    objective: "Cure an unreported pull request.",
+    instructions: "Repair the pull request.",
+    acceptanceCriteria: ["The head is healthy."],
+    allowedActions: ["read", "write", "run-tests", "open-pr"],
+    delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
+    createdBy: "operator:test",
+    sourceRef: `${syntheticUrl}@${head}`,
+    cure: {
+      pullRequestUrl: syntheticUrl,
+      headSha: head,
+      patchDigest: `sha256:${"a".repeat(64)}`,
+      decay: ["behind"],
+    },
+  })!;
+  const cureLease = queue.claim({ worker: "claude:cure", kinds: ["pr-cure"] })!;
+  queue.block(cure.id, cureLease.leaseToken!, cureLease.leaseOwner!, "No longer needed.");
+  queue.cancel(cure.id, "operator:test", "No longer needed.");
 
   const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue }) });
   const cookie = `snowcat_session=${sessionDigest(TOKEN)}`;
@@ -214,4 +236,5 @@ test("the Ready to merge rail queues a non-draft pull request for merge when the
   const rail = section(body, "readyToMerge");
   assert.match(rail, /<span class="ph-badge ok">queue for merge<\/span> add it to the merge queue/);
   assert.match(rail, /review gate off/);
+  assert.equal(rail.includes("pull/31"), false, "a cure-only row has no verified source and is never merge-ready");
 });

@@ -150,9 +150,12 @@ that path and the server owns both the `pr-cure-change` kind and existing-PR
 target; a contradictory redundant field is refused rather than corrected,
 because opening a second pull request for a head that already has one is
 exactly what ADR-0061 forbids. A child under a parent
-with no binding inherits nothing and is refused exactly as before. Those
-reports are provenance, not independent attestation. Deterministic checks can reject malformed, cross-repository, or
-unauthorized artifact claims, but only reconciliation with GitHub or another
+with no binding inherits nothing and is refused exactly as before. Those reports are provenance, not independent attestation. Deterministic checks
+can reject malformed, cross-repository, or unauthorized artifact claims. For an
+open pull request, the completion boundary also checks the repository's
+template-shaped handoff and the presence of attempt evidence under
+[ADR-0078](../adr/0078-make-pull-request-handoff-artifact-centric-and-evidence-bound.md);
+it stores neither body nor template. Only reconciliation with GitHub or another
 source can establish that an artifact exists and has the reported state.
 
 ### Trial findings

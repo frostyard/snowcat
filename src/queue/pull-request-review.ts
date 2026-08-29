@@ -1,4 +1,5 @@
 import { githubApiJson, githubGraphql, type GitHubFetch } from "../repository/github-api.ts";
+import { pullRequestArtifactIdentity } from "./artifact-identity.ts";
 import { asObject, listOpenPullRequests, MAX_LISTING_PAGES, parsePullRequestUrl, readPatchDigest } from "./pull-request-cure.ts";
 import { MAX_LEASE_SECONDS, type QueueStore } from "./store.ts";
 import { type PolicyBoundary,
@@ -230,20 +231,61 @@ export async function reviewPullRequests(
   if (gated.size === 0) return result;
 
   const items = queue.completedItemsWithPendingArtifacts({ repository: options.repository, limit: options.limit ?? 100 });
-  const candidates = new Map<string, { repository: string; priority: number; originItemId: string; authorModel?: string }>();
+  const origins = new Map<string, { repository: string; priority: number; originItemId: string; authorModel?: string }>();
+  const observations = new Map<
+    string,
+    {
+      url: string;
+      order: string;
+      state?: "open" | "closed" | "merged" | "published" | "draft";
+      draft?: boolean;
+    }
+  >();
+  const unresolvedSources = new Set<string>();
+  const unresolvedHandoffs = new Set<string>();
   for (const item of items) {
-    if (item.kind === REVIEW_KIND || item.kind === REVIEW_FIX_KIND) continue;
     if (!gated.has(item.repository.toLowerCase())) continue;
     for (const artifact of item.result?.artifacts ?? []) {
-      if (artifact.kind !== "pull-request" || artifact.verification?.status !== "verified") continue;
-      if (artifact.verification.state !== "open" || artifact.verification.draft !== true) continue;
+      if (artifact.kind !== "pull-request" || artifact.verification === undefined) continue;
+      const key = pullRequestArtifactIdentity(item.repository, artifact);
+      const observedAt =
+        artifact.verification.status === "verified"
+          ? artifact.verification.verifiedAt
+          : artifact.verification.attemptedAt;
+      const order = `${observedAt}\0${item.updatedAt}\0${item.kind === REVIEW_FIX_KIND ? "1" : "0"}`;
+      if (artifact.verification.status === "unverified") {
+        unresolvedSources.add(key);
+        continue;
+      }
+      if (artifact.verification.handoff !== undefined) unresolvedHandoffs.add(key);
+      const observation = observations.get(key);
+      if (!observation || order > observation.order) {
+        observations.set(key, {
+          url: artifact.url,
+          order,
+          state: artifact.verification.state,
+          draft: artifact.verification.draft === true,
+        });
+      }
+      if (item.kind === REVIEW_KIND || item.kind === REVIEW_FIX_KIND) continue;
       const candidate = { repository: item.repository, priority: item.priority, originItemId: item.id, ...(item.result?.model ? { authorModel: item.result.model } : {}) };
-      const existing = candidates.get(artifact.url);
-      if (!existing || item.priority > existing.priority) candidates.set(artifact.url, candidate);
+      const existing = origins.get(key);
+      if (!existing || item.priority > existing.priority) origins.set(key, candidate);
     }
   }
 
-  for (const [url, origin] of candidates) {
+  for (const [key, origin] of origins) {
+    const observation = observations.get(key);
+    if (
+      !observation ||
+      unresolvedSources.has(key) ||
+      unresolvedHandoffs.has(key) ||
+      observation.state !== "open" ||
+      !observation.draft
+    ) {
+      continue;
+    }
+    const url = observation.url;
     result.inspected += 1;
     const check = await readPullRequestHead(origin.repository, url, options);
     if (check.kind === "unavailable") {

@@ -52,6 +52,7 @@ function pullRequest(overrides: Record<string, unknown> = {}): Record<string, un
     mergeable_state: "clean",
     head: { sha: HEAD_A },
     base: { repo: { full_name: REPOSITORY } },
+    body: "## Summary\n\nFix the catalog.\n\n## Verification\n\nChecks observed.\n\n## Risk tier\n\nTier 2",
     ...overrides,
   };
 }
@@ -342,6 +343,24 @@ test("the review gate refuses an open non-draft pull request in a gated reposito
   assertReviewGate(queue, { ...cure, kind: "pr-cure-change" }, [{ kind: "pull-request", url: PR_URL, verification: { status: "verified", verifiedAt: clock().toISOString(), number: 12, state: "open" } }]);
   // A pr-review-fix is not: it must keep the pull request a draft.
   assert.throws(() => assertReviewGate(queue, { ...cure, kind: REVIEW_FIX_KIND }, [{ kind: "pull-request", url: PR_URL, verification: { status: "verified", verifiedAt: clock().toISOString(), number: 12, state: "open" } }]), /review gate/);
+  assert.throws(
+    () =>
+      assertReviewGate(queue, { ...cure, kind: "issue-resolution" }, [
+        {
+          kind: "pull-request",
+          url: PR_URL,
+          verification: {
+            status: "verified",
+            verifiedAt: clock().toISOString(),
+            number: 12,
+            state: "open",
+            handoff: { status: "unverified", attemptedAt: clock().toISOString(), reason: "template unavailable" },
+          },
+        },
+      ]),
+    /review gate/,
+    "a template outage never hides the verified non-draft state",
+  );
   // A ready pull request the gate itself released (a passed round exists for its URL) is accepted by any kind.
   const releasedQueue = await newQueue("review-gate-released");
   completedWithDraftPr(releasedQueue);
@@ -427,6 +446,74 @@ test("the sweep reads nothing without a gated repository and creates one admitte
   assert.deepEqual(down.unreported, [], "a listing GitHub could not serve leaves the previous observation standing");
 });
 
+test("the review sweep waits while a verified draft has an unresolved handoff check", async () => {
+  const queue = await newQueue("review-handoff-wait");
+  const originId = completedWithDraftPr(queue);
+  queue.recordArtifactVerification(
+    originId,
+    PR_URL,
+    {
+      status: "verified",
+      verifiedAt: clock().toISOString(),
+      number: 12,
+      state: "open",
+      headSha: HEAD_A,
+      draft: true,
+      handoff: { status: "rejected", checkedAt: clock().toISOString(), reason: "body is missing a required section" },
+    },
+    "policy:artifact-verifier",
+  );
+  queue.setRepositoryReviewGate(REPOSITORY, true);
+  const renamedRepository = "frostyard/updex-renamed";
+  const renamedUrl = `https://github.com/${renamedRepository}/pull/12`;
+  queue.renameRepository(REPOSITORY, renamedRepository, "operator:test");
+  queue.enqueueSeed({
+    repository: renamedRepository,
+    kind: "issue-resolution",
+    objective: "Observe the current pull request URL.",
+    instructions: "Report the pull request.",
+    acceptanceCriteria: ["The current URL is recorded."],
+    allowedActions: ["read", "write", "open-pr"],
+    delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
+    createdBy: "operator:test",
+  });
+  const current = queue.claim({ worker: "claude:current-url" })!;
+  queue.complete({
+    id: current.id,
+    leaseToken: current.leaseToken!,
+    worker: current.leaseOwner!,
+    result: {
+      summary: "Recorded the current URL.",
+      evidence: ["observed"],
+      artifacts: [
+        {
+          kind: "pull-request",
+          url: renamedUrl,
+          verification: {
+            status: "verified",
+            verifiedAt: "2026-08-17T21:00:00.000Z",
+            number: 12,
+            state: "open",
+            headSha: HEAD_A,
+            draft: true,
+          },
+        },
+      ],
+    },
+    followUps: [],
+  });
+
+  const swept = await reviewPullRequests(queue, {
+    repository: renamedRepository,
+    fetcher: apiFetcher(routesFor({})).fetcher,
+    clock,
+  });
+  assert.equal(swept.inspected, 0);
+  assert.equal(swept.enqueued.length, 0);
+});
+
 test("a pr-review completion needs a consistent verdict bound to the same head; the store merges it and records work.reviewed", async () => {
   const queue = await newQueue("review-complete");
   completedWithDraftPr(queue);
@@ -499,7 +586,50 @@ test("block → one admitted fix root; a new head → the next round with prior 
   const again = await sweep(HEAD_A);
   assert.deepEqual(again.enqueued, []);
   assert.deepEqual(again.skipped, [{ url: PR_URL, reason: "a review or fix is in flight" }]);
-  completeFix(queue);
+  const completedFix = completeFix(queue);
+  queue.recordArtifactVerification(
+    completedFix.id,
+    PR_URL,
+    {
+      status: "verified",
+      verifiedAt: clock().toISOString(),
+      number: 12,
+      state: "open",
+      headSha: HEAD_B,
+      draft: true,
+      handoff: { status: "rejected", checkedAt: clock().toISOString(), reason: "body is missing a required section" },
+    },
+    "policy:artifact-verifier",
+  );
+  queue.recordArtifactVerification(
+    originId,
+    PR_URL,
+    {
+      status: "verified",
+      verifiedAt: "2026-08-17T21:00:00.000Z",
+      number: 12,
+      state: "open",
+      headSha: HEAD_B,
+      draft: true,
+    },
+    "policy:artifact-verifier",
+  );
+  const waitingForRepair = await sweep(HEAD_B);
+  assert.equal(waitingForRepair.inspected, 0, "a review-fix handoff defect pauses the next review round");
+  assert.deepEqual(waitingForRepair.enqueued, []);
+  queue.recordArtifactVerification(
+    completedFix.id,
+    PR_URL,
+    {
+      status: "verified",
+      verifiedAt: clock().toISOString(),
+      number: 12,
+      state: "open",
+      headSha: HEAD_B,
+      draft: true,
+    },
+    "policy:artifact-verifier",
+  );
 
   // The fix pushed head B: round 2 carries the prior blockers and both models.
   const roundTwo = await sweep(HEAD_B);
@@ -755,6 +885,14 @@ test("enqueueReviewRoot validates kind, action ceilings, and the review record; 
   queue.setRepositoryReviewGate(REPOSITORY, true);
   queue.renameRepository(REPOSITORY, "frostyard/updex2", "operator:test");
   assert.equal(queue.reviewGateEnabled("frostyard/updex2"), true);
+  const renamedUrl = "https://github.com/frostyard/updex2/pull/12";
+  assert.equal(queue.pullRequestReviewItems("frostyard/updex2", renamedUrl).length, 1);
+  assert.doesNotThrow(() =>
+    queue.recordPullRequestReady(originId, renamedUrl, "policy:review-gate", {
+      headSha: HEAD_A,
+      reviewItemId: created!.id,
+    }),
+  );
 });
 
 test("deriveReviewState mirrors the sweep for the board and inbox", () => {

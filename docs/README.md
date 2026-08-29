@@ -92,6 +92,7 @@ Docs are split by the question they answer:
 - [0075 — Declare a repository execution profile in core](adr/0075-declare-a-repository-execution-profile-in-core.md)
 - [0076 — Pin repository tools in the repository and qualify lanes by running them](adr/0076-pin-repository-tools-in-the-repository-and-qualify-lanes-by-running-them.md)
 - [0077 — Derive follow-up contracts from proposer intent](adr/0077-derive-follow-up-contracts-from-proposer-intent.md)
+- [0078 — Make pull-request handoff artifact-centric and evidence-bound](adr/0078-make-pull-request-handoff-artifact-centric-and-evidence-bound.md)
 
 ### Organization decisions
 

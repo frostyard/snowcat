@@ -51,8 +51,11 @@ reviewer can prefer a different model. This validates the claim's scope, not the
 existence. Issue and pull-request artifacts additionally carry a
 `verification`, Snowcat's own observation of the artifact through the GitHub
 API: `{ status: "verified", verifiedAt, number, state: open | closed | merged,
-headSha?, mergedAt?, closedAt? }` or `{ status: "unverified", attemptedAt,
-reason }`. Workers never supply it. A completion result has a non-empty
+headSha?, mergedAt?, closedAt?, handoff? }` or `{ status: "unverified", attemptedAt,
+reason }`. An open pull request's optional `handoff` is an unresolved
+structural check — `{ status: "unverified", attemptedAt, reason }` or
+`{ status: "rejected", checkedAt, reason }` — and never changes the source
+observation's verified state. Workers never supply verification. A completion result has a non-empty
 summary, an evidence string array, and an artifact array.
 
 ### MCP tools
@@ -132,9 +135,10 @@ and neither is exposed through MCP.
 
 `metrics` is the PRD baseline reading over one window (rule 56): how much work
 the window created and where it stands now, how often workers attempted it,
-what they completed and how much of that GitHub merged, and how long the merges
-took. It aggregates the ledger and the current items, mutates nothing, and is
-not exposed through MCP.
+what they completed, the terminal pull-request delivery acceptance for those
+completions with open and unavailable outcomes kept censored, and how long the
+merges took. It aggregates the ledger and the current items, mutates nothing,
+and is not exposed through MCP.
 
 `requeue` and `cancel` are operator-only exits for `blocked` work. Requeue
 moves the block result to the end of `previousResults`, appends a `requeue`
@@ -386,7 +390,8 @@ MCP (rule 41).
     private repositories exactly as for missing ones, so the completion MUST
     be accepted as `unverified` naming the missing token. The MCP artifact
     schema MUST reject a worker-supplied `verification` as an unknown key
-    rather than strip it.
+    rather than strip it. An open pull-request completion additionally passes
+    rule 73's handoff validation.
 34. `verify-artifacts [--repository <owner/repo>] [--limit <1-100>]` MUST
     re-check completed items' issue and pull-request artifacts that are
     `unverified` or verified but still `open`, MUST record each changed
@@ -402,6 +407,13 @@ MCP (rule 41).
     the items that need checking rather than arbitrary completions and a
     repository with more than 100 terminal completions cannot starve a newer
     one; the pull-request cure sweep (rules 42–43) MUST use the same selection.
+    An open pull request with an unresolved rule 73 handoff marker MUST repeat
+    that validation with the retained attempt evidence. Source unavailability
+    and a definite defect MUST remain attached as an `unverified` or
+    `rejected` handoff on the still-verified pull request, so delivery,
+    draft-gate, and cure observations remain truthful. An unchanged rejected
+    handoff MUST write no repeated event; repair clears the marker. The review
+    sweep MUST wait while either marker exists.
     Before curing or reviewing, `verify-artifacts` MUST also retire every
     queued or blocked `pr-review`, `pr-review-fix`, `pr-cure`, or
     `pr-cure-change` item whose bound pull request GitHub reports merged or
@@ -947,14 +959,26 @@ MCP (rule 41).
     `completed`, `blocked`, `cancelled`); `attempts`, the `work.claimed`
     events in the window; `completed`, the `work.completed` events in it, and
     `completedByDelivery`, those completions by their item's current
-    `delivery` (`none`, `unverified`, `open`, `closed`, `merged`);
-    `accepted`, the completions whose item's `delivery` is `merged`;
-    `acceptedPerAttempt`, `accepted / attempts` rounded to three decimals and
-    `null` when `attempts` is 0; `blocked` and `cancelled`, the
+    `delivery` (`none`, `unverified`, `open`, `closed`, `merged`, `published`);
+    `accepted`, the unique pull requests reported by those completions,
+    identified by the event repository and verified GitHub number (falling
+    back to the number in a valid GitHub URL for an unverified legacy row),
+    whose current verification is `merged`; `acceptance`, the stage-correct
+    terminal disposition of those same unique pull requests as
+    `{ numerator, denominator, rate, open, unavailable, excluded }`, where
+    numerator is `merged`, denominator is `merged + closed`, rate is their
+    ratio rounded to three decimals (`null` when the denominator is zero),
+    open and unavailable are censored rather than failed, and excluded counts
+    completion events that reported no pull-request artifact; an origin,
+    cure, and review fix reporting differently cased or retained pre-rename
+    URLs for the same repository and number contribute one acceptance sample.
+    The newest verified source observation determines the sample state, so a
+    reopened pull request becomes censored again and a later unavailable read
+    cannot erase a verified observation; `blocked` and `cancelled`, the
     `work.blocked` and `work.cancelled` events in the window; and
-    `timeToMergeHours` as `{ count, median, p90 }` over the merged
-    pull-request artifacts of those completions — hours from the item's
-    `work.completed` event to the artifact's `verification.mergedAt`, each
+    `timeToMergeHours` as `{ count, median, p90 }` over those unique merged
+    pull requests — hours from the earliest completion in the window that
+    reported the pull request to the artifact's `verification.mergedAt`, each
     rounded to three decimals, `p90` by nearest rank, with `median` and `p90`
     `null` exactly when `count` is 0. An unparseable bound and a window whose
     `since` is not before its `until` MUST be refused naming the bound. The
@@ -1223,18 +1247,29 @@ MCP (rule 41).
     leases first, and MUST NOT reveal a lease token (rule 11).
 68. **Undelivered-work listing (extends rules 35 and 60).** The read-only
     `deliveries` listing (`queue -- deliveries [--repository <owner/repo>]`)
-    MUST list completed items whose `delivery` is `open` — work whose merge
-    or publication a human still owes
-    ([reality report finding 17](../design/reality.md)) — selecting through
-    the same pending-artifact query the artifact sweeps use so old terminal
-    completions never starve it. Each row MUST carry the item's id,
-    repository, kind, objective, `createdAt`, its verified still-open
-    `pull-request` and `release` artifacts (url, observed state, and draft
-    flag), and a derived `ready` flag: true when any verified pull request is
-    open and not a draft, or any verified release is an unpublished draft —
-    the rows waiting on a human's merge queue entry or publish, as opposed to
-    a draft pull request still inside the review gate. Ready rows MUST sort
-    first, oldest item first. The listing MUST NOT reveal a lease token
+    MUST list one row for every unique verified pending pull-request or
+    draft-release artifact
+    ([reality report finding 17](../design/reality.md)). Selection MUST include
+    bounded terminal observations before reconciling identity, so a newer merge,
+    closure, or publication suppresses an older pending report rather than
+    resurrecting it. Each artifact row MUST carry `artifact`
+    (`kind`, `url`, observed `state`, `draft`, `verifiedAt`, and observed
+    `headSha` when present), `handoff` (`verify` for an unavailable structural
+    handoff check, `repair` for a rejected one, `review` for a draft pull
+    request, `merge` for an open non-draft pull request, or `publish` for a
+    draft release), optional bounded `reason`, `ready` (true only for merge or
+    publish), and work context:
+    `workItemId`, repository, `workKind`, objective, optional `sourceRef`, and
+    `createdAt`. Pull requests MUST deduplicate by queue repository and verified
+    GitHub number (falling back to the number in a valid GitHub URL); releases
+    deduplicate by case-insensitive URL. Duplicate reports MUST collapse to one
+    row using the oldest work item as context and newest verified source
+    observation. Source and handoff observations MUST fold independently:
+    a marker on any still-stored report remains the next handoff until that
+    report is successfully revalidated, even when another report has a newer
+    source observation. Merge and publish
+    rows MUST sort first, oldest item first, followed by other handoffs oldest
+    first. The listing MUST NOT reveal a lease token
     (rule 11) and MUST NOT mutate anything: freshness comes from
     `verify-artifacts`' own timer, not from this read.
 69. **Claim backoff on rapid worker releases ([ADR-0072](../adr/0072-back-off-claim-selection-after-rapid-worker-releases.md); extends rules 2–3).**
@@ -1382,6 +1417,40 @@ MCP (rule 41).
     policy predicates MUST refuse the completion atomically. Intent MUST NOT
     be stored: the proposed child carries the complete normalized durable
     contract.
+73. **Open pull-request completion handoff ([ADR-0078](../adr/0078-make-pull-request-handoff-artifact-centric-and-evidence-bound.md); extends rules 18, 33–35, 52, and 54–55).**
+    Before any GitHub read, `complete_work` MUST require at least one evidence
+    assertion from every attempt report carrying a pull-request artifact.
+    For an open pull request it MUST validate the current body from the same
+    GitHub response used by rule 33. It MUST read at most 128 KiB of UTF-8 template content
+    from `.github/pull_request_template.md` through at most one bounded GitHub
+    contents request per repository in that completion or refresh operation.
+    Every level-two template section MUST be present in the body; a template
+    that exists with no level-two sections imposes no section names. If an
+    credentialed read plus the pull-request response's public-repository fact
+    proves the template does not exist, Summary, Verification, and Risk tier
+    are the required sections; an unauthenticated 404 or a 404 for a private
+    or unknown-visibility repository is unavailable, not absence. Summary,
+    Checks/Verification, and Risk MUST carry
+    visible content after HTML comments and unchecked boxes are ignored. When
+    the template's Risk section presents checkboxes, exactly one corresponding
+    template option MUST be checked; unrelated checked boxes do not count. A
+    definite defect MUST reject the entire completion without
+    ending its lease; the error MUST name the defect without copying body or
+    template content or heading text. An unavailable, non-200, oversized,
+    non-base64, or non-UTF-8 template answer MUST retain the verified
+    pull-request source observation with an `unverified` handoff marker rather
+    than reject the completion, and rule 34 MUST retry the same validation
+    with the retained attempt evidence. A later definite defect MUST become a
+    `rejected` handoff marker on that verified artifact, not erase or demote the
+    GitHub observation; review waits, `deliveries` exposes repair, and a later
+    successful refresh of that marker-bearing report clears the marker; a
+    newer source-only observation on another report MUST NOT hide it.
+    Historical or operator-attached source-unverified artifacts with no
+    retained attempt evidence MUST be source-verified without retroactively
+    creating an evidence handoff they cannot repair. Snowcat MUST NOT persist
+    pull-request body or template bytes. A pull request already observed merged is outside this
+    open-handoff check. Independent review remains authoritative for truth of
+    claims and tree correctness; this rule validates structure only.
 
 ## Derived artifacts
 
@@ -1398,7 +1467,7 @@ MCP (rule 41).
 | Contract audit | `audit-contracts` applies rule 64's predicate to every in-flight item and exits non-zero when any fails; `approve` and every definition path apply the same predicate |
 | Predecessor gate | Claim selection excludes items whose rule 58 predecessors are not observed delivered per rule 62; `show`, the item page, and a queued item's progress strip print each one's satisfaction — and name a cycle — per rule 63 |
 | MCP tokens | `token mint [--kinds …] [--tools … | --profile …] | list | revoke` over the `mcp_tokens` table per rule 49; identities per rule 48; claim restriction per rule 50; tool grant per rule 65 |
-| PRD baseline metrics | `metrics` aggregates items created in a window with its `work.claimed`, `work.completed`, `work.blocked`, and `work.cancelled` events and the completed items' current `delivery` per rule 56 |
+| PRD baseline metrics | `metrics` aggregates items created in a window with raw lifecycle transitions, terminal pull-request delivery acceptance, censored delivery states, and merge latency per rule 56 |
 | Attempt provenance | `QueueStore.attempts` folds an item's newest `work.claimed` / `work.completed` / `work.blocked` / `work.released` / `lease.expired` events, plus the clock against a lapsed lease, into at most ten attempts per rule 66; `list_work` and `get_work` carry them and `list` filters exactly by `leaseOwner` and `label` |
 | Operator lease release | `QueueStore.releaseLease` returns one claimed item to queued and fences the outstanding token per rule 67; `claims` lists every current lease, lapsed first, without tokens |
 | Undelivered work | `deliveries` lists completed items whose `delivery` is `open`, ready-to-merge or ready-to-publish rows first, per rule 68 |
@@ -1406,6 +1475,7 @@ MCP (rule 41).
 | Execution target | Every definition declares where it executes and the rule 64 predicate binds target, actions, artifact, and binding per rule 70; legacy rows read undeclared |
 | Policy binding | Definitions bind to the control plane's current authority, admission records its satisfier, standing authorizations gate mechanical admission, and boundary touches route to a human per rules 55 and 71 |
 | Follow-up intent | The completion boundary normalizes request-level intent into one complete durable child contract per rule 72 |
+| Pull-request handoff | Completion and artifact refresh validate the open pull request's bounded template/evidence handoff without storing source content per rule 73 |
 | MCP worker behavior | Portable `work-snowcat-queue` skill constrained by this contract |
 | Testing-gap seed | Deterministic CLI instance of this contract |
 

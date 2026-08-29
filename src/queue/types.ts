@@ -102,6 +102,13 @@ export type ArtifactVerification =
       tag?: string;
       /** A release's observed `published_at`; absent while the release is still a draft. */
       publishedAt?: string;
+      /**
+       * A deferred open-PR handoff check (ADR-0078). Absent means no unresolved
+       * handoff problem; source observation remains verified either way.
+       */
+      handoff?:
+        | { status: "unverified"; attemptedAt: string; reason: string }
+        | { status: "rejected"; checkedAt: string; reason: string };
     }
   | { status: "unverified"; attemptedAt: string; reason: string };
 

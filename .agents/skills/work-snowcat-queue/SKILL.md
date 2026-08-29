@@ -89,10 +89,11 @@ When the child needs a narrower delegation ceiling than that derivation, omit
   four tiers) — with a one-line rationale, and Checks/Verification
   items ticked only when you actually ran them (paste the command's tail;
   never claim a check you did not run). A repository with no template still
-  gets a Summary / Verification / Risk tier body. A missing section blocks in
-  review as a description-only `contract:pr-body:` finding that routes to a
-  human to cure (ADR-0067) instead of you, costing a review round for no
-  code reason — fill it in up front.
+  gets a Summary / Verification / Risk tier body. `complete_work` rejects a
+  definite missing section, empty handoff, absent evidence assertion, or
+  invalid risk selection while the lease is still yours — edit the body and
+  complete again instead of spending a review round on deterministic
+  description repair.
 
 ## Cure a pull request (`pr-cure`)
 

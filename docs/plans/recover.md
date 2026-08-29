@@ -212,8 +212,8 @@ hands on the host. Status as of 2026-08-19:
    ~45 items in a day, every discovery one finding, fixes as PRs, cures
    that refused to forge patches and filed `pr-cure-change` instead. The
    daily numbers now come from a command instead of by hand:
-   `npm run --silent queue -- metrics` prints accepted-per-attempt, blocked,
-   and time-to-merge for a window, per repository and in total (work-queue
+   `npm run --silent queue -- metrics` prints terminal delivery acceptance,
+   blocked, and time-to-merge for a window, per repository and in total (work-queue
    spec rule 56, runbook *What to record for the PRD*); still to do: record
    its reading into the PRD baseline each day.
    (The Hive/Snowcat boundary was decided 2026-08-18:
@@ -267,7 +267,7 @@ hands on the host. Status as of 2026-08-19:
   inventory is full, with the board showing the cap and the count; admission
   stays the operator's, the cap only stops workers from running ahead of
   merges. Not before the numbers say so (`queue -- metrics`: time-to-merge
-  rising, accepted-per-attempt flat).
+  rising while terminal delivery acceptance stays flat).
 - Unpark GitHub observation only if on-demand verification demonstrably
   misses state that a maintainer relied on.
 - Remote workers: accepted and built 2026-08-18 as

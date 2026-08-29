@@ -93,7 +93,14 @@ test("a claimed, completed, and merged item is one attempt, one acceptance, and 
   assert.equal(metrics.all.attempts, 1);
   assert.equal(metrics.all.completed, 1);
   assert.equal(metrics.all.accepted, 1);
-  assert.equal(metrics.all.acceptedPerAttempt, 1);
+  assert.deepEqual(metrics.all.acceptance, {
+    numerator: 1,
+    denominator: 1,
+    rate: 1,
+    open: 0,
+    unavailable: 0,
+    excluded: 0,
+  });
   assert.equal(metrics.all.completedByDelivery.merged, 1);
   assert.equal(metrics.all.completedByDelivery.open, 0);
   assert.equal(metrics.all.created.completed, 1);
@@ -122,7 +129,7 @@ test("time to merge reports the median and the nearest-rank p90 of its samples",
 
   assert.equal(metrics.all.attempts, 3);
   assert.equal(metrics.all.accepted, 3);
-  assert.equal(metrics.all.acceptedPerAttempt, 1);
+  assert.equal(metrics.all.acceptance.rate, 1);
   // Samples 2, 5, 9: median 5, nearest-rank p90 (ceil(0.9 * 3) = 3) is 9.
   assert.deepEqual(metrics.all.timeToMergeHours, { count: 3, median: 5, p90: 9 });
 });
@@ -142,7 +149,7 @@ test("a blocked item counts as blocked and never as accepted", () => {
   assert.equal(metrics.all.blocked, 1);
   assert.equal(metrics.all.completed, 0);
   assert.equal(metrics.all.accepted, 0);
-  assert.equal(metrics.all.acceptedPerAttempt, 0);
+  assert.equal(metrics.all.acceptance.rate, null);
   assert.equal(metrics.all.created.blocked, 1);
   assert.deepEqual(metrics.all.timeToMergeHours, { count: 0, median: null, p90: null });
 });
@@ -165,10 +172,10 @@ test("--since excludes an item created before it, and its attempt with it", () =
   assert.equal(narrowed.all.created.queued, 1);
   assert.equal(narrowed.all.created.claimed, 0);
   assert.equal(narrowed.all.attempts, 0);
-  assert.equal(narrowed.all.acceptedPerAttempt, null);
+  assert.equal(narrowed.all.acceptance.rate, null);
 });
 
-test("acceptedPerAttempt is null when the window has no attempts", () => {
+test("acceptance is null when the window has no terminal pull-request delivery", () => {
   const { queue } = frozenStore("2026-08-19T09:00:00.000Z");
   test.after(() => queue.close());
 
@@ -178,8 +185,40 @@ test("acceptedPerAttempt is null when the window has no attempts", () => {
 
   assert.equal(metrics.all.attempts, 0);
   assert.equal(metrics.all.accepted, 0);
-  assert.equal(metrics.all.acceptedPerAttempt, null);
+  assert.equal(metrics.all.acceptance.rate, null);
   assert.equal(metrics.all.created.queued, 1);
+});
+
+test("acceptance uses the completion cohort even when its claim was outside the window", () => {
+  const { queue, at } = frozenStore("2026-08-19T09:55:00.000Z");
+  test.after(() => queue.close());
+
+  seed(queue, "Resolve issue #10.");
+  const claimed = queue.claim({ worker: "codex:updex:before-window", repository: REPOSITORY })!;
+  at("2026-08-19T10:05:00.000Z");
+  const completed = queue.complete({
+    id: claimed.id,
+    leaseToken: claimed.leaseToken!,
+    worker: claimed.leaseOwner!,
+    result: {
+      summary: "Resolved.",
+      evidence: ["npm test passed"],
+      artifacts: [{ kind: "pull-request", url: `https://github.com/${REPOSITORY}/pull/10` }],
+    },
+    followUps: [],
+  }).completed;
+  recordMerge(queue, completed, 10, "2026-08-19T10:15:00.000Z");
+
+  const metrics = queueMetrics(queue, { since: "2026-08-19T10:00:00.000Z", until: NEXT_DAY });
+  assert.equal(metrics.all.attempts, 0);
+  assert.deepEqual(metrics.all.acceptance, {
+    numerator: 1,
+    denominator: 1,
+    rate: 1,
+    open: 0,
+    unavailable: 0,
+    excluded: 0,
+  });
 });
 
 test("the default window is the last 24 hours ending now", () => {
@@ -246,7 +285,12 @@ test("computing metrics is pure: the same window rows always give the same numbe
     until: NEXT_DAY,
     created: [{ repository: REPOSITORY, status: "completed" as const, count: 1 }],
     events: [
-      { type: "work.claimed", repository: REPOSITORY, workItemId: "a", occurredAt: "2026-08-19T10:00:00.000Z" },
+      {
+        type: "work.claimed",
+        repository: REPOSITORY,
+        workItemId: "a",
+        occurredAt: "2026-08-19T10:00:00.000Z",
+      },
       {
         type: "work.completed",
         repository: REPOSITORY,
@@ -277,8 +321,126 @@ test("computing metrics is pure: the same window rows always give the same numbe
   const second = computeQueueMetrics(window);
 
   assert.deepEqual(first, second);
-  assert.equal(first.all.acceptedPerAttempt, 1);
+  assert.equal(first.all.acceptance.rate, 1);
   assert.deepEqual(first.all.timeToMergeHours, { count: 1, median: 1.5, p90: 1.5 });
+});
+
+test("acceptance deduplicates one pull request across repair completions and excludes published releases", () => {
+  const merged = {
+    summary: "Done.",
+    evidence: ["checked"],
+    artifacts: [
+      {
+        kind: "pull-request" as const,
+        url: `https://github.com/${REPOSITORY}/pull/42`,
+        verification: {
+          status: "verified" as const,
+          verifiedAt: "2026-08-19T12:00:00.000Z",
+          number: 42,
+          state: "merged" as const,
+          mergedAt: "2026-08-19T12:00:00.000Z",
+        },
+      },
+    ],
+  };
+  const release = {
+    summary: "Published.",
+    evidence: ["tag observed"],
+    artifacts: [
+      {
+        kind: "release" as const,
+        url: `https://github.com/${REPOSITORY}/releases/tag/v1.0.0`,
+        verification: {
+          status: "verified" as const,
+          verifiedAt: "2026-08-19T13:00:00.000Z",
+          number: 99,
+          state: "published" as const,
+          tag: "v1.0.0",
+        },
+      },
+    ],
+  };
+  const metrics = computeQueueMetrics({
+    since: DAY_START,
+    until: NEXT_DAY,
+    created: [],
+    events: [
+      { type: "work.completed", repository: REPOSITORY, workItemId: "origin", occurredAt: "2026-08-19T10:00:00.000Z", result: merged },
+      {
+        type: "work.completed",
+        repository: REPOSITORY,
+        workItemId: "cure",
+        occurredAt: "2026-08-19T11:00:00.000Z",
+        result: {
+          ...merged,
+          artifacts: [{ ...merged.artifacts[0]!, url: `https://github.com/Frostyard/Updex/pull/42` }],
+        },
+      },
+      { type: "work.completed", repository: REPOSITORY, workItemId: "release", occurredAt: "2026-08-19T12:30:00.000Z", result: release },
+    ],
+  });
+
+  assert.equal(metrics.all.completed, 3);
+  assert.equal(metrics.all.accepted, 1);
+  assert.deepEqual(metrics.all.acceptance, {
+    numerator: 1,
+    denominator: 1,
+    rate: 1,
+    open: 0,
+    unavailable: 0,
+    excluded: 1,
+  });
+  assert.deepEqual(metrics.all.timeToMergeHours, { count: 1, median: 2, p90: 2 });
+});
+
+test("acceptance uses the newest verified observation when a closed pull request is reopened", () => {
+  const result = (state: "closed" | "open", verifiedAt: string) => ({
+    summary: state,
+    evidence: ["observed"],
+    artifacts: [
+      {
+        kind: "pull-request" as const,
+        url: `https://github.com/${REPOSITORY}/pull/43`,
+        verification: {
+          status: "verified" as const,
+          verifiedAt,
+          number: 43,
+          state,
+          ...(state === "closed" ? { closedAt: verifiedAt } : {}),
+        },
+      },
+    ],
+  });
+  const metrics = computeQueueMetrics({
+    since: DAY_START,
+    until: NEXT_DAY,
+    created: [],
+    events: [
+      {
+        type: "work.completed",
+        repository: REPOSITORY,
+        workItemId: "closed",
+        occurredAt: "2026-08-19T10:00:00.000Z",
+        result: result("closed", "2026-08-19T10:30:00.000Z"),
+      },
+      {
+        type: "work.completed",
+        repository: REPOSITORY,
+        workItemId: "reopened",
+        occurredAt: "2026-08-19T11:00:00.000Z",
+        result: result("open", "2026-08-19T11:30:00.000Z"),
+      },
+    ],
+  });
+
+  assert.deepEqual(metrics.all.acceptance, {
+    numerator: 0,
+    denominator: 0,
+    rate: null,
+    open: 1,
+    unavailable: 0,
+    excluded: 0,
+  });
 });
 
 test("a window bound that is not a timestamp is refused, and an inverted window with it", () => {
@@ -315,12 +477,12 @@ test("the metrics command prints one JSON reading and refuses a bad --since", as
   const parsed = JSON.parse(reading.stdout) as {
     since: string;
     until: string;
-    all: { created: Record<string, number>; acceptedPerAttempt: number | null };
+    all: { created: Record<string, number>; acceptance: { rate: number | null } };
     repositories: Record<string, { created: Record<string, number> }>;
   };
   assert.ok(Date.parse(parsed.since) < Date.parse(parsed.until));
   assert.equal(parsed.all.created.queued, 1);
-  assert.equal(parsed.all.acceptedPerAttempt, null);
+  assert.equal(parsed.all.acceptance.rate, null);
   assert.equal(parsed.repositories[REPOSITORY]?.created.queued, 1);
 
   const narrowed = run("metrics", "--repository", "frostyard/clix");
