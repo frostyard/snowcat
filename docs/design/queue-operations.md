@@ -5,8 +5,11 @@ Living document. Rationale:
 the execution boundary from
 [ADR-0003](../adr/0003-separate-work-coordination-from-execution.md) and
 admission from
-[ADR-0005](../adr/0005-admit-worker-created-work-before-claiming.md).
-Contract: [work queue](../specs/work-queue.md). Architecture:
+[ADR-0005](../adr/0005-admit-worker-created-work-before-claiming.md), and host
+serialization from
+[ADR-0079](../adr/0079-serialize-scheduled-jobs-and-publish-host-health.md).
+Contracts: [work queue](../specs/work-queue.md) and
+[scheduled jobs](../specs/scheduled-jobs.md). Architecture:
 [queue execution boundary](queue-execution-boundary.md).
 
 ## Overview
@@ -48,12 +51,14 @@ seed-dogfood ──────────────────► queued   
   never in `SNOWCAT_HOME`. (On 2026-08-17 a worker left the operator checkout
   on a feature branch; the timers then ran that branch's code.)
 
-State lives in `/var/lib/snowcat/{queue,control-plane}.db`, configuration in
-`/etc/snowcat/env`, backups in `/var/backups/snowcat`, all created by the
-installer below. Without the installer the defaults are `./data/queue.db` and
-`./data/control-plane.db` relative to the process working directory. Every
-command below is `npm run --silent queue -- <command>` unless it names
-another script; all print JSON.
+State lives in `/var/lib/snowcat/{queue,control-plane}.db`, scheduled-job
+health in `/var/lib/snowcat/job-health`, configuration in
+`/etc/snowcat/env`, and backups in `/var/backups/snowcat`, all created by the
+installer below. Without the installer the database defaults are
+`./data/queue.db` and `./data/control-plane.db` relative to the process
+working directory. Every command below is
+`npm run --silent queue -- <command>` unless it names another script; all
+print JSON.
 
 ## Install the host
 
@@ -79,7 +84,8 @@ starting the surface, open `/login` and enter that same value; retrieve it from
 the loaded environment with `printf '%s\n' "$SNOWCAT_APP_TOKEN"`. Access mode
 uses its two Access variables instead and ignores this token.
 
-[`deploy/install.sh`](../../deploy/install.sh) creates `/var/lib/snowcat` and
+[`deploy/install.sh`](../../deploy/install.sh) creates `/var/lib/snowcat`,
+`/var/lib/snowcat/job-health`, and
 `/var/backups/snowcat` (0750, owned by `--user`, default the sudo caller —
 `snowcat-backup.timer` narrows the backup directory to 0700 on its first
 daily run; see below);
@@ -1222,6 +1228,18 @@ Snowcat v1 runs on **one operator host** and stays there deliberately:
   `deploy/systemd/` and re-running `deploy/install.sh`; a host-only override
   is a drop-in (`systemctl edit <timer>`), which upgrades preserve.
 
+  Every service command is wrapped by
+  [`deploy/bin/snowcat-run-job`](../../deploy/bin/snowcat-run-job) under
+  [ADR-0079](../adr/0079-serialize-scheduled-jobs-and-publish-host-health.md).
+  The wrapper takes one exclusive `flock` shared by all six jobs, waits rather
+  than dropping a due run, and writes the latest completed result under
+  `/var/lib/snowcat/job-health`. This keeps timer cadences independent while
+  preventing overlapping queue writers and backup reads. The operator inbox's
+  *Scheduled jobs* rail shows result, finish time, execution duration, lock
+  wait, last success, and last failure. The exact file and failure contract is
+  the [scheduled-jobs spec](../specs/scheduled-jobs.md); no command output,
+  source content, arguments, or credentials enter those files.
+
   Each service is `Type=oneshot`, reads `EnvironmentFile=/etc/snowcat/env`
   (`SNOWCAT_HOME`, `SNOWCAT_QUEUE_DB`, `SNOWCAT_CONTROL_DB`,
   `SNOWCAT_GITHUB_TOKEN`, `SNOWCAT_BACKUP_RETAIN_DAYS`), and runs
@@ -1740,12 +1758,23 @@ tokens and wall time per accepted outcome (from the client you ran).
   protocol on stdout. Test by hand with
   `npm --prefix /path/to/snowcat run --silent mcp` and an `initialize` line on
   stdin.
+- **A scheduled job shows `failure` or `unreadable`** — open the inbox's
+  *Scheduled jobs* rail, then inspect the named unit with
+  `systemctl status snowcat-<name>.service` and
+  `journalctl -u snowcat-<name>.service`. `failure` is the command's last
+  non-zero exit; `unreadable` means the host observation cannot be trusted.
+  A high `waited` value means another scheduled job held the shared lock. Do
+  not delete the lock file while a service may be running. Fix the underlying
+  command or file permissions, then start that service once; a successful run
+  retains the prior failure time while restoring current health.
 
 ## Operational notes
 
 - One host, one queue database, any number of clients: every CLI invocation and
   MCP server opens its own connection; SQLite WAL and a busy timeout serialize
-  writes.
+  ad hoc writes. The six scheduled services additionally share the host lock
+  from [ADR-0079](../adr/0079-serialize-scheduled-jobs-and-publish-host-health.md)
+  so timer overlap cannot become queue-writer contention.
 - Feeder, `verify-artifacts`, and `backup` are idempotent and cheap; the
   six timers in `deploy/systemd/` (daily, every 15 minutes, daily, weekly, every 2 minutes, daily) are the
   intended cadence, and running any of them by hand in between is harmless.
@@ -1766,8 +1795,10 @@ tokens and wall time per accepted outcome (from the client you ran).
   [ADR-0061](../adr/0061-cure-pull-requests-as-bounded-per-head-work.md),
   [ADR-0065](../adr/0065-gate-worker-pull-requests-behind-bounded-review.md),
   [ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md),
-  [ADR-0070](../adr/0070-grant-mcp-tokens-a-server-enforced-tool-scope.md)
-- Contracts: [work queue](../specs/work-queue.md)
+  [ADR-0070](../adr/0070-grant-mcp-tokens-a-server-enforced-tool-scope.md),
+  [ADR-0079](../adr/0079-serialize-scheduled-jobs-and-publish-host-health.md)
+- Contracts: [work queue](../specs/work-queue.md),
+  [scheduled jobs](../specs/scheduled-jobs.md)
 - Architecture: [queue execution boundary](queue-execution-boundary.md),
   [repository enrollment](repository-enrollment.md)
 - Built in: [recovery plan](../plans/recover.md) Phases 1–5

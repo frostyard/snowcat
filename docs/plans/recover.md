@@ -171,7 +171,11 @@ and merged through the queue:
   #10).
 - Scheduling — systemd timers for feeder, `verify-artifacts`, and backup with
   `seed-dogfood --enrolled` and `import-issues --enrolled` (#12 → PR #14,
-  #21 → PR #28); `npm run check:deploy` verifies units and scripts in CI.
+  #21 → PR #28); strengthened 2026-08-29 under
+  [ADR-0079](../adr/0079-serialize-scheduled-jobs-and-publish-host-health.md):
+  the six independent cadences share one host lock, publish atomically replaced
+  health outside SQLite, and appear in the operator inbox;
+  `npm run check:deploy` verifies units and scripts in CI.
 - Deployment — `deploy/install.sh`, `deploy/upgrade.sh`, `/etc/snowcat/env`,
   the runbook rewritten around them (#13 → PR #15). Decision recorded in the
   runbook's Deployment section: single host, stdio MCP, loopback listeners,
@@ -189,6 +193,9 @@ and merged through the queue:
   timers keep the queue fed, verified, and backed up without a shell.
   Achieved 2026-08-18 for the browser; the timers are installed by
   `deploy/install.sh`, which the operator runs on the host (see Phase 7).
+  Strengthened 2026-08-29 after a live seed/verify overlap produced
+  `database is locked`: scheduled commands now serialize and their last
+  completed health remains visible after journald scrolls.
 
 ## Phase 7 — Settle in (in progress; steps 1, 3, 4 done, 2 under way)
 

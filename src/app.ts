@@ -109,6 +109,7 @@ function defaultSurfaceStores(): () => SurfaceStores {
     stores ??= {
       queue: new QueueStore(queueDatabasePath()),
       controlPlanePath: process.env.SNOWCAT_CONTROL_DB && process.env.SNOWCAT_CONTROL_DB !== ":memory:" ? process.env.SNOWCAT_CONTROL_DB : undefined,
+      jobHealthDirectory: process.env.SNOWCAT_JOB_HEALTH_DIR?.trim() || "/var/lib/snowcat/job-health",
     };
     return stores;
   };

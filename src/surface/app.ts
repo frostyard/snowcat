@@ -47,6 +47,8 @@ export interface SurfaceStores {
   controlPlanePath?: string;
   /** GitHub fetcher/clock for re-verification; production uses the defaults (and `SNOWCAT_GITHUB_TOKEN`). */
   verifier?: ArtifactVerifierOptions;
+  /** Atomically replaced host scheduler observations; absent in tests or non-host deployments. */
+  jobHealthDirectory?: string;
 }
 
 export interface SurfaceOptions {
@@ -184,7 +186,7 @@ export function createSurfaceApp(options: SurfaceOptions): Hono<SurfaceEnv> {
     requireSession,
     (context) =>
       page((stores, enrollments, chrome) => {
-        const data = readInbox(stores.queue, enrollments);
+        const data = readInbox(stores.queue, enrollments, new Date(), stores.jobHealthDirectory);
         const partial = context.req.query("partial");
         if (partial !== undefined) {
           if (!(inboxPartials as readonly string[]).includes(partial)) return new Response("unknown partial", { status: 400 });

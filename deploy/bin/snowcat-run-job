@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Signal traps invoke the helper indirectly; ShellCheck versions report either
+# the function or its body as unreachable.
+# shellcheck disable=SC2317,SC2329
+# Serialize one timer-triggered Snowcat job and atomically record its latest
+# result outside the queue/control-plane databases.
+set -euo pipefail
+
+if [[ $# -lt 2 ]]; then
+  echo "usage: snowcat-run-job <job> <command> [args...]" >&2
+  exit 2
+fi
+
+job="$1"
+shift
+case "$job" in
+  backup | import-issues | seed-dogfood | sweep-dependencies | sweep-settings | verify-artifacts) ;;
+  *)
+    echo "snowcat-run-job: unknown job: $job" >&2
+    exit 2
+    ;;
+esac
+
+: "${SNOWCAT_HOME:?SNOWCAT_HOME is required}"
+health_dir="${SNOWCAT_JOB_HEALTH_DIR:-/var/lib/snowcat/job-health}"
+lock_file="${SNOWCAT_JOB_LOCK_FILE:-/var/lib/snowcat/scheduled-jobs.lock}"
+mkdir -p "$health_dir" "$(dirname "$lock_file")"
+
+requested_ms="$(date -u +%s%3N)"
+exec 9> "$lock_file"
+flock -x 9
+started_ms="$(date -u +%s%3N)"
+started_at="$(date -u --date="@$((started_ms / 1000))" +%Y-%m-%dT%H:%M:%S).$(printf '%03d' "$((started_ms % 1000))")Z"
+
+child_pid=""
+signal_status=0
+forward_signal() {
+  local signal="$1" status="$2"
+  signal_status="$status"
+  if [[ -n $child_pid ]] && kill -0 "$child_pid" 2> /dev/null; then
+    kill "-$signal" "$child_pid"
+  fi
+}
+trap 'forward_signal TERM 143' TERM
+trap 'forward_signal INT 130' INT
+
+set +e
+"$@" &
+child_pid=$!
+wait "$child_pid"
+status=$?
+if [[ $signal_status -ne 0 ]]; then
+  wait "$child_pid" 2> /dev/null || true
+  status="$signal_status"
+fi
+set -e
+child_pid=""
+trap - TERM INT
+
+finished_ms="$(date -u +%s%3N)"
+finished_at="$(date -u --date="@$((finished_ms / 1000))" +%Y-%m-%dT%H:%M:%S).$(printf '%03d' "$((finished_ms % 1000))")Z"
+duration_ms=$((finished_ms - started_ms))
+wait_ms=$((started_ms - requested_ms))
+
+if ! node "$SNOWCAT_HOME/scripts/record-job-health.mjs" \
+  "$health_dir" "$job" "$started_at" "$finished_at" "$duration_ms" "$wait_ms" "$status"; then
+  echo "snowcat-run-job: failed to record health for $job" >&2
+  if [[ $status -eq 0 ]]; then status=1; fi
+fi
+
+exit "$status"

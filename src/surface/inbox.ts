@@ -2,6 +2,7 @@ import { REVIEW_KIND } from "../queue/pull-request-review.ts";
 import { pullRequestArtifactIdentity } from "../queue/artifact-identity.ts";
 import type { QueueStore } from "../queue/store.ts";
 import { withoutLeaseToken, type ObservableWorkItem, type ObservedWorkEvent, type UnreportedPullRequest, type WorkArtifact } from "../queue/types.ts";
+import { readScheduledJobHealth, type ScheduledJobHealth } from "./job-health.ts";
 import { readPullRequests, type PullRequestRow, type RepositoryEnrollment } from "./repositories.ts";
 
 /** How many ledger events the inbox rail shows, newest first. */
@@ -85,6 +86,7 @@ export interface InboxData {
   readyToMerge: ReadyRow[];
   unverified: UnverifiedRow[];
   adjudication: AdjudicationRow[];
+  scheduledJobs: ScheduledJobHealth[];
   events: ObservedWorkEvent[];
   eventsSince: number;
   /** Groups whose read hit the 100-row list cap, so the operator knows the page is not exhaustive. */
@@ -128,7 +130,12 @@ function readyAction(pullRequest: PullRequestRow, reviewGateOn: boolean): ReadyR
  * uses. Lease tokens are stripped at the boundary with `withoutLeaseToken`;
  * nothing here writes.
  */
-export function readInbox(queue: QueueStore, enrollments: Map<string, RepositoryEnrollment> | undefined, now: Date = new Date()): InboxData {
+export function readInbox(
+  queue: QueueStore,
+  enrollments: Map<string, RepositoryEnrollment> | undefined,
+  now: Date = new Date(),
+  jobHealthDirectory?: string,
+): InboxData {
   const metadata = queue.metadata();
   const counts = queue.counts();
   const truncated: string[] = [];
@@ -268,6 +275,7 @@ export function readInbox(queue: QueueStore, enrollments: Map<string, Repository
     readyToMerge,
     unverified,
     adjudication,
+    scheduledJobs: readScheduledJobHealth(jobHealthDirectory),
     events,
     eventsSince,
     truncated,
