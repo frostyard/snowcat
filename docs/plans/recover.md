@@ -260,6 +260,15 @@ hands on the host. Status as of 2026-08-19:
 
 - Grants and capability profiles from ADR-0032/0034 as additional claim
   filters once one repository shows contention.
+- **Credential-scope pre-claim matching:** follow the ordered, deliberately
+  deferred
+  [Core-first compatibility train](repository-tooling-rollout.md#deferred-compatibility-train-credential-scopes)
+  required by
+  [ADR-0076 §5](../adr/0076-pin-repository-tools-in-the-repository-and-qualify-lanes-by-running-them.md#decision).
+  Snowcat must dual-read current and widened Core governance first; deploy it;
+  then publish and adopt the Core schema; then let Cockpit lanes advertise
+  proven credential-free capability names; enable matching only last. Until
+  then workers keep the explicit post-claim release rule.
 - **Per-repository WIP limit (ADR-0034)** — filed 2026-08-19 after the
   first Copilot fleet run: four supervisors drained 23 discovery roots in
   ~20 minutes, the operator admitted 18 proposals in bulk, and 19 draft
