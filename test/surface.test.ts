@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -165,7 +165,7 @@ test("the operator surface requires a session, sets the cookie on the right toke
 
   // Structure from the artboard: sidebar, header kicker + h1, stat row, three grouped cards, events rail.
   assert.match(body, /<noscript><meta http-equiv="refresh" content="30"><\/noscript>/);
-  assert.match(body, /<script>\(function \(\) \{\s*var cfg = \{"page":"\/","partials":\["stats","proposals","readyToMerge","blocked","unverified","adjudication"\],"repository":null,"refresh":30,"reload":false,"reloadDelay":2000,"queueEventPrefix":"work\.","queueEventTypes":\["artifact\.verified","artifact\.attached"\]\};/);
+  assert.match(body, /<script>\(function \(\) \{\s*var cfg = \{"page":"\/","partials":\["stats","proposals","readyToMerge","blocked","unverified","adjudication","scheduledJobs"\],"repository":null,"refresh":30,"reload":false,"reloadDelay":2000,"queueEventPrefix":"work\.","queueEventTypes":\["artifact\.verified","artifact\.attached"\]\};/);
   assert.equal(/<script[^>]*src=/.test(body), false); // nothing loaded from elsewhere
 
   // The dirty-form guard (issue #155): a due refresh — reload or fragment swap —
@@ -211,6 +211,7 @@ test("the operator surface requires a session, sets the cookie on the right toke
   assert.match(unverified, /Resolve frostyard\/example#2: <span>events --since and watch<\/span>/);
   assert.match(unverified, /<span class="ph-version">PR #5<\/span>/);
   assert.match(unverified, /GitHub returned 404 without SNOWCAT_GITHUB_TOKEN/);
+  assert.match(section(body, "scheduledJobs"), /Scheduled-job health is not configured for this surface\./);
 
   // Events rail: newest first, with the "since <sequence>" caption.
   const events = section(body, "events");
@@ -249,6 +250,45 @@ test("the operator surface requires a session, sets the cookie on the right toke
   assert.equal(health.status, 200);
   const agents = await app.request("/agents/queue-clerk");
   assert.equal(agents.status, 401);
+});
+
+test("the inbox renders durable scheduled-job results without opening either database for health", async () => {
+  const seeded = await seededQueue();
+  test.after(() => seeded.queue.close());
+  const healthDirectory = join(seeded.directory, "job-health");
+  await mkdir(healthDirectory);
+  await writeFile(
+    join(healthDirectory, "verify-artifacts.json"),
+    `${JSON.stringify({
+      version: 1,
+      job: "verify-artifacts",
+      lastAttemptStartedAt: "2026-08-29T00:00:00.000Z",
+      lastAttemptFinishedAt: "2026-08-29T00:00:02.000Z",
+      lastDurationMs: 2_000,
+      lastWaitMs: 317,
+      lastResult: "failure",
+      lastExitCode: 1,
+      lastSuccessAt: "2026-08-28T23:58:00.000Z",
+      lastFailureAt: "2026-08-29T00:00:02.000Z",
+      lastFailureExitCode: 1,
+    })}\n`,
+  );
+
+  const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue: seeded.queue, jobHealthDirectory: healthDirectory }) });
+  const cookie = `snowcat_session=${sessionDigest(TOKEN)}`;
+  const inbox = await app.request("/", { headers: { Cookie: cookie } });
+  assert.equal(inbox.status, 200);
+  const jobs = section(await inbox.text(), "scheduledJobs");
+  assert.match(jobs, /<h2>Scheduled jobs<\/h2><span>6 items<\/span>/);
+  assert.match(jobs, /verify-artifacts<small>finished 00:00:02<\/small>/);
+  assert.match(jobs, /<span class="ph-badge danger">failure<\/span><small class="fl-sub">2000 ms · waited 317 ms · exit 1<\/small>/);
+  assert.match(jobs, /23:58:00/);
+  assert.match(jobs, /00:00:02 · exit 1/);
+  assert.match(jobs, /seed-dogfood.*?<span class="ph-badge">never run<\/span>/s);
+
+  const partial = await app.request("/?partial=scheduledJobs", { headers: { Cookie: cookie } });
+  assert.equal(partial.status, 200);
+  assert.match(await partial.text(), /^<section class="fl-group" id="scheduledJobs">/);
 });
 
 test("a verified pull request with a rejected handoff is shown for repair and never as merge-ready", async () => {

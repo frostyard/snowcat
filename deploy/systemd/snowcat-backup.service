@@ -11,7 +11,7 @@ Documentation=https://github.com/frostyard/snowcat/blob/main/docs/design/queue-o
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/snowcat/env
-ExecStart=/bin/bash ${SNOWCAT_HOME}/deploy/bin/snowcat-backup
+ExecStart=/bin/bash ${SNOWCAT_HOME}/deploy/bin/snowcat-run-job backup /bin/bash ${SNOWCAT_HOME}/deploy/bin/snowcat-backup
 NoNewPrivileges=yes
 # PrivateTmp gives tsx a writable compile cache under a private /tmp.
 PrivateTmp=yes

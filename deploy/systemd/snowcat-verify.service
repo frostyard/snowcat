@@ -11,7 +11,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/snowcat/env
-ExecStart=npm --prefix ${SNOWCAT_HOME} run --silent queue -- verify-artifacts
+ExecStart=/bin/bash ${SNOWCAT_HOME}/deploy/bin/snowcat-run-job verify-artifacts npm --prefix ${SNOWCAT_HOME} run --silent queue -- verify-artifacts
 NoNewPrivileges=yes
 # PrivateTmp gives tsx a writable compile cache under a private /tmp.
 PrivateTmp=yes

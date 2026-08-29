@@ -144,6 +144,7 @@ const LIVE_SCRIPT = String.raw`(function () {
     });
   }
   function scheduleRefetch() { if (pending === null) pending = setTimeout(refetch, cfg.reload ? cfg.reloadDelay : 250); }
+  setInterval(scheduleRefetch, cfg.refresh * 1000);
   function affectsQueueView(type) {
     return type.indexOf(cfg.queueEventPrefix) === 0 || cfg.queueEventTypes.indexOf(type) !== -1;
   }
@@ -258,7 +259,7 @@ export function unavailablePage(message: string): string {
 }
 
 /** The inbox fragments the live script refetches; each renders one element with that id. */
-export const inboxPartials = ["stats", "proposals", "readyToMerge", "blocked", "unverified", "adjudication"] as const;
+export const inboxPartials = ["stats", "proposals", "readyToMerge", "blocked", "unverified", "adjudication", "scheduledJobs"] as const;
 export type InboxPartial = (typeof inboxPartials)[number];
 
 export function inboxPartial(data: InboxData, partial: InboxPartial): string {
@@ -275,6 +276,8 @@ export function inboxPartial(data: InboxData, partial: InboxPartial): string {
       return unverifiedGroup(data.unverified).value;
     case "adjudication":
       return adjudicationGroup(data.adjudication).value;
+    case "scheduledJobs":
+      return scheduledJobsGroup(data.scheduledJobs).value;
   }
 }
 
@@ -292,6 +295,7 @@ export function inboxPage(context: PageContext, data: InboxData): string {
         ${blockedGroup(data.blocked)}
         ${unverifiedGroup(data.unverified)}
         ${adjudicationGroup(data.adjudication)}
+        ${scheduledJobsGroup(data.scheduledJobs)}
       </div>${eventsRail(data.events, data.eventsSince)}</div>`,
     ),
     { refresh: true, live: { page: "/", partials: inboxPartials } },
@@ -480,6 +484,30 @@ function unverifiedGroup(rows: UnverifiedRow[]): SafeHtml {
     })}</tbody></table>`,
     "Every issue and pull-request artifact has a verified source and complete handoff.",
     "unverified",
+  );
+}
+
+function scheduledJobsGroup(rows: InboxData["scheduledJobs"]): SafeHtml {
+  return group(
+    "Scheduled jobs",
+    rows.length,
+    html`<table class="fl-table"><thead><tr><th>Job</th><th>Last result</th><th>Last success</th><th>Last failure</th></tr></thead><tbody>${rows.map(
+      (row) => {
+        if (row.status === "never-run") {
+          return html`<tr><td><div class="fl-name">${row.job}</div></td><td><span class="ph-badge">never run</span></td><td>—</td><td>—</td></tr>`;
+        }
+        if (row.status === "unreadable") {
+          return html`<tr><td><div class="fl-name">${row.job}</div></td><td class="fl-reason"><span class="ph-badge danger">unreadable</span> ${row.reason}</td><td>—</td><td>—</td></tr>`;
+        }
+        return html`<tr><td><div class="fl-name">${row.job}<small>finished ${clock(row.lastAttemptFinishedAt, true)}</small></div></td><td><span class="ph-badge ${
+          row.status === "success" ? "ok" : "danger"
+        }">${row.status}</span><small class="fl-sub">${row.lastDurationMs} ms · waited ${row.lastWaitMs} ms · exit ${row.lastExitCode}</small></td><td>${
+          row.lastSuccessAt ? clock(row.lastSuccessAt, true) : "—"
+        }</td><td>${row.lastFailureAt ? `${clock(row.lastFailureAt, true)} · exit ${row.lastFailureExitCode ?? "?"}` : "—"}</td></tr>`;
+      },
+    )}</tbody></table>`,
+    "Scheduled-job health is not configured for this surface.",
+    "scheduledJobs",
   );
 }
 

@@ -93,6 +93,7 @@ Docs are split by the question they answer:
 - [0076 — Pin repository tools in the repository and qualify lanes by running them](adr/0076-pin-repository-tools-in-the-repository-and-qualify-lanes-by-running-them.md)
 - [0077 — Derive follow-up contracts from proposer intent](adr/0077-derive-follow-up-contracts-from-proposer-intent.md)
 - [0078 — Make pull-request handoff artifact-centric and evidence-bound](adr/0078-make-pull-request-handoff-artifact-centric-and-evidence-bound.md)
+- [0079 — Serialize scheduled jobs and publish host health](adr/0079-serialize-scheduled-jobs-and-publish-host-health.md)
 
 ### Organization decisions
 
@@ -136,6 +137,7 @@ Docs are split by the question they answer:
 - [Verification-profile ingestion](specs/verification-profile-ingestion.md)
 - [Goal ingestion](specs/goal-ingestion.md)
 - [Conclusive-run-rate evaluator](specs/conclusive-run-rate-evaluator.md)
+- [Scheduled jobs](specs/scheduled-jobs.md)
 
 ### Plans
 

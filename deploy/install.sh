@@ -6,8 +6,9 @@
 #   sudo deploy/install.sh [--user OPERATOR]
 #
 # What it does (and nothing else):
-#   1. creates /var/lib/snowcat and /var/backups/snowcat (0750, owned by the
-#      operator user — --user, else the sudo caller, else the invoking user);
+#   1. creates /var/lib/snowcat, /var/lib/snowcat/job-health, and
+#      /var/backups/snowcat (0750, owned by the operator user — --user, else
+#      the sudo caller, else the invoking user);
 #   2. writes /etc/snowcat/env (0600) from deploy/env.example ONLY IF ABSENT,
 #      with SNOWCAT_HOME set to this checkout and the database paths under
 #      /var/lib/snowcat; an existing file is never modified;
@@ -120,6 +121,7 @@ fi
 
 state_dir="$root/var/lib/snowcat"
 backup_dir="$root/var/backups/snowcat"
+job_health_dir="$state_dir/job-health"
 env_dir="$root/etc/snowcat"
 env_file="$env_dir/env"
 unit_dir="$root/etc/systemd/system"
@@ -194,6 +196,7 @@ fi
 
 # 1. Data directories.
 ensure_dir "$state_dir" 0750 owned
+ensure_dir "$job_health_dir" 0750 owned
 ensure_dir "$backup_dir" 0750 owned
 
 # 2. Environment file, only if absent.
@@ -248,25 +251,25 @@ DROPIN
 
 write_dropin snowcat-seed-dogfood.service \
   "$state_dir -$snowcat_home/data" \
-  "$npm_path --prefix $snowcat_home run --silent queue -- seed-dogfood --enrolled"
+  "/bin/bash $snowcat_home/deploy/bin/snowcat-run-job seed-dogfood $npm_path --prefix $snowcat_home run --silent queue -- seed-dogfood --enrolled"
 write_dropin snowcat-import-issues.service \
   "$state_dir -$snowcat_home/data" \
-  "$npm_path --prefix $snowcat_home run --silent queue -- import-issues --enrolled --label snowcat"
+  "/bin/bash $snowcat_home/deploy/bin/snowcat-run-job import-issues $npm_path --prefix $snowcat_home run --silent queue -- import-issues --enrolled --label snowcat"
 write_dropin snowcat-sweep-dependencies.service \
   "$state_dir -$snowcat_home/data" \
-  "$npm_path --prefix $snowcat_home run --silent queue -- sweep-dependencies --enrolled"
+  "/bin/bash $snowcat_home/deploy/bin/snowcat-run-job sweep-dependencies $npm_path --prefix $snowcat_home run --silent queue -- sweep-dependencies --enrolled"
 write_dropin snowcat-sweep-settings.service \
   "$state_dir -$snowcat_home/data" \
-  "$npm_path --prefix $snowcat_home run --silent queue -- sweep-repository-settings --enrolled"
+  "/bin/bash $snowcat_home/deploy/bin/snowcat-run-job sweep-settings $npm_path --prefix $snowcat_home run --silent queue -- sweep-repository-settings --enrolled"
 write_dropin snowcat-verify.service \
   "$state_dir -$snowcat_home/data" \
-  "$npm_path --prefix $snowcat_home run --silent queue -- verify-artifacts"
+  "/bin/bash $snowcat_home/deploy/bin/snowcat-run-job verify-artifacts $npm_path --prefix $snowcat_home run --silent queue -- verify-artifacts"
 write_dropin snowcat-surface.service \
   "$state_dir -$snowcat_home/data" \
   "$npm_path --prefix $snowcat_home run --silent serve"
 write_dropin snowcat-backup.service \
   "$state_dir $backup_dir -$snowcat_home/data" \
-  "/bin/bash $snowcat_home/deploy/bin/snowcat-backup"
+  "/bin/bash $snowcat_home/deploy/bin/snowcat-run-job backup /bin/bash $snowcat_home/deploy/bin/snowcat-backup"
 
 # 3b. Retire units this installer used to write and no longer ships, after
 # the current ones exist: the Fluent-named trio, and the combined

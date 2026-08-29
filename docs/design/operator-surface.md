@@ -7,8 +7,11 @@ with the decision model from
 the work engine from
 [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md), with
 artifact handoff from
-[ADR-0078](../adr/0078-make-pull-request-handoff-artifact-centric-and-evidence-bound.md).
-Contract: [work queue](../specs/work-queue.md). Operating context:
+[ADR-0078](../adr/0078-make-pull-request-handoff-artifact-centric-and-evidence-bound.md),
+and host-job observation from
+[ADR-0079](../adr/0079-serialize-scheduled-jobs-and-publish-host-health.md).
+Contracts: [work queue](../specs/work-queue.md) and
+[scheduled jobs](../specs/scheduled-jobs.md). Operating context:
 [queue operations runbook](queue-operations.md).
 
 ## Overview
@@ -49,7 +52,7 @@ as well as on the item page.
 
 | View | Route | Reads | Purpose |
 | --- | --- | --- | --- |
-| Inbox | `/` | `list({status:"proposed"})`, `list({status:"blocked"})`, `completedItemsWithPendingArtifacts({ handoffAttentionOnly: true })` — completed items with an `unverified` issue/pull-request source or unresolved/rejected pull-request handoff, newest first, selected in the store rather than filtered out of the first 100 completions; `readPullRequests(queue, repository, now)` for every opted-in repository (below), the same read the board uses | Everything waiting on the operator, grouped: proposals to admit (children under their parent's finding), pull requests [ready to merge](#pull-requests) (mark ready or queue for merge), blocked items to requeue or cancel, and artifact handoffs to verify or repair |
+| Inbox | `/` | `list({status:"proposed"})`, `list({status:"blocked"})`, `completedItemsWithPendingArtifacts({ handoffAttentionOnly: true })` — completed items with an `unverified` issue/pull-request source or unresolved/rejected pull-request handoff, newest first, selected in the store rather than filtered out of the first 100 completions; `readPullRequests(queue, repository, now)` for every opted-in repository (below), the same read the board uses; `readScheduledJobHealth(directory)` over the six host files without a database read | Everything waiting on the operator, grouped: proposals to admit (children under their parent's finding), pull requests [ready to merge](#pull-requests) (mark ready or queue for merge), blocked items to requeue or cancel, artifact handoffs to verify or repair, and the latest result of every scheduled host job |
 | Repository board | `/repositories/:owner/:name` | `counts(repository)`, `list({repository, status})` for `queued`/`claimed`/`completed`, `list({repository, kind:"pr-cure", status})` per status, `events(id)` for the completing worker; `ControlPlaneStore.repositoryStatuses()` and `activeCoreSnapshot()` for the enrollment badge (effective state, Core source commit, surface commit, repository id, hold) | Three columns: queued in claim order (priority tag, `note` tag when `operatorNotes` is non-empty), leased (worker identity, lease-time bar from `updatedAt` → `leaseExpiresAt`), completed newest first with the `delivery` tag; four stat tiles (queued, leased, completed today, merged / attempts — the attempts denominator counts only completed items whose `allowedActions` include `open-pr`, see below); under them the [pull requests](#pull-requests) section; the header's Verify artifacts / Import issues / Seed dogfood / Hold (or Clear hold) actions, each one same-origin `POST` (see [Mutations](#mutations) and the operational notes below; [spec rule 40](../specs/work-queue.md)) |
 | Progress | `/progress` | `list({status})` for the live statuses and `recentlyUpdatedItems({status})` — the same filters ordered newest first in the store — for `completed` and `cancelled`, so more than 100 old merged completions cannot hide today's work behind claim order; `recentEvents(id, 100)` for each visible primary and folded review satellite; plus `repositoryLabeledIssueObservations(repository)` and each repository's review-gate setting, and `predecessorStatuses(id)` for each **queued** item that declares predecessors — the claim gate's own evaluation, read once per pass through a shared cache | Lifecycle strips grouped by repository, preceded by counts for awaiting import, proposed, queued, working, in review, awaiting merge, and needs attention. The eight fixed stages run from awaiting import through merged; review and fix satellites fold into their primary item. Completed and current stages expose their ledger-derived entered-at times on hover, while the current waiting chip shows its elapsed stage duration (and carries its full text as a `title`, since the chip itself is one clipped line). A queued item the predecessor gate withholds ([ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md), [spec rules 62–63](../specs/work-queue.md)) reads `waiting for predecessor issue #N · <reason label>` instead of `in queue`, naming the nearest unmet edge in stored order; when its unmet chain loops back to itself the chip reads `predecessor cycle · issue #N` and the row carries an amber **predecessor cycle** stop, because no worker can ever claim it. Every stop is collected in a pinned needs-attention group — the amber and red ones (blocked, expired lease, predecessor cycle, a pull request closed without merge, a round-three human decision) and the grey unverified artifact — while active leases pulse. A cancelled item leaves the projection at once (it stays on `/events` and on its item page), and a completed discovery root with no pull request reads `delivered · proposals filed` at the merged stage; merged, published, and delivered rows age out after seven days. The strips are read-only except for two states: a proposed strip offers Approve, and a blocked strip offers Requeue with note and Cancel, both through the existing mutation routes |
 | Item | `/items/:id` | `get(id)`, `events(id)`, `get(parentId)`, `get(rootId)`, `children(id)`, `predecessorStatuses(id)` | Exactly what `queue -- show` prints, rendered: header with status and delivery tags; Definition (objective, repository + enrollment, kind, lineage links to parent/root/children, priority, allowed/delegable tags, created/updated, instructions, acceptance criteria); Predecessors, for an item that declares any ([ADR-0066](../adr/0066-sequence-project-slices-on-observed-predecessor-delivery.md), [spec rule 63](../specs/work-queue.md)) — one row per declared source reference in stored order, each with the URL, a scannable verdict (`met`, `not imported`, `not completed`, `cancelled`, `not delivered`, `predecessor cycle`), the gate's own reason, and a link to the work item that reason was read from; its caption says whether the gate withholds the item, and a cycle says so outright; Result (summary, evidence, artifacts table with verification tag, head SHA, merged/verified time and the re-verifying actor from `artifact.verified`); Operator notes; Previous results; the full event timeline |
@@ -132,6 +135,15 @@ projection, no GitHub call: the same
 opted-in repository, folded into `InboxData.readyToMerge` alongside the
 existing adjudication loop so a gated repository's pull requests are read
 once for both rails.
+
+The inbox's **Scheduled jobs** rail is a read-only projection over the
+versioned, atomically replaced files defined by the
+[scheduled-jobs spec](../specs/scheduled-jobs.md). It shows all six jobs in a
+fixed order. A missing file is `never run`; invalid JSON, an unsupported
+version, a mismatched job name, or an invalid field is `unreadable`. A valid
+row shows the latest result, finish time, execution duration, lock wait, last
+success, and last failure. Rendering never opens either SQLite database for
+this rail, runs a command, repairs a file, or reads command output.
 
 ### Pull requests
 
@@ -246,10 +258,12 @@ loaded from another host) that subscribes with `EventSource`, prepends events
 to the rail (cap 30), and after a `work.*`, `artifact.verified`, or
 `artifact.attached` event
 refetches the page's groups as fragments (`GET /?partial=stats|proposals|
-blocked|unverified`, `GET /repositories/:owner/:name?partial=stats|queued|
+blocked|unverified|scheduledJobs`, `GET /repositories/:owner/:name?partial=stats|queued|
 leased|completed|pull-requests`) and swaps them in; the 30-second meta refresh survives only
 inside `<noscript>`, and a browser with scripts but no `EventSource`
-re-inserts it. The progress view uses the same subscriber and queue-affecting
+re-inserts it. Scripted pages also schedule the same 30-second fragment pass,
+so host health changes that do not append a queue event become visible. The
+progress view uses the same subscriber and queue-affecting
 event gate, but schedules a full-page reload no sooner than the stream's
 2-second poll interval so every lifecycle strip is derived again together.
 On every page, a due refresh — fragment swap or full reload alike — is
@@ -262,7 +276,7 @@ it is reading, the same way `metadata` does.
 
 ### What it does not do
 
-Grants, capability profiles, fleet or relationship views, process health,
+Grants, capability profiles, fleet or relationship views, worker process health,
 restricted findings, decision types beyond admission and blocked exits,
 multi-user access, and anything reachable off-host. Those remain roadmap
 Phase 10 and later.
@@ -272,7 +286,8 @@ Phase 10 and later.
 - The surface runs in the same process as the Flue app, reading
   `SNOWCAT_QUEUE_DB`, `SNOWCAT_CONTROL_DB`, `SNOWCAT_ACCESS_TEAM_DOMAIN` +
   `SNOWCAT_ACCESS_AUD` (Access mode) or `SNOWCAT_APP_TOKEN` (token mode),
-  `HOST`, and `PORT`. The surface fails closed (503) for every route, login
+  `SNOWCAT_JOB_HEALTH_DIR` (default `/var/lib/snowcat/job-health`), `HOST`,
+  and `PORT`. The surface fails closed (503) for every route, login
   included, only when neither Access nor the token is configured:
   `Neither Cloudflare Access (SNOWCAT_ACCESS_TEAM_DOMAIN + SNOWCAT_ACCESS_AUD)
   nor SNOWCAT_APP_TOKEN is configured on this host`. In Access mode a request
@@ -364,8 +379,10 @@ Phase 10 and later.
   [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md),
   [ADR-0002](../adr/0002-agent-portable-instruction-surface.md),
   [ADR-0070](../adr/0070-grant-mcp-tokens-a-server-enforced-tool-scope.md)
-  (the `/tokens` page's tool-grant column)
-- Contracts: [work queue](../specs/work-queue.md)
+  (the `/tokens` page's tool-grant column),
+  [ADR-0079](../adr/0079-serialize-scheduled-jobs-and-publish-host-health.md)
+- Contracts: [work queue](../specs/work-queue.md),
+  [scheduled jobs](../specs/scheduled-jobs.md)
 - Built in: [recovery plan](../plans/recover.md) Phase 6;
   long-range: [product foundation roadmap](../plans/product-foundation-roadmap.md) Phase 10
 - Adjacent: [queue execution boundary](queue-execution-boundary.md),

@@ -107,6 +107,30 @@ if ! grep -qxF "$marker" "$env_file"; then
   echo "check:deploy: install.sh overwrote an existing etc/snowcat/env" >&2
   exit 1
 fi
+if [[ ! -d $install_root/var/lib/snowcat/job-health ]]; then
+  echo "check:deploy: install.sh did not create var/lib/snowcat/job-health" >&2
+  exit 1
+fi
+declare -A scheduled_jobs=(
+  [snowcat-verify.service]=verify-artifacts
+  [snowcat-import-issues.service]=import-issues
+  [snowcat-seed-dogfood.service]=seed-dogfood
+  [snowcat-sweep-dependencies.service]=sweep-dependencies
+  [snowcat-sweep-settings.service]=sweep-settings
+  [snowcat-backup.service]=backup
+)
+for service in "${!scheduled_jobs[@]}"; do
+  dropin="$install_root/etc/systemd/system/$service.d/10-install.conf"
+  expected="/deploy/bin/snowcat-run-job ${scheduled_jobs[$service]} "
+  if ! grep -qF "$expected" "$repo/deploy/systemd/$service"; then
+    echo "check:deploy: shipped $service does not use the shared scheduled-job wrapper for ${scheduled_jobs[$service]}" >&2
+    exit 1
+  fi
+  if ! grep -qF "$expected" "$dropin"; then
+    echo "check:deploy: $service does not use the shared scheduled-job wrapper for ${scheduled_jobs[$service]}" >&2
+    exit 1
+  fi
+done
 if grep -q "created\|updated" "$install_root.second.log"; then
   echo "check:deploy: second install.sh run reported changes:" >&2
   cat "$install_root.second.log" >&2
