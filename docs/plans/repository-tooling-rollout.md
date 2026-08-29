@@ -658,10 +658,12 @@ Codex.
    cleaned by hand today), #21 (`release-needed` counted claimable while
    the prompt excludes it). ADR-0012 §5–6 (kit refreshed from its source;
    catalog derived from Core) remain design-only.
-6. **ADR-0076 §5 — credential scopes on the boundary:** not started. The
-   `workflow`-scope wall cost three leases today; until core's governance
-   schema carries `github:workflow` on `.github/workflows/**` and the queue
-   surfaces it, a worker discovers it inside the lease.
+6. **ADR-0076 §5 — credential scopes on the boundary:** deliberately
+   deferred to the [compatibility train below](#deferred-compatibility-train-credential-scopes).
+   The `workflow`-scope wall cost three leases today, but changing Core,
+   Snowcat, repository governance files, and Cockpit in the wrong order
+   would either make a current Core snapshot unreadable or silently exclude
+   current workers from claimable work.
 7. **Provider reliability, observed not fixed:** Copilot mangled the lease
    token twice (relay now immune) and once invented a `gh` limitation; keep
    it off the reviewer lane until a run shows otherwise. A Codex reviewer
@@ -670,6 +672,73 @@ Codex.
    the author's claim from the previous head. snowcat#248 makes the
    instructions demand the check runs; until it lands, treat a "CI not
    green" blocker as unverified until the head's runs are read.
+
+## Deferred compatibility train — credential scopes
+
+Status 2026-08-29: designed for rollout order, not scheduled for
+implementation. Live Core `main` at `44dfd0b` still publishes
+`repository-agent-governance.schema.json` version 1: a protected boundary has
+`id`, `decision`, `minimum_risk_tier`, `paths`, and empty `detectors`, with
+`additionalProperties: false`; there is no credential-scope vocabulary.
+Snowcat items do not carry a pre-claim credential requirement, and Cockpit
+lanes do not advertise a comparable capability set. The current safe behavior
+therefore remains the worker skill's post-claim check and immediate
+`release_work` when a required capability is absent.
+
+Roll this out only in this order:
+
+1. **Snowcat dual-read and additive item contract.** Record a new Snowcat ADR
+   that defines the item-side carrier for a requirement before a claim. Core's
+   versioned governance schema owns the closed scope vocabulary; Snowcat
+   supports the values of each Core revision it explicitly accepts rather
+   than inventing a second enum. Never infer a scope from prose, kind, actions,
+   or a path guessed after the lease. Snowcat must accept both the current Core
+   governance revision (absence means no declared scope requirement) and the
+   widened revision, expose requirements through existing list/get/claim
+   objects as additive fields, and leave matching disabled. This step updates the
+   [work-queue spec](../specs/work-queue.md) and the
+   [queue execution boundary](../design/queue-execution-boundary.md).
+2. **Deploy the compatible Snowcat first.** Upgrade the operator host and
+   every MCP endpoint before any repository adopts a governance record old
+   Snowcat cannot read. Prove a current version-1 Core snapshot still
+   activates and current clients still list, claim, and complete ordinary
+   work.
+3. **Core widens the governance contract.** In a new Core ADR and schema
+   revision, add the optional path-bound requirement with a closed first value
+   (`github:workflow` for `.github/workflows/**`). A required scope remains an
+   execution need, never an authority grant. Publish fixtures for both absent
+   and present scope requirements; do not edit the existing version-1 schema
+   in place.
+4. **Repositories adopt the new governance revision.** Migrate one repository
+   first, then the fleet. Each repository adds only scopes its protected paths
+   actually require. During this compatibility window Snowcat surfaces the
+   requirement but does not exclude clients; workers retain the post-claim
+   release rule, so no work becomes invisibly stranded.
+5. **Cockpit advertises proven lane capabilities.** Add a credential-free,
+   closed capability set to the lane/profile contract. It describes what the
+   operator-provisioned credential can do without naming, reading, copying, or
+   persisting that credential. A lane may advertise `github:workflow` only
+   after a new Cockpit ADR defines a non-mutating, reproducible proof through
+   the existing credential boundary; until that proof exists, the lane
+   advertises no such capability. The proof must not perform a workflow write
+   or expose token material. Update Cockpit's worker prompt to pass the exact
+   capability filter rather than discovering the mismatch after launch.
+6. **Enable pre-claim matching last.** Snowcat may filter a claim only when
+   the caller explicitly supplies its capability set; omitted capabilities
+   retain the compatibility behavior until every supported client has rolled.
+   First prove one capable and one incapable lane against the same queue:
+   the incapable lane receives no scope-requiring item, the capable lane may
+   claim it, and neither result changes the item's allowed actions or grants
+   credential authority. Only then decide whether omission can become
+   fail-closed in a later compatibility break.
+
+Do not start with a Core schema change from a stale local checkout, do not
+encode provider names as scopes, and do not make possession of a scope imply
+permission to change a protected boundary. The rollout is complete only when
+the old and widened Core revisions have compatibility fixtures, Snowcat's
+additive MCP shape is tested with old clients, repository adoption is visible,
+and Cockpit avoids the previously observed wasted workflow lease before any
+worker starts.
 
 ## Later / ideas
 
@@ -680,10 +749,10 @@ Codex.
   limits, resolved by `gh attestation verify` rather than a committed
   digest. Cockpit's `--pull=never` posture needs a per-repository digest
   source before this can land.
-- **Credential scopes on items** (finding 13): ADR-0076 chooses the home;
-  the queue-side surfacing ("this item touches `.github/workflows/**`,
-  needs `github:workflow`") is its own phase in the recovery plan once
-  the governance-policy shape is decided.
+- **Credential scopes on items** (finding 13): ADR-0076 chooses the governance
+  home; implementation follows the
+  [Core-first compatibility train](#deferred-compatibility-train-credential-scopes),
+  never a one-repository schema edit or a claim-time inference.
 - **Runtime floors** (PIDs, memory): dropped from the declaration; if a
   repository trips Cockpit's 1024-PID or 2 GiB limits again, the extension
   image's qualification run is where it surfaces, and a floor can be added
