@@ -258,6 +258,14 @@ function pullRequestRow(row: PullRequestRow): SafeHtml {
         : review.active
           ? html`<span class="ph-badge">${review.kind === "pr-review" ? "in review" : "fixing"}</span>`
           : "";
+  const handoffBadge =
+    row.sourcePending !== undefined
+      ? html`<span class="ph-badge warn">verify source</span>`
+      : row.handoff === undefined
+      ? ""
+      : row.handoff.status === "rejected"
+        ? html`<span class="ph-badge danger">repair handoff</span>`
+        : html`<span class="ph-badge warn">verify handoff</span>`;
   const reviewFacts = !review
     ? ""
     : html` · <a href="${itemPath(review.itemId)}">${review.kind} r${review.round} ${review.status}${review.decision ? ` · ${review.decision}` : ""}</a>${
@@ -265,9 +273,9 @@ function pullRequestRow(row: PullRequestRow): SafeHtml {
       }`;
   return html`<div class="fl-row"><div class="fl-row-head"><strong><a href="${row.url}" rel="noreferrer">${row.number === undefined ? "pull request" : `#${row.number}`}</a> <span>${row.title}</span></strong><span class="fl-tags"><span class="ph-badge ${tone}">${row.state}</span>${
     row.draft ? html`<span class="ph-badge">draft</span>` : ""
-  }${row.cure?.active ? html`<span class="ph-badge warn">decayed</span>` : ""}${reviewBadge}</span></div><small>${facts.join(" · ")}${reporter ? html` · <a href="${itemPath(reporter.id)}">reported by ${reporter.kind}</a>` : " · no reporting item"}${
+  }${row.cure?.active ? html`<span class="ph-badge warn">decayed</span>` : ""}${handoffBadge}${reviewBadge}</span></div><small>${facts.join(" · ")}${reporter ? html` · <a href="${itemPath(reporter.id)}">reported by ${reporter.kind}</a>` : " · no reporting item"}${
     row.cure ? html` · <a href="${itemPath(row.cure.itemId)}">cure ${row.cure.status}: ${row.cure.decay.join(", ")}</a>` : ""
-  }${reviewFacts}</small></div>`;
+  }${row.sourcePending ? ` · ${row.sourcePending.reason}` : row.handoff ? ` · ${row.handoff.reason}` : ""}${reviewFacts}</small></div>`;
 }
 
 export function enrollmentBadge(enrollment: RepositoryEnrollment | undefined, controlPlaneConfigured: boolean): SafeHtml {

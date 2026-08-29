@@ -79,14 +79,11 @@ test("a manually started MCP client can claim, complete, and create child work",
         },
         followUps: [
           {
+            intent: "new-pr-change",
             kind: "test-implementation",
             objective: "Test retry exhaustion after repeated timeouts.",
             instructions: "Implement the smallest deterministic regression test and run checks.",
             acceptanceCriteria: ["The new regression test passes in the full project check."],
-            allowedActions: ["read", "write", "run-tests", "open-pr"],
-            delegableActions: [],
-            requiredArtifact: "pull-request",
-            executionTarget: "new-pull-request",
           },
         ],
       },
@@ -94,7 +91,11 @@ test("a manually started MCP client can claim, complete, and create child work",
   );
   assert.equal(completed.completed.status, "completed");
   assert.equal(completed.followUps[0].parentId, seed.id);
+  assert.deepEqual(completed.followUps[0].allowedActions, ["read", "write", "run-tests", "open-pr"]);
+  assert.deepEqual(completed.followUps[0].delegableActions, []);
   assert.equal(completed.followUps[0].requiredArtifact, "pull-request");
+  assert.equal(completed.followUps[0].executionTarget, "new-pull-request");
+  assert.equal(completed.followUps[0].intent, undefined);
 
   await client.close();
   const verify = new QueueStore(path);
@@ -164,8 +165,7 @@ test("the MCP boundary rejects a follow-up that supplies priority", async () => 
   });
   assert.match(rejected, /priority|[Uu]nrecognized/);
 
-  // The contract is required at the boundary (ADR-0069): a follow-up that
-  // omits requiredArtifact is a schema error, never defaulted.
+  // The complete legacy contract is still required at the boundary.
   const { requiredArtifact: _omitted, ...undeclared } = followUp;
   const missingContract = await callToolExpectingError(client, "complete_work", { ...completion, followUps: [undeclared] });
   assert.match(missingContract, /requiredArtifact/);
@@ -174,6 +174,11 @@ test("the MCP boundary rejects a follow-up that supplies priority", async () => 
     followUps: [{ ...followUp, allowedActions: ["read", "write", "run-tests"] }],
   });
   assert.match(underAuthorized, /must deliver a pull request requires open-pr/);
+  const mismatchedIntent = await callToolExpectingError(client, "complete_work", {
+    ...completion,
+    followUps: [{ ...followUp, intent: "new-pr-change", requiredArtifact: "none" }],
+  });
+  assert.match(mismatchedIntent, /contract mismatch: requiredArtifact must be pull-request/);
 
   const verifyRejected = new QueueStore(path);
   assert.equal(verifyRejected.get(seed.id)?.status, "claimed");
@@ -409,4 +414,3 @@ function parseToolText(result: { content: unknown[] }): any {
   assert.equal(typeof first.text, "string");
   return JSON.parse(first.text!);
 }
-

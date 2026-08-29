@@ -26,6 +26,7 @@ const RELEASE_TAG_PATH = `/repos/frostyard/updex/releases/tags/${TAG}`;
 const RELEASE_LIST_PATH = "/repos/frostyard/updex/releases";
 const PR_URL = "https://github.com/frostyard/updex/pull/12";
 const PR_PATH = "/repos/frostyard/updex/pulls/12";
+const PR_TEMPLATE_PATH = "/repos/frostyard/updex/contents/.github/pull_request_template.md";
 const clock = () => new Date("2026-08-17T20:00:00.000Z");
 const releaseArtifact: WorkArtifact = { kind: "release", url: RELEASE_URL };
 // Verification treats 404 as absence only when a credential was presented.
@@ -52,6 +53,7 @@ function pullRequest(overrides: Record<string, unknown> = {}): Record<string, un
     merged: false,
     head: { sha: "0123456789abcdef0123456789abcdef01234567" },
     base: { repo: { full_name: REPOSITORY } },
+    body: "## Summary\n\nResolve the issue.\n\n## Verification\n\nTests passed.\n\n## Risk tier\n\nTier 2",
     ...overrides,
   };
 }
@@ -450,7 +452,13 @@ test("a pull-request completion still verifies and derives exactly as before bes
     createdBy: "operator:test",
   });
   const claimed = queue.claim({ worker: "claude:release-test" })!;
-  const { fetcher, requests } = apiFetcher({ [PR_PATH]: pullRequest() });
+  const { fetcher, requests } = apiFetcher({
+    [PR_PATH]: pullRequest(),
+    [PR_TEMPLATE_PATH]: {
+      encoding: "base64",
+      content: Buffer.from("## Summary\n\n## Verification\n\n## Risk tier\n").toString("base64"),
+    },
+  });
   const { client, close } = await connect(path, fetcher);
   test.after(async () => { await close(); queue.close(); });
   const accepted = parse(
@@ -473,5 +481,5 @@ test("a pull-request completion still verifies and derives exactly as before bes
     state: "open",
     headSha: "0123456789abcdef0123456789abcdef01234567",
   });
-  assert.deepEqual(requests, [PR_PATH], "no release read is made for an item with no release artifact");
+  assert.deepEqual(requests, [PR_PATH, PR_TEMPLATE_PATH], "one bounded template read is made, and no release read");
 });

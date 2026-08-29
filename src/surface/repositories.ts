@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 
 import type { RepositoryMaintenanceProgram } from "../control/registry.ts";
 import { ControlPlaneStore, type RepositoryStatus } from "../control/store.ts";
+import { pullRequestArtifactIdentity } from "../queue/artifact-identity.ts";
 import { CURE_KIND } from "../queue/pull-request-cure.ts";
 import { REVIEW_FIX_KIND, REVIEW_KIND } from "../queue/pull-request-review.ts";
 import type { QueueStore } from "../queue/store.ts";
@@ -278,6 +279,10 @@ export interface PullRequestRow {
   mergedAt?: string;
   /** GitHub reported the pull request as a draft at the latest verification (ADR-0065). */
   draft?: boolean;
+  /** Source-backed description handoff still awaiting verification or repair (ADR-0078). */
+  handoff?: NonNullable<Extract<ArtifactVerification, { status: "verified" }>["handoff"]>;
+  /** A reported source observation that GitHub has not yet confirmed. */
+  sourcePending?: Extract<ArtifactVerification, { status: "unverified" }>;
   /** Completed items that reported this pull request, most recently updated first (review and fix items excluded). */
   reportedBy: ObservableWorkItem[];
   /** The `pr-cure` root for this head, when one exists. */
@@ -337,11 +342,12 @@ export function readPullRequests(queue: QueueStore, repository: string, now: Dat
   for (const raw of completed) {
     const item = withoutLeaseToken(raw);
     // Review and fix items report the pull request they act on; they are not
-    // its reporters and must not retitle it.
-    if (item.kind === REVIEW_KIND || item.kind === REVIEW_FIX_KIND) continue;
+    // its reporters and must not retitle it, but their newer verification and
+    // handoff observation still governs whether the artifact can advance.
+    const reportContext = item.kind !== REVIEW_KIND && item.kind !== REVIEW_FIX_KIND;
     for (const artifact of item.result?.artifacts ?? []) {
       if (artifact.kind !== "pull-request") continue;
-      absorbArtifact(rows, item, artifact);
+      absorbArtifact(rows, item, artifact, reportContext);
     }
   }
 
@@ -351,7 +357,10 @@ export function readPullRequests(queue: QueueStore, repository: string, now: Dat
     if (items.length === LIST_LIMIT) truncated = true;
     for (const item of items) {
       if (!item.cure) continue;
-      const key = item.cure.pullRequestUrl.toLowerCase();
+      const key = pullRequestArtifactIdentity(item.repository, {
+        kind: "pull-request",
+        url: item.cure.pullRequestUrl,
+      });
       const cure: PullRequestCureRow = {
         itemId: item.id,
         status,
@@ -436,46 +445,77 @@ function pullRequestBoardState(state: VerifiedArtifactState): PullRequestRow["st
 }
 
 /** Folds one completed item's pull-request artifact into the row for its URL, keeping the newest verification. */
-function absorbArtifact(rows: Map<string, PullRequestRow>, item: ObservableWorkItem, artifact: WorkArtifact): void {
-  const key = artifact.url.toLowerCase();
+function absorbArtifact(
+  rows: Map<string, PullRequestRow>,
+  item: ObservableWorkItem,
+  artifact: WorkArtifact,
+  reportContext: boolean,
+): void {
+  const key = pullRequestArtifactIdentity(item.repository, artifact);
   const verification = artifact.verification;
-  const observed =
-    verification?.status === "verified"
-      ? {
-          number: verification.number,
-          state: pullRequestBoardState(verification.state),
-          headSha: verification.headSha,
-          verifiedAt: verification.verifiedAt,
-          mergedAt: verification.mergedAt,
-          draft: verification.draft === true,
-        }
-      : { state: "unverified" as const, verifiedAt: verification?.attemptedAt, draft: undefined };
   const existing = rows.get(key);
   if (!existing) {
+    if (verification?.status !== "verified") {
+      rows.set(key, {
+        url: artifact.url,
+        number: numberFromPullRequestUrl(artifact.url),
+        title: item.objective,
+        state: "unverified",
+        verifiedAt: verification?.attemptedAt,
+        ...(verification === undefined ? {} : { sourcePending: verification }),
+        reportedBy: reportContext ? [item] : [],
+      });
+      return;
+    }
     rows.set(key, {
       url: artifact.url,
-      number: observed.number ?? numberFromPullRequestUrl(artifact.url),
+      number: verification.number ?? numberFromPullRequestUrl(artifact.url),
       title: item.objective,
-      state: observed.state,
-      headSha: observed.headSha,
-      verifiedAt: observed.verifiedAt,
-      mergedAt: observed.mergedAt,
-      ...(observed.draft === undefined ? {} : { draft: observed.draft }),
-      reportedBy: [item],
+      state: pullRequestBoardState(verification.state),
+      headSha: verification.headSha,
+      verifiedAt: verification.verifiedAt,
+      mergedAt: verification.mergedAt,
+      draft: verification.draft === true,
+      ...(verification.handoff === undefined ? {} : { handoff: verification.handoff }),
+      reportedBy: reportContext ? [item] : [],
     });
     return;
   }
-  existing.reportedBy = [...existing.reportedBy, item].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-  const newer = (observed.verifiedAt ?? "") > (existing.verifiedAt ?? "");
-  if (newer) {
-    existing.number = observed.number ?? existing.number;
-    existing.state = observed.state;
-    existing.headSha = observed.headSha ?? existing.headSha;
-    existing.verifiedAt = observed.verifiedAt;
-    existing.mergedAt = observed.mergedAt;
-    if (observed.draft !== undefined) existing.draft = observed.draft;
+  if (reportContext) {
+    existing.reportedBy = [...existing.reportedBy, item].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }
+  if (verification?.status === "unverified") {
+    if (!existing.sourcePending || verification.attemptedAt > existing.sourcePending.attemptedAt) {
+      existing.sourcePending = verification;
+    }
+  } else if (verification?.status === "verified") {
+    const newer =
+      existing.state === "unverified" ||
+      verification.verifiedAt > (existing.verifiedAt ?? "") ||
+      (verification.verifiedAt === (existing.verifiedAt ?? "") && item.kind === REVIEW_FIX_KIND);
+    if (newer) {
+      existing.url = artifact.url;
+      existing.number = verification.number ?? existing.number;
+      existing.state = pullRequestBoardState(verification.state);
+      existing.headSha = verification.headSha ?? existing.headSha;
+      existing.verifiedAt = verification.verifiedAt;
+      existing.mergedAt = verification.mergedAt;
+      existing.draft = verification.draft === true;
+    }
+    if (
+      verification.handoff !== undefined &&
+      (existing.handoff === undefined || handoffObservedAt(verification.handoff) > handoffObservedAt(existing.handoff))
+    ) {
+      existing.handoff = verification.handoff;
+    }
   }
   existing.title = existing.reportedBy[0]?.objective ?? existing.title;
+}
+
+function handoffObservedAt(
+  handoff: NonNullable<Extract<ArtifactVerification, { status: "verified" }>["handoff"]>,
+): string {
+  return handoff.status === "unverified" ? handoff.attemptedAt : handoff.checkedAt;
 }
 
 /** The cure root bound to this head — an unfinished one wins, then the newest. */

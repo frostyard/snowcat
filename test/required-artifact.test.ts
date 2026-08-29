@@ -138,8 +138,11 @@ test("a follow-up must state a deliverable contract, and a wrong one rolls the w
     () => queue.complete(completion({ ...implementationChild, requiredArtifact: "none" })),
     /follow-up "quality-implementation": a follow-up granting write is a change and must declare requiredArtifact "pull-request"/,
   );
-  // Neither a missing nor an unknown contract is defaulted.
-  assert.throws(() => queue.complete(completion({ ...implementationChild, requiredArtifact: undefined })), /requiredArtifact must be one of none, pull-request/);
+  // Neither a missing legacy contract nor an unknown contract is defaulted.
+  assert.throws(
+    () => queue.complete(completion({ ...implementationChild, requiredArtifact: undefined })),
+    /legacy follow-up without intent must declare requiredArtifact/,
+  );
   assert.throws(() => queue.complete(completion({ ...implementationChild, requiredArtifact: "issue" })), /requiredArtifact must be one of none, pull-request/);
   assert.equal(queue.get(root.id)?.status, "claimed", "a refused completion leaves the root claimed");
   assert.equal(queue.list({ repository: REPOSITORY }).length, 1, "and proposes nothing");

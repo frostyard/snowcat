@@ -372,7 +372,7 @@ function statRow(data: InboxData): SafeHtml {
     ${tile("Proposals", data.stats.proposals, "awaiting admission")}
     ${tile("Ready to merge", data.stats.readyToMerge, "waiting for you to mark ready or merge")}
     ${tile("Blocked", data.stats.blocked, "needs an operator exit")}
-    ${tile("Unverified artifacts", data.stats.unverified, "GitHub could not be asked")}
+    ${tile("Artifact handoffs", data.stats.unverified, "source verification or description repair")}
     ${tile("Review adjudication", data.stats.adjudication, "PRs the gate cannot advance or never saw")}
     ${tile("Leased now", data.stats.leased, data.stats.leasedCaption)}
   </div>`;
@@ -456,17 +456,29 @@ function blockedGroup(rows: BlockedRow[]): SafeHtml {
 
 function unverifiedGroup(rows: UnverifiedRow[]): SafeHtml {
   return group(
-    "Unverified artifacts",
+    "Artifact handoffs",
     rows.length,
-    html`<table class="fl-table"><thead><tr><th>Item</th><th>Artifact</th><th>Why</th><th class="right"></th></tr></thead><tbody>${rows.map(
-      (row) => html`<tr>
+    html`<table class="fl-table"><thead><tr><th>Item</th><th>Artifact</th><th>Why</th><th class="right"></th></tr></thead><tbody>${rows.map((row) => {
+      const verification = row.artifact.verification;
+      const handoff = verification.status === "verified" ? verification.handoff : undefined;
+      const status = handoff?.status === "rejected" ? "repair" : "verify";
+      const reason = handoff?.reason ?? (verification.status === "unverified" ? verification.reason : "");
+      const attemptedAt =
+       handoff?.status === "rejected"
+         ? handoff.checkedAt
+         : handoff?.status === "unverified"
+           ? handoff.attemptedAt
+           : verification.status === "unverified"
+             ? verification.attemptedAt
+             : "";
+      return html`<tr>
         <td><div class="fl-name">${objective(row.item)}<small>${row.item.kind} · completed ${clock(row.item.updatedAt)}${row.completedBy ? ` · ${row.completedBy}` : ""}</small></div></td>
         <td><span class="ph-version">${artifactLabel(row.artifact.kind, row.artifact.url)}</span><small class="fl-sub"><a href="${row.artifact.url}" rel="noreferrer noopener">${row.artifact.url}</a></small></td>
-        <td class="fl-reason"><span class="ph-badge warn">unverified</span> ${row.artifact.verification.reason}<small class="fl-sub">attempted ${clock(row.artifact.verification.attemptedAt, true)}</small></td>
+        <td class="fl-reason"><span class="ph-badge ${status === "repair" ? "danger" : "warn"}">${status}</span> ${reason}<small class="fl-sub">attempted ${clock(attemptedAt, true)}</small></td>
         <td class="right"><div class="fl-actions">${verifyForm(row.item.repository, "/")}<a class="ph-button secondary" href="${itemPath(row.item.id)}">Open</a></div></td>
-      </tr>`,
-    )}</tbody></table>`,
-    "Every issue and pull-request artifact has been verified against GitHub.",
+      </tr>`;
+    })}</tbody></table>`,
+    "Every issue and pull-request artifact has a verified source and complete handoff.",
     "unverified",
   );
 }

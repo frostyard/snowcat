@@ -1,4 +1,5 @@
 import { REVIEW_KIND } from "../queue/pull-request-review.ts";
+import { pullRequestArtifactIdentity } from "../queue/artifact-identity.ts";
 import type { QueueStore } from "../queue/store.ts";
 import { withoutLeaseToken, type ObservableWorkItem, type ObservedWorkEvent, type UnreportedPullRequest, type WorkArtifact } from "../queue/types.ts";
 import { readPullRequests, type PullRequestRow, type RepositoryEnrollment } from "./repositories.ts";
@@ -33,7 +34,19 @@ export interface BlockedRow {
 
 export interface UnverifiedRow {
   item: ObservableWorkItem;
-  artifact: WorkArtifact & { verification: { status: "unverified"; attemptedAt: string; reason: string } };
+  artifact:
+    | (WorkArtifact & { verification: { status: "unverified"; attemptedAt: string; reason: string } })
+    | (WorkArtifact & {
+        verification: {
+          status: "verified";
+          verifiedAt: string;
+          number: number;
+          state: "open" | "closed" | "merged" | "published" | "draft";
+          handoff:
+            | { status: "unverified"; attemptedAt: string; reason: string }
+            | { status: "rejected"; checkedAt: string; reason: string };
+        };
+      });
   completedBy?: string;
 }
 
@@ -92,10 +105,18 @@ export interface InboxData {
  * still carries an outstanding one) and stays on *Review adjudication* only.
  */
 function readyAction(pullRequest: PullRequestRow, reviewGateOn: boolean): ReadyRow["kind"] | undefined {
-  if (pullRequest.state !== "open" || pullRequest.cure?.active === true) return undefined;
+  if (
+    pullRequest.state !== "open" ||
+    pullRequest.verifiedAt === undefined ||
+    pullRequest.cure?.active === true ||
+    pullRequest.handoff !== undefined ||
+    pullRequest.sourcePending !== undefined
+  ) {
+    return undefined;
+  }
   const review = pullRequest.review;
   if (review?.readyToMark === true && review.needsHuman !== true) return "mark-ready";
-  if (pullRequest.draft === false) {
+  if (pullRequest.draft !== true) {
     const passed = review?.kind === REVIEW_KIND && review.status === "completed" && review.decision === "pass";
     if (passed || !reviewGateOn) return "queue-for-merge";
   }
@@ -120,7 +141,7 @@ export function readInbox(queue: QueueStore, enrollments: Map<string, Repository
   // artifact, newest first — selected in the store rather than filtered out
   // of list()'s first 100 completions, which starved the group once a queue
   // held more than 100 completed items.
-  const completed = queue.completedItemsWithPendingArtifacts({ limit: LIST_LIMIT, unverifiedOnly: true });
+  const completed = queue.completedItemsWithPendingArtifacts({ limit: LIST_LIMIT, handoffAttentionOnly: true });
   if (completed.length === LIST_LIMIT) truncated.push("unverified artifacts");
   const claimed = queue.list({ status: "claimed", limit: LIST_LIMIT });
 
@@ -165,18 +186,31 @@ export function readInbox(queue: QueueStore, enrollments: Map<string, Repository
     };
   });
 
-  const unverified: UnverifiedRow[] = [];
+  const artifactHandoffs = new Map<string, UnverifiedRow>();
   for (const raw of completed) {
     const item = withoutLeaseToken(raw);
     for (const artifact of item.result?.artifacts ?? []) {
-      if ((artifact.kind !== "issue" && artifact.kind !== "pull-request") || artifact.verification?.status !== "unverified") continue;
-      unverified.push({
-        item,
-        artifact: artifact as UnverifiedRow["artifact"],
-        completedBy: lastActor(item.id, "work.completed")?.actor,
-      });
+      if (artifact.kind !== "issue" && artifact.kind !== "pull-request") continue;
+      if (
+        artifact.verification?.status !== "unverified" &&
+        !(artifact.kind === "pull-request" && artifact.verification?.status === "verified" && artifact.verification.handoff !== undefined)
+      ) {
+        continue;
+      }
+      const identity =
+        artifact.kind === "pull-request"
+          ? pullRequestArtifactIdentity(item.repository, artifact)
+          : `issue:${artifact.url.toLowerCase()}`;
+      if (!artifactHandoffs.has(identity)) {
+        artifactHandoffs.set(identity, {
+          item,
+          artifact: artifact as UnverifiedRow["artifact"],
+          completedBy: lastActor(item.id, "work.completed")?.actor,
+        });
+      }
     }
   }
+  const unverified = [...artifactHandoffs.values()];
 
   // Every opted-in repository (`repositoryReviewGateSettings` lists them all,
   // gated or not): the Ready to merge rail needs both, so one
@@ -196,7 +230,13 @@ export function readInbox(queue: QueueStore, enrollments: Map<string, Repository
     }
     if (!setting.reviewGate) continue;
     for (const pullRequest of pulls.open) {
-      if (pullRequest.review?.needsHuman || pullRequest.review?.readyToMark) adjudication.push({ kind: "review", repository: setting.repository, pullRequest });
+      if (
+        pullRequest.handoff === undefined &&
+        pullRequest.sourcePending === undefined &&
+        (pullRequest.review?.needsHuman || pullRequest.review?.readyToMark)
+      ) {
+        adjudication.push({ kind: "review", repository: setting.repository, pullRequest });
+      }
     }
     for (const pullRequest of pulls.unreported) {
       adjudication.push({ kind: "unreported", repository: setting.repository, pullRequest, observedAt: pulls.unreportedObservedAt ?? "" });

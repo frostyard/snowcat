@@ -1,4 +1,5 @@
 import type { QueueMetricsWindow, QueueStore } from "./store.ts";
+import { pullRequestArtifactIdentity } from "./artifact-identity.ts";
 import { deliveryStates, deriveDelivery, workStatuses, type DeliveryState, type WorkStatus } from "./types.ts";
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -27,10 +28,17 @@ export interface RepositoryMetrics {
   completed: number;
   /** Those completions by the completed item's current `delivery`. */
   completedByDelivery: Record<DeliveryState, number>;
-  /** Completions in the window whose item's `delivery` is `merged`. */
+  /** Unique pull requests reported by completions in the window whose current state is merged. */
   accepted: number;
-  /** `accepted / attempts` rounded to 3 decimals; `null` when `attempts` is 0. */
-  acceptedPerAttempt: number | null;
+  /** Terminal pull-request delivery acceptance, with censored and excluded completions explicit. */
+  acceptance: {
+    numerator: number;
+    denominator: number;
+    rate: number | null;
+    open: number;
+    unavailable: number;
+    excluded: number;
+  };
   /** `work.blocked` events in the window. */
   blocked: number;
   /** `work.cancelled` events in the window. */
@@ -55,10 +63,18 @@ interface MetricsAccumulator {
   attempts: number;
   completed: number;
   completedByDelivery: Record<DeliveryState, number>;
-  accepted: number;
+  acceptanceExcluded: number;
+  pullRequests: Map<string, PullRequestSample>;
   blocked: number;
   cancelled: number;
-  mergeHours: number[];
+}
+
+interface PullRequestSample {
+  state: "unverified" | "open" | "closed" | "merged";
+  observedAt: string;
+  reportedAt: string;
+  completedAt: string;
+  mergedAt?: string;
 }
 
 /**
@@ -127,8 +143,41 @@ export function computeQueueMetrics(window: QueueMetricsWindow): QueueMetrics {
         accumulator.completed += 1;
         const delivery = deriveDelivery(event.result);
         accumulator.completedByDelivery[delivery] += 1;
-        if (delivery === "merged") accumulator.accepted += 1;
-        for (const hours of mergeHoursOf(event.occurredAt, event.result)) accumulator.mergeHours.push(hours);
+        const pullRequests = (event.result?.artifacts ?? []).filter((artifact) => artifact.kind === "pull-request");
+        if (pullRequests.length === 0) {
+          accumulator.acceptanceExcluded += 1;
+        } else {
+          for (const artifact of pullRequests) {
+            const verification = artifact.verification;
+            const state =
+              verification?.status !== "verified"
+                ? "unverified"
+                : verification.state === "merged"
+                  ? "merged"
+                  : verification.state === "closed"
+                    ? "closed"
+                    : verification.state === "open"
+                      ? "open"
+                      : "unverified";
+            const sample: PullRequestSample = {
+              state,
+              observedAt:
+                verification?.status === "verified"
+                  ? verification.verifiedAt
+                  : verification?.attemptedAt ?? event.occurredAt,
+              reportedAt: event.occurredAt,
+              completedAt: event.occurredAt,
+              ...(verification?.status === "verified" && verification.mergedAt
+                ? { mergedAt: verification.mergedAt }
+                : {}),
+            };
+            const identity = pullRequestArtifactIdentity(event.repository, artifact);
+            accumulator.pullRequests.set(
+              identity,
+              mergePullRequestSample(accumulator.pullRequests.get(identity), sample),
+            );
+          }
+        }
       }
     }
   }
@@ -164,19 +213,20 @@ export function queueMetrics(
  * item reported as merged. A pull request Snowcat has not verified, or one
  * GitHub reports as open or closed, contributes nothing.
  */
-function mergeHoursOf(completedAt: string, result: QueueMetricsWindow["events"][number]["result"]): number[] {
-  const completed = Date.parse(completedAt);
-  if (Number.isNaN(completed)) return [];
-  const hours: number[] = [];
-  for (const artifact of result?.artifacts ?? []) {
-    if (artifact.kind !== "pull-request") continue;
-    const verification = artifact.verification;
-    if (verification?.status !== "verified" || verification.state !== "merged" || !verification.mergedAt) continue;
-    const mergedAt = Date.parse(verification.mergedAt);
-    if (Number.isNaN(mergedAt)) continue;
-    hours.push(round3((mergedAt - completed) / HOUR_MS));
-  }
-  return hours;
+function mergePullRequestSample(existing: PullRequestSample | undefined, next: PullRequestSample): PullRequestSample {
+  if (!existing) return next;
+  const existingVerified = existing.state !== "unverified";
+  const nextVerified = next.state !== "unverified";
+  const observation =
+    existingVerified !== nextVerified
+      ? nextVerified
+        ? next
+        : existing
+      : `${next.observedAt}\0${next.reportedAt}` > `${existing.observedAt}\0${existing.reportedAt}`
+        ? next
+        : existing;
+  const completedAt = existing.completedAt <= next.completedAt ? existing.completedAt : next.completedAt;
+  return { ...observation, completedAt };
 }
 
 function emptyAccumulator(): MetricsAccumulator {
@@ -185,14 +235,26 @@ function emptyAccumulator(): MetricsAccumulator {
     attempts: 0,
     completed: 0,
     completedByDelivery: Object.fromEntries(deliveryStates.map((state) => [state, 0])) as Record<DeliveryState, number>,
-    accepted: 0,
+    acceptanceExcluded: 0,
+    pullRequests: new Map(),
     blocked: 0,
     cancelled: 0,
-    mergeHours: [],
   };
 }
 
 function finalize(accumulator: MetricsAccumulator): RepositoryMetrics {
+  const samples = [...accumulator.pullRequests.values()];
+  const accepted = samples.filter((sample) => sample.state === "merged").length;
+  const closed = samples.filter((sample) => sample.state === "closed").length;
+  const open = samples.filter((sample) => sample.state === "open").length;
+  const unavailable = samples.filter((sample) => sample.state === "unverified").length;
+  const mergeHours = samples.flatMap((sample) => {
+    if (sample.state !== "merged" || sample.mergedAt === undefined) return [];
+    const completed = Date.parse(sample.completedAt);
+    const mergedAt = Date.parse(sample.mergedAt);
+    if (Number.isNaN(completed) || Number.isNaN(mergedAt)) return [];
+    return [round3((mergedAt - completed) / HOUR_MS)];
+  });
   // Field order follows the reported order, so a printed reading reads the
   // way the spec and the runbook describe it.
   return {
@@ -200,11 +262,18 @@ function finalize(accumulator: MetricsAccumulator): RepositoryMetrics {
     attempts: accumulator.attempts,
     completed: accumulator.completed,
     completedByDelivery: accumulator.completedByDelivery,
-    accepted: accumulator.accepted,
-    acceptedPerAttempt: accumulator.attempts === 0 ? null : round3(accumulator.accepted / accumulator.attempts),
+    accepted,
+    acceptance: {
+      numerator: accepted,
+      denominator: accepted + closed,
+      rate: accepted + closed === 0 ? null : round3(accepted / (accepted + closed)),
+      open,
+      unavailable,
+      excluded: accumulator.acceptanceExcluded,
+    },
     blocked: accumulator.blocked,
     cancelled: accumulator.cancelled,
-    timeToMergeHours: summarize(accumulator.mergeHours),
+    timeToMergeHours: summarize(mergeHours),
   };
 }
 

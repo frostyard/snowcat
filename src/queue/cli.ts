@@ -10,6 +10,7 @@ import { parseMetricsTimestamp, queueMetrics } from "./metrics.ts";
 import { sweepFailureMessage, sweepInternalDependencies } from "./internal-dependencies.ts";
 import { sweepRepositorySettings } from "./repository-settings.ts";
 import { QueueStore, queueDatabasePath, type MutationPrecondition } from "./store.ts";
+import { pendingDeliveries } from "./deliveries.ts";
 import {
   enqueueDogfoodBatch,
   enqueueDogfoodBatchForEnrolled,
@@ -190,29 +191,18 @@ try {
       .sort((a, b) => Number(b.expired) - Number(a.expired) || (a.leaseExpiresAt ?? "").localeCompare(b.leaseExpiresAt ?? ""));
     print(claims);
   } else if (command === "deliveries") {
-    // Read-only view of undelivered completed work (spec rule 68): items
-    // whose delivery is still `open` — the merge or publish a human owes.
-    // Ready rows (an open non-draft pull request, or a draft release whose
-    // tag awaits publishing) sort first, oldest item first.
+    // Read-only artifact-centric handoff (spec rule 68): one row per pending
+    // pull request or release, with the next human action explicit.
     const flags = parseFlags(args, ["repository"]);
-    const deliveries = queue
-      .completedItemsWithPendingArtifacts({ repository: flags.repository, limit: 200 })
-      .filter((item) => item.delivery === "open")
-      .map((item) => {
-        const artifacts = (item.result?.artifacts ?? []).flatMap((artifact) => {
-          if (artifact.kind !== "pull-request" && artifact.kind !== "release") return [];
-          if (artifact.verification?.status !== "verified") return [];
-          const { state, draft } = artifact.verification;
-          if (state !== "open" && state !== "draft") return [];
-          return [{ kind: artifact.kind, url: artifact.url, state, draft: draft === true }];
-        });
-        const ready = artifacts.some(
-          (artifact) => (artifact.kind === "pull-request" && !artifact.draft) || (artifact.kind === "release" && artifact.state === "draft"),
-        );
-        return { id: item.id, repository: item.repository, kind: item.kind, objective: item.objective, createdAt: item.createdAt, ready, artifacts };
-      })
-      .sort((a, b) => Number(b.ready) - Number(a.ready) || a.createdAt.localeCompare(b.createdAt));
-    print(deliveries);
+    print(
+      pendingDeliveries(
+        queue.completedItemsWithPendingArtifacts({
+          repository: flags.repository,
+          limit: 200,
+          deliveryObservationsOnly: true,
+        }),
+      ),
+    );
   } else if (command === "churn") {
     // Read-only view of the items claim selection is backing off (ADR-0072,
     // spec rule 69): who released them, why, and when they re-enter the

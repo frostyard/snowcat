@@ -183,7 +183,7 @@ test("the operator surface requires a session, sets the cookie on the right toke
   assert.match(body, /<div class="ph-stats" id="stats">/);
   assert.match(body, /<span>Proposals<\/span><strong>1<\/strong>/);
   assert.match(body, /<span>Blocked<\/span><strong>1<\/strong>/);
-  assert.match(body, /<span>Unverified artifacts<\/span><strong>1<\/strong>/);
+  assert.match(body, /<span>Artifact handoffs<\/span><strong>1<\/strong>/);
   assert.match(body, /<span>Leased now<\/span><strong>1<\/strong><small>copilot-cli:example:four · security-implementation<\/small>/);
 
   // Proposals group: the child's objective and its parent's finding.
@@ -205,9 +205,9 @@ test("the operator surface requires a session, sets the cookie on the right toke
   assert.match(blocked, /<textarea class="fl-note" name="reason"/);
   assert.match(unverifiedSectionPlaceholder(body), /<form class="fl-inline" method="post" action="\/repositories\/frostyard\/example\/verify-artifacts">/);
 
-  // Unverified artifacts group.
+  // Artifact handoffs group.
   const unverified = section(body, "unverified");
-  assert.match(unverified, /<h2>Unverified artifacts<\/h2>/);
+  assert.match(unverified, /<h2>Artifact handoffs<\/h2>/);
   assert.match(unverified, /Resolve frostyard\/example#2: <span>events --since and watch<\/span>/);
   assert.match(unverified, /<span class="ph-version">PR #5<\/span>/);
   assert.match(unverified, /GitHub returned 404 without SNOWCAT_GITHUB_TOKEN/);
@@ -249,6 +249,102 @@ test("the operator surface requires a session, sets the cookie on the right toke
   assert.equal(health.status, 200);
   const agents = await app.request("/agents/queue-clerk");
   assert.equal(agents.status, 401);
+});
+
+test("a verified pull request with a rejected handoff is shown for repair and never as merge-ready", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-surface-handoff-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/example", true);
+  const seed = queue.enqueueSeed({
+    repository: "frostyard/example",
+    kind: "issue-resolution",
+    objective: "Repair the pull-request handoff.",
+    instructions: "Open a pull request.",
+    acceptanceCriteria: ["The pull request is ready to merge."],
+    allowedActions: ["read", "write", "open-pr"],
+    delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
+    createdBy: "operator:test",
+  });
+  const claimed = queue.claim({ worker: "copilot-cli:example:handoff" })!;
+  queue.complete({
+    id: seed.id,
+    leaseToken: claimed.leaseToken!,
+    worker: claimed.leaseOwner!,
+    result: {
+      summary: "Opened the pull request.",
+      evidence: ["npm test passed"],
+      artifacts: [
+        {
+          kind: "pull-request",
+          url: "https://github.com/frostyard/example/pull/81",
+          verification: {
+            status: "verified",
+            verifiedAt: "2026-08-20T12:00:00.000Z",
+            number: 81,
+            state: "open",
+            handoff: {
+              status: "rejected",
+              checkedAt: "2026-08-20T12:00:00.000Z",
+              reason: "pull request body is missing required template sections",
+            },
+          },
+        },
+      ],
+    },
+    followUps: [],
+  });
+  queue.renameRepository("frostyard/example", "frostyard/example-renamed", "operator:test");
+  const refreshSeed = queue.enqueueSeed({
+    repository: "frostyard/example-renamed",
+    kind: "issue-resolution",
+    objective: "Observe the repaired head.",
+    instructions: "Report the pull request.",
+    acceptanceCriteria: ["The current head is observed."],
+    allowedActions: ["read", "write", "open-pr"],
+    delegableActions: [],
+    requiredArtifact: "pull-request",
+    executionTarget: "new-pull-request",
+    createdBy: "operator:test",
+  });
+  const refreshClaim = queue.claim({ worker: "copilot-cli:example:refresh" })!;
+  queue.complete({
+    id: refreshSeed.id,
+    leaseToken: refreshClaim.leaseToken!,
+    worker: refreshClaim.leaseOwner!,
+    result: {
+      summary: "Observed a newer source state.",
+      evidence: ["npm test passed"],
+      artifacts: [
+        {
+          kind: "pull-request",
+          url: "https://github.com/frostyard/example-renamed/pull/81",
+          verification: {
+            status: "verified",
+            verifiedAt: "2026-08-20T13:00:00.000Z",
+            number: 81,
+            state: "open",
+            headSha: "b".repeat(40),
+          },
+        },
+      ],
+    },
+    followUps: [],
+  });
+
+  const app = createApp({ appToken: TOKEN, surfaceStores: () => ({ queue }) });
+  const cookie = `snowcat_session=${sessionDigest(TOKEN)}`;
+  const inbox = await app.request("/", { headers: { Cookie: cookie } });
+  const inboxBody = await inbox.text();
+  assert.match(inboxBody, /<span>Ready to merge<\/span><strong>0<\/strong>/);
+  assert.match(inboxBody, /<span>Artifact handoffs<\/span><strong>1<\/strong>/);
+  assert.match(section(inboxBody, "unverified"), /<span class="ph-badge danger">repair<\/span> pull request body is missing required template sections/);
+
+  const board = await app.request("/repositories/frostyard/example-renamed", { headers: { Cookie: cookie } });
+  const pulls = section(await board.text(), "pull-requests");
+  assert.match(pulls, /<span class="ph-badge danger">repair handoff<\/span>/);
 });
 
 test("the sidebar lists control-plane repositories with their effective states when SNOWCAT_CONTROL_DB is configured", async () => {
@@ -929,7 +1025,7 @@ test("re-verify from the browser refreshes a repository's pending artifacts as o
   assert.equal(event.actor, "operator:web");
   const inbox = await (await app.request(verified.headers.get("Location")!, { headers: { Cookie: cookie } })).text();
   assert.match(inbox, /Recorded artifact\.verified — 1 checked, 1 updated, 0 rejected, 0 unavailable, 0 cure items queued, 0 review items queued, 0 marked ready, 0 retired\./);
-  assert.match(inbox, /<span>Unverified artifacts<\/span><strong>0<\/strong>/);
+  assert.match(inbox, /<span>Artifact handoffs<\/span><strong>0<\/strong>/);
   assert.equal(inbox.includes(seeded.leaseToken), false);
 
   const missing = await app.request("/repositories/frostyard/nope/verify-artifacts", { method: "POST", body: new URLSearchParams({}), headers: { Cookie: cookie } });

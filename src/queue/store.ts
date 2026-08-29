@@ -3,6 +3,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:f
 import { dirname, resolve } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 
+import { deliveryArtifactIdentity, pullRequestArtifactIdentity } from "./artifact-identity.ts";
 import {
   allowedActions,
   CURE_CHANGE_KIND,
@@ -53,6 +54,7 @@ import {
   type PolicyDecision,
   type PolicyRecord,
 } from "./types.ts";
+import { normalizeFollowUpIntent } from "./follow-up-intent.ts";
 import { standingAuthorizationFor } from "./standing-authorizations.ts";
 
 type Row = Record<string, SQLInputValue>;
@@ -1137,15 +1139,27 @@ export class QueueStore {
    */
   pullRequestReviewItems(repository: string, pullRequestUrl: string): WorkItem[] {
     validateRepository(repository);
+    const identity = pullRequestArtifactIdentity(repository, {
+      kind: "pull-request",
+      url: pullRequestUrl,
+    });
     const rows = this.db
       .prepare(
         `SELECT * FROM work_items
          WHERE repository = ? AND kind IN ('pr-review', 'pr-review-fix')
-           AND lower(json_extract(review_json, '$.pullRequestUrl')) = lower(?)
          ORDER BY created_at ASC, rowid ASC`,
       )
-      .all(repository, pullRequestUrl) as Row[];
-    return rows.map((row) => withDelivery(decodeWorkItem(row)));
+      .all(repository) as Row[];
+    return rows
+      .map((row) => withDelivery(decodeWorkItem(row)))
+      .filter(
+        (item) =>
+         item.review !== undefined &&
+         pullRequestArtifactIdentity(repository, {
+           kind: "pull-request",
+           url: item.review.pullRequestUrl,
+         }) === identity,
+      );
   }
 
   /**
@@ -1159,7 +1173,15 @@ export class QueueStore {
     return this.transaction(() => {
       const item = this.getRequired(id);
       if (item.status !== "completed" || !item.result) throw new Error(`work item is not completed: ${id}`);
-      const index = item.result.artifacts.findIndex((artifact) => artifact.url.toLowerCase() === url.toLowerCase());
+      const identity = pullRequestArtifactIdentity(item.repository, {
+        kind: "pull-request",
+        url,
+      });
+      const index = item.result.artifacts.findIndex(
+        (artifact) =>
+          artifact.kind === "pull-request" &&
+          pullRequestArtifactIdentity(item.repository, artifact) === identity,
+      );
       if (index === -1) throw new Error(`work item ${id} has no artifact ${url}`);
       const artifact = item.result.artifacts[index]!;
       if (artifact.kind !== "pull-request") throw new Error(`artifact is not a pull request: ${url}`);
@@ -1486,12 +1508,21 @@ export class QueueStore {
    * terminal ones. Unlike list(), the limit bounds items that need checking
    * and is not clamped to 100; the callers own their ceilings.
    *
-   * `unverifiedOnly` narrows the predicate to artifacts whose
-   * `verification.status` is `unverified` (the operator inbox's "unverified
-   * artifacts" group): a verified-but-open pull request is not waiting on
-   * the operator, it is waiting on GitHub.
+   * `unverifiedOnly` narrows to source-unverified artifacts.
+   * `handoffAttentionOnly` additionally includes verified pull requests with
+   * an unresolved or rejected handoff for the operator inbox.
+   * `deliveryObservationsOnly` includes verified terminal observations too,
+   * so `deliveries` can reconcile identity before deciding what is pending.
    */
-  completedItemsWithPendingArtifacts(options: { repository?: string; limit?: number; unverifiedOnly?: boolean } = {}): WorkItem[] {
+  completedItemsWithPendingArtifacts(
+    options: {
+      repository?: string;
+      limit?: number;
+      unverifiedOnly?: boolean;
+      handoffAttentionOnly?: boolean;
+      deliveryObservationsOnly?: boolean;
+    } = {},
+  ): WorkItem[] {
     const params: SQLInputValue[] = [];
     let repositoryClause = "";
     if (options.repository) {
@@ -1500,9 +1531,79 @@ export class QueueStore {
       params.push(options.repository);
     }
     const limit = Math.max(1, Math.floor(options.limit ?? 100));
-    const pending = options.unverifiedOnly
-      ? `json_extract(artifact.value, '$.verification.status') = 'unverified'`
-      : `json_type(artifact.value, '$.verification') IS NULL
+    if (options.deliveryObservationsOnly) {
+      const rows = this.db
+        .prepare(
+          `WITH artifact_observations AS (
+             SELECT item.id,
+                    item.repository,
+                    item.updated_at,
+                    CASE
+                      WHEN json_extract(artifact.value, '$.kind') = 'pull-request'
+                        AND json_type(artifact.value, '$.verification.number') = 'integer'
+                      THEN 'pull-request:' || lower(item.repository) || '#' || json_extract(artifact.value, '$.verification.number')
+                      ELSE 'release:' || lower(json_extract(artifact.value, '$.url'))
+                    END AS artifact_identity,
+                    json_extract(artifact.value, '$.verification.state') AS artifact_state,
+                    json_extract(artifact.value, '$.verification.verifiedAt') AS verified_at
+             FROM work_items item, json_each(item.result_json, '$.artifacts') artifact
+             WHERE item.status = 'completed' AND item.result_json IS NOT NULL ${repositoryClause}
+               AND json_extract(artifact.value, '$.kind') IN ('pull-request', 'release')
+               AND json_extract(artifact.value, '$.verification.status') = 'verified'
+           ),
+           ranked_observations AS (
+             SELECT *,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY artifact_identity
+                      ORDER BY verified_at DESC, updated_at DESC, id DESC
+                    ) AS observation_rank
+             FROM artifact_observations
+           ),
+           pending_identities AS (
+             SELECT artifact_identity
+             FROM ranked_observations
+             WHERE observation_rank = 1 AND artifact_state IN ('open', 'draft')
+             ORDER BY updated_at DESC, artifact_identity ASC
+             LIMIT ?
+           )
+           SELECT DISTINCT item.*, pending.artifact_identity AS selected_identity
+           FROM work_items item
+           JOIN artifact_observations observation ON observation.id = item.id
+           JOIN pending_identities pending ON pending.artifact_identity = observation.artifact_identity
+           ORDER BY item.updated_at DESC, item.created_at DESC`,
+        )
+        .all(...params, limit) as Array<Row & { selected_identity: string }>;
+      const items = new Map<string, WorkItem>();
+      for (const row of rows) {
+        const item = decodeWorkItem(row);
+        if (!item.result) continue;
+        const artifacts = item.result.artifacts.filter(
+          (artifact) => deliveryArtifactIdentity(item.repository, artifact) === row.selected_identity,
+        );
+        const existing = items.get(item.id);
+        if (existing?.result) {
+          existing.result.artifacts.push(
+            ...artifacts.filter(
+              (artifact) =>
+                !existing.result!.artifacts.some(
+                  (candidate) =>
+                    candidate.kind === artifact.kind &&
+                    candidate.url === artifact.url,
+                ),
+            ),
+          );
+        } else {
+          items.set(item.id, { ...item, result: { ...item.result, artifacts } });
+        }
+      }
+      return [...items.values()].map(withDelivery);
+    }
+    const pending = options.handoffAttentionOnly
+        ? `json_extract(artifact.value, '$.verification.status') = 'unverified'
+                 OR json_type(artifact.value, '$.verification.handoff') IS NOT NULL`
+        : options.unverifiedOnly
+          ? `json_extract(artifact.value, '$.verification.status') = 'unverified'`
+          : `json_type(artifact.value, '$.verification') IS NULL
                  OR json_extract(artifact.value, '$.verification.status') = 'unverified'
                  OR json_extract(artifact.value, '$.verification.state') IN ('open', 'draft')`;
     const rows = this.db
@@ -1880,11 +1981,11 @@ export class QueueStore {
 
       const now = this.now();
       const children: WorkItem[] = [];
-      for (const followUp of input.followUps) {
+      for (const proposal of input.followUps) {
         // Scheduling priority is operator-owned. Reject any worker-supplied
         // value here as well as at the MCP schema so non-MCP callers cannot
         // bypass the rule; accepted children inherit the parent's priority.
-        if ("priority" in followUp) {
+        if ("priority" in proposal) {
           throw new Error("follow-up items may not set priority; children inherit the parent's priority");
         }
         // A pull-request binding is derived from the parent, never proposed: a
@@ -1892,12 +1993,13 @@ export class QueueStore {
         // exactly what the binding predicate exists to prevent. Refuse it here
         // as well as at the MCP schema so non-MCP callers cannot bypass it.
         for (const field of ["sourceRef", "cure", "review"] as const) {
-          if (field in followUp) {
+          if (field in proposal) {
             throw new Error(`follow-up items may not set ${field}; a pull-request-bound child inherits its parent's binding`);
           }
         }
         // Sequencing edges belong to imported roots, not to lineage (ADR-0066).
-        assertNoPredecessors(followUp, "a follow-up item");
+        assertNoPredecessors(proposal, "a follow-up item");
+        const followUp = normalizeFollowUpIntent(parent, proposal);
         // The proposer states the child's delivery contract (ADR-0069); the
         // store only checks it is one the child can honor. A child that may
         // write is a change, and a change nobody can deliver is not a proposal.
@@ -2276,6 +2378,8 @@ export class QueueStore {
         status: verification.status,
         state: verification.status === "verified" ? verification.state : undefined,
         previousState: artifact.verification?.status === "verified" ? artifact.verification.state : undefined,
+        handoffStatus: verification.status === "verified" ? verification.handoff?.status : undefined,
+        previousHandoffStatus: artifact.verification?.status === "verified" ? artifact.verification.handoff?.status : undefined,
       });
       return this.getRequired(id);
     });
@@ -2994,6 +3098,15 @@ function validateVerification(verification: ArtifactVerification): void {
       throw new Error("verification state is invalid");
     }
     if (!verification.verifiedAt.trim()) throw new Error("verification verifiedAt is required");
+    if (verification.handoff?.status === "unverified") {
+      if (!verification.handoff.attemptedAt.trim() || !verification.handoff.reason.trim()) {
+        throw new Error("unverified handoff needs attemptedAt and reason");
+      }
+    } else if (verification.handoff?.status === "rejected") {
+      if (!verification.handoff.checkedAt.trim() || !verification.handoff.reason.trim()) {
+        throw new Error("rejected handoff needs checkedAt and reason");
+      }
+    }
     return;
   }
   if (verification.status === "unverified") {

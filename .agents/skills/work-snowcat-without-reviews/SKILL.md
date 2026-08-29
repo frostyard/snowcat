@@ -76,7 +76,8 @@ Honor the claimed item's `executionTarget` (ADR-0073) before touching the
 repository — the bound pull request's branch at its recorded head for
 `existing-pull-request`, a fresh branch from a fresh base for
 `new-pull-request`, a detached never-mutated checkout for `read-only` — and
-declare one on every follow-up you propose.
+use `work-snowcat-queue`'s follow-up intent shorthand instead of reconstructing
+the child's target and delivery contract.
 
 ## Pull request body
 

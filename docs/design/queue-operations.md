@@ -440,9 +440,10 @@ same way. Their permissions can never exceed the parent's `delegableActions`.
 **Every item says what it must deliver** ([spec rule 64](../specs/work-queue.md),
 [ADR-0069](../adr/0069-declare-the-required-artifact-on-every-work-item.md)).
 `requiredArtifact` is `pull-request` or `none`, shown as `delivers` on the
-item page and in `show`. The worker that proposes a follow-up declares it;
-imports, sweeps, and the cure and review gates declare it on the roots they
-create. The store refuses — at proposal and again at `approve` — any item
+item page and in `show`. A worker normally states follow-up intent and Snowcat
+normalizes it into this explicit durable field; the complete legacy proposal
+remains accepted. Imports, sweeps, and the cure and review gates declare it on
+the roots they create. The store refuses — at proposal and again at `approve` — any item
 whose actions cannot honor its contract: `pull-request` without `open-pr`,
 `write` without `open-pr`, or a follow-up that may `write` but promises no
 pull request. An item that must deliver a pull request completes only when
@@ -785,8 +786,11 @@ to have — Snowcat grants none — and ask it to work the queue. The portable
 tells it to claim one item, do only the item's `allowedActions`, report
 evidence and artifacts, and stop; it also has the worker fill the target
 repository's `.github/pull_request_template.md` in full — Risk classification
-included — so operators should expect a template-shaped pull request body,
-not a bare summary. The skill lives in this repository, so a
+included. `complete_work` refuses a definite missing section, empty handoff,
+absent attempt evidence, or invalid risk selection while the worker still owns
+the lease; an unavailable template read leaves the pull request verified but
+marks its handoff `verify` for the refresh loop. Operators should therefore expect a template-shaped pull request
+body, not a bare summary. The skill lives in this repository, so a
 client started in another checkout needs it installed where that client looks
 for skills — for Claude Code, symlink or copy
 `.agents/skills/work-snowcat-queue` into `~/.claude/skills/`; other clients
@@ -911,20 +915,29 @@ one out of the pass. It
 records `artifact.verified` events and leaves anything alone while GitHub is
 unavailable.
 
-**Undelivered work waits on a human** ([spec rule 68](../specs/work-queue.md),
-[reality report finding 17](reality.md)). The review gate's last automated
-act is marking a draft ready; nothing merges. A completed item whose
-`delivery` still reads `open` is work somebody finished that nobody
-delivered. See what is sitting, ready rows first:
+**Pending delivery handoffs are artifact-scoped** ([spec rule
+68](../specs/work-queue.md), [reality report finding 17](reality.md)). A
+completed item whose `delivery` still reads `open` has at least one pull
+request or release waiting outside the worker attempt. See each artifact and
+its next handoff, merge and publish rows first:
 
 ```bash
 npm run --silent queue -- deliveries [--repository <owner/repo>]
 ```
 
-`ready: true` rows are waiting on you: an open non-draft pull request (the
-gate passed it, or the repository is not gated) or a draft release whose tag
-is unpublished. Draft pull requests in a gated repository are still the
-gate's, not yours. From the browser, the inbox's **Ready to merge** rail
+Each row carries one `artifact` plus `handoff`: `verify` while the template
+source is unavailable, `repair` when the completed item's body definitely
+misses the structural handoff, `review` for a draft pull request, `merge` for
+an open non-draft pull request, or `publish` for a draft release. `ready: true`
+means merge or publish is waiting on you; review is still the gate's, verify is
+the next refresh's, and repair needs a human body edit. The same pull request reported by its origin and later cure/fix items appears
+once by queue repository plus GitHub number, even if URL casing or a retained
+pre-rename URL differs. Terminal observations are reconciled before rows are
+emitted, and a handoff marker on any report remains visible until that report
+passes refresh, so neither a stale open report nor a newer source-only
+observation can manufacture merge readiness. From the browser, unresolved
+source and description checks appear in **Artifact handoffs**; the inbox's
+**Ready to merge** rail
 ([#251](https://github.com/frostyard/snowcat/issues/251)) is the same rows
 across every opted-in repository at once — a passed draft to mark ready, an
 open non-draft to add to the merge queue — so you rarely need `deliveries` or
@@ -1659,8 +1672,10 @@ entry per repository, each carrying, for that window:
 - `attempts` — `work.claimed` events, and `completed` — `work.completed`
   events, with `completedByDelivery` splitting those completions by their
   item's current `delivery`;
-- `accepted` — completions whose `delivery` is `merged` — and
-  `acceptedPerAttempt`, the headline number (`null` when nothing was claimed);
+- `accepted` — completions whose `delivery` is `merged` — and `acceptance`,
+  the terminal delivery stage: merged numerator, merged-plus-closed
+  denominator and rate, with open and unavailable pull requests censored and
+  non-pull-request completions excluded;
 - `blocked` and `cancelled` — `work.blocked` and `work.cancelled` events;
 - `timeToMergeHours` — `{ count, median, p90 }` hours from a completion to its
   pull request's merge.
@@ -1670,7 +1685,7 @@ and merge times come from the recorded verifications, so an unverified pull
 request counts as `unverified`, not as accepted. The command is read-only and
 is not an MCP tool.
 
-Record daily, per repository, `acceptedPerAttempt`, `blocked`, and
+Record daily, per repository, `acceptance`, `blocked`, and
 `timeToMergeHours` from the reading, plus the two numbers the queue cannot
 see: reviewer changes requested and rejected pull requests (from GitHub), and
 tokens and wall time per accepted outcome (from the client you ran).
@@ -1690,6 +1705,12 @@ tokens and wall time per accepted outcome (from the client you ran).
   commit on a branch does not count). It should open the pull request and
   complete again, or `block_work` with the reason if no change is warranted;
   then you `cancel` or leave it for the next lease.
+- **`complete_work` refuses a pull-request body or evidence handoff** — the
+  worker still owns the lease. It should preserve every level-two section from
+  the repository template, fill Summary and Checks/Verification with visible
+  content, select exactly one risk tier when the template presents
+  checkboxes, keep at least one concrete attempt-report evidence assertion,
+  edit the pull request, and complete again. Snowcat never stores the body.
 - **`complete_work` refuses a follow-up "cannot deliver"/"requires open-pr"**
   — the worker proposed a change child without `open-pr`, or without
   `requiredArtifact: "pull-request"`. The whole completion was rolled back

@@ -13,6 +13,7 @@ import {
   MODEL_NAME_PATTERN,
   type McpToolName,
   executionTargets,
+  followUpIntents,
   requiredArtifacts,
   reviewDecisions,
   withoutLeaseToken,
@@ -62,17 +63,25 @@ const reviewSchema = z.strictObject({
 // Strict: unknown fields such as `priority` are rejected rather than stripped,
 // because scheduling priority is operator-owned and children inherit it.
 const followUpSchema = z.strictObject({
-  kind: z.string().regex(/^[a-z][a-z0-9-]{1,63}$/),
+  intent: z.enum(followUpIntents).describe("Request-level shorthand normalized by Snowcat into the durable child contract.").optional(),
+  kind: z.string().regex(/^[a-z][a-z0-9-]{1,63}$/).optional(),
   objective: z.string().min(1),
   instructions: z.string().min(1),
   acceptanceCriteria: z.array(z.string().min(1)).min(1),
-  allowedActions: z.array(actionSchema),
-  delegableActions: z.array(actionSchema),
-  // Required, never defaulted (ADR-0069): the proposer states whether the
-  // child is a change that lands through a pull request. The store refuses a
-  // `write` child without `pull-request`, and `pull-request` without `open-pr`.
-  requiredArtifact: z.enum(requiredArtifacts),
-  executionTarget: z.enum(executionTargets),
+  allowedActions: z.array(actionSchema).optional(),
+  delegableActions: z.array(actionSchema).optional(),
+  requiredArtifact: z.enum(requiredArtifacts).optional(),
+  executionTarget: z.enum(executionTargets).optional(),
+}).superRefine((followUp, context) => {
+  if (followUp.intent === undefined) {
+    for (const field of ["kind", "allowedActions", "delegableActions", "requiredArtifact", "executionTarget"] as const) {
+      if (followUp[field] === undefined) {
+        context.addIssue({ code: "custom", path: [field], message: `legacy follow-up without intent must declare ${field}` });
+      }
+    }
+  } else if (followUp.intent !== "existing-pr-change" && followUp.kind === undefined) {
+    context.addIssue({ code: "custom", path: ["kind"], message: `follow-up intent ${followUp.intent} requires kind` });
+  }
 });
 
 /**
@@ -158,8 +167,10 @@ export function buildQueueMcpServer(
         "Perform only the allowedActions listed on the claimed item.",
         "Before changing anything, check whether the work already exists: read operatorNotes when present and look for pull requests that reference the item's sourceRef issue; re-report or block rather than opening a duplicate.",
         "Never broaden child permissions beyond delegableActions.",
-        "Every follow-up declares requiredArtifact: \"pull-request\" for a change (it then needs open-pr in allowedActions and an implementation kind such as <program>-fix, never a -discovery kind) or \"none\" for discovery-only work. An item whose requiredArtifact is pull-request completes only with a pull-request artifact; block_work instead when no change is warranted.",
-        "Every follow-up also declares executionTarget (ADR-0073): \"read-only\" for work that mutates no checkout, \"new-pull-request\" for a change on a fresh branch, or \"existing-pull-request\" for a change to a bound pull request's own branch. Honor the claimed item's executionTarget before touching the repository: check out the bound pull request's branch at its recorded head for existing-pull-request work, a fresh branch from a fresh default-branch base for new-pull-request work, and a detached read-only checkout otherwise; release or block when the target cannot be satisfied.",
+        "Prefer follow-up intent shorthand: \"read-only\", \"new-pr-change\", or \"existing-pr-change\". Snowcat derives the durable actions, delegation ceiling, required artifact, execution target, and the server-owned pr-cure-change kind for an existing-PR change; a legacy follow-up may still state the full contract instead.",
+        "Give new-pr-change an implementation kind such as <program>-fix, never a -discovery kind.",
+        "Honor the claimed item's executionTarget before touching the repository: check out the bound pull request's branch at its recorded head for existing-pull-request work, a fresh branch from a fresh default-branch base for new-pull-request work, and a detached read-only checkout otherwise; release or block when the target cannot be satisfied.",
+        "An item whose requiredArtifact is pull-request completes only with a pull-request artifact; use block_work when no change is warranted.",
         "Complete work with concrete evidence and bounded follow-up items, and report the model you ran as result.model.",
         "In a review-gated repository open pull requests as drafts; a pr-review item completes with a structured review verdict and touches nothing on GitHub.",
       ].join(" "),
@@ -269,7 +280,10 @@ export function buildQueueMcpServer(
       // `unverified` and the later verify-artifacts pass closes the loop.
       const item = queue.get(input.id);
       const artifacts = item
-        ? await verifyCompletionArtifacts(item.repository, input.result.artifacts, verifier)
+        ? await verifyCompletionArtifacts(item.repository, input.result.artifacts, {
+            ...verifier,
+            completionEvidence: input.result.evidence,
+          })
         : input.result.artifacts;
       // In a review-gated repository an open pull request must be a draft
       // (ADR-0065); a pr-cure completion is refused when the pull request's
