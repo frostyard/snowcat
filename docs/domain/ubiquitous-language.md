@@ -415,7 +415,20 @@ ten follow-ups, and a lineage holds at most four edges below its root.
 
 **Avoid:** subtask; next step; approval.
 ([ADR-0005](../adr/0005-admit-worker-created-work-before-claiming.md),
-[ADR-0006](../adr/0006-enforce-admission-in-the-database.md))
+[ADR-0006](../adr/0006-enforce-admission-in-the-database.md),
+[ADR-0077](../adr/0077-derive-follow-up-contracts-from-proposer-intent.md))
+
+#### Follow-up intent
+
+A request-level statement of the placement and delivery a worker wants for a
+follow-up: read-only investigation, a change through a new pull request, or a
+change to the parent's already-bound pull request. Snowcat derives and
+validates the complete child contract under the parent ceiling before storing
+the proposal. Intent is not a durable work field, a program kind, or authority.
+
+**Avoid:** inferred work contract; kind alias; permission request; execution
+target (the durable normalized field).
+([ADR-0077](../adr/0077-derive-follow-up-contracts-from-proposer-intent.md))
 
 #### Work lineage
 
@@ -459,22 +472,27 @@ reconciled without establishing correctness or acceptance.
 #### Required artifact
 
 The artifact kind a work item's completion must report — a pull request, or
-none — declared on the item by whoever defined it and never inferred from its
-kind or actions. It is the item's delivery contract: an item that requires a
-pull request is admitted only with the authority to open one and completes
-only when one is reported. It says what must be delivered, not whether the
-delivery was merged (delivery state) or the outcome achieved.
+none — explicit on the durable item and never inferred from its kind or
+actions. A worker may state a [follow-up intent](#follow-up-intent) from which
+Snowcat derives this field before storing the proposal. It is the item's
+delivery contract: an item that requires a pull request is admitted only with
+the authority to open one and completes only when one is reported. It says
+what must be delivered, not whether the delivery was merged (delivery state)
+or the outcome achieved.
 
 **Avoid:** expected artifact; deliverable (the initiative projection);
 implied by `write`; fix item.
 
 ([ADR-0069](../adr/0069-declare-the-required-artifact-on-every-work-item.md),
+[ADR-0077](../adr/0077-derive-follow-up-contracts-from-proposer-intent.md),
 [ADR-0031](../adr/0031-separate-delivery-from-outcome-achievement.md))
 
 #### Execution target
 
-Where a work item's execution happens, declared on the item by whoever
-defined it and never inferred from its kind or actions: `read-only` (a
+Where a work item's execution happens, explicit on the durable item and never
+inferred from its kind or actions. A worker may state a
+[follow-up intent](#follow-up-intent) from which Snowcat derives this field
+before storing the proposal: `read-only` (a
 checkout to read and run checks, mutating nothing), `new-pull-request` (a
 fresh branch from a fresh default-branch base, delivering a new pull
 request), or `existing-pull-request` (the bound pull request's branch at
@@ -486,7 +504,8 @@ refuses an item where they cannot.
 **Avoid:** branch mode; workspace type; implied by kind; implied by
 `open-pr` (authority to publish a pull request is not authority to alter
 the tree).
-([ADR-0073](../adr/0073-declare-the-execution-target-on-every-work-item.md))
+([ADR-0073](../adr/0073-declare-the-execution-target-on-every-work-item.md),
+[ADR-0077](../adr/0077-derive-follow-up-contracts-from-proposer-intent.md))
 
 #### Policy binding
 

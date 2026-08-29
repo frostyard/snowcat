@@ -53,6 +53,7 @@ import {
   type PolicyDecision,
   type PolicyRecord,
 } from "./types.ts";
+import { normalizeFollowUpIntent } from "./follow-up-intent.ts";
 import { standingAuthorizationFor } from "./standing-authorizations.ts";
 
 type Row = Record<string, SQLInputValue>;
@@ -1880,11 +1881,11 @@ export class QueueStore {
 
       const now = this.now();
       const children: WorkItem[] = [];
-      for (const followUp of input.followUps) {
+      for (const proposal of input.followUps) {
         // Scheduling priority is operator-owned. Reject any worker-supplied
         // value here as well as at the MCP schema so non-MCP callers cannot
         // bypass the rule; accepted children inherit the parent's priority.
-        if ("priority" in followUp) {
+        if ("priority" in proposal) {
           throw new Error("follow-up items may not set priority; children inherit the parent's priority");
         }
         // A pull-request binding is derived from the parent, never proposed: a
@@ -1892,12 +1893,13 @@ export class QueueStore {
         // exactly what the binding predicate exists to prevent. Refuse it here
         // as well as at the MCP schema so non-MCP callers cannot bypass it.
         for (const field of ["sourceRef", "cure", "review"] as const) {
-          if (field in followUp) {
+          if (field in proposal) {
             throw new Error(`follow-up items may not set ${field}; a pull-request-bound child inherits its parent's binding`);
           }
         }
         // Sequencing edges belong to imported roots, not to lineage (ADR-0066).
-        assertNoPredecessors(followUp, "a follow-up item");
+        assertNoPredecessors(proposal, "a follow-up item");
+        const followUp = normalizeFollowUpIntent(parent, proposal);
         // The proposer states the child's delivery contract (ADR-0069); the
         // store only checks it is one the child can honor. A child that may
         // write is a change, and a change nobody can deliver is not a proposal.

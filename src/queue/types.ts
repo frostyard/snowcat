@@ -17,8 +17,9 @@ export type AllowedAction = (typeof allowedActions)[number];
  * change that lands through one pull request and `complete_work` refuses a
  * completion that reports none; `none` means completion is judged on the
  * result alone. Declared by whoever defines the item — a feeder, an import,
- * a sweep, or the worker proposing a follow-up — and never inferred from the
- * item's kind or actions; nothing changes it afterwards.
+ * or a sweep — or normalized from a worker's follow-up intent (ADR-0077).
+ * It is never inferred from the durable item's kind or actions and nothing
+ * changes it afterwards.
  */
 export const requiredArtifacts = ["none", "pull-request"] as const;
 export type RequiredArtifact = (typeof requiredArtifacts)[number];
@@ -27,9 +28,10 @@ export type RequiredArtifact = (typeof requiredArtifacts)[number];
  * Where a work item's execution happens (ADR-0073): a checkout to read and
  * run checks mutating nothing; a fresh branch from a fresh default-branch
  * base delivering a new pull request; or the bound pull request's branch at
- * exactly the recorded head. Declared by the definer, never inferred from
- * kind or actions; absent only on items defined before the rung that added
- * it (undeclared legacy, listed by `audit-contracts`).
+ * exactly the recorded head. Declared by the definer, or normalized from a
+ * worker's follow-up intent (ADR-0077), never inferred from durable kind or
+ * actions; absent only on items defined before the rung that added it
+ * (undeclared legacy, listed by `audit-contracts`).
  */
 export const executionTargets = ["read-only", "new-pull-request", "existing-pull-request"] as const;
 export type ExecutionTarget = (typeof executionTargets)[number];
@@ -206,15 +208,30 @@ export interface FollowUpInput {
   allowedActions: AllowedAction[];
   delegableActions: AllowedAction[];
   /**
-   * The proposer's explicit delivery contract for the child (ADR-0069):
-   * required, never defaulted, so a worker states whether the child is a
-   * change that lands through a pull request. A child granting `write` must
-   * declare `pull-request`, and `pull-request` needs `open-pr` in
-   * `allowedActions`; the store refuses the whole completion otherwise.
+   * The child's explicit durable delivery contract (ADR-0069, ADR-0077).
+   * A legacy proposer states it; an intent-shaped proposal is normalized into
+   * it before storage. A child granting `write` must carry `pull-request`, and
+   * `pull-request` needs `open-pr` in `allowedActions`.
    */
   requiredArtifact: RequiredArtifact;
-  /** Where the child executes (ADR-0073); required on every follow-up, like `requiredArtifact`. */
+  /** Where the child executes (ADR-0073, ADR-0077); explicit after normalization. */
   executionTarget: ExecutionTarget;
+}
+
+/** Request-level shorthand that Snowcat normalizes into FollowUpInput. */
+export const followUpIntents = ["read-only", "new-pr-change", "existing-pr-change"] as const;
+export type FollowUpIntent = (typeof followUpIntents)[number];
+
+export interface FollowUpProposalInput {
+  intent?: FollowUpIntent;
+  kind?: string;
+  objective: string;
+  instructions: string;
+  acceptanceCriteria: string[];
+  allowedActions?: AllowedAction[];
+  delegableActions?: AllowedAction[];
+  requiredArtifact?: RequiredArtifact;
+  executionTarget?: ExecutionTarget;
 }
 
 /** The pull-request cure a `pr-cure` root was created for (ADR-0061). */
@@ -534,7 +551,7 @@ export interface CompletionInput {
   leaseToken: string;
   worker: string;
   result: WorkResult;
-  followUps: FollowUpInput[];
+  followUps: FollowUpProposalInput[];
   /** Required on a `pr-review` item, refused on every other kind (ADR-0065). */
   review?: ReviewResult;
 }

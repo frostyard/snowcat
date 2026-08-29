@@ -20,8 +20,8 @@ claim, renew, and resolve it.
 | `acceptanceCriteria` | string[] | yes | At least one verifiable criterion |
 | `allowedActions` | action[] | yes | Authority for this item |
 | `delegableActions` | action[] | yes | Maximum authority for direct children |
-| `requiredArtifact` | enum | yes | The item's delivery contract ([ADR-0069](../adr/0069-declare-the-required-artifact-on-every-work-item.md)): `none` or `pull-request`. Declared by the definer — required on every follow-up, `none` when an operator seed omits it — never inferred from kind or actions, never changed afterwards. `pull-request` requires `open-pr` in `allowedActions` (rule 64) |
-| `executionTarget` | enum | when declared | Where execution happens ([ADR-0073](../adr/0073-declare-the-execution-target-on-every-work-item.md)): `read-only`, `new-pull-request`, or `existing-pull-request`. Declared by the definer on every post-rung-16 definition, never inferred; absent on pre-rung rows (undeclared legacy) |
+| `requiredArtifact` | enum | yes | The item's delivery contract ([ADR-0069](../adr/0069-declare-the-required-artifact-on-every-work-item.md)): `none` or `pull-request`. Explicit on every stored follow-up; an ADR-0077 intent is normalized into it before storage. `none` when an operator seed omits it; never inferred from durable kind or actions, never changed afterwards. `pull-request` requires `open-pr` in `allowedActions` (rules 64 and 72) |
+| `executionTarget` | enum | when declared | Where execution happens ([ADR-0073](../adr/0073-declare-the-execution-target-on-every-work-item.md)): `read-only`, `new-pull-request`, or `existing-pull-request`. Explicit on every post-rung-16 stored definition; an ADR-0077 intent is normalized into it before storage. Never inferred from durable kind or actions; absent on pre-rung rows (undeclared legacy) |
 | `policy` | record | when bound | The policy binding and admission evidence ([ADR-0074](../adr/0074-compile-policy-into-work-admission.md)): the Core snapshot and repository commit judged, the actions the policy marks review-required, and the `authorization` that satisfied them (`operator` with the admitting principal, or `standing` with the registry id and its ADR). Absent on rows defined without a control-plane store or before rung 17 (unbound legacy) |
 | `priority` | integer | yes | Safe integer; higher values claim first, creation time breaks ties. Chosen only by operator or policy seeds; worker-created children inherit the parent's value; changed afterwards only by the operator `prioritize` command (rule 38) |
 | `status` | enum | yes | `proposed`, `queued`, `claimed`, `completed`, `blocked`, or `cancelled` |
@@ -1118,9 +1118,9 @@ MCP (rule 41).
 64. **Required artifact ([ADR-0069](../adr/0069-declare-the-required-artifact-on-every-work-item.md)).**
     Every work item MUST carry `requiredArtifact`, `none` or `pull-request`,
     stored in one column added by schema rung 13 (default `none`; the rung
-    MUST backfill nothing). A follow-up MUST declare it — `complete_work`
-    MUST reject a follow-up that omits it at the schema, and the store MUST
-    refuse one whose value is missing or unknown — and a seeded or proposed
+    MUST backfill nothing). A legacy follow-up MUST declare it; an
+    intent-shaped follow-up MUST derive it under rule 72. The store MUST
+    refuse a legacy value that is missing or unknown — and a seeded or proposed
     root takes the value its feeder, import, or sweep declares (`none` when
     an operator seed omits it). On every definition path, and again in
     `approve`, the store MUST refuse a contract the item's authority cannot
@@ -1147,8 +1147,9 @@ MCP (rule 41).
     rule 33, `complete_work` on an item whose `requiredArtifact` is
     `pull-request` MUST refuse the completion — leaving the item claimed —
     unless the reported artifacts include a `pull-request`; `block_work`
-    remains the worker's way out when no change is warranted. No inference
-    from `kind` or from actions MAY set or change the value.
+    remains the worker's way out when no change is warranted.     No inference from durable `kind` or from actions MAY set or change the
+    value; rule 72's request-level intent normalization happens before a
+    durable definition exists.
     `audit-contracts [--repository <owner/repo>]` MUST list every
     `proposed`, `queued`, `claimed`, or `blocked` item the same predicate
     rejects — id, repository, kind, status, parent, actions, contract, the
@@ -1285,10 +1286,12 @@ MCP (rule 41).
     returning the bare item without `attempts`.
 70. **Execution target ([ADR-0073](../adr/0073-declare-the-execution-target-on-every-work-item.md); extends rules 10, 37, and 64).**
     Every definition path — seeds, imported and proposed roots, cure and
-    review roots, and every MCP follow-up — MUST declare `executionTarget`
-    as `read-only`, `new-pull-request`, or `existing-pull-request`, and MUST
-    be refused without one; nothing ever infers a target from kind or
-    actions. The consistency predicate extends rule 64, checked at every
+    review roots, and every stored MCP follow-up — MUST carry
+    `executionTarget` as `read-only`, `new-pull-request`, or
+    `existing-pull-request`. A legacy follow-up MUST declare it; an
+    intent-shaped follow-up MUST derive it under rule 72. Nothing ever infers
+    a target from durable kind or actions. The consistency predicate extends
+    rule 64, checked at every
     definition, again at admission, and surfaced by `audit-contracts`:
     `read-only` MUST exclude `write` and `open-pr` from `allowedActions` and
     declare `requiredArtifact` `none`; `new-pull-request` and
@@ -1354,6 +1357,31 @@ MCP (rule 41).
     `unbound-policy` only when a hook is configured, and is never
     back-filled. Without a hook, definition and admission behave exactly as
     before this rule.
+72. **Follow-up intent normalization ([ADR-0077](../adr/0077-derive-follow-up-contracts-from-proposer-intent.md); extends rules 18, 37, 42, 64, 70, and 71).**
+    `complete_work` MAY receive one strict additive follow-up object with
+    optional `intent`: `read-only`, `new-pr-change`, or
+    `existing-pr-change`. Without `intent`, the legacy object MUST provide
+    `kind`, `allowedActions`, `delegableActions`, `requiredArtifact`, and
+    `executionTarget` exactly as before; a proposer that needs a narrower
+    child ceiling than intent derives MUST use this form. With `intent`, those derived fields
+    MAY be omitted; any supplied value MUST exactly equal the canonical
+    derivation or the whole completion MUST roll back. `read-only` and
+    `new-pr-change` MUST still declare `kind`; `existing-pr-change` MUST derive
+    the server-owned kind `pr-cure-change`, require a parent cure binding, and
+    inherit that exact binding under rules 42 and 70. Read-only intent MUST
+    derive direct `read`, artifact `none`, and target `read-only`, adding
+    `open-issue` when the parent delegates it. Both change intents MUST derive
+    direct `read`, `write`, and `open-pr`, artifact
+    `pull-request`, and their named new or existing target, and MUST NOT add
+    `open-issue` to direct actions. `run-tests` and
+    `create-followup` MUST be added to direct actions only when the parent
+    delegates them; when `create-followup` is present the child MUST inherit
+    the parent's complete delegation ceiling, otherwise its ceiling MUST be
+    empty. Missing required derived actions, unknown intent, contradictory
+    fields, or any result that fails the ordinary definition, ceiling, or
+    policy predicates MUST refuse the completion atomically. Intent MUST NOT
+    be stored: the proposed child carries the complete normalized durable
+    contract.
 
 ## Derived artifacts
 
@@ -1377,6 +1405,7 @@ MCP (rule 41).
 | Claim backoff | Claim selection excludes an item with three worker releases inside the trailing window and `churn` lists the evidence per rule 69 |
 | Execution target | Every definition declares where it executes and the rule 64 predicate binds target, actions, artifact, and binding per rule 70; legacy rows read undeclared |
 | Policy binding | Definitions bind to the control plane's current authority, admission records its satisfier, standing authorizations gate mechanical admission, and boundary touches route to a human per rules 55 and 71 |
+| Follow-up intent | The completion boundary normalizes request-level intent into one complete durable child contract per rule 72 |
 | MCP worker behavior | Portable `work-snowcat-queue` skill constrained by this contract |
 | Testing-gap seed | Deterministic CLI instance of this contract |
 

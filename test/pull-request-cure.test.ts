@@ -729,7 +729,14 @@ test("a pr-cure-change follow-up inherits its parent's binding, and can bind not
     id: parent.id,
     leaseToken: claimed.leaseToken!,
     ...completion,
-    followUps: [{ ...change, allowedActions: [...change.allowedActions], delegableActions: [...change.delegableActions] }],
+    followUps: [
+      {
+        intent: "existing-pr-change",
+        objective: change.objective,
+        instructions: change.instructions,
+        acceptanceCriteria: change.acceptanceCriteria,
+      },
+    ],
   });
   const child = queue.get(accepted.followUps[0]!.id)!;
   assert.equal(child.kind, "pr-cure-change");

@@ -51,8 +51,14 @@ Honor the claimed item's `executionTarget` before touching the repository
 exactly its recorded head — release or block when the head moved; never a new
 branch, never a second pull request. `new-pull-request` means a fresh branch
 from a freshly pulled default-branch base. `read-only` means a detached
-checkout you never mutate. Every follow-up you propose declares its own
-`executionTarget` alongside `requiredArtifact`.
+checkout you never mutate. Propose a follow-up with one intent:
+`read-only`, `new-pr-change`, or `existing-pr-change`; Snowcat derives the
+child actions, delegation ceiling, artifact, target, and the
+`pr-cure-change` kind for the existing-PR case. Give `kind` for the first two.
+Do not repeat derived fields unless a client requires them; if supplied they
+must exactly match Snowcat's derivation.
+When the child needs a narrower delegation ceiling than that derivation, omit
+`intent` and send the complete legacy contract deliberately.
 
 - Perform only actions listed in `allowedActions`. Absence means prohibition.
 - Pull the target repository's default branch immediately before branching,
@@ -107,10 +113,10 @@ new pull request but an unchanged patch on a healthier one.
   squash in fixes under the name of curing.
 - When curing needs the patch to change (a conflict that needs edits, a
   failing check that needs a code or test change, a review asking for a
-  change), do not push: create exactly one follow-up of kind `pr-cure-change`
-  naming the exact change and how it will be verified (its actions may be at
-  most the item's `delegableActions`), or block if the change is the
-  maintainer's to make.
+  change), do not push: create exactly one `existing-pr-change` follow-up
+  naming the exact change and how it will be verified, or block if the change
+  is the maintainer's to make. Snowcat owns the `pr-cure-change` kind and exact
+  inherited pull-request binding.
 - Never merge, approve, or dismiss a review.
 - Complete with the pull request reported as a `pull-request` artifact and
   evidence: the checks on the new head, the mergeable state, and what you
@@ -195,29 +201,24 @@ yourself.
   acceptance criteria. Follow-ups become non-claimable proposals for operator
   or approved-policy review; never treat proposing work as approving it.
 - Keep every child action inside the parent's `delegableActions`. A follow-up is
-  not permission to escalate autonomy — and under-authorizing is now refused,
-  not merely discouraged: a child granted `write` MUST also hold
-  `create-followup` whenever the parent's `delegableActions` allow it — and a
-  non-empty `delegableActions` of its own, since a child that may propose into
-  an empty ceiling can propose nothing at all. Missing either half refuses the
-  whole completion with `change-child-cannot-propose`. A worker that changes
-  the tree finds adjacent work while it is in there, and evidence re-queues
-  nothing. A parent that cannot delegate `create-followup` imposes no
-  such requirement — the ceiling is still the ceiling.
-- Declare `requiredArtifact` on every follow-up; it is required, never
-  defaulted. A follow-up whose objective is a change (a fix, a bump, a doc
-  edit) is `requiredArtifact: "pull-request"` with `write` and `open-pr` in
-  its `allowedActions`; a discovery-only follow-up is `requiredArtifact:
-  "none"` with `read` (and `create-followup` if it may propose). A change
-  follow-up takes an implementation kind — `<program>-fix` such as
+  not permission to escalate autonomy. With an intent, Snowcat derives direct
+  actions and a usable delegation ceiling inside the parent's ceiling. Without
+  an intent, the full legacy contract must still satisfy the same bounds,
+  including `change-child-cannot-propose` when a write-capable child fails to
+  retain delegated `create-followup` and a non-empty ceiling.
+- Prefer an intent instead of declaring `requiredArtifact`, `executionTarget`,
+  or action arrays yourself. Use `new-pr-change` for a fix, bump, or doc edit;
+  `read-only` for investigation or issue-only triage; and
+  `existing-pr-change` only for a substantive cure to the parent's bound pull
+  request. A new-PR change still takes an implementation kind — `<program>-fix` such as
   `docs-drift-fix` or `quality-gap-fix` — never the parent's `-discovery`
   kind: discoverers claim by kind, and a `-discovery` item that owes a pull
-  request is one every discoverer claims and none can deliver. Snowcat
-  refuses the whole completion — the root stays yours — for a change child
+  request is one every discoverer claims and none can deliver. Snowcat refuses
+  the whole completion — the root stays yours — for a change child
   without `open-pr`, for a child that may `write` but declares `"none"`, for
   a `-discovery` kind that promises a pull request or grants `write` or
-  `open-pr`, and for a missing or unknown value; nothing widens an admitted
-  item afterwards, and a change nobody can deliver is not a proposal.
+  `open-pr`, and for a missing or unknown legacy value; nothing widens an
+  admitted item afterwards, and a change nobody can deliver is not a proposal.
 - Report created issues, pull requests, commits, and reports as artifacts.
   Snowcat checks each reported issue and pull request against GitHub when you
   call `complete_work`: report the exact URL in the item's repository. A

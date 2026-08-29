@@ -440,9 +440,10 @@ same way. Their permissions can never exceed the parent's `delegableActions`.
 **Every item says what it must deliver** ([spec rule 64](../specs/work-queue.md),
 [ADR-0069](../adr/0069-declare-the-required-artifact-on-every-work-item.md)).
 `requiredArtifact` is `pull-request` or `none`, shown as `delivers` on the
-item page and in `show`. The worker that proposes a follow-up declares it;
-imports, sweeps, and the cure and review gates declare it on the roots they
-create. The store refuses — at proposal and again at `approve` — any item
+item page and in `show`. A worker normally states follow-up intent and Snowcat
+normalizes it into this explicit durable field; the complete legacy proposal
+remains accepted. Imports, sweeps, and the cure and review gates declare it on
+the roots they create. The store refuses — at proposal and again at `approve` — any item
 whose actions cannot honor its contract: `pull-request` without `open-pr`,
 `write` without `open-pr`, or a follow-up that may `write` but promises no
 pull request. An item that must deliver a pull request completes only when

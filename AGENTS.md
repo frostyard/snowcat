@@ -191,9 +191,10 @@ removed. -->
   pull request or issue the operator carried the last mile against a
   completed item — it verifies against GitHub first and never fabricates a
   `verification`. Every item carries an explicit `requiredArtifact`
-  (`pull-request` or `none`; ADR-0069, schema rung 13): the definer
-  declares it (required on every follow-up, never inferred from kind or
-  actions), `contractProblem` in the store refuses an item whose actions
+  (`pull-request` or `none`; ADR-0069, schema rung 13): a root definer declares
+  it, while ADR-0077 follow-up intent is normalized into the same explicit
+  durable field (never inferred from durable kind or actions).
+  `contractProblem` in the store refuses an item whose actions
   cannot honor it at proposal and again at `approve`, and `complete_work`
   refuses a `pull-request` item that reports no pull request; `queue --
   audit-contracts` lists in-flight items that fail the same predicate.

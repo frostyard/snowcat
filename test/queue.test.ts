@@ -65,6 +65,45 @@ test("seed work requires an opted-in repository and preserves child lineage", as
   );
 });
 
+test("one invalid intent-shaped follow-up rolls back every sibling proposal", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-follow-up-intent-rollback-test-"));
+  const queue = new QueueStore(join(directory, "queue.db"));
+  test.after(() => queue.close());
+  queue.setRepositoryEnabled("frostyard/updex", true);
+  const seed = seedTestingGap(queue, "frostyard/updex");
+  const claimed = queue.claim({ worker: "codex:updex:intent-rollback" })!;
+
+  assert.throws(
+    () =>
+      queue.complete({
+        id: seed.id,
+        leaseToken: claimed.leaseToken!,
+        worker: "codex:updex:intent-rollback",
+        result: { summary: "Found two gaps.", evidence: ["src/retry.ts"], artifacts: [] },
+        followUps: [
+          {
+            intent: "read-only",
+            kind: "testing-gap-investigation",
+            objective: "Confirm the first gap.",
+            instructions: "Inspect the retry path without changing it.",
+            acceptanceCriteria: ["The behavior is documented with evidence."],
+          },
+          {
+            intent: "new-pr-change",
+            kind: "testing-gap-fix",
+            objective: "Fix the second gap.",
+            instructions: "Add the bounded test.",
+            acceptanceCriteria: ["The test passes."],
+            requiredArtifact: "none",
+          },
+        ],
+      }),
+    /contract mismatch: requiredArtifact must be pull-request/,
+  );
+  assert.equal(queue.get(seed.id)?.status, "claimed");
+  assert.equal(queue.list({ repository: "frostyard/updex" }).length, 1);
+});
+
 test("expired leases can be reclaimed without accepting the old token", async () => {
   const directory = await mkdtemp(join(tmpdir(), "snowcat-lease-test-"));
   let now = new Date("2026-08-14T12:00:00.000Z");
@@ -1555,4 +1594,3 @@ test("rename-repository carries the opt-in and every item to the new slug and le
   // Claiming under the new slug works; the old slug is gone.
   assert.equal(queue.claim({ worker: "claude:rename-test", repository: "frostyard/after2" })?.id, root.id);
 });
-

@@ -11,7 +11,9 @@ and promotion to the v1 work engine by
 [ADR-0059](../adr/0059-adopt-the-queue-store-as-the-v1-work-engine.md).
 Execution
 placement is typed on each item by
-[ADR-0073](../adr/0073-declare-the-execution-target-on-every-work-item.md).
+[ADR-0073](../adr/0073-declare-the-execution-target-on-every-work-item.md);
+worker proposals may state the placement intent for server normalization under
+[ADR-0077](../adr/0077-derive-follow-up-contracts-from-proposer-intent.md).
 Contracts: [work queue](../specs/work-queue.md). Delivery:
 [recovery plan](../plans/recover.md) and
 [maintenance programs](../plans/maintenance-programs.md); pull-request cure by
@@ -132,19 +134,22 @@ Completion records a structured summary, concrete evidence, artifact URLs, and
 zero or more bounded child items. A child that works on an *existing* pull
 request rather than opening a new one
 ([ADR-0073](../adr/0073-declare-the-execution-target-on-every-work-item.md))
-must be bound to one, and the proposer never names that binding: the MCP
-follow-up schema is closed over its eight fields, and the store refuses a
-follow-up carrying `sourceRef`, `cure`, or `review` even from a non-MCP caller,
+must be bound to one, and the proposer never names that binding. The MCP
+follow-up schema is one strict additive object: a proposer either sends the
+complete legacy contract or one of ADR-0077's intents, which the queue
+normalizes to complete durable fields inside the completion transaction.
+Redundant derived fields must exactly agree. The store refuses a follow-up
+carrying `sourceRef`, `cure`, or `review` even from a non-MCP caller,
 because a proposer-supplied binding could reach any pull request at any head.
 The binding is inherited instead — a `pr-cure-change` child
 ([ADR-0061](../adr/0061-cure-pull-requests-as-bounded-per-head-work.md)) takes
 its parent's `cure` record verbatim, the same pull request URL and the same
 head SHA — so the substantive cure is reachable while a proposal still cannot
-reach a pull request its parent does not already hold. Nor can it escape the
-binding by declaring a different target: a `pr-cure-change` that says
-`new-pull-request` is refused rather than corrected, because opening a second
-pull request for a head that already has one is exactly what ADR-0061
-forbids. A child under a parent
+reach a pull request its parent does not already hold. Nor can it escape the binding: `existing-pr-change` is the only intent for
+that path and the server owns both the `pr-cure-change` kind and existing-PR
+target; a contradictory redundant field is refused rather than corrected,
+because opening a second pull request for a head that already has one is
+exactly what ADR-0061 forbids. A child under a parent
 with no binding inherits nothing and is refused exactly as before. Those
 reports are provenance, not independent attestation. Deterministic checks can reject malformed, cross-repository, or
 unauthorized artifact claims, but only reconciliation with GitHub or another
