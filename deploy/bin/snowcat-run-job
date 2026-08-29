@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Signal traps invoke the helper indirectly; ShellCheck versions report either
+# the function or its body as unreachable.
+# shellcheck disable=SC2317,SC2329
 # Serialize one timer-triggered Snowcat job and atomically record its latest
 # result outside the queue/control-plane databases.
 set -euo pipefail
@@ -31,8 +34,6 @@ started_at="$(date -u --date="@$((started_ms / 1000))" +%Y-%m-%dT%H:%M:%S).$(pri
 
 child_pid=""
 signal_status=0
-# Invoked by the signal traps below.
-# shellcheck disable=SC2329
 forward_signal() {
   local signal="$1" status="$2"
   signal_status="$status"
