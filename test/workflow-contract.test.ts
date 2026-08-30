@@ -8,6 +8,11 @@ const WORKFLOW_DIRECTORY = join(process.cwd(), ".github", "workflows");
 const FULL_SHA = /@[0-9a-f]{40}$/i;
 const VERSION_COMMENT = /^v?\d+(?:\.\d+){0,2}(?:[-+][A-Za-z0-9.-]+)?$/;
 const CANONICAL_FULL_GATE = "npm run check";
+// Node is pinned once, in mise.toml/mise.lock (core ADR-0043, Snowcat ADR-0076);
+// a workflow that installs its own runtime is a second, unchecksummed pin.
+const MISE_ACTION = /^jdx\/mise-action@/i;
+const SETUP_NODE = /^actions\/setup-node@/i;
+const NODE_VERSION_KEYS = new Set(["node-version", "node-version-file"]);
 const MAKE_CI_TARGET = "ci";
 
 test("every workflow pins actions and declares least privilege", () => {
@@ -197,6 +202,114 @@ test("the Makefile full-gate check rejects a missing, duplicated, or wrapped rec
     /found 0 in \[npm test\]/,
   );
 });
+
+test("the PR-title lint signal takes its Node toolchain from mise.toml/mise.lock", () => {
+  const source = readFileSync(join(WORKFLOW_DIRECTORY, "pr-title-lint.yml"), "utf8");
+  const errors = miseNodeToolchainErrors(source);
+  assert.deepEqual(errors, [], `pr-title-lint.yml:\n${errors.join("\n")}`);
+
+  // The same pin as check.yml, so the two signals cannot drift to different
+  // installers or different SHAs of the same one.
+  assert.equal(miseActionPin(source), miseActionPin(readFileSync(join(WORKFLOW_DIRECTORY, "check.yml"), "utf8")));
+
+  // The rest of the signal's contract is unchanged: a `pull_request` trigger,
+  // no write permission, a timeout, and the one title-lint invocation.
+  const document = parseDocument(source);
+  assert.ok(isMap(document.contents));
+  assert.equal(document.contents.get("name"), "pr-title-lint");
+  const triggers = document.contents.get("on", true);
+  assert.ok(isMap(triggers), "trigger must be a mapping");
+  assert.ok(isMap(triggers.get("pull_request", true)), "trigger must be pull_request");
+  assert.match(source, /^ {8}run: node scripts\/check-pr-title\.mjs$/m);
+});
+
+test("the mise toolchain contract rejects a reintroduced independent Node pin", () => {
+  const valid = `jobs:
+  lint:
+    steps:
+      - uses: actions/checkout@${"a".repeat(40)} # v7.0.1
+      - uses: jdx/mise-action@${"b".repeat(40)} # v4.2.5
+        with:
+          install: true
+          cache: true
+      - run: node scripts/check-pr-title.mjs
+`;
+  assert.deepEqual(miseNodeToolchainErrors(valid), []);
+
+  // The exact drift this guard exists for: setup-node back alongside mise.
+  assert.match(
+    miseNodeToolchainErrors(
+      valid.replace(
+        "      - run: node",
+        `      - uses: actions/setup-node@${"c".repeat(40)} # v7.0.0\n        with:\n          node-version: 24\n      - run: node`,
+      ),
+    ).join("\n"),
+    /actions\/setup-node/,
+  );
+  // A bare `node-version` key, whatever action claims it.
+  assert.match(
+    miseNodeToolchainErrors(valid.replace("          cache: true", "          node-version: 26")).join("\n"),
+    /node-version/,
+  );
+  assert.match(
+    miseNodeToolchainErrors(valid.replace("          cache: true", "          node-version-file: .nvmrc")).join("\n"),
+    /node-version/,
+  );
+  // Dropping the mise installation entirely leaves the runtime unpinned.
+  assert.match(
+    miseNodeToolchainErrors(valid.replace(/ {6}- uses: jdx[\s\S]*?cache: true\n/, "")).join("\n"),
+    /jdx\/mise-action/,
+  );
+});
+
+/**
+ * Errors when a workflow does not take its Node runtime solely from
+ * mise.toml/mise.lock: it must install the toolchain with the SHA-pinned
+ * `jdx/mise-action`, and must state no runtime version of its own — no
+ * `actions/setup-node`, no `node-version`, no `node-version-file`.
+ */
+function miseNodeToolchainErrors(source: string): string[] {
+  const lineCounter = new LineCounter();
+  const document = parseDocument(source, { lineCounter });
+  if (document.errors.length > 0) {
+    return document.errors.map((error) => `workflow must be valid YAML: ${error.message}`);
+  }
+
+  const errors: string[] = [];
+  let installsWithMise = false;
+  visit(document, {
+    Pair(_key, pair) {
+      if (!isScalar(pair.key) || typeof pair.key.value !== "string") return;
+      const line = lineCounter.linePos(pair.key.range?.[0] ?? 0).line;
+      if (NODE_VERSION_KEYS.has(pair.key.value)) {
+        errors.push(
+          `line ${line}: \`${pair.key.value}\` pins Node outside mise.toml/mise.lock; ` +
+            "delete it and let jdx/mise-action install the pinned toolchain",
+        );
+        return;
+      }
+      if (pair.key.value !== "uses" || !isScalar(pair.value) || typeof pair.value.value !== "string") return;
+      if (SETUP_NODE.test(pair.value.value)) {
+        errors.push(
+          `line ${line}: actions/setup-node is a second Node pin; ` +
+            "install the toolchain with jdx/mise-action instead (core ADR-0043, ADR-0076)",
+        );
+      }
+      if (MISE_ACTION.test(pair.value.value)) installsWithMise = true;
+    },
+  });
+  if (!installsWithMise) {
+    errors.push("workflow must install its Node toolchain with jdx/mise-action so mise.toml/mise.lock stays the only pin");
+  }
+  return errors;
+}
+
+/** The `owner/action@sha` a workflow pins `jdx/mise-action` to. */
+function miseActionPin(source: string): string {
+  const match = /jdx\/mise-action@[0-9a-f]{40}/i.exec(source);
+  assert.ok(match, "workflow must pin jdx/mise-action to a full commit SHA");
+  return match[0];
+}
 
 function readMakefile(): string | undefined {
   try {
