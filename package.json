@@ -27,7 +27,7 @@
     "verify": "npm run typecheck && npm run test && npm run check:docs"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "0.84.2",
+    "@earendil-works/pi-ai": "0.84.4",
     "@flue/runtime": "2.0.3",
     "@modelcontextprotocol/server": "2.0.0",
     "ajv": "8.20.0",
