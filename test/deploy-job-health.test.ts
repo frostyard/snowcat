@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, writeSync } from "node:fs";
 import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { readScheduledJobHealth } from "../src/surface/job-health.ts";
+import { publishHealthRecord } from "../scripts/record-job-health.mjs";
 import { childEnvironment } from "./helpers/child-environment.ts";
 
 const WRAPPER = join(process.cwd(), "deploy", "bin", "snowcat-run-job");
@@ -161,6 +162,40 @@ test("snowcat-run-job records a terminated command as a failed attempt", async (
   assert.equal(health.lastResult, "failure");
   assert.equal(health.lastExitCode, 143);
   assert.equal(health.lastFailureAt, health.lastAttemptFinishedAt);
+});
+
+test("publishHealthRecord retries past a short write and publishes the complete record", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-job-health-short-write-"));
+  const path = join(directory, "verify-artifacts.json");
+  const record = { version: 1, job: "verify-artifacts", lastResult: "success" };
+
+  let calls = 0;
+  const shortThenComplete = (fd: number, buffer: Buffer, offset: number, length: number) => {
+    calls += 1;
+    const chunk = calls === 1 ? Math.min(3, length) : length;
+    return writeSync(fd, buffer, offset, chunk);
+  };
+
+  publishHealthRecord(directory, path, record, { write: shortThenComplete });
+
+  assert.ok(calls > 1, "a short first write must force at least one more write call");
+  assert.equal(await readFile(path, "utf8"), `${JSON.stringify(record)}\n`);
+  assert.deepEqual(await readdir(directory), ["verify-artifacts.json"]);
+});
+
+test("publishHealthRecord refuses to publish and preserves the prior file when a write makes no progress", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-job-health-no-progress-"));
+  const path = join(directory, "verify-artifacts.json");
+  const previousContents = `${JSON.stringify({ version: 1, job: "verify-artifacts", lastResult: "success" })}\n`;
+  await writeFile(path, previousContents);
+
+  assert.throws(
+    () => publishHealthRecord(directory, path, { version: 1, job: "verify-artifacts", lastResult: "failure" }, { write: () => 0 }),
+    /made no progress/,
+  );
+
+  assert.equal(await readFile(path, "utf8"), previousContents);
+  assert.deepEqual(await readdir(directory), ["verify-artifacts.json"]);
 });
 
 test("readScheduledJobHealth distinguishes absent, valid, malformed, and mismatched observations", async () => {
