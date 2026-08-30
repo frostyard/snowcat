@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync, fsyncSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeSync, fsyncSync } from "node:fs";
 import { basename, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const JOBS = new Set([
   "backup",
@@ -12,7 +13,31 @@ const JOBS = new Set([
   "verify-artifacts",
 ]);
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+if (isEntryPoint()) main();
+
+/**
+ * True when this module is the process entry point rather than an import.
+ *
+ * The two sides are not comparable as strings: `process.argv[1]` is absolute
+ * but never symlink-resolved and never percent-encoded, while
+ * `import.meta.url` is both. A naive `file://${process.argv[1]}` comparison
+ * therefore reports false for a SNOWCAT_HOME reached through a symlink (a
+ * blue/green deploy layout) or containing a character URL encoding touches (a
+ * space, `#`, `%`, non-ASCII), and the writer would silently exit 0 without
+ * publishing anything — the success-shaped outcome ADR-0079 forbids.
+ * `pathToFileURL(process.argv[1])` alone fixes only the encoding half.
+ * Resolving both sides to a real filesystem path fixes both, and also holds
+ * under `--preserve-symlinks-main`.
+ */
+function isEntryPoint() {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(entry);
+  } catch {
+    return false;
+  }
+}
 
 function main() {
   const [directory, job, startedAt, finishedAt, durationValue, waitValue, exitValue] = process.argv.slice(2);

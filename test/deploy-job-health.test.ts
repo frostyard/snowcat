@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, writeSync } from "node:fs";
-import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -162,6 +162,37 @@ test("snowcat-run-job records a terminated command as a failed attempt", async (
   assert.equal(health.lastResult, "failure");
   assert.equal(health.lastExitCode, 143);
   assert.equal(health.lastFailureAt, health.lastAttemptFinishedAt);
+});
+
+test("snowcat-run-job publishes health when SNOWCAT_HOME is reached through a symlink", async () => {
+  // Every other wrapper test builds SNOWCAT_HOME from process.cwd(), which is a
+  // physical path in CI and in a normal checkout, so none of them exercises the
+  // writer's entry-point detection. A symlinked SNOWCAT_HOME is a supported
+  // configuration (deploy/env.example ships a literal SNOWCAT_HOME and every
+  // unit file documents relocating it), and a blue/green layout points it at a
+  // symlink. With a naive `file://${process.argv[1]}` guard the writer exits 0
+  // and publishes nothing, which deploy/bin/snowcat-run-job cannot distinguish
+  // from success — the success-shaped outcome ADR-0079 forbids.
+  const directory = await mkdtemp(join(tmpdir(), "snowcat-job-health-symlinked-home-"));
+  const linkedHome = join(directory, "home");
+  await symlink(process.cwd(), linkedHome, "dir");
+
+  const result = spawnSync("bash", [WRAPPER, "verify-artifacts", "bash", "-c", "exit 0"], {
+    encoding: "utf8",
+    env: childEnvironment({
+      SNOWCAT_HOME: linkedHome,
+      SNOWCAT_JOB_HEALTH_DIR: join(directory, "health"),
+      SNOWCAT_JOB_LOCK_FILE: join(directory, "scheduled-jobs.lock"),
+    }),
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const health = await readHealth(directory, "verify-artifacts");
+  assert.equal(health.version, 1);
+  assert.equal(health.job, "verify-artifacts");
+  assert.equal(health.lastResult, "success");
+  assert.equal(health.lastExitCode, 0);
+  assert.equal(health.lastSuccessAt, health.lastAttemptFinishedAt);
 });
 
 test("publishHealthRecord retries past a short write and publishes the complete record", async () => {
